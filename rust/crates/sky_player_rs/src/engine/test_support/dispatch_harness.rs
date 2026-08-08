@@ -9,7 +9,7 @@ use crate::engine::config::WorkerConfig;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
-use crate::engine::worker::dispatch::observer::PendingObservationQueue;
+use crate::engine::worker::dispatch::PendingObservationQueue;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
     dispatch_due_pending_releases,
@@ -386,6 +386,23 @@ impl ProductionDispatchTestHarness {
             &mut self.local_metrics,
             &mut self.secondary_errors,
             &self.target_hwnd,
+        )
+    }
+
+    pub fn drain_observer(&mut self) -> Result<u64, DispatchStep> {
+        super::super::worker::drain_one_observer(
+            &mut self.observer,
+            &self.config,
+            &mut self.health,
+            &mut self.local_metrics,
+            &mut self.last_published_error,
+            &self.metrics,
+            &mut self.resources.backend,
+            &mut self.resources.estimator,
+            &mut self.resources.telemetry,
+            self.resources.clock,
+            0,
+            &mut self.timing,
         )
     }
 }

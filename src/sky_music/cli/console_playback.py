@@ -601,6 +601,7 @@ def play_selected_song(
         hold_frames=session.hold_frames,
         game_fps=int(active_policy.fps),
         tempo_scale=current_tempo,
+        focus_restore_grace_us=int(active_policy.focus_restore_grace_us),
         min_hold_us=int(active_policy.min_hold_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,

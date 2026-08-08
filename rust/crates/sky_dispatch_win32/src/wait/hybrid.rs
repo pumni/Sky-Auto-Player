@@ -72,38 +72,26 @@ impl HybridWaiter {
         let qpc_clock = match QpcClock::initialize() {
             Ok(clock) => clock,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         let now_ticks = match qpc_clock.now() {
             Ok(ticks) => ticks,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         let now_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(now_ticks.as_u64())) {
             Ok(value) => value,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         let delta_ticks = match target_us.checked_sub(now_us) {
             Some(delta_us) => match qpc_clock.duration_from_us(delta_us) {
                 Ok(value) => value,
                 Err(_) => {
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::Clock);
                 }
             },
             None => DurationTicks::ZERO,
@@ -111,10 +99,7 @@ impl HybridWaiter {
         let target_ticks = match now_ticks.checked_add_duration(delta_ticks) {
             Ok(ticks) => ticks,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         self.wait_until_ticks_with_metrics_typed(
@@ -123,10 +108,7 @@ impl HybridWaiter {
             match qpc_clock.duration_from_us(spin_threshold_us) {
                 Ok(value) => value,
                 Err(_) => {
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::Clock);
                 }
             },
             interrupt,
@@ -142,19 +124,13 @@ impl HybridWaiter {
         let qpc_clock = match QpcClock::initialize() {
             Ok(clock) => clock,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         let spin_threshold_ticks = match qpc_clock.duration_from_us(spin_threshold_us) {
             Ok(value) => value,
             Err(_) => {
-                return WaitResult {
-                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                    spin_us: 0,
-                };
+                return WaitResult::failed(WaitFailure::Clock);
             }
         };
         self.wait_until_ticks_with_metrics_typed(
@@ -178,10 +154,7 @@ impl HybridWaiter {
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
             if interrupt.try_take() {
-                return WaitResult {
-                    outcome: WaitOutcome::Interrupted,
-                    spin_us: 0,
-                };
+                return WaitResult::interrupted();
             }
             // Close the handoff race between the first event consume and the
             // generation sample. A signal after this second consume is seen
@@ -189,10 +162,7 @@ impl HybridWaiter {
             let after_take = interrupt.signal_generation();
             if after_take != observed_generation {
                 if interrupt.try_take() {
-                    return WaitResult {
-                        outcome: WaitOutcome::Interrupted,
-                        spin_us: 0,
-                    };
+                    return WaitResult::interrupted();
                 }
                 observed_generation = interrupt.signal_generation();
             }
@@ -201,15 +171,11 @@ impl HybridWaiter {
             let now_ticks = match qpc_clock.now() {
                 Ok(ticks) => ticks,
                 Err(_) => {
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::Clock);
                 }
             };
             if now_ticks >= target_ticks {
                 return deadline_wait_result(
-                    qpc_clock,
                     spin_started_ticks,
                     now_ticks,
                     interrupt,
@@ -220,10 +186,7 @@ impl HybridWaiter {
             let remaining_ticks = match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
                 Some(remaining) => remaining,
                 None => {
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::Clock);
                 }
             };
             if remaining_ticks <= spin_threshold_ticks.as_u64() {
@@ -235,15 +198,11 @@ impl HybridWaiter {
                             let completed_ticks = match qpc_clock.now() {
                                 Ok(ticks) => ticks,
                                 Err(_) => {
-                                    return WaitResult {
-                                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                        spin_us: 0,
-                                    };
+                                    return WaitResult::failed(WaitFailure::Clock);
                                 }
                             };
                             return wait_result_with_spin(
                                 WaitOutcome::Interrupted,
-                                qpc_clock,
                                 spin_started_ticks,
                                 completed_ticks,
                             );
@@ -254,15 +213,11 @@ impl HybridWaiter {
                     let now_ticks = match qpc_clock.now() {
                         Ok(ticks) => ticks,
                         Err(_) => {
-                            return WaitResult {
-                                outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                spin_us: 0,
-                            };
+                            return WaitResult::failed(WaitFailure::Clock);
                         }
                     };
                     if now_ticks >= target_ticks {
                         return deadline_wait_result(
-                            qpc_clock,
                             spin_started_ticks,
                             now_ticks,
                             interrupt,
@@ -274,10 +229,7 @@ impl HybridWaiter {
                         match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
                             Some(remaining) => remaining,
                             None => {
-                                return WaitResult {
-                                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                    spin_us: 0,
-                                };
+                                return WaitResult::failed(WaitFailure::Clock);
                             }
                         };
                     if remaining_ticks > spin_threshold_ticks.as_u64() {
@@ -293,20 +245,14 @@ impl HybridWaiter {
             {
                 Some(value) => value,
                 None => {
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::Clock);
                 }
             };
             let kernel_wait_us =
                 match qpc_clock.duration_to_us(DurationTicks::from_raw(kernel_wait_ticks)) {
                     Ok(value) => value,
                     Err(_) => {
-                        return WaitResult {
-                            outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                            spin_us: 0,
-                        };
+                        return WaitResult::failed(WaitFailure::Clock);
                     }
                 };
             #[cfg(windows)]
@@ -314,12 +260,7 @@ impl HybridWaiter {
                 if let Some(timer) = &self.timer {
                     let arm_result = timer.arm_relative_us(kernel_wait_us);
                     if let Err(error) = arm_result {
-                        return WaitResult {
-                            outcome: WaitOutcome::Failed(WaitFailure::TimerArm {
-                                win32_error: error,
-                            }),
-                            spin_us: 0,
-                        };
+                        return WaitResult::failed(WaitFailure::TimerArm { win32_error: error });
                     }
 
                     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -333,20 +274,14 @@ impl HybridWaiter {
                     let result =
                         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, u32::MAX) };
                     if result == WAIT_OBJECT_0 {
-                        return WaitResult {
-                            outcome: WaitOutcome::Interrupted,
-                            spin_us: 0,
-                        };
+                        return WaitResult::interrupted();
                     }
                     if result == WAIT_OBJECT_0 + 1 {
                         continue;
                     }
-                    return WaitResult {
-                        outcome: WaitOutcome::Failed(WaitFailure::MultiWait {
-                            win32_error: unsafe { windows_sys::Win32::Foundation::GetLastError() },
-                        }),
-                        spin_us: 0,
-                    };
+                    return WaitResult::failed(WaitFailure::MultiWait {
+                        win32_error: unsafe { windows_sys::Win32::Foundation::GetLastError() },
+                    });
                 }
             } else if let Some(timer) = &self.timer
             // `sleep_us` arms and waits once. Do not arm the same timer
@@ -356,12 +291,7 @@ impl HybridWaiter {
                 match timer.sleep_us(kernel_wait_us) {
                     Ok(()) => continue,
                     Err(error) => {
-                        return WaitResult {
-                            outcome: WaitOutcome::Failed(WaitFailure::TimerWait {
-                                win32_error: error,
-                            }),
-                            spin_us: 0,
-                        };
+                        return WaitResult::failed(WaitFailure::TimerWait { win32_error: error });
                     }
                 }
             }
@@ -371,10 +301,7 @@ impl HybridWaiter {
             std::thread::sleep(std::time::Duration::from_micros(kernel_wait_us.min(2_000)));
             if self.event_wait_enabled && interrupt.signal_generation() != observed_generation {
                 if interrupt.try_take() {
-                    return WaitResult {
-                        outcome: WaitOutcome::Interrupted,
-                        spin_us: 0,
-                    };
+                    return WaitResult::interrupted();
                 }
                 observed_generation = interrupt.signal_generation();
             }

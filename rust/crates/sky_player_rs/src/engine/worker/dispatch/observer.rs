@@ -1,10 +1,9 @@
 use super::super::super::{
     DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator,
-    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
-    TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, trace_outcome_code,
-    try_publish_metrics,
+    RuntimeDispatchCoordinator, SendLatencyEstimator, SharedMetrics, TRACE_FLAG_ANOMALY,
+    TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
+    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
+    trace_outcome_code, try_publish_metrics,
 };
 use super::super::{
     DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
@@ -13,14 +12,14 @@ use super::super::{
     update_estimator_after_send_class,
 };
 use super::authored::resolve_slo_terminal_step;
-use super::release::{ReleaseOutcomeFlags, ReleaseReconciliation, ReleaseSend};
+use super::observation::{
+    DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
+    UpObservation,
+};
 #[cfg(any(test, feature = "test-support"))]
 use super::release::{take_release_observer_failure, take_release_telemetry_failure};
-use super::timing::{
-    DownSendTiming, EstimatorObservationEvidence, is_clean_estimator_observation, read_qpc_us,
-};
+use super::timing::{DownSendTiming, is_clean_estimator_observation, read_qpc_us};
 use super::{AuthoredBatchView, DispatchStep};
-use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
@@ -70,29 +69,6 @@ pub(crate) fn publisher_down_send_outcome(
         saturation_abort,
         ..
     } = *timing_proof;
-    let dispatch_ready_qpc = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
-        }
-    };
-    let core_post_send_us = match dispatch_ready_qpc.checked_duration_since(sender_completed_qpc) {
-        Ok(duration) => match qpc_clock.duration_to_us(duration) {
-            Ok(us) => us,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "note-on post-send conversion failure: {error:?}"
-                ));
-            }
-        },
-        Err(error) => {
-            return DispatchStep::Terminate(format!(
-                "dispatch-ready QPC ordering failure: {error:?}"
-            ));
-        }
-    };
-    // HARD DISPATCH READY BOUNDARY:
-    // gameplay-critical dispatch ownership ends here.
     if recovered_retry_late {
         local_metrics.recovered_zero_progress_but_late = local_metrics
             .recovered_zero_progress_but_late
@@ -117,57 +93,87 @@ pub(crate) fn publisher_down_send_outcome(
             health.down_saturation_positive_streak = timing_proof.saturation_streak;
         }
     }
-    let mut force_dispatch_publish = match record_down_send_telemetry(
-        view,
-        telemetry,
-        trace_kind,
-        effective_now_ticks,
-        lead_down_ticks,
-        result_success,
-        completed_effective,
-        result_sent,
-        result_skipped_duplicates,
-        result_send_attempts,
-        result_retry_reason,
-        result_chord_integrity_lost,
-        result_last_win32_error,
-        sender_started_effective_ticks,
-        completed_effective_ticks,
-        completion_error_ticks_value,
-        authored_completion_error_ticks_value,
-        core_post_send_us,
-        requested_count,
-        recovered_retry_late,
-        recovered_partial_up,
-        strict_completion_late,
-    ) {
-        Ok(value) => value.1,
-        Err(step) => return step,
-    };
-    if result_chord_integrity_lost || retry_late_abort || strict_completion_late || saturation_abort
-    {
-        force_dispatch_publish = true;
-    }
     runtime.pending_pre_send_spin_us = 0;
+    let worker_ready_qpc = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
+        }
+    };
+    // HARD DISPATCH READY BOUNDARY:
+    // physical/coordinator ownership is safe for the next dispatch.  From
+    // here on, only a fixed raw observation enqueue and terminal policy may
+    // run on this call stack.
+    let mut observation = DownObservation {
+        path: frozen_budget.path,
+        latency_class,
+        lead_down_saturated,
+        lead_down,
+        sender_duration_us,
+        delivered_count,
+        batch_intent_count: view.batch_intent_count,
+        completion_error_us,
+        estimator_evidence,
+        completed_effective,
+        authored_batch_scheduled_us: view.authored_batch_scheduled_us,
+        batch_scheduled_us: view.batch_scheduled_us,
+        sender_completed_qpc,
+        worker_ready_qpc,
+        send_warn_us: frozen_budget.send_warn_us,
+        core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
+        trace: DownTraceObservation {
+            event_index: view.batch_source_action_index,
+            trace_kind,
+            result_success,
+            requested_count,
+            sent_count: if view.packet_masks.is_some() && result_success {
+                requested_count
+            } else {
+                result_sent.len()
+            },
+            skipped_count: result_skipped_duplicates.len(),
+            send_attempts: result_send_attempts,
+            retry_reason: result_retry_reason,
+            chord_integrity_lost: result_chord_integrity_lost,
+            last_win32_error: result_last_win32_error.unwrap_or(0),
+            authored_ticks: view.authored_batch_scheduled_ticks,
+            effective_deadline_ticks: view.batch_scheduled_ticks,
+            wake_ticks: effective_now_ticks,
+            sender_started_ticks: Some(sender_started_effective_ticks),
+            sender_completed_ticks: Some(completed_effective_ticks),
+            completion_error_ticks: completion_error_ticks_value,
+            authored_completion_error_ticks: authored_completion_error_ticks_value,
+            applied_lead_ticks: lead_down_ticks,
+            recovered_retry_late,
+            recovered_partial_up,
+            strict_completion_late,
+            retry_late_abort,
+            saturation_abort,
+        },
+    };
+    if observer.is_full() {
+        let evicted = match observer.pop_front() {
+            Some(value) => value,
+            None => {
+                return DispatchStep::Terminate(
+                    "observer queue fullness state is inconsistent".to_string(),
+                );
+            }
+        };
+        if let Err(step) = flush_overflow_observation(evicted, telemetry, qpc_clock) {
+            return step;
+        }
+        observation.worker_ready_qpc = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "observer overflow worker-ready QPC failure: {error:?}"
+                ));
+            }
+        };
+    }
     observer.push(
-        DispatchObservation::Down(DownObservation {
-            path: frozen_budget.path,
-            latency_class,
-            lead_down_saturated,
-            lead_down,
-            sender_duration_us,
-            delivered_count,
-            batch_intent_count: view.batch_intent_count,
-            completion_error_us,
-            estimator_evidence,
-            completed_effective,
-            authored_batch_scheduled_us: view.authored_batch_scheduled_us,
-            batch_scheduled_us: view.batch_scheduled_us,
-            core_post_send_us,
-            send_warn_us: frozen_budget.send_warn_us,
-            core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
-            force_publish: force_dispatch_publish,
-        }),
+        DispatchObservation::Down(observation),
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
     );
@@ -183,29 +189,21 @@ pub(crate) fn publisher_down_send_outcome(
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_down_send_telemetry(
-    view: &AuthoredBatchView,
+    observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
-    trace_kind: u8,
-    effective_now_ticks: TimelineTicks,
-    lead_down_ticks: DurationTicks,
-    result_success: bool,
-    _completed_effective: u64,
-    result_sent: &SmallVec<[u16; 15]>,
-    result_skipped_duplicates: &SmallVec<[u16; 15]>,
-    result_send_attempts: u8,
-    result_retry_reason: PacketRetryReason,
-    result_chord_integrity_lost: bool,
-    result_last_win32_error: Option<u32>,
-    sender_started_effective_ticks: TimelineTicks,
-    completed_effective_ticks: TimelineTicks,
-    completion_error_ticks_value: i64,
-    authored_completion_error_ticks_value: i64,
     core_post_send_us: u64,
-    requested_count: usize,
-    recovered_retry_late: bool,
-    recovered_partial_up: bool,
-    strict_completion_late: bool,
 ) -> Result<(&'static str, bool), DispatchStep> {
+    let trace = observation.trace;
+    let result_retry_reason = trace.retry_reason;
+    let result_chord_integrity_lost = trace.chord_integrity_lost;
+    let result_success = trace.result_success;
+    let requested_count = trace.requested_count;
+    let result_sent_count = trace.sent_count;
+    let result_skipped_count = trace.skipped_count;
+    let result_send_attempts = trace.send_attempts;
+    let recovered_retry_late = trace.recovered_retry_late;
+    let recovered_partial_up = trace.recovered_partial_up;
+    let strict_completion_late = trace.strict_completion_late;
     let down_outcome = if recovered_retry_late {
         "recovered_zero_progress_but_late"
     } else if recovered_partial_up {
@@ -214,9 +212,7 @@ pub(super) fn record_down_send_telemetry(
         "strict_completion_slo_exceeded"
     } else if result_chord_integrity_lost {
         "chord_integrity_lost"
-    } else if view.packet_masks.is_some_and(|_| result_success)
-        || (view.packet_masks.is_none() && result_sent.len() == view.scan_batch.len())
-    {
+    } else if result_success && result_sent_count == requested_count {
         "sent"
     } else {
         "partial_note_on"
@@ -225,8 +221,7 @@ pub(super) fn record_down_send_telemetry(
         || !matches!(result_retry_reason, PacketRetryReason::None)
         || result_chord_integrity_lost;
     let mut trace_flags = 0u8;
-    let send_completed_fully = view.packet_masks.is_some_and(|_| result_success)
-        || (view.packet_masks.is_none() && result_sent.len() == view.scan_batch.len());
+    let send_completed_fully = result_success && result_sent_count == requested_count;
     if send_completed_fully {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
@@ -239,32 +234,28 @@ pub(super) fn record_down_send_telemetry(
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
             TraceContext {
-                event_index: view.batch_source_action_index,
-                kind: trace_kind,
+                event_index: trace.event_index,
+                kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
-                polyphony: view.batch_intent_count,
+                polyphony: observation.batch_intent_count,
                 flags: trace_flags,
-                win32_error: result_last_win32_error.unwrap_or(0),
+                win32_error: trace.last_win32_error,
             },
             TraceTiming {
-                authored_ticks: view.authored_batch_scheduled_ticks,
-                effective_deadline_ticks: view.batch_scheduled_ticks,
-                wake_ticks: effective_now_ticks,
-                send_started_ticks: Some(sender_started_effective_ticks),
-                send_completed_ticks: Some(completed_effective_ticks),
+                authored_ticks: trace.authored_ticks,
+                effective_deadline_ticks: trace.effective_deadline_ticks,
+                wake_ticks: trace.wake_ticks,
+                send_started_ticks: trace.sender_started_ticks,
+                send_completed_ticks: trace.sender_completed_ticks,
                 core_post_send_duration_us: core_post_send_us,
-                completion_error_ticks: completion_error_ticks_value,
-                authored_completion_error_ticks: authored_completion_error_ticks_value,
-                applied_lead_ticks: lead_down_ticks,
+                completion_error_ticks: trace.completion_error_ticks,
+                authored_completion_error_ticks: trace.authored_completion_error_ticks,
+                applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
-                requested: view.batch_intent_count,
-                sent: if view.packet_masks.is_some() && result_success {
-                    requested_count
-                } else {
-                    result_sent.len()
-                },
-                skipped: result_skipped_duplicates.len(),
+                requested: requested_count,
+                sent: result_sent_count,
+                skipped: result_skipped_count,
                 send_attempts: usize::from(result_send_attempts),
             },
         )
@@ -382,38 +373,31 @@ pub(super) fn record_blocked_unfocused_telemetry(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_release_telemetry(
     telemetry: &mut TelemetryCollector,
-    due_pending: &SmallVec<[PendingRelease; 15]>,
-    send: &ReleaseSend,
-    reconciliation: &ReleaseReconciliation,
-    lead_up_ticks: DurationTicks,
+    observation: &UpObservation,
     core_post_send_us: u64,
 ) -> Result<(), DispatchStep> {
-    let Some(first) = due_pending.first() else {
-        return Err(DispatchStep::Terminate(
-            "empty pending release batch in telemetry recording".to_string(),
-        ));
-    };
+    let trace = observation.trace;
     #[cfg(any(test, feature = "test-support"))]
-    if take_release_telemetry_failure(reconciliation.recovery_required) {
+    if take_release_telemetry_failure(trace.recovery_required) {
         return Err(DispatchStep::Terminate(
             "injected release telemetry failure".to_string(),
         ));
     }
-    let scan_count = due_pending.len();
+    let scan_count = trace.scan_count;
     let release_outcome = release_runtime_outcome(
-        reconciliation.deferred_by_us,
-        send.sent_count,
+        trace.deferred_by_us,
+        trace.sent_count,
         scan_count,
-        reconciliation.recovery_required,
+        trace.recovery_required,
     );
     let mut trace_flags = 0u8;
-    if send.sent_count == scan_count {
+    if trace.sent_count == scan_count {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
     if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
         trace_flags |= TRACE_FLAG_RECOVERY;
     }
-    if reconciliation.deferred_by_us > 0 {
+    if trace.deferred_by_us > 0 {
         trace_flags |= TRACE_FLAG_DEFERRED;
     }
     if release_outcome != "sent" {
@@ -422,29 +406,29 @@ pub(super) fn record_release_telemetry(
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
             TraceContext {
-                event_index: first.source_action_index,
-                kind: TRACE_KIND_UP,
+                event_index: trace.event_index,
+                kind: trace.trace_kind,
                 outcome: trace_outcome_code(release_outcome),
                 polyphony: scan_count,
                 flags: trace_flags,
-                win32_error: send.last_win32_error.unwrap_or(0),
+                win32_error: trace.last_win32_error,
             },
             TraceTiming {
-                authored_ticks: reconciliation.scheduled_ticks,
-                effective_deadline_ticks: reconciliation.effective_deadline_ticks,
-                wake_ticks: send.actual_ticks,
-                send_started_ticks: send.sender_started_effective_ticks,
-                send_completed_ticks: Some(send.completed_effective_ticks),
+                authored_ticks: trace.authored_ticks,
+                effective_deadline_ticks: trace.effective_deadline_ticks,
+                wake_ticks: trace.wake_ticks,
+                send_started_ticks: trace.sender_started_ticks,
+                send_completed_ticks: trace.sender_completed_ticks,
                 core_post_send_duration_us: core_post_send_us,
-                completion_error_ticks: reconciliation.up_completion_error_ticks,
-                authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
-                applied_lead_ticks: lead_up_ticks,
+                completion_error_ticks: trace.completion_error_ticks,
+                authored_completion_error_ticks: trace.authored_completion_error_ticks,
+                applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
                 requested: scan_count,
-                sent: send.sent_count,
-                skipped: send.skipped_count,
-                send_attempts: usize::from(send.attempts),
+                sent: trace.sent_count,
+                skipped: trace.skipped_count,
+                send_attempts: usize::from(trace.send_attempts),
             },
         )
     }) {
@@ -454,115 +438,46 @@ pub(super) fn record_release_telemetry(
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
-pub(super) fn observe_release_send_health(
-    _qpc_clock: QpcClock,
-    config: &WorkerConfig,
-    timing: &WorkerTimingState,
-    health: &mut WorkerHealthState,
-    runtime: &mut WorkerRuntime,
-    local_metrics: &mut WorkerMetricsLocal,
-    observer: &mut PendingObservationQueue,
-    send: &ReleaseSend,
-    reconciliation: &ReleaseReconciliation,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
-    lead_up: u64,
-    latency_class: LatencyClass,
-    pending_plan: Option<&PendingDispatchPlan>,
-    scan_count: usize,
-    core_post_send_us: u64,
-) -> Result<ReleaseOutcomeFlags, DispatchStep> {
-    #[cfg(any(test, feature = "test-support"))]
-    if take_release_observer_failure(reconciliation.recovery_required) {
-        return Err(DispatchStep::Terminate(
-            "injected release observer failure".to_string(),
-        ));
+
+pub(super) fn flush_overflow_observation(
+    observation: DispatchObservation,
+    telemetry: &mut TelemetryCollector,
+    qpc_clock: QpcClock,
+) -> Result<(), DispatchStep> {
+    if matches!(observation, DispatchObservation::Wait(_)) {
+        return Ok(());
     }
-    let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
-        && reconciliation.up_completion_lateness_ticks.is_some();
-    health.up_saturation_positive_streak = if up_saturated_positive {
-        health.up_saturation_positive_streak.saturating_add(1)
-    } else {
-        0
+    let (worker_ready_qpc, sender_completed_qpc) = match observation {
+        DispatchObservation::Down(value) => (value.worker_ready_qpc, value.sender_completed_qpc),
+        DispatchObservation::Up(value) => (value.worker_ready_qpc, value.sender_completed_qpc),
+        DispatchObservation::Wait(_) => unreachable!("wait observations are not telemetry records"),
     };
-    let saturation_abort = config.timing.strict_timing
-        && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-    let strict_up_completion_late = config.timing.strict_timing
-        && is_clean_estimator_observation(reconciliation.estimator_evidence)
-        && reconciliation
-            .up_completion_lateness_ticks
-            .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
-    runtime.pending_pre_send_spin_us = 0;
-    observer.push(
-        DispatchObservation::Up(UpObservation {
-            latency_class,
-            sender_duration_us: send.sender_duration_us,
-            sent_count: send.sent_count,
-            scan_count,
-            lead_up,
-            lead_up_saturated: up_saturated_positive,
-            completed_effective: send.completed_effective_us,
-            scheduled_us: reconciliation.scheduled_us,
-            deferred_by_us: reconciliation.deferred_by_us,
-            up_completion_error_us: reconciliation.up_completion_error_us,
-            estimator_evidence: reconciliation.estimator_evidence,
-            core_post_send_us,
-            send_warn_us: frozen_budget.send_warn_us,
-            core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
-            force_publish: !is_clean_estimator_observation(reconciliation.estimator_evidence)
-                || reconciliation.recovery_required,
-        }),
-        &mut local_metrics.observer_dropped_samples,
-        &mut local_metrics.observer_queue_high_watermark,
-    );
-    Ok(ReleaseOutcomeFlags {
-        strict_up_completion_late,
-        saturation_abort,
-    })
+    let core_post_send_us = qpc_clock
+        .duration_to_us(
+            worker_ready_qpc
+                .checked_duration_since(sender_completed_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "observer overflow QPC ordering failure: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "observer overflow post-send conversion failure: {error:?}"
+            ))
+        })?;
+    match observation {
+        DispatchObservation::Down(value) => {
+            record_down_send_telemetry(&value, telemetry, core_post_send_us).map(|_| ())
+        }
+        DispatchObservation::Up(value) => {
+            record_release_telemetry(telemetry, &value, core_post_send_us)
+        }
+        DispatchObservation::Wait(_) => unreachable!("wait observations are not telemetry records"),
+    }
 }
-pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
-#[derive(Clone, Copy, Debug)]
-pub enum DispatchObservation {
-    Down(DownObservation),
-    Up(UpObservation),
-}
-#[derive(Clone, Copy, Debug)]
-pub struct DownObservation {
-    pub path: DispatchPath,
-    pub latency_class: LatencyClass,
-    pub lead_down_saturated: bool,
-    pub lead_down: u64,
-    pub sender_duration_us: u64,
-    pub delivered_count: usize,
-    pub batch_intent_count: usize,
-    pub completion_error_us: i64,
-    pub estimator_evidence: EstimatorObservationEvidence,
-    pub completed_effective: u64,
-    pub authored_batch_scheduled_us: u64,
-    pub batch_scheduled_us: u64,
-    pub core_post_send_us: u64,
-    pub send_warn_us: u64,
-    pub core_post_send_warn_us: u64,
-    pub force_publish: bool,
-}
-#[derive(Clone, Copy, Debug)]
-pub struct UpObservation {
-    pub latency_class: LatencyClass,
-    pub sender_duration_us: u64,
-    pub sent_count: usize,
-    pub scan_count: usize,
-    pub lead_up: u64,
-    pub lead_up_saturated: bool,
-    pub completed_effective: u64,
-    pub scheduled_us: u64,
-    pub deferred_by_us: u64,
-    pub up_completion_error_us: i64,
-    pub estimator_evidence: EstimatorObservationEvidence,
-    pub core_post_send_us: u64,
-    pub send_warn_us: u64,
-    pub core_post_send_warn_us: u64,
-    pub force_publish: bool,
-}
+
 #[derive(Debug)]
 pub struct PendingObservationQueue {
     entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
@@ -607,6 +522,9 @@ impl PendingObservationQueue {
     }
     pub fn len(&self) -> usize {
         self.len
+    }
+    pub fn is_full(&self) -> bool {
+        self.len == self.entries.len()
     }
     pub fn is_empty(&self) -> bool {
         self.len == 0
@@ -683,8 +601,10 @@ pub(crate) fn drain_down_send_outcome(
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
     estimator: &mut SendLatencyEstimator,
+    telemetry: &mut TelemetryCollector,
+    qpc_clock: QpcClock,
     now_us: u64,
-) {
+) -> Result<(), DispatchStep> {
     local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
     match observation.path {
@@ -699,9 +619,25 @@ pub(crate) fn drain_down_send_outcome(
         }
     }
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    local_metrics.core_post_send_max_us = local_metrics
-        .core_post_send_max_us
-        .max(observation.core_post_send_us);
+    let core_post_send_us = qpc_clock
+        .duration_to_us(
+            observation
+                .worker_ready_qpc
+                .checked_duration_since(observation.sender_completed_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-on observer QPC ordering failure: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "note-on observer post-send conversion failure: {error:?}"
+            ))
+        })?;
+    let (_, force_publish) = record_down_send_telemetry(observation, telemetry, core_post_send_us)?;
+    local_metrics.core_post_send_max_us =
+        local_metrics.core_post_send_max_us.max(core_post_send_us);
     if config.estimator.enable_adaptive_lead && observation.lead_down_saturated {
         match observation.path {
             DispatchPath::UpOnly { .. } => record_lead_saturation(
@@ -750,7 +686,7 @@ pub(crate) fn drain_down_send_outcome(
     observe_dispatch_health(
         DispatchHealthObservation {
             send_duration_us: observation.sender_duration_us,
-            post_send_duration_us: observation.core_post_send_us,
+            post_send_duration_us: core_post_send_us,
             path: observation.path,
             send_warn_us: observation.send_warn_us,
             core_post_send_warn_us: observation.core_post_send_warn_us,
@@ -762,7 +698,8 @@ pub(crate) fn drain_down_send_outcome(
         local_metrics,
     );
     publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    try_publish_metrics(local_metrics, metrics, now_us, observation.force_publish);
+    try_publish_metrics(local_metrics, metrics, now_us, force_publish);
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_up_send_outcome(
@@ -774,15 +711,45 @@ pub(crate) fn drain_up_send_outcome(
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
     estimator: &mut SendLatencyEstimator,
+    telemetry: &mut TelemetryCollector,
+    qpc_clock: QpcClock,
     now_us: u64,
-) {
+) -> Result<(), DispatchStep> {
+    #[cfg(any(test, feature = "test-support"))]
+    if take_release_observer_failure(observation.trace.recovery_required) {
+        return Err(DispatchStep::Terminate(
+            "injected release observer failure".to_string(),
+        ));
+    }
     local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
     local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    local_metrics.core_post_send_max_us = local_metrics
-        .core_post_send_max_us
-        .max(observation.core_post_send_us);
+    let core_post_send_us = qpc_clock
+        .duration_to_us(
+            observation
+                .worker_ready_qpc
+                .checked_duration_since(observation.sender_completed_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-off observer QPC ordering failure: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "note-off observer post-send conversion failure: {error:?}"
+            ))
+        })?;
+    record_release_telemetry(telemetry, observation, core_post_send_us)?;
+    if let Some(pause_ticks) = observation.recovery_pause_ticks {
+        let recovery_pause_us = qpc_clock.duration_to_us(pause_ticks).map_err(|error| {
+            DispatchStep::Terminate(format!("recovery telemetry conversion failure: {error:?}"))
+        })?;
+        local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
+    }
+    local_metrics.core_post_send_max_us =
+        local_metrics.core_post_send_max_us.max(core_post_send_us);
     if config.estimator.enable_adaptive_lead && observation.lead_up_saturated {
         record_lead_saturation(
             &mut local_metrics.lead_saturation_count_up,
@@ -813,7 +780,7 @@ pub(crate) fn drain_up_send_outcome(
     observe_dispatch_health(
         DispatchHealthObservation {
             send_duration_us: observation.sender_duration_us,
-            post_send_duration_us: observation.core_post_send_us,
+            post_send_duration_us: core_post_send_us,
             path: DispatchPath::UpOnly {
                 up_count: observation.scan_count,
             },
@@ -827,7 +794,14 @@ pub(crate) fn drain_up_send_outcome(
         local_metrics,
     );
     publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    try_publish_metrics(local_metrics, metrics, now_us, observation.force_publish);
+    try_publish_metrics(
+        local_metrics,
+        metrics,
+        now_us,
+        !is_clean_estimator_observation(observation.estimator_evidence)
+            || observation.trace.recovery_required,
+    );
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_one_observer(
@@ -839,15 +813,21 @@ pub(crate) fn drain_one_observer(
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
     estimator: &mut SendLatencyEstimator,
+    telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_us: u64,
-) -> u64 {
+    timing: &mut WorkerTimingState,
+) -> Result<u64, DispatchStep> {
     let Some(observation) = pending.pop_front() else {
-        return 0;
+        return Ok(0);
     };
     let drain_start = match qpc_clock.now() {
         Ok(ticks) => ticks,
-        Err(_) => return 0,
+        Err(error) => {
+            return Err(DispatchStep::Terminate(format!(
+                "observer start QPC failure: {error:?}"
+            )));
+        }
     };
     match &observation {
         DispatchObservation::Down(down) => drain_down_send_outcome(
@@ -859,8 +839,10 @@ pub(crate) fn drain_one_observer(
             metrics,
             backend,
             estimator,
+            telemetry,
+            qpc_clock,
             now_us,
-        ),
+        )?,
         DispatchObservation::Up(up) => drain_up_send_outcome(
             up,
             config,
@@ -870,8 +852,13 @@ pub(crate) fn drain_one_observer(
             metrics,
             backend,
             estimator,
+            telemetry,
+            qpc_clock,
             now_us,
-        ),
+        )?,
+        DispatchObservation::Wait(wait) => {
+            super::super::wait::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     {
@@ -882,12 +869,19 @@ pub(crate) fn drain_one_observer(
     }
     let drain_end = match qpc_clock.now() {
         Ok(ticks) => ticks,
-        Err(_) => return 0,
+        Err(error) => {
+            return Err(DispatchStep::Terminate(format!(
+                "observer end QPC failure: {error:?}"
+            )));
+        }
     };
     let drain_us = match drain_end.checked_duration_since(drain_start) {
         Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
         Err(_) => 0,
     };
+    if let Ok(wall_now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64())) {
+        super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
+    }
     super::super::health::observe_observer_health(
         drain_us,
         health.options.observer_warn_us,
@@ -896,5 +890,9 @@ pub(crate) fn drain_one_observer(
         &mut health.observer_window,
         local_metrics,
     );
-    drain_us
+    if matches!(observation, DispatchObservation::Wait(_)) {
+        publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+        try_publish_metrics(local_metrics, metrics, now_us, false);
+    }
+    Ok(drain_us)
 }

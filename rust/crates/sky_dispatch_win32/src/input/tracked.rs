@@ -1,18 +1,18 @@
-use super::down_transaction::{emit_down, emit_down_with};
+use super::down_transaction::emit_down_once_with;
 #[cfg(any(test, feature = "test-support"))]
 use super::outcome::PlatformSendResult;
 use super::outcome::{
     PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, ReleaseAllOutcome, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus,
 };
-use super::packet::send_physical_packet_with_clock;
+use super::packet::send_physical_packet_once_with_clock;
 use super::physical::{
     CleanupVerification, InstrumentPhysicalState, ReconciledRelease,
     instrument_physical_state_for_mask, mask_for_scan_codes, reconcile_release_observation,
 };
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock};
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
-use super::up_transaction::{emit_up, emit_up_once_with, emit_up_with};
+use super::up_transaction::emit_up_once_with;
 use crate::clock::QpcClock;
 use smallvec::SmallVec;
 use std::fmt;
@@ -235,28 +235,28 @@ impl TrackedKeyState {
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
-            return emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+            return emit_down_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
         }
         if let Some(clock) = self.qpc_clock {
-            emit_down_with(scan_codes, |sc, key_up| {
+            emit_down_once_with(scan_codes, |sc, key_up| {
                 send_input_raw_with_clock(sc, key_up, clock)
             })
         } else {
-            emit_down(scan_codes)
+            emit_down_once_with(scan_codes, send_input_raw)
         }
     }
 
     fn do_emit_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
-            return emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+            return emit_up_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
         }
         if let Some(clock) = self.qpc_clock {
-            emit_up_with(scan_codes, |sc, key_up| {
+            emit_up_once_with(scan_codes, |sc, key_up| {
                 send_input_raw_with_clock(sc, key_up, clock)
             })
         } else {
-            emit_up(scan_codes)
+            emit_up_once_with(scan_codes, send_input_raw)
         }
     }
 
@@ -395,9 +395,7 @@ impl TrackedKeyState {
         ) {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
         }
-        if matches!(emitted.status, SendTransactionStatus::ZeroProgress)
-            && emitted.evidence.zero_progress_retries > 0
-        {
+        if matches!(emitted.status, SendTransactionStatus::ZeroProgress) {
             self.sendinput_zero_progress_failures =
                 self.sendinput_zero_progress_failures.saturating_add(1);
         }
@@ -474,7 +472,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_with_clock(packet, clock)
+                send_physical_packet_once_with_clock(packet, clock)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
@@ -498,7 +496,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_with_clock(packet, clock)
+                send_physical_packet_once_with_clock(packet, clock)
             }
         };
 
@@ -511,10 +509,8 @@ impl TrackedKeyState {
                 self.last_error = None;
             }
             SendTransactionStatus::ZeroProgress => {
-                if outcome.evidence.attempts > 1 {
-                    self.sendinput_zero_progress_failures =
-                        self.sendinput_zero_progress_failures.saturating_add(1);
-                }
+                self.sendinput_zero_progress_failures =
+                    self.sendinput_zero_progress_failures.saturating_add(1);
                 self.chords_rejected = self.chords_rejected.saturating_add(1);
                 self.authored_keys_rejected = self
                     .authored_keys_rejected

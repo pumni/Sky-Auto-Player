@@ -38,13 +38,15 @@ use control::{
     CommandControlRuntime, CommandControlSignals, process_command_control,
 };
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases, drain_one_observer, observer_has_safe_slack,
+    AuthoredPacketContext, DispatchObservation, DispatchStep, PendingReleaseContext,
+    dispatch_authored_packet, dispatch_due_pending_releases, drain_one_observer,
+    observer_has_safe_slack,
 };
 
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
+#[cfg(test)]
 pub(crate) use health::HealthWindowPolicy;
 #[cfg(test)]
 pub(crate) use health::record_input_path_health;
@@ -97,6 +99,7 @@ pub(crate) struct WorkerRuntime {
     focus_loss_fault_injected: bool,
     allow_pre_epoch_startup_dispatch: bool,
     pending_pre_send_spin_us: u64,
+    pending_wait_observation: Option<wait::WaitObservation>,
     chord_integrity_lost: u64,
 }
 
@@ -237,6 +240,30 @@ pub(super) const OBSERVER_MARGIN_US: u64 = 500;
 pub(super) const OBSERVER_BUDGET_FLOOR_US: u64 = 5_000;
 /// Upper bound for adaptive observer budget adaptation (§8.9).
 pub(super) const OBSERVER_BUDGET_CAP_US: u64 = 20_000;
+
+pub(super) fn update_deferred_worker_metrics(
+    local_metrics: &mut WorkerMetricsLocal,
+    timing: &mut WorkerTimingState,
+    wall_now_us: u64,
+) {
+    if cpu_metrics_sample_due(
+        wall_now_us,
+        timing.last_cpu_metrics_sample_us,
+        CPU_METRICS_SAMPLE_INTERVAL_US,
+    ) {
+        local_metrics.worker_cpu_time_us =
+            current_thread_cpu_time_us().saturating_sub(timing.start_thread_cpu_us);
+        local_metrics.process_cpu_time_us =
+            current_process_cpu_time_us().saturating_sub(timing.start_process_cpu_us);
+        timing.last_cpu_metrics_sample_us = wall_now_us;
+    }
+    local_metrics.playback_wall_time_us = wall_now_us.saturating_sub(timing.start_wall_time_us);
+    if local_metrics.playback_wall_time_us > 0 {
+        local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
+            / local_metrics.playback_wall_time_us as u128)
+            as u64;
+    }
+}
 
 fn observer_initial_budget_us() -> u64 {
     #[cfg(any(test, feature = "test-support"))]

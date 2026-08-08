@@ -22,7 +22,26 @@ pub enum WaitOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WaitResult {
     pub outcome: WaitOutcome,
-    pub spin_us: u64,
+    pub wake_qpc: Option<crate::clock::QpcTicks>,
+    pub spin_ticks: crate::clock::DurationTicks,
+}
+
+impl WaitResult {
+    pub const fn failed(failure: WaitFailure) -> Self {
+        Self {
+            outcome: WaitOutcome::Failed(failure),
+            wake_qpc: None,
+            spin_ticks: crate::clock::DurationTicks::ZERO,
+        }
+    }
+
+    pub const fn interrupted() -> Self {
+        Self {
+            outcome: WaitOutcome::Interrupted,
+            wake_qpc: None,
+            spin_ticks: crate::clock::DurationTicks::ZERO,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -44,11 +63,10 @@ pub use hybrid::HybridWaiter;
 #[cfg(test)]
 mod tests {
     use super::calibration::robust_wake_error_us;
-    use super::spin::spin_duration_us;
+    use super::spin::{spin_duration_ticks, wait_result_with_spin};
     use super::{HybridWaiter, WaitOutcome};
-    use crate::clock::{QpcClock, QpcTicks, qpc_now_us};
+    use crate::clock::{DurationTicks, QpcTicks, qpc_now_us};
     use crate::event::OwnedEvent;
-    use std::num::NonZeroU64;
 
     #[test]
     fn pre_signalled_event_interrupts_a_long_wait() {
@@ -81,19 +99,26 @@ mod tests {
 
     #[test]
     fn spin_duration_converts_one_completed_tick_interval() {
-        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
         assert_eq!(
-            spin_duration_us(
-                clock,
-                Some(QpcTicks::from_raw(1_000)),
-                QpcTicks::from_raw(1_500),
-            ),
-            Ok(500)
+            spin_duration_ticks(Some(QpcTicks::from_raw(1_000)), QpcTicks::from_raw(1_500),),
+            Ok(crate::clock::DurationTicks::from_raw(500))
         );
         assert_eq!(
-            spin_duration_us(clock, None, QpcTicks::from_raw(1_500)),
-            Ok(0)
+            spin_duration_ticks(None, QpcTicks::from_raw(1_500)),
+            Ok(crate::clock::DurationTicks::ZERO)
         );
+    }
+
+    #[test]
+    fn wait_result_keeps_raw_wake_and_spin_evidence() {
+        let result = wait_result_with_spin(
+            WaitOutcome::Deadline,
+            Some(QpcTicks::from_raw(1_000)),
+            QpcTicks::from_raw(1_500),
+        );
+        assert_eq!(result.outcome, WaitOutcome::Deadline);
+        assert_eq!(result.wake_qpc, Some(QpcTicks::from_raw(1_500)));
+        assert_eq!(result.spin_ticks, DurationTicks::from_raw(500));
     }
 
     #[test]

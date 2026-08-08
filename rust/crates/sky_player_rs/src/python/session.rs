@@ -9,6 +9,32 @@ use crate::engine::{
 #[pyclass(name = "DispatchSession", frozen)]
 pub(super) struct NativeDispatchSessionPy {
     session: Arc<NativeDispatchSession>,
+    effective_config: EffectiveSessionConfig,
+}
+
+#[derive(Clone, Default)]
+struct EffectiveSessionConfig {
+    game_fps: u16,
+    requested_min_hold_us: u64,
+    effective_min_hold_us: u64,
+    require_focus: bool,
+    focus_restore_grace_us: u64,
+    telemetry_mode: &'static str,
+    profile: &'static str,
+}
+
+impl EffectiveSessionConfig {
+    fn to_py_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("game_fps", self.game_fps)?;
+        dict.set_item("requested_min_hold_us", self.requested_min_hold_us)?;
+        dict.set_item("effective_min_hold_us", self.effective_min_hold_us)?;
+        dict.set_item("require_focus", self.require_focus)?;
+        dict.set_item("focus_restore_grace_us", self.focus_restore_grace_us)?;
+        dict.set_item("telemetry_mode", self.telemetry_mode)?;
+        dict.set_item("profile", self.profile)?;
+        Ok(dict)
+    }
 }
 
 #[pymethods]
@@ -24,10 +50,12 @@ impl NativeDispatchSessionPy {
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
+        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
+        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
         let max_lead_us = 2_000;
         let dispatch_lead_us = 0;
         let require_focus = config.require_focus;
-        let focus_restore_grace_us = 100_000;
+        let focus_restore_grace_us = config.focus_restore_grace_us;
         let spin_threshold_us = 150;
         let core_warmup_budget_us = 0;
         let parsed_telemetry_mode = if config.telemetry {
@@ -102,6 +130,20 @@ impl NativeDispatchSessionPy {
 
         Ok(Self {
             session: Arc::new(session),
+            effective_config: EffectiveSessionConfig {
+                game_fps,
+                requested_min_hold_us: min_hold_us,
+                effective_min_hold_us,
+                require_focus,
+                focus_restore_grace_us,
+                telemetry_mode: if config.telemetry { "ring" } else { "off" },
+                profile: match parsed_profile {
+                    DispatchProfile::Production => "production",
+                    DispatchProfile::StrictTimingDiagnostic => "strict_timing_diagnostic",
+                    #[cfg(any(test, feature = "test-support"))]
+                    DispatchProfile::MockTest => "mock_test",
+                },
+            },
         })
     }
 
@@ -390,6 +432,7 @@ impl NativeDispatchSessionPy {
     fn session_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let report = PyDict::new(py);
         report.set_item("snapshot", self.snapshot(py)?)?;
+        report.set_item("effective_config", self.effective_config.to_py_dict(py)?)?;
         report.set_item("telemetry_json", self.take_telemetry_json(py)?)?;
         report.set_item("estimator_state_json", self.estimator_state_json()?)?;
         Ok(report)
@@ -641,6 +684,7 @@ impl TestDispatchSessionPy {
     fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         NativeDispatchSessionPy {
             session: Arc::clone(&self.session),
+            effective_config: EffectiveSessionConfig::default(),
         }
         .snapshot(py)
     }

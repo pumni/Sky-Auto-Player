@@ -750,6 +750,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             hold_frames=plan.session.hold_frames,
             game_fps=int(plan.active_policy.fps),
             tempo_scale=plan.session.tempo_scale,
+            focus_restore_grace_us=int(plan.active_policy.focus_restore_grace_us),
             min_hold_us=int(plan.active_policy.min_hold_us),
             min_hold_margin_us=int(plan.active_policy.min_hold_margin_us),
             min_hold_margin_source=plan.active_policy.min_hold_margin_source,

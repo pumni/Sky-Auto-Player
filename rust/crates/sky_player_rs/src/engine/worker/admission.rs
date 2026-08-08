@@ -37,16 +37,8 @@ pub(crate) fn focus_matches_hwnd(
     )
 }
 
-pub(crate) fn focus_matches(
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-) -> bool {
-    focus_matches_hwnd(
-        require_focus,
-        focus_active,
-        target_hwnd.load(Ordering::Acquire),
-    )
+pub(crate) fn focus_matches(require_focus: bool, focus_active: &AtomicBool) -> bool {
+    !require_focus || focus_active.load(Ordering::Acquire)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

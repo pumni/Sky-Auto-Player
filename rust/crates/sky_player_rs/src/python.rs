@@ -54,6 +54,7 @@ struct NativeSessionConfigPy {
     game_fps: u16,
     min_hold_us: u64,
     require_focus: bool,
+    focus_restore_grace_us: u64,
     target_hwnd: isize,
     telemetry: bool,
     profile: DispatchProfile,
@@ -66,6 +67,7 @@ impl Default for NativeSessionConfigPy {
             game_fps: 60,
             min_hold_us: 50_000,
             require_focus: false,
+            focus_restore_grace_us: 100_000,
             target_hwnd: 0,
             telemetry: false,
             profile: DispatchProfile::Production,
@@ -81,15 +83,18 @@ impl NativeSessionConfigPy {
         game_fps,
         min_hold_us = StrictU64(50000),
         require_focus = false,
+        focus_restore_grace_us = StrictU64(100000),
         target_hwnd = StrictU64(0),
         telemetry = false,
         profile = "production",
         estimator_state_json = None
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         game_fps: StrictU64,
         min_hold_us: StrictU64,
         require_focus: bool,
+        focus_restore_grace_us: StrictU64,
         target_hwnd: StrictU64,
         telemetry: bool,
         profile: &str,
@@ -109,6 +114,11 @@ impl NativeSessionConfigPy {
                 "min_hold_us must be at most 60000000",
             ));
         }
+        if focus_restore_grace_us.0 > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "focus_restore_grace_us must be at most 60000000",
+            ));
+        }
         let game_fps = u16::try_from(game_fps.0)
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
         if !(15..=240).contains(&game_fps) {
@@ -118,6 +128,7 @@ impl NativeSessionConfigPy {
             game_fps,
             min_hold_us: min_hold_us.0,
             require_focus,
+            focus_restore_grace_us: focus_restore_grace_us.0,
             target_hwnd,
             telemetry,
             profile,
@@ -138,6 +149,11 @@ impl NativeSessionConfigPy {
     #[getter]
     fn require_focus(&self) -> bool {
         self.require_focus
+    }
+
+    #[getter]
+    fn focus_restore_grace_us(&self) -> u64 {
+        self.focus_restore_grace_us
     }
 
     #[getter]

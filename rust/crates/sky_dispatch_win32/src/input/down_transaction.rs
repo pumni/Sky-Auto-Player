@@ -5,7 +5,87 @@ use super::outcome::{
 use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
 
-pub fn emit_down_with<F>(scan_codes: &[u16], mut send_fn: F) -> SendTransactionOutcome
+/// Emit one note-on packet and return transport evidence without retrying.
+///
+/// A Down-bearing packet cannot be replayed after any non-zero insertion: the
+/// physical chord may already be split.  Recovery therefore belongs to the
+/// owning state machine, not this low-level transport primitive.
+pub fn emit_down_once_with<F>(scan_codes: &[u16], mut send_fn: F) -> SendTransactionOutcome
+where
+    F: FnMut(&[u16], bool) -> PlatformSendResult,
+{
+    if scan_codes.is_empty() {
+        let (started_ticks, completed_ticks, timing_error) = no_syscall_boundary_with_clock(None);
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: 0,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 0,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started_ticks),
+                completed_ticks,
+                timing_error,
+            },
+        };
+    }
+
+    let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
+    let requested = scan_codes.len();
+    let result = send_fn(scan_codes, false);
+    let inserted = (result.inserted as usize).min(requested);
+    let status = classify_send_status(
+        inserted,
+        requested,
+        result.win32_error,
+        Some(result.started_ticks),
+        result.completed_ticks,
+    );
+    let win32_error = (result.win32_error != 0).then_some(result.win32_error);
+    let retry_reason = if inserted == 0 && !matches!(status, SendTransactionStatus::Complete) {
+        PacketRetryReason::ZeroProgress
+    } else if inserted < requested {
+        PacketRetryReason::PartialProgress {
+            inserted_count: inserted as u8,
+        }
+    } else {
+        PacketRetryReason::None
+    };
+
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted as u8,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason,
+            first_win32_error: win32_error,
+            last_win32_error: win32_error,
+            started_ticks: Some(result.started_ticks),
+            completed_ticks: result.completed_ticks,
+            timing_error: result.timing_error,
+        },
+    }
+}
+
+pub fn emit_down_once(scan_codes: &[u16]) -> SendTransactionOutcome {
+    emit_down_once_with(scan_codes, send_input_raw)
+}
+
+#[cfg(test)]
+pub(crate) fn emit_down_with<F>(scan_codes: &[u16], mut send_fn: F) -> SendTransactionOutcome
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
@@ -183,5 +263,5 @@ where
 }
 
 pub fn emit_down(scan_codes: &[u16]) -> SendTransactionOutcome {
-    emit_down_with(scan_codes, send_input_raw)
+    emit_down_once(scan_codes)
 }

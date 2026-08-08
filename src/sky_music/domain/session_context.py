@@ -42,6 +42,8 @@ class PlaybackSessionContext:
         object.__setattr__(self, "hold_frames", validate_hold_frames(self.hold_frames))
         if self.tempo_scale <= 0:
             raise ValueError("tempo_scale must be > 0")
+        if not 0 <= self.focus_restore_grace_us <= 60_000_000:
+            raise ValueError("focus_restore_grace_us must be in 0..=60000000")
         object.__setattr__(self, "fps", resolve_game_fps(self.fps))
 
     @classmethod

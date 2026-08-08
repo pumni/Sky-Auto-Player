@@ -14,12 +14,13 @@
 //!       --features test-support --test rt_dispatch_no_alloc
 
 use sky_dispatch_core::estimator::LatencyClass;
-use sky_dispatch_core::time::TimelineTicks;
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, DownObservation, EstimatorObservationEvidence,
-    OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, ProductionDispatchTestHarness,
-    UpObservation, is_clean_estimator_observation,
+    DispatchObservation, DispatchPath, DispatchStep, DownObservation, DownTraceObservation,
+    EstimatorObservationEvidence, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
+    ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
+    is_clean_estimator_observation,
 };
 use sky_player_rs::engine::observer_test_hooks::{
     observer_test_hook_guard, set_release_observer_failure_on_recovery,
@@ -123,10 +124,35 @@ fn down_observation(n: u64) -> DispatchObservation {
         completed_effective: n,
         authored_batch_scheduled_us: 0,
         batch_scheduled_us: 0,
-        core_post_send_us: 1,
+        sender_completed_qpc: QpcTicks::ZERO,
+        worker_ready_qpc: QpcTicks::ZERO,
         send_warn_us: 0,
         core_post_send_warn_us: 0,
-        force_publish: false,
+        trace: DownTraceObservation {
+            event_index: 0,
+            trace_kind: 0,
+            result_success: true,
+            requested_count: 1,
+            sent_count: 1,
+            skipped_count: 0,
+            send_attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            chord_integrity_lost: false,
+            last_win32_error: 0,
+            authored_ticks: TimelineTicks::ZERO,
+            effective_deadline_ticks: TimelineTicks::ZERO,
+            wake_ticks: TimelineTicks::ZERO,
+            sender_started_ticks: Some(TimelineTicks::ZERO),
+            sender_completed_ticks: Some(TimelineTicks::ZERO),
+            completion_error_ticks: 0,
+            authored_completion_error_ticks: 0,
+            applied_lead_ticks: DurationTicks::ZERO,
+            recovered_retry_late: false,
+            recovered_partial_up: false,
+            strict_completion_late: false,
+            retry_late_abort: false,
+            saturation_abort: false,
+        },
     })
 }
 
@@ -143,10 +169,32 @@ fn up_observation(n: u64) -> DispatchObservation {
         deferred_by_us: 0,
         up_completion_error_us: 0,
         estimator_evidence: clean_estimator_evidence(1),
-        core_post_send_us: 1,
+        sender_completed_qpc: QpcTicks::ZERO,
+        worker_ready_qpc: QpcTicks::ZERO,
         send_warn_us: 0,
         core_post_send_warn_us: 0,
-        force_publish: false,
+        recovery_pause_ticks: None,
+        strict_up_completion_late: false,
+        saturation_abort: false,
+        trace: UpTraceObservation {
+            event_index: 0,
+            trace_kind: 1,
+            scan_count: 1,
+            sent_count: 1,
+            skipped_count: 0,
+            send_attempts: 1,
+            last_win32_error: 0,
+            authored_ticks: TimelineTicks::ZERO,
+            effective_deadline_ticks: TimelineTicks::ZERO,
+            wake_ticks: TimelineTicks::ZERO,
+            sender_started_ticks: Some(TimelineTicks::ZERO),
+            sender_completed_ticks: Some(TimelineTicks::ZERO),
+            completion_error_ticks: 0,
+            authored_completion_error_ticks: 0,
+            applied_lead_ticks: DurationTicks::ZERO,
+            deferred_by_us: 0,
+            recovery_required: false,
+        },
     })
 }
 
@@ -473,6 +521,15 @@ fn production_pending_release_hard_path_no_alloc() {
 }
 
 fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness) -> DispatchStep {
+    let drain_observer = |harness: &mut ProductionDispatchTestHarness| {
+        loop {
+            match harness.drain_observer() {
+                Ok(0) => break Ok(()),
+                Ok(_) => continue,
+                Err(step) => break Err(step),
+            }
+        }
+    };
     for _ in 0..=usize::from(sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES) {
         let plan = harness.plan_current_dispatch();
         let pending_plan = plan.pending().expect("recovery must retain pending plan");
@@ -489,6 +546,12 @@ fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness)
             LatencyClass::Hot,
         );
         if matches!(step, DispatchStep::Terminate(_)) {
+            if let Err(observer_step) = drain_observer(harness) {
+                return observer_step;
+            }
+            return step;
+        }
+        if let Err(step) = drain_observer(harness) {
             return step;
         }
     }

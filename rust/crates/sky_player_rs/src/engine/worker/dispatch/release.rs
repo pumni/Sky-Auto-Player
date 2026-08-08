@@ -9,8 +9,8 @@ use super::super::{
     signed_timeline_delta_ticks,
 };
 use super::DispatchStep;
-use super::observer::PendingObservationQueue;
-use super::observer::{observe_release_send_health, record_release_telemetry};
+use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
+use super::observer::{PendingObservationQueue, flush_overflow_observation};
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
@@ -292,79 +292,102 @@ pub(crate) fn dispatch_due_pending_releases(
         None
     };
 
-    let dispatch_ready_qpc = match qpc_clock.now() {
+    let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
+        && reconciliation.up_completion_lateness_ticks.is_some();
+    health.up_saturation_positive_streak = if up_saturated_positive {
+        health.up_saturation_positive_streak.saturating_add(1)
+    } else {
+        0
+    };
+    let flags = ReleaseOutcomeFlags {
+        saturation_abort: config.timing.strict_timing
+            && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK,
+        strict_up_completion_late: config.timing.strict_timing
+            && super::timing::is_clean_estimator_observation(reconciliation.estimator_evidence)
+            && reconciliation
+                .up_completion_lateness_ticks
+                .is_some_and(|late| late > timing.strict_up_completion_late_ticks),
+    };
+    runtime.pending_pre_send_spin_us = 0;
+    let worker_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
             return DispatchStep::Terminate(format!(
-                "note-off dispatch_ready QPC failure: {error:?}"
+                "note-off worker-ready QPC failure: {error:?}"
             ));
         }
     };
-    let core_post_send_us =
-        match dispatch_ready_qpc.checked_duration_since(send.sender_completed_qpc) {
-            Ok(duration) => match qpc_clock.duration_to_us(duration) {
-                Ok(us) => us,
-                Err(error) => {
-                    return DispatchStep::Terminate(format!(
-                        "note-off post-send conversion failure: {error:?}"
-                    ));
-                }
-            },
+    // HARD DISPATCH READY BOUNDARY:
+    // physical/coordinator ownership is safe for the next dispatch.  From
+    // here on, only a fixed raw observation enqueue and terminal policy may
+    // run on this call stack.
+    let mut observation = UpObservation {
+        latency_class,
+        sender_duration_us: send.sender_duration_us,
+        sent_count: send.sent_count,
+        scan_count,
+        lead_up,
+        lead_up_saturated: up_saturated_positive,
+        completed_effective: send.completed_effective_us,
+        scheduled_us: reconciliation.scheduled_us,
+        deferred_by_us: reconciliation.deferred_by_us,
+        up_completion_error_us: reconciliation.up_completion_error_us,
+        estimator_evidence: reconciliation.estimator_evidence,
+        sender_completed_qpc: send.sender_completed_qpc,
+        worker_ready_qpc,
+        send_warn_us: frozen_budget.send_warn_us,
+        core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
+        recovery_pause_ticks: reconciliation.recovery_pause_ticks,
+        strict_up_completion_late: flags.strict_up_completion_late,
+        saturation_abort: flags.saturation_abort,
+        trace: UpTraceObservation {
+            event_index: due_pending[reconciliation.first_index].source_action_index,
+            trace_kind: super::super::TRACE_KIND_UP,
+            scan_count,
+            sent_count: send.sent_count,
+            skipped_count: send.skipped_count,
+            send_attempts: send.attempts,
+            last_win32_error: send.last_win32_error.unwrap_or(0),
+            authored_ticks: reconciliation.scheduled_ticks,
+            effective_deadline_ticks: reconciliation.effective_deadline_ticks,
+            wake_ticks: send.actual_ticks,
+            sender_started_ticks: send.sender_started_effective_ticks,
+            sender_completed_ticks: Some(send.completed_effective_ticks),
+            completion_error_ticks: reconciliation.up_completion_error_ticks,
+            authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
+            applied_lead_ticks: lead_up_ticks,
+            deferred_by_us: reconciliation.deferred_by_us,
+            recovery_required: reconciliation.recovery_required,
+        },
+    };
+    if observer.is_full() {
+        let evicted = match observer.pop_front() {
+            Some(value) => value,
+            None => {
+                return DispatchStep::Terminate(
+                    "observer queue fullness state is inconsistent".to_string(),
+                );
+            }
+        };
+        if let Err(step) = flush_overflow_observation(evicted, telemetry, qpc_clock) {
+            return step;
+        }
+        observation.worker_ready_qpc = match qpc_clock.now() {
+            Ok(ticks) => ticks,
             Err(error) => {
                 return DispatchStep::Terminate(format!(
-                    "dispatch-ready QPC ordering failure: {error:?}"
+                    "observer overflow worker-ready QPC failure: {error:?}"
                 ));
             }
         };
-
-    // HARD DISPATCH READY BOUNDARY:
-    // gameplay-critical dispatch ownership ends here.
+    }
     #[cfg(any(test, feature = "test-support"))]
     mark_release_ready();
-
-    if let Some(pause_ticks) = reconciliation.recovery_pause_ticks {
-        let recovery_pause_us = match qpc_clock.duration_to_us(pause_ticks) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "recovery telemetry conversion failure: {error:?}"
-                ));
-            }
-        };
-        local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
-    }
-
-    if let Err(step) = record_release_telemetry(
-        telemetry,
-        &due_pending,
-        &send,
-        &reconciliation,
-        lead_up_ticks,
-        core_post_send_us,
-    ) {
-        return step;
-    }
-
-    let flags = match observe_release_send_health(
-        qpc_clock,
-        config,
-        timing,
-        health,
-        runtime,
-        local_metrics,
-        observer,
-        &send,
-        &reconciliation,
-        &frozen_budget,
-        lead_up,
-        latency_class,
-        pending_plan,
-        scan_count,
-        core_post_send_us,
-    ) {
-        Ok(value) => value,
-        Err(step) => return step,
-    };
+    observer.push(
+        DispatchObservation::Up(observation),
+        &mut local_metrics.observer_dropped_samples,
+        &mut local_metrics.observer_queue_high_watermark,
+    );
 
     if let Some(outcome) = recovery_outcome {
         return DispatchStep::Terminate(outcome.terminal_error);

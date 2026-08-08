@@ -24,6 +24,11 @@ QPC tick domains for control-path arithmetic and only converts at API or
 telemetry boundaries. Completion timing is measured at the `SendInput` return
 boundary; it is not a claim about game polling, rendering, or audio onset.
 
+The production thread-priority ladder is explicit: `Auto` attempts the
+documented MMCSS `Games` task with `AVRT_PRIORITY_HIGH`, then falls back to
+`THREAD_PRIORITY_HIGHEST`; an explicit `MMCSS` request does not probe unrelated
+task names. RAII restores any thread priority and reverts MMCSS registration.
+
 ## Worker module ownership
 
 The worker is decomposed by invariant owner, not by call depth. `worker.rs`
@@ -40,21 +45,25 @@ choice, and the terminal transition.
   the wait deadline, so prepare and wait cannot disagree on lead selection.
 - `dispatch/` owns the pending-release and authored-packet backend
   transactions, transaction-outcome interpretation, coordinator commit, and the
-  dispatch telemetry record.  Both the note-on and note-off observers are
-  two-phase: the mandatory telemetry trace, the coordinator commit, the
-  mandatory terminal SLO decision (note-off path), and the `dispatch_ready`
-  QPC sample stay on the hard scheduler path; the estimator update,
-  health-window observation, lateness accounting, and diagnostic metric
-  publication are enqueued as an allocation-free `DispatchObservation`
-  (tagged `Down`/`Up`) into a fixed-capacity (64) worker-owned ring and
-  consumed later by `observer::drain_one_observer`.
+  dispatch telemetry record. Both note-on and note-off paths first finish
+  physical/coordinator correctness, required recovery, the mandatory terminal
+  SLO decision, and a `worker_ready_qpc` sample. They then enqueue one
+  allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) into a
+  fixed-capacity (64) worker-owned ring and return. Worker-ready duration
+  conversion, trace-record materialization, estimator update, health-window
+  observation, lateness accounting, and diagnostic metric publication are
+  deferred to `observer::drain_one_observer`. If the ring is full, the oldest raw record is
+  materialized before the new record is admitted, preserving telemetry order
+  without blocking the normal queue path.
   The dispatch loop applies the §8.7/§8.8 slack rule before admit/dispatch:
   fresh QPC → immutable `NextDispatchPlan` → drain at most one observation
   only when next-deadline slack ≥ `budget_us + margin_us` (or no deadline
   remains) → if drained, discard the plan and rebuild from a fresh QPC
   sample before wait/admit/dispatch.  Adaptive budget (§8.9) is
-  `clamp(2 × observed_us, 5_000..20_000)`.  Observer work is droppable and
-  never terminal.  It returns a closed four-variant `DispatchStep`
+  `clamp(2 × observed_us, 5_000..20_000)`. Observer work never rolls back
+  physical ownership; a deferred observer failure may still terminate the
+  session after that ownership is safe. It returns a closed four-variant
+  `DispatchStep`
   (`NoWork`, `Dispatched`, `Continue`, `Terminate`) instead of scalar tuples.
 - `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
   terminal-error aggregation.
@@ -73,9 +82,12 @@ app-owned delivery proxy and must not be described as game receipt.
 
 `SessionConfig` exposes only session/user inputs: the user-selected `game_fps` (15..=240), the
 materialized `min_hold_us` from the selected hold-frame value,
-`require_focus`, `target_hwnd`, telemetry enablement, and the native profile.
-Internal wait strategy, priority, retry, estimator, telemetry capacity, lease,
-and strict-completion policy are Rust dispatch-mode details.
+`require_focus`, `focus_restore_grace_us`, `target_hwnd`, telemetry enablement,
+and the native profile. The final Python session report includes an immutable
+`effective_config` record with requested/effective min-hold values and the
+wired focus/telemetry semantics. Internal wait strategy, priority, retry,
+estimator, telemetry capacity, lease, and strict-completion policy are Rust
+dispatch-mode details.
 
 The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
 `panic`), `set_target_hwnd`, `snapshot_lite`, and `session_report`.
@@ -109,7 +121,7 @@ The native final snapshot also reports `post_send_max_us`,
 `dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
 wait failure counters, and timeline-rebase count/duration/reason.  The
 deferred dispatch observer additionally reports
-`core_post_send_max_us` (a typed `dispatch_ready - sender_completed` QPC
+`core_post_send_max_us` (a typed `worker_ready_qpc - sender_completed` QPC
 sample), `observer_duration_max_us`, `observer_dropped_samples`, and
 `observer_queue_high_watermark`.  Authored
 lateness is measured before any recovery rebase. These fields are diagnostic
@@ -146,6 +158,13 @@ health; observer and wait-path degradation remain separate signals.
   cleanup. Uncertain cleanup is an error, never a successful finish.
 - Partial `SendInput` is not success; zero progress and recovery are handled
   by Rust and remain visible in the final report.
+- Normal authored Down/Mixed packets and pending release sends use one
+  low-level `SendInput` attempt. A partial Down/Mixed insertion is terminal
+  chord uncertainty and is never replayed; zero progress is returned as
+  explicit transport evidence rather than immediately retrying the packet.
+  Pending-release retry belongs to the coordinator-owned recovery state
+  machine, while terminal cleanup owns its bounded one-attempt-per-FSM-step
+  retry budget. This prevents nested transport-retry × recovery-FSM behavior.
 - Physical preflight and cleanup verification map the requested instrument
   scan-code mask through the keyboard layout of the current target window
   thread using `MapVirtualKeyExW`. Full admission and full terminal cleanup use
@@ -177,8 +196,10 @@ health; observer and wait-path degradation remain separate signals.
 ## Focus and liveness
 
 Python owns process-name validation and target discovery. It sends one HWND
-with `set_target_hwnd`; Rust compares it to `GetForegroundWindow()` immediately
-before dispatch. Python does not send a second focus boolean.
+with `set_target_hwnd`; Rust uses the focus-tracker atomic as the coarse loop
+gate and performs one authoritative `GetForegroundWindow()` comparison against
+the stamped HWND immediately before a Down dispatch. Python does not send a
+second focus boolean.
 
 The HWND is also passed directly to preflight and cleanup verification. The
 sender continues to inject the same physical scan codes; the layout-aware VK
@@ -194,10 +215,11 @@ same HWND still requires a fresh preflight. A target change invalidates the
 previous verification before the worker processes the next chord.
 Cleanup/preflight runs while the playback clock remains paused; only after a
 successful, still-current verification does the worker take a new QPC sample
-and leave the pause. Immediately before a Down, the worker checks focus
-against the exact stamped HWND, rechecks the target stamp, and gates quit,
-skip, panic, and pause state before `SendInput`, so a change during the Win32
-verification window cannot send an unverified chord.
+and leave the pause. The steady-state loop uses only the focus-tracker atomic
+as its coarse gate. Immediately before a Down, the worker performs one fresh
+focus query against the exact stamped HWND, rechecks the target stamp, and
+gates quit, skip, panic, and pause state before `SendInput`, so a change during
+the Win32 verification window cannot send an unverified chord.
 
 Each physical-state pass resolves the target thread and keyboard layout once,
 maps only the requested fixed scan-code mask, and then reads the aggregate key
@@ -228,6 +250,15 @@ on a bounded 100 ms interval with a final worker sample, while healthy shared
 metrics publication is rate-limited and anomaly/terminal transitions publish
 immediately. When telemetry is disabled, trace-record construction is not
 performed.
+
+The waiter returns raw `wake_qpc` and `spin_ticks` evidence. The regular worker
+loop stores at most one fixed raw wait observation and hands it to the same
+deferred observer path as dispatch observations; wake lateness, tick-to-
+microsecond conversion, spin counters, and wait-health windows are therefore
+not computed on the wake-to-dispatch handoff. A full observer queue drops the
+wait observation without evicting a physical dispatch observation. Startup
+gating may account for its own spin sample immediately because it is outside
+the steady-state dispatch boundary.
 
 ## Preview, calibration, and rollback
 

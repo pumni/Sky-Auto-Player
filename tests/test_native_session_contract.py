@@ -46,6 +46,7 @@ def test_session_config_validates_target_and_exposes_user_fields() -> None:
         game_fps=120,
         min_hold_us=50_000,
         require_focus=True,
+        focus_restore_grace_us=12_345,
         target_hwnd=123,
         telemetry=True,
         profile="production",
@@ -53,6 +54,7 @@ def test_session_config_validates_target_and_exposes_user_fields() -> None:
     assert config.min_hold_us == 50_000
     assert config.game_fps == 120
     assert config.require_focus is True
+    assert config.focus_restore_grace_us == 12_345
     assert config.target_hwnd == 123
     assert config.telemetry is True
     assert config.profile == "production"
@@ -83,7 +85,9 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
         [21],
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=60,
+            min_hold_us=100,
             require_focus=False,
+            focus_restore_grace_us=1_234,
             telemetry=True,
         ),
     )
@@ -97,8 +101,22 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
     with pytest.raises(AttributeError):
         live.is_finished = False
     report = dict(session.session_report())  # type: ignore[attr-defined]
-    assert set(report) == {"snapshot", "telemetry_json", "estimator_state_json"}
+    assert set(report) == {
+        "snapshot",
+        "effective_config",
+        "telemetry_json",
+        "estimator_state_json",
+    }
     assert dict(report["snapshot"])["is_finished"] is True
+    assert report["effective_config"] == {
+        "game_fps": 60,
+        "requested_min_hold_us": 100,
+        "effective_min_hold_us": 17_167,
+        "require_focus": False,
+        "focus_restore_grace_us": 1_234,
+        "telemetry_mode": "ring",
+        "profile": "production",
+    }
 
 
 def test_health_mapping_rejects_missing_correctness_counter() -> None:

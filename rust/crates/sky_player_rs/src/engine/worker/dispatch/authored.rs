@@ -299,7 +299,7 @@ fn admit_authored_down(
     if !view
         .packet_masks
         .is_some_and(|packet| packet.down_mask == 0)
-        && !focus_matches(config.focus.require_focus, focus_active, target_hwnd)
+        && !focus_matches(config.focus.require_focus, focus_active)
     {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
@@ -535,9 +535,9 @@ fn record_down_send_outcome(
         runtime,
         local_metrics,
         qpc_clock,
+        telemetry,
         coordinator,
         clock_state,
-        telemetry,
         effective_now_ticks,
         lead_down,
         lead_down_saturated,
@@ -568,9 +568,9 @@ fn finalize_down_send_outcome(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
+    telemetry: &mut TelemetryCollector,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
     lead_down_saturated: bool,

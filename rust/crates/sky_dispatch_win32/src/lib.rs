@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_mmcss_guard() {
-        let guard = mmcss::MmcssGuard::join_pro_audio();
+        let guard = mmcss::MmcssGuard::join_games();
         if cfg!(windows) {
             drop(guard);
         }

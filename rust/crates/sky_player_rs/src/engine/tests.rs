@@ -13,7 +13,7 @@ use super::{
     anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
     deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
     estimator_path_for_dispatch, exact_sender_durations, final_down_admission, focus_gate_matches,
-    focus_matches_hwnd, record_input_path_health, record_termination_error,
+    focus_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
     release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
     target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
@@ -709,6 +709,37 @@ fn target_change_is_rejected_at_the_final_send_boundary() {
 fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
     let focus_active = AtomicBool::new(false);
     assert!(focus_matches_hwnd(false, &focus_active, 123));
+}
+
+#[test]
+fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let focus_active = AtomicBool::new(true);
+    let target = AtomicIsize::new(123);
+    assert!(focus_matches(true, &focus_active));
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+
+    let generation = AtomicU64::new(1);
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 1,
+    };
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let _ = final_down_admission(
+        expected,
+        true,
+        &focus_active,
+        &target,
+        &generation,
+        &quit_requested,
+        &skip_requested,
+        &panic_requested,
+        &desired_pause,
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 }
 
 #[test]
@@ -2634,19 +2665,23 @@ fn invariant_mismatch_prevents_sender_invocation() {
 
 #[test]
 fn test_qpc_ordering_failure_is_terminal() {
+    use crate::engine::config::WorkerConfig;
+    use crate::engine::telemetry::SharedMetrics;
     use crate::engine::telemetry::WorkerMetricsLocal;
     use crate::engine::worker::WorkerRuntime;
-    use crate::engine::worker::dispatch::observer::publisher_down_send_outcome;
+    use crate::engine::worker::dispatch::observer::{
+        drain_one_observer, publisher_down_send_outcome,
+    };
     use crate::engine::worker::dispatch::timing::{DownSendTiming, EstimatorObservationEvidence};
     use crate::engine::worker::dispatch::{
         AuthoredBatchView, DispatchStep, PendingObservationQueue,
     };
     use crate::engine::worker::health::{DispatchPath, FrozenDispatchBudget};
     use sky_dispatch_core::coordinator::PreparedBatch;
-    use sky_dispatch_core::estimator::LatencyClass;
+    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, ScanCodeBatch};
     use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
-    use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
+    use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus, TrackedKeyState};
     use smallvec::SmallVec;
 
     let qpc_clock = QpcClock::initialize().expect("QPC");
@@ -2655,8 +2690,9 @@ fn test_qpc_ordering_failure_is_terminal() {
         crate::engine::worker::health::DispatchHealthOptions::default(),
     );
     let mut local_metrics = WorkerMetricsLocal::default();
+    let mut timing = crate::engine::worker::WorkerTimingState::create_test_timing();
     let mut telemetry = crate::engine::telemetry::TelemetryCollector::new(
-        crate::engine::telemetry::TelemetryMode::Off,
+        crate::engine::telemetry::TelemetryMode::Ring,
         16,
     );
     let mut observer = PendingObservationQueue::default();
@@ -2749,13 +2785,33 @@ fn test_qpc_ordering_failure_is_terminal() {
         &timing_proof,
     );
 
+    assert!(matches!(step, DispatchStep::Dispatched));
+    let config = WorkerConfig::default();
+    let mut last_published_error = None;
+    let metrics = SharedMetrics::default();
+    let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
+    let mut estimator = SendLatencyEstimator::default();
+    let step = drain_one_observer(
+        &mut observer,
+        &config,
+        &mut health,
+        &mut local_metrics,
+        &mut last_published_error,
+        &metrics,
+        &mut backend,
+        &mut estimator,
+        &mut telemetry,
+        qpc_clock,
+        0,
+        &mut timing,
+    );
     match step {
-        DispatchStep::Terminate(msg) => {
+        Err(DispatchStep::Terminate(msg)) => {
             assert!(
-                msg.contains("dispatch-ready QPC ordering failure"),
+                msg.contains("observer QPC ordering failure"),
                 "expected ordering failure message, got: {msg}"
             );
         }
-        other => panic!("expected DispatchStep::Terminate, got {other:?}"),
+        other => panic!("expected observer ordering failure, got {other:?}"),
     }
 }

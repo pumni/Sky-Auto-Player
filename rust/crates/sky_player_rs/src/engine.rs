@@ -43,10 +43,11 @@ pub mod dispatch_primitives {
     pub use super::test_support::ProductionDispatchTestHarness;
     pub use super::worker::NextDispatchPlan;
     pub use super::worker::dispatch::DispatchStep;
-    pub use super::worker::dispatch::observer::{
-        DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
-        UpObservation,
+    pub use super::worker::dispatch::observation::{
+        DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
+        UpObservation, UpTraceObservation,
     };
+    pub use super::worker::dispatch::observer::PendingObservationQueue;
     pub use super::worker::dispatch::timing::{
         EstimatorObservationEvidence, is_clean_estimator_observation,
     };

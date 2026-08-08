@@ -10,10 +10,11 @@ class SessionConfig:
     require_focus: bool
     target_hwnd: int
     telemetry: bool
+    focus_restore_grace_us: int
     profile: PlaybackProfile
     estimator_state_json: str | None
 
-    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., profile: PlaybackProfile = ..., estimator_state_json: str | None = ...) -> None: ...
+    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., focus_restore_grace_us: int = ..., profile: PlaybackProfile = ..., estimator_state_json: str | None = ...) -> None: ...
 
 
 class BackendHealthSnapshot:

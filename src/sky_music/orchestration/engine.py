@@ -6,7 +6,10 @@ import logging
 from typing import Any
 
 from sky_music.domain.domain import Song
-from sky_music.domain.scheduler_types import KeyAction
+from sky_music.domain.scheduler_types import (
+    DEFAULT_FOCUS_RESTORE_GRACE_US,
+    KeyAction,
+)
 from sky_music.infrastructure.focus import (
     FocusGuard,
     NoopFocusGuard,
@@ -48,6 +51,7 @@ class PlaybackEngine:
         renderer: Any = None,
         telemetry_enabled: bool = False,
         require_focus: bool = True,
+        focus_restore_grace_us: int = DEFAULT_FOCUS_RESTORE_GRACE_US,
         focus_guard: FocusGuard | None = None,
         hold_label: str = "hold 1.00f",
         hold_frames: float = 1.0,
@@ -63,6 +67,9 @@ class PlaybackEngine:
         self.controls = controls
         self.renderer = renderer
         self.require_focus = bool(require_focus)
+        if not 0 <= int(focus_restore_grace_us) <= 60_000_000:
+            raise ValueError("focus_restore_grace_us must be in 0..=60000000")
+        self.focus_restore_grace_us = int(focus_restore_grace_us)
         self.dry_run = bool(dry_run)
         self.game_fps = int(game_fps)
         if not 15 <= self.game_fps <= 240:
@@ -112,6 +119,7 @@ class PlaybackEngine:
             game_fps=self.game_fps,
             min_hold_us=self.min_hold_us,
             require_focus=self.require_focus,
+            focus_restore_grace_us=self.focus_restore_grace_us,
             focus_guard=self.focus_guard,
             controls=self.controls,
             renderer=self.renderer,

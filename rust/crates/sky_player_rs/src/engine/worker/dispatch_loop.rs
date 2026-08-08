@@ -1,13 +1,13 @@
 use super::super::{
-    CPU_METRICS_SAMPLE_INTERVAL_US, Duration, DurationTicks, QpcError, TimelineTicks, WaitFailure,
-    WaitOutcome, current_process_cpu_time_us, current_thread_cpu_time_us, try_publish_metrics,
+    Duration, DurationTicks, QpcError, TimelineTicks, WaitFailure, WaitOutcome, try_publish_metrics,
 };
+use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, WaitBoundary, WaitBoundaryInput, WaitDeadline,
-    WaitMutable, WaitSignals, WaitTiming, Worker, anchored_dispatch_target_ticks_typed,
-    classify_latency_class, cpu_metrics_sample_due, ensure_preflight_for_target, focus_matches,
-    focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch,
+    CommandControlRuntime, CommandControlSignals, DispatchObservation, WaitBoundary,
+    WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
+    anchored_dispatch_target_ticks_typed, classify_latency_class, ensure_preflight_for_target,
+    focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch,
     process_command_control, publish_backend_metrics, suspend_live_input,
     target_stamp_still_current, wait_failure_message, wait_for_next_boundary,
 };
@@ -101,26 +101,6 @@ pub(super) fn dispatch(
         let qpc_clock = resources.clock;
         while !resources.coordinator.is_finished() {
             let loop_start_ticks = qpc_ticks_or_terminal!();
-            let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
-            core.metrics.playback_wall_time_us =
-                loop_start_us.saturating_sub(timing.start_wall_time_us);
-            if cpu_metrics_sample_due(
-                loop_start_us,
-                timing.last_cpu_metrics_sample_us,
-                CPU_METRICS_SAMPLE_INTERVAL_US,
-            ) {
-                core.metrics.worker_cpu_time_us =
-                    current_thread_cpu_time_us().saturating_sub(timing.start_thread_cpu_us);
-                core.metrics.process_cpu_time_us =
-                    current_process_cpu_time_us().saturating_sub(timing.start_process_cpu_us);
-                timing.last_cpu_metrics_sample_us = loop_start_us;
-            }
-            if core.metrics.playback_wall_time_us > 0 {
-                core.metrics.spin_duty_cycle_ppm = (core.metrics.spin_time_us as u128 * 1_000_000
-                    / core.metrics.playback_wall_time_us as u128)
-                    as u64;
-            }
-            try_publish_metrics(&core.metrics, metrics, loop_start_us, false);
             if let CommandControl::Exit = process_command_control(CommandControlInput {
                 clock: CommandControlClock {
                     loop_start_ticks,
@@ -152,7 +132,7 @@ pub(super) fn dispatch(
             }
 
             let mut now_ticks = qpc_ticks_or_terminal!();
-            let focus_ok = focus_matches(config.focus.require_focus, focus_active, target_hwnd);
+            let focus_ok = focus_matches(config.focus.require_focus, focus_active);
             let manual_pause = desired_pause.load(Ordering::Acquire);
             #[cfg(any(test, feature = "test-support"))]
             if command_timing.needs_observation() {
@@ -452,11 +432,17 @@ pub(super) fn dispatch(
                         timing.effective_spin_threshold_ticks,
                         interrupt,
                     );
+                    let spin_us = match qpc_clock.duration_to_us(wait_result.spin_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("startup wait spin conversion failure: {error:?}"));
+                            break;
+                        }
+                    };
                     core.metrics.idle_wake_count = core.metrics.idle_wake_count.saturating_add(1);
-                    core.metrics.spin_time_us = core
-                        .metrics
-                        .spin_time_us
-                        .saturating_add(wait_result.spin_us);
+                    core.metrics.spin_time_us = core.metrics.spin_time_us.saturating_add(spin_us);
                     match wait_result.outcome {
                         WaitOutcome::Interrupted => continue,
                         WaitOutcome::Deadline => continue,
@@ -521,6 +507,18 @@ pub(super) fn dispatch(
             // §8.7: fresh QPC → immutable plan → inspect slack → maybe drain
             // one observation → if drained, discard plan and rebuild from a
             // fresh QPC sample before any admit/dispatch/wait.
+            if let Some(wait_observation) = core.runtime.pending_wait_observation.take() {
+                if core.observer.pending.is_full() {
+                    core.metrics.observer_dropped_samples =
+                        core.metrics.observer_dropped_samples.saturating_add(1);
+                } else {
+                    core.observer.pending.push(
+                        DispatchObservation::Wait(wait_observation),
+                        &mut core.metrics.observer_dropped_samples,
+                        &mut core.metrics.observer_queue_high_watermark,
+                    );
+                }
+            }
             let mut dispatch_plan = match plan_next_dispatch(
                 &resources.coordinator,
                 &resources.estimator,
@@ -545,7 +543,7 @@ pub(super) fn dispatch(
                     qpc_clock,
                 )
             {
-                let drain_us = super::drain_one_observer(
+                let drain_us = match super::drain_one_observer(
                     &mut core.observer.pending,
                     config,
                     core.health.as_mut().unwrap(),
@@ -554,9 +552,19 @@ pub(super) fn dispatch(
                     metrics,
                     &mut resources.backend,
                     &mut resources.estimator,
+                    &mut resources.telemetry,
                     qpc_clock,
                     effective_now_us,
-                );
+                    &mut timing,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some(format!("observer drain failed: {error:?}"));
+                        break;
+                    }
+                };
                 if drain_us > 0 {
                     core.metrics.observer_duration_max_us =
                         core.metrics.observer_duration_max_us.max(drain_us);
@@ -735,21 +743,86 @@ pub(super) fn dispatch(
                     waiter: &resources.waiter,
                     interrupt,
                     strict_timing: config.timing.strict_timing,
-                    wait_warn_us: core.health.as_ref().unwrap().options.wait_warn_us,
-                    wait_policy: core.health.as_ref().unwrap().options.window_policy(),
                 },
                 mutable: WaitMutable {
                     local_metrics: &mut core.metrics,
                     pending_pre_send_spin_us: &mut core.runtime.pending_pre_send_spin_us,
                     force_full_cleanup: &mut core.runtime.force_full_cleanup,
                     terminal_error: &mut core.runtime.terminal_error,
-                    wait_window: &mut core.health.as_mut().unwrap().wait_window,
                 },
             }) {
-                WaitBoundary::Ready => {}
-                WaitBoundary::Continue => continue,
+                WaitBoundary::Ready(Some(wait_result)) | WaitBoundary::Continue(wait_result) => {
+                    let Some(wait_deadline_ticks) = deadline_ticks else {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some("wait returned a result without a dispatch deadline".to_string());
+                        break;
+                    };
+                    core.runtime.pending_wait_observation = Some(WaitObservation {
+                        outcome: wait_result.outcome,
+                        wake_qpc: wait_result.wake_qpc,
+                        spin_ticks: wait_result.spin_ticks,
+                        deadline_ticks: wait_deadline_ticks,
+                        epoch_qpc: resources.playback.epoch,
+                        allow_pre_epoch_startup_dispatch: core
+                            .runtime
+                            .allow_pre_epoch_startup_dispatch,
+                    });
+                    continue;
+                }
+                WaitBoundary::Ready(None) => {}
                 WaitBoundary::Exit => break,
             }
+        }
+        // A terminal transition can end the coordinator loop immediately
+        // after a successful physical send.  Drain the fixed raw queue before
+        // finalization so deferred telemetry is not lost, while keeping this
+        // work outside the normal dispatch critical section.
+        while !core.observer.pending.is_empty() {
+            let now_us = match qpc_clock.now() {
+                Ok(ticks) => {
+                    match qpc_clock.duration_to_us(DurationTicks::from_raw(ticks.as_u64())) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(format!(
+                                "observer finalization QPC conversion failure: {error:?}"
+                            ));
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error =
+                        Some(format!("observer finalization QPC failure: {error:?}"));
+                    break;
+                }
+            };
+            let drain_us = match super::drain_one_observer(
+                &mut core.observer.pending,
+                config,
+                core.health.as_mut().unwrap(),
+                &mut core.metrics,
+                &mut core.errors.last_published,
+                metrics,
+                &mut resources.backend,
+                &mut resources.estimator,
+                &mut resources.telemetry,
+                qpc_clock,
+                now_us,
+                &mut timing,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error =
+                        Some(format!("observer finalization failed: {error:?}"));
+                    break;
+                }
+            };
+            core.metrics.observer_duration_max_us =
+                core.metrics.observer_duration_max_us.max(drain_us);
         }
     }))
 }

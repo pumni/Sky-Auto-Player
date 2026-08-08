@@ -17,6 +17,7 @@
 //!   publication.
 
 mod authored;
+pub(crate) mod observation;
 pub(crate) mod observer;
 mod release;
 pub(crate) mod timing;
@@ -84,6 +85,7 @@ pub(crate) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
+pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::{PendingObservationQueue, drain_one_observer, observer_has_safe_slack};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 #[cfg(any(test, feature = "test-support"))]

@@ -5,6 +5,7 @@ use super::outcome::{
 use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
 
+#[cfg(test)]
 pub(crate) fn emit_up_with_immediate<F>(
     scan_codes: &[u16],
     mut send_fn: F,
@@ -124,11 +125,11 @@ pub fn emit_up_with<F>(scan_codes: &[u16], send_fn: F) -> SendTransactionOutcome
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
-    emit_up_with_immediate(scan_codes, send_fn)
+    emit_up_once_with(scan_codes, send_fn)
 }
 
 pub fn emit_up(scan_codes: &[u16]) -> SendTransactionOutcome {
-    emit_up_with(scan_codes, send_input_raw)
+    emit_up_once_with(scan_codes, send_input_raw)
 }
 
 /// Single-send note-off used by the cleanup FSM, which owns retry itself.

@@ -21,7 +21,7 @@ pub struct MmcssGuard {
 }
 
 impl MmcssGuard {
-    pub fn join_pro_audio() -> Self {
+    pub fn join_games() -> Self {
         Self::acquire(PriorityMode::Mmcss)
     }
 
@@ -35,32 +35,24 @@ impl MmcssGuard {
             };
 
             if matches!(mode, PriorityMode::Auto | PriorityMode::Mmcss) {
-                for (task, acquired) in [
-                    ("Games", "mmcss:Games"),
-                    ("Low Latency", "mmcss:Low Latency"),
-                    ("Audio", "mmcss:Audio"),
-                ] {
-                    let task_name: Vec<u16> = format!("{task}\0").encode_utf16().collect();
-                    let mut task_index: u32 = 0;
-                    // SAFETY: the task name is NUL-terminated and task_index
-                    // is a valid writable out-parameter.
-                    let handle = unsafe {
-                        AvSetMmThreadCharacteristicsW(task_name.as_ptr(), &mut task_index)
-                    };
-                    if handle.is_null() {
-                        continue;
-                    }
+                let task_name: Vec<u16> = "Games\0".encode_utf16().collect();
+                let mut task_index: u32 = 0;
+                // SAFETY: the task name is NUL-terminated and task_index
+                // is a valid writable out-parameter.
+                let handle =
+                    unsafe { AvSetMmThreadCharacteristicsW(task_name.as_ptr(), &mut task_index) };
+                if !handle.is_null() {
                     // SAFETY: handle was returned by the MMCSS registration.
                     if unsafe { AvSetMmThreadPriority(handle, AVRT_PRIORITY_HIGH) } != 0 {
                         return Self {
                             mmcss_handle: handle,
                             priority_thread: std::ptr::null_mut(),
                             old_priority: None,
-                            acquired,
+                            acquired: "mmcss:Games",
                         };
                     }
-                    // SAFETY: release a partial registration before trying
-                    // the next documented MMCSS profile.
+                    // SAFETY: release a partial registration after priority
+                    // acquisition failed.
                     unsafe {
                         AvRevertMmThreadCharacteristics(handle);
                     }

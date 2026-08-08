@@ -122,6 +122,7 @@ class RustDispatchRuntime:
         renderer: Any,
         poll_s: float,
         telemetry_enabled: bool = False,
+        focus_restore_grace_us: int = 100_000,
     ) -> None:
         import sky_player_rs  # type: ignore[import-not-found]
 
@@ -150,6 +151,7 @@ class RustDispatchRuntime:
                 game_fps=int(game_fps),
                 min_hold_us=min_hold_us,
                 require_focus=require_focus,
+                focus_restore_grace_us=focus_restore_grace_us,
                 telemetry=telemetry_enabled,
                 profile="production",
                 estimator_state_json=estimator_state_json,

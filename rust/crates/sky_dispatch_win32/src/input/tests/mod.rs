@@ -276,6 +276,52 @@ fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
 }
 
 #[test]
+fn tracked_note_on_uses_one_send_attempt_without_retry() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_emitter = Arc::clone(&calls);
+    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
+        assert!(!key_up);
+        calls_for_emitter.fetch_add(1, Ordering::SeqCst);
+        test_send_result(codes.len() as u8, 0, 1460)
+    });
+
+    let outcome = state.key_down(&[0x15, 0x16]);
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(outcome.evidence.zero_progress_retries, 0);
+    assert_eq!(state.sendinput_zero_progress_failures, 1);
+    assert_eq!(state.chord_split_events, 0);
+}
+
+#[test]
+fn tracked_note_off_uses_one_send_attempt_without_retry() {
+    let up_calls = Arc::new(AtomicUsize::new(0));
+    let up_calls_for_emitter = Arc::clone(&up_calls);
+    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
+        if key_up {
+            up_calls_for_emitter.fetch_add(1, Ordering::SeqCst);
+            test_send_result(codes.len() as u8, 0, 1460)
+        } else {
+            test_send_result(codes.len() as u8, codes.len() as u8, 0)
+        }
+    });
+    assert_eq!(
+        state.key_down(&[0x15, 0x16]).status,
+        SendTransactionStatus::Complete
+    );
+
+    let outcome = state.key_up(&[0x15, 0x16]);
+
+    assert_eq!(up_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(outcome.evidence.zero_progress_retries, 0);
+    assert_ne!(state.failed_release_mask & 0b11, 0);
+}
+
+#[test]
 fn instrument_scan_codes_are_the_physical_allowlist() {
     assert_eq!(
         PHYSICAL_INSTRUMENT_SCAN_CODES,
