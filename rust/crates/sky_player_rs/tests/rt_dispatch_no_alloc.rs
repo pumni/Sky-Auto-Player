@@ -14,9 +14,11 @@
 //!       --features test-support --test rt_dispatch_no_alloc
 
 use sky_dispatch_core::estimator::LatencyClass;
+use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, DownObservation, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, ProductionDispatchTestHarness, UpObservation,
+    DispatchObservation, DispatchPath, DispatchStep, DownObservation, EstimatorObservationEvidence,
+    OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, ProductionDispatchTestHarness,
+    UpObservation, is_clean_estimator_observation,
 };
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -111,7 +113,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         delivered_count: 1,
         batch_intent_count: 1,
         completion_error_us: 0,
-        clean_directional_sample: true,
+        estimator_evidence: clean_estimator_evidence(1),
         completed_effective: n,
         authored_batch_scheduled_us: 0,
         batch_scheduled_us: 0,
@@ -134,12 +136,75 @@ fn up_observation(n: u64) -> DispatchObservation {
         scheduled_us: 0,
         deferred_by_us: 0,
         up_completion_error_us: 0,
-        clean_up_sample: true,
+        estimator_evidence: clean_estimator_evidence(1),
         core_post_send_us: 1,
         send_warn_us: 0,
         core_post_send_warn_us: 0,
         force_publish: false,
     })
+}
+
+fn clean_estimator_evidence(requested_count: usize) -> EstimatorObservationEvidence {
+    EstimatorObservationEvidence {
+        status: SendTransactionStatus::Complete,
+        attempts: 1,
+        retry_reason: PacketRetryReason::None,
+        requested_count,
+        confirmed_count: requested_count,
+        skipped_count: 0,
+        timing_valid: true,
+        transport_anomaly: false,
+        recovery_used: false,
+        chord_integrity_lost: false,
+    }
+}
+
+#[test]
+fn canonical_clean_estimator_evidence_requires_every_dimension() {
+    let clean = clean_estimator_evidence(2);
+    assert!(is_clean_estimator_observation(clean));
+
+    let cases = [
+        EstimatorObservationEvidence {
+            status: SendTransactionStatus::PartialProgress,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            attempts: 2,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            retry_reason: PacketRetryReason::ZeroProgress,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            confirmed_count: 1,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            skipped_count: 1,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            timing_valid: false,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            transport_anomaly: true,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            recovery_used: true,
+            ..clean
+        },
+        EstimatorObservationEvidence {
+            chord_integrity_lost: true,
+            ..clean
+        },
+    ];
+    for evidence in cases {
+        assert!(!is_clean_estimator_observation(evidence));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +372,8 @@ fn production_down_only_hard_path_no_alloc() {
         "production DownOnly hard-path made {allocs} heap allocation(s); expected 0"
     );
     assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(harness.has_active_generation(0x15));
+    assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
 
 /// Mixed production dispatch hard-path makes ZERO heap allocations.
@@ -353,28 +420,47 @@ fn production_mixed_hard_path_no_alloc() {
     assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
 
-/// UpOnly release production dispatch hard-path makes ZERO heap allocations.
+/// Pending-release production dispatch hard-path makes ZERO heap allocations.
 #[test]
-fn production_uponly_release_hard_path_no_alloc() {
+fn production_pending_release_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_uponly_release();
 
-    // Down A was physically dispatched outside window. Advance time to release deadline.
+    // Down A was physically dispatched outside the window. Advance to the
+    // authored Up request, then let the production coordinator create the
+    // pending release outside the measurement window.
     harness.advance_playback_time_us(1000);
+    harness.seed_pending_release_for_test();
 
     enable_counting();
     let plan = harness.plan_current_dispatch();
+    let plan_allocs = disable_counting();
+    let pending_plan = plan.pending().expect("pending release plan");
+    enable_counting();
+    let effective_now = harness.advance_playback_time_us(0);
+    let due_pending = harness.pop_due_pending_for_plan(effective_now, &plan);
+    let pop_allocs = disable_counting();
     assert_eq!(
-        plan.authored_path().unwrap(),
-        DispatchPath::UpOnly { up_count: 1 }
+        due_pending.len(),
+        1,
+        "plan must own one due pending release"
     );
-    let step = harness.dispatch_authored_with_plan(&plan);
-    let allocs = disable_counting();
+    enable_counting();
+    let step = harness.dispatch_pending_release_with_plan(
+        due_pending,
+        Some(pending_plan),
+        LatencyClass::Hot,
+    );
+    let dispatch_allocs = disable_counting();
+    let allocs = plan_allocs + pop_allocs + dispatch_allocs;
 
     assert_eq!(
         allocs, 0,
-        "production UpOnly release hard-path made {allocs} heap allocation(s); expected 0"
+        "production pending-release hard-path made {allocs} heap allocation(s); expected 0"
     );
     assert!(matches!(step, DispatchStep::Dispatched));
     assert!(!harness.has_active_generation(0x15));
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+    assert_eq!(harness.chord_integrity_lost_count(), 0);
 }

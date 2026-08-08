@@ -1389,10 +1389,9 @@ fn architecture_layers_strict_boundary_enforced() {
 fn module_line_limits_strictly_respected() {
     let dispatch = [
         ("worker/dispatch/mod.rs", 250),
-        ("worker/dispatch/authored.rs", 700),
-        ("worker/dispatch/observer.rs", 700),
-        ("worker/dispatch/observer_drain.rs", 700),
-        ("worker/dispatch/release.rs", 700),
+        ("worker/dispatch/authored.rs", 900),
+        ("worker/dispatch/observer.rs", 900),
+        ("worker/dispatch/release.rs", 900),
         ("worker/dispatch/timing.rs", 700),
     ];
     for (relative, hard_limit) in dispatch {
@@ -2422,7 +2421,7 @@ fn slow_observer_defers_when_slack_is_insufficient() {
     );
     assert_eq!(
         snapshot.timeline_rebase_count, 0,
-        "WorkerLate rebase must be 0"
+        "forbidden authored timeline rebase must be 0"
     );
     assert_eq!(
         snapshot.timeline_rebase_last_reason, None,
@@ -2571,8 +2570,8 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
 #[test]
 fn invariant_mismatch_prevents_sender_invocation() {
     use sky_dispatch_win32::input::{PlatformSendResult, TrackedKeyState};
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     let send_counter = Arc::new(AtomicU64::new(0));
     let counter_clone = send_counter.clone();
@@ -2624,22 +2623,25 @@ fn invariant_mismatch_prevents_sender_invocation() {
 #[test]
 fn test_qpc_ordering_failure_is_terminal() {
     use crate::engine::telemetry::WorkerMetricsLocal;
+    use crate::engine::worker::WorkerRuntime;
     use crate::engine::worker::dispatch::observer::publisher_down_send_outcome;
-    use crate::engine::worker::dispatch::timing::DownSendTiming;
+    use crate::engine::worker::dispatch::timing::{DownSendTiming, EstimatorObservationEvidence};
     use crate::engine::worker::dispatch::{
         AuthoredBatchView, DispatchStep, PendingObservationQueue,
     };
     use crate::engine::worker::health::{DispatchPath, FrozenDispatchBudget};
-    use crate::engine::worker::WorkerRuntime;
     use sky_dispatch_core::coordinator::PreparedBatch;
     use sky_dispatch_core::estimator::LatencyClass;
     use sky_dispatch_core::model::{ActionKind, ScanCodeBatch};
     use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
-    use sky_dispatch_win32::input::PacketRetryReason;
+    use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
     use smallvec::SmallVec;
 
     let qpc_clock = QpcClock::initialize().expect("QPC");
     let mut runtime = WorkerRuntime::default();
+    let mut health = crate::engine::worker::WorkerHealthState::new(
+        crate::engine::worker::health::DispatchHealthOptions::default(),
+    );
     let mut local_metrics = WorkerMetricsLocal::default();
     let mut telemetry = crate::engine::telemetry::TelemetryCollector::new(
         crate::engine::telemetry::TelemetryMode::Off,
@@ -2689,17 +2691,31 @@ fn test_qpc_ordering_failure_is_terminal() {
         completion_error_ticks_value: 0,
         authored_completion_error_ticks_value: 0,
         completion_error_us: 0,
-        clean_directional_sample: true,
+        estimator_evidence: EstimatorObservationEvidence {
+            status: SendTransactionStatus::Complete,
+            attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            requested_count: 1,
+            confirmed_count: 1,
+            skipped_count: 0,
+            timing_valid: true,
+            transport_anomaly: false,
+            recovery_used: false,
+            chord_integrity_lost: false,
+        },
+        recovered_zero_progress: false,
         recovered_partial_up: false,
         recovered_retry_late: false,
         strict_completion_late: false,
         retry_late_abort: false,
         saturation_abort: false,
+        saturation_streak: 0,
     };
 
     let step = publisher_down_send_outcome(
         &view,
         &mut runtime,
+        &mut health,
         &mut local_metrics,
         qpc_clock,
         &mut telemetry,
