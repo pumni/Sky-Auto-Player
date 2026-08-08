@@ -13,7 +13,7 @@ category: getting-started
 order: 3
 published: '2026-08-08'
 updated: '2026-08-08'
-lastReviewedVersion: '3.0.0'
+lastReviewedVersion: '3.1.0'
 draft: false
 related:
   - sheet-formats
@@ -43,7 +43,7 @@ evidence:
 
    ```powershell
    # Trong PowerShell, ở thư mục chứa file zip:
-   (Get-FileHash "Sky-Auto-Player-v3.0.0.zip" -Algorithm SHA256).Hash
+   (Get-FileHash "Sky-Auto-Player-v3.1.0.zip" -Algorithm SHA256).Hash
    # So sánh kết quả với nội dung file .sha256
    ```
 
