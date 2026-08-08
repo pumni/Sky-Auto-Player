@@ -377,7 +377,10 @@ fn production_down_only_hard_path_no_alloc() {
         allocs, 0,
         "production DownOnly hard-path made {allocs} heap allocation(s); expected 0"
     );
-    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(
+        matches!(step, DispatchStep::Dispatched),
+        "down-only dispatch returned {step:?}"
+    );
     assert!(harness.has_active_generation(0x15));
     assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
@@ -418,7 +421,10 @@ fn production_mixed_hard_path_no_alloc() {
         allocs, 0,
         "production Mixed hard-path made {allocs} heap allocation(s); expected 0"
     );
-    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(
+        matches!(step, DispatchStep::Dispatched),
+        "mixed dispatch returned {step:?}"
+    );
 
     // Assert coordinator state: old generation A terminal/released, new generation B active
     assert!(!harness.has_active_generation(0x15));

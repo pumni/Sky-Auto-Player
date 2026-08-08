@@ -14,7 +14,7 @@ use super::observer::{observe_release_send_health, record_release_telemetry};
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
@@ -149,11 +149,42 @@ static RELEASE_READY_REACHED: std::sync::atomic::AtomicBool =
 #[cfg(any(test, feature = "test-support"))]
 static RELEASE_RECOVERY_COMPLETED_BEFORE_READY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(any(test, feature = "test-support"))]
+static RELEASE_TELEMETRY_FAILURE_ON_RECOVERY: AtomicBool = AtomicBool::new(false);
+#[cfg(any(test, feature = "test-support"))]
+static RELEASE_OBSERVER_FAILURE_ON_RECOVERY: AtomicBool = AtomicBool::new(false);
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_release_order_test_hook() {
     RELEASE_READY_REACHED.store(false, Ordering::SeqCst);
     RELEASE_RECOVERY_COMPLETED_BEFORE_READY.store(false, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_release_test_hooks() {
+    reset_release_order_test_hook();
+    RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.store(false, Ordering::SeqCst);
+    RELEASE_OBSERVER_FAILURE_ON_RECOVERY.store(false, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_release_telemetry_failure_on_recovery(enabled: bool) {
+    RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.store(enabled, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_release_observer_failure_on_recovery(enabled: bool) {
+    RELEASE_OBSERVER_FAILURE_ON_RECOVERY.store(enabled, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_release_telemetry_failure(recovery_required: bool) -> bool {
+    recovery_required && RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.swap(false, Ordering::SeqCst)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_release_observer_failure(recovery_required: bool) -> bool {
+    recovery_required && RELEASE_OBSERVER_FAILURE_ON_RECOVERY.swap(false, Ordering::SeqCst)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -195,7 +226,6 @@ pub(crate) fn dispatch_due_pending_releases(
         latency_class,
         observer,
     } = ctx;
-
     let WorkerResources {
         clock: qpc_clock,
         backend,
@@ -206,7 +236,6 @@ pub(crate) fn dispatch_due_pending_releases(
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
-
     let scan_codes: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
     let scan_count = scan_codes.len();
     let frozen_budget = build_dispatch_budget(

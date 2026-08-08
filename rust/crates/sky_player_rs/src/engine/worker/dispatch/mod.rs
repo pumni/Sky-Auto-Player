@@ -85,9 +85,12 @@ pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep
 
 pub(crate) use authored::dispatch_authored_packet;
 pub(crate) use observer::{PendingObservationQueue, drain_one_observer, observer_has_safe_slack};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use release::release_recovery_completed_before_ready;
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use release::{
+    release_recovery_completed_before_ready, set_release_observer_failure_on_recovery,
+    set_release_telemetry_failure_on_recovery,
+};
 
 // `observer_initial_budget_override_us` is reached crate-internally via
 // `dispatch::observer_initial_budget_override_us` (worker.rs). The remaining
