@@ -76,9 +76,6 @@ const byCategory = Object.fromEntries(
                 <a class="guide-hub__link" href={withBase(`${guideBase}${guide.data.slug}/`)}>
                   <span class="guide-hub__link-title">{guide.data.title}</span>
                   <span class="guide-hub__link-summary">{guide.data.summary}</span>
-                  <span class="guide-hub__link-version" aria-label="Last reviewed version">
-                    v{guide.data.lastReviewedVersion}
-                  </span>
                 </a>
               </li>
             ))}
@@ -151,10 +148,4 @@ const byCategory = Object.fromEntries(
     line-height: 1.5;
   }
 
-  .guide-hub__link-version {
-    font-family: var(--font-mono);
-    font-size: var(--type-micro);
-    color: var(--color-text-tertiary);
-    letter-spacing: 0.04em;
-  }
 </style>
