@@ -20,6 +20,22 @@ use sky_dispatch_core::coordinator::PreparedBatch;
 use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
 
+/// Predicate defining clean directional sample eligibility for send latency estimator training.
+pub(crate) fn is_clean_directional_sample(
+    result_success: bool,
+    skipped_duplicates_empty: bool,
+    send_attempts: u8,
+    chord_integrity_lost: bool,
+    delivered_count: usize,
+    requested_count: usize,
+) -> bool {
+    result_success
+        && skipped_duplicates_empty
+        && send_attempts == 1
+        && !chord_integrity_lost
+        && delivered_count == requested_count
+}
+
 /// Project the prepared authored batch into a snapshot used by admission, send,
 /// and telemetry.  Built once per epoch so the worker does not re-query the
 /// coordinator schedule across multiple invariants within a single loop epoch
@@ -392,11 +408,14 @@ pub(crate) fn interpret_down_send_timing(
     } else {
         result_sent.len()
     };
-    let clean_directional_sample = result_success
-        && result_skipped_duplicates.is_empty()
-        && result_send_attempts == 1
-        && !result_chord_integrity_lost
-        && delivered_count == requested_count;
+    let clean_directional_sample = is_clean_directional_sample(
+        result_success,
+        result_skipped_duplicates.is_empty(),
+        result_send_attempts,
+        result_chord_integrity_lost,
+        delivered_count,
+        requested_count,
+    );
     let recovered_zero_progress = matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
     let recovered_partial_up = matches!(
         (view.dispatch_path, result_retry_reason),
