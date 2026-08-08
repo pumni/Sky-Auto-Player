@@ -76,6 +76,8 @@ pub struct TrackedKeyState {
     pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) custom_probe: Option<CustomProbeFn>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub full_instrument_release_calls: u64,
     qpc_clock: Option<QpcClock>,
 }
 
@@ -132,6 +134,14 @@ impl TrackedKeyState {
             custom_packet_emitter: Some(Box::new(emitter)),
             ..Default::default()
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_emitter<F>(&mut self, emitter: F)
+    where
+        F: Fn(&[u16], bool) -> PlatformSendResult + Send + Sync + 'static,
+    {
+        self.custom_emitter = Some(Box::new(emitter));
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -809,6 +819,11 @@ impl TrackedKeyState {
     }
 
     pub fn release_all_full_instrument(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.full_instrument_release_calls =
+                self.full_instrument_release_calls.saturating_add(1);
+        }
         self.release_scope(ReleaseScope::FullInstrument, target_hwnd)
     }
 }

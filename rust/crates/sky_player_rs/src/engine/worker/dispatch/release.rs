@@ -139,6 +139,40 @@ pub(super) struct ReleaseOutcomeFlags {
     pub(super) saturation_abort: bool,
 }
 
+struct ReleaseRecoveryOutcome {
+    terminal_error: String,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static RELEASE_READY_REACHED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(any(test, feature = "test-support"))]
+static RELEASE_RECOVERY_COMPLETED_BEFORE_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_release_order_test_hook() {
+    RELEASE_READY_REACHED.store(false, Ordering::SeqCst);
+    RELEASE_RECOVERY_COMPLETED_BEFORE_READY.store(false, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn release_recovery_completed_before_ready() -> bool {
+    RELEASE_RECOVERY_COMPLETED_BEFORE_READY.load(Ordering::SeqCst)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn mark_release_recovery_complete() {
+    if !RELEASE_READY_REACHED.load(Ordering::SeqCst) {
+        RELEASE_RECOVERY_COMPLETED_BEFORE_READY.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn mark_release_ready() {
+    RELEASE_READY_REACHED.store(true, Ordering::SeqCst);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_due_pending_releases(
     ctx: PendingReleaseContext<'_>,
@@ -151,6 +185,8 @@ pub(crate) fn dispatch_due_pending_releases(
     secondary_errors: &mut Vec<String>,
     target_hwnd: &AtomicIsize,
 ) -> DispatchStep {
+    #[cfg(any(test, feature = "test-support"))]
+    RELEASE_READY_REACHED.store(false, Ordering::SeqCst);
     let PendingReleaseContext {
         due_pending,
         pending_plan,
@@ -211,6 +247,22 @@ pub(crate) fn dispatch_due_pending_releases(
         Err(step) => return step,
     };
 
+    // Recovery is correctness-critical ownership, not observer bookkeeping.
+    // Full-instrument release, physical verification, and coordinator
+    // cancellation must finish before the hard ready boundary is sampled.
+    let recovery_outcome = if reconciliation.recovery_required {
+        Some(finalize_release_recovery(
+            backend,
+            coordinator,
+            runtime,
+            secondary_errors,
+            target_hwnd,
+            &send,
+        ))
+    } else {
+        None
+    };
+
     let dispatch_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -238,6 +290,8 @@ pub(crate) fn dispatch_due_pending_releases(
 
     // HARD DISPATCH READY BOUNDARY:
     // gameplay-critical dispatch ownership ends here.
+    #[cfg(any(test, feature = "test-support"))]
+    mark_release_ready();
 
     if let Some(pause_ticks) = reconciliation.recovery_pause_ticks {
         let recovery_pause_us = match qpc_clock.duration_to_us(pause_ticks) {
@@ -283,15 +337,8 @@ pub(crate) fn dispatch_due_pending_releases(
         Err(step) => return step,
     };
 
-    if reconciliation.recovery_required {
-        return finalize_release_recovery(
-            backend,
-            coordinator,
-            runtime,
-            secondary_errors,
-            target_hwnd,
-            &send,
-        );
+    if let Some(outcome) = recovery_outcome {
+        return DispatchStep::Terminate(outcome.terminal_error);
     }
     if flags.strict_up_completion_late {
         let first = &due_pending[reconciliation.first_index];
@@ -656,7 +703,7 @@ fn finalize_release_recovery(
     secondary_errors: &mut Vec<String>,
     target_hwnd: &AtomicIsize,
     send: &ReleaseSend,
-) -> DispatchStep {
+) -> ReleaseRecoveryOutcome {
     runtime.verified_target = None;
     let mut term_err = Some(format!(
         "note-off recovery exhausted after {} retries{}",
@@ -681,5 +728,9 @@ fn finalize_release_recovery(
         &mut term_err,
         secondary_errors,
     );
-    DispatchStep::Terminate(term_err.unwrap_or_else(|| "recovery failure".to_string()))
+    #[cfg(any(test, feature = "test-support"))]
+    mark_release_recovery_complete();
+    ReleaseRecoveryOutcome {
+        terminal_error: term_err.unwrap_or_else(|| "recovery failure".to_string()),
+    }
 }

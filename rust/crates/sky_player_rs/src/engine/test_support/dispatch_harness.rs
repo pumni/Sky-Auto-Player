@@ -26,10 +26,11 @@ use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcClock;
-use sky_dispatch_win32::input::TrackedKeyState;
+use sky_dispatch_win32::input::{PlatformSendResult, TrackedKeyState};
 use sky_dispatch_win32::wait::HybridWaiter;
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
@@ -49,6 +50,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) desired_pause: AtomicBool,
     pub(crate) metrics: SharedMetrics,
     pub(crate) observer: PendingObservationQueue,
+    effective_now_ticks: TimelineTicks,
 }
 
 impl ProductionDispatchTestHarness {
@@ -179,23 +181,23 @@ impl ProductionDispatchTestHarness {
             desired_pause: AtomicBool::new(false),
             metrics: SharedMetrics::default(),
             observer: PendingObservationQueue::default(),
+            effective_now_ticks: TimelineTicks::ZERO,
         }
     }
 
     /// Advance simulated playback time by `us` microseconds and return effective now ticks.
     pub fn advance_playback_time_us(&mut self, us: u64) -> TimelineTicks {
         let advance_qpc = self.resources.clock.duration_from_us(us).unwrap();
-        let now_ticks = self
-            .resources
-            .clock
-            .now()
-            .unwrap()
+        self.effective_now_ticks = self
+            .effective_now_ticks
             .checked_add_duration(advance_qpc)
             .unwrap();
-        let elapsed = now_ticks
-            .checked_duration_since(self.resources.playback.epoch)
-            .unwrap_or(DurationTicks::ZERO);
-        TimelineTicks::from_raw(elapsed.as_u64())
+        self.effective_now_ticks
+    }
+
+    /// Return the deterministic effective playback time used by test setup.
+    pub fn current_effective_time(&self) -> TimelineTicks {
+        self.effective_now_ticks
     }
 
     /// Query whether coordinator has active generation for `scan_code`.
@@ -221,6 +223,46 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.possibly_active_mask
     }
 
+    /// Number of full-instrument cleanup operations performed by production
+    /// release recovery. This is a test-support observation of the backend,
+    /// not a replacement for the production cleanup call.
+    pub fn full_instrument_release_calls(&self) -> u64 {
+        self.resources.backend.full_instrument_release_calls
+    }
+
+    /// Make every production pending-release send fail while retaining a
+    /// real sender seam. The counter is incremented inside the emitter that
+    /// production invokes, so tests can distinguish physical cleanup from a
+    /// helper-only assertion.
+    pub fn configure_persistent_release_failure(&mut self, calls: Arc<AtomicU64>) {
+        let clock = self.resources.clock;
+        self.resources
+            .backend
+            .set_emitter(move |scan_codes, key_up| {
+                let now = clock.now().expect("test QPC");
+                if key_up {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    PlatformSendResult {
+                        requested: scan_codes.len() as u8,
+                        inserted: 0,
+                        started_ticks: now,
+                        completed_ticks: Some(now),
+                        win32_error: 1460,
+                        timing_error: None,
+                    }
+                } else {
+                    PlatformSendResult {
+                        requested: scan_codes.len() as u8,
+                        inserted: scan_codes.len() as u8,
+                        started_ticks: now,
+                        completed_ticks: Some(now),
+                        win32_error: 0,
+                        timing_error: None,
+                    }
+                }
+            });
+    }
+
     /// Pop due pending releases using plan.
     pub fn pop_due_pending_for_plan(
         &mut self,
@@ -238,16 +280,10 @@ impl ProductionDispatchTestHarness {
     /// The measurement must exercise `plan_next_dispatch` and
     /// `dispatch_due_pending_releases`, not the authored Up packet path.
     pub fn seed_pending_release_for_test(&mut self) {
-        let now_ticks = self.resources.clock.now().expect("qpc now");
-        let effective_now = self
-            .resources
-            .playback
-            .get_elapsed(now_ticks)
-            .expect("effective now");
         let prepared = self
             .resources
             .coordinator
-            .prepare_next_due_authored(effective_now, DurationTicks::ZERO)
+            .prepare_next_due_authored(self.effective_now_ticks, DurationTicks::ZERO)
             .expect("prepare pending-release request")
             .expect("authored release request");
         self.resources
@@ -290,14 +326,9 @@ impl ProductionDispatchTestHarness {
     /// Dispatch authored packet using an explicit production `NextDispatchPlan`.
     pub fn dispatch_authored_with_plan(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
-        let effective_now_ticks = self
-            .resources
-            .playback
-            .get_elapsed(now_ticks)
-            .unwrap_or(TimelineTicks::ZERO);
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
-            effective_now_ticks,
+            effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             latency_class: plan.latency_class(),
             focus_loss_fault: false,

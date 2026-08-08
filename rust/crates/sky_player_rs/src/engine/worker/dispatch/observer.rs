@@ -22,7 +22,7 @@ use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -391,6 +391,14 @@ pub(super) fn record_release_telemetry(
             "empty pending release batch in telemetry recording".to_string(),
         ));
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if reconciliation.recovery_required
+        && RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.swap(false, Ordering::SeqCst)
+    {
+        return Err(DispatchStep::Terminate(
+            "injected release telemetry failure".to_string(),
+        ));
+    }
     let scan_count = due_pending.len();
     let release_outcome = release_runtime_outcome(
         reconciliation.deferred_by_us,
@@ -464,6 +472,14 @@ pub(super) fn observe_release_send_health(
     scan_count: usize,
     core_post_send_us: u64,
 ) -> Result<ReleaseOutcomeFlags, DispatchStep> {
+    #[cfg(any(test, feature = "test-support"))]
+    if reconciliation.recovery_required
+        && RELEASE_OBSERVER_FAILURE_ON_RECOVERY.swap(false, Ordering::SeqCst)
+    {
+        return Err(DispatchStep::Terminate(
+            "injected release observer failure".to_string(),
+        ));
+    }
     let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
         && reconciliation.up_completion_lateness_ticks.is_some();
     health.up_saturation_positive_streak = if up_saturated_positive {
@@ -622,6 +638,10 @@ static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_INITIAL_BUDGET_OVERRIDE_US: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(test, feature = "test-support"))]
+static RELEASE_TELEMETRY_FAILURE_ON_RECOVERY: AtomicBool = AtomicBool::new(false);
+#[cfg(any(test, feature = "test-support"))]
+static RELEASE_OBSERVER_FAILURE_ON_RECOVERY: AtomicBool = AtomicBool::new(false);
+#[cfg(any(test, feature = "test-support"))]
 static OBSERVER_TEST_HOOK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 #[cfg(any(test, feature = "test-support"))]
 pub struct ObserverTestHookGuard {
@@ -631,12 +651,14 @@ pub struct ObserverTestHookGuard {
 impl Drop for ObserverTestHookGuard {
     fn drop(&mut self) {
         reset_observer_test_hooks();
+        super::release::reset_release_order_test_hook();
     }
 }
 #[cfg(any(test, feature = "test-support"))]
 pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
     let lock = OBSERVER_TEST_HOOK_LOCK.lock();
     reset_observer_test_hooks();
+    super::release::reset_release_order_test_hook();
     ObserverTestHookGuard { _lock: lock }
 }
 #[cfg(any(test, feature = "test-support"))]
@@ -655,6 +677,16 @@ pub(crate) fn observer_initial_budget_override_us() -> u64 {
 pub fn reset_observer_test_hooks() {
     OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
     OBSERVER_INITIAL_BUDGET_OVERRIDE_US.store(0, Ordering::SeqCst);
+    RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.store(false, Ordering::SeqCst);
+    RELEASE_OBSERVER_FAILURE_ON_RECOVERY.store(false, Ordering::SeqCst);
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_release_telemetry_failure_on_recovery(enabled: bool) {
+    RELEASE_TELEMETRY_FAILURE_ON_RECOVERY.store(enabled, Ordering::SeqCst);
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_release_observer_failure_on_recovery(enabled: bool) {
+    RELEASE_OBSERVER_FAILURE_ON_RECOVERY.store(enabled, Ordering::SeqCst);
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_down_send_outcome(

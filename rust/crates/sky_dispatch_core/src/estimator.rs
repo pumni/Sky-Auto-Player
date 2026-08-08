@@ -19,7 +19,7 @@
 //! | `delivery_proxy_us` | Static calibrated prior (updated by calibration harness) |
 //! | `wake_reserve_us` | Constant scheduler guard |
 //! | `cold_reserve_us` | Polyphony-linear cold prior |
-//! | `residual_bias_us` | EMA of completion-error residual (Down/Up × Hot/Cold) |
+//! | `residual_bias_us` | EMA of completion-error residual across six `(SendPath × LatencyClass)` channels |
 //!
 //! The histogram model is updated outside the precision decision and publishes
 //! a fixed lookup table. Dispatch queries are O(1): no allocation, sort,

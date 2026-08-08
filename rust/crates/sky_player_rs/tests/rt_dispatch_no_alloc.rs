@@ -14,14 +14,20 @@
 //!       --features test-support --test rt_dispatch_no_alloc
 
 use sky_dispatch_core::estimator::LatencyClass;
+use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, DownObservation, EstimatorObservationEvidence,
     OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, ProductionDispatchTestHarness,
     UpObservation, is_clean_estimator_observation,
 };
+use sky_player_rs::engine::observer_test_hooks::{
+    observer_test_hook_guard, set_release_observer_failure_on_recovery,
+    set_release_telemetry_failure_on_recovery,
+};
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -434,25 +440,20 @@ fn production_pending_release_hard_path_no_alloc() {
 
     enable_counting();
     let plan = harness.plan_current_dispatch();
-    let plan_allocs = disable_counting();
     let pending_plan = plan.pending().expect("pending release plan");
-    enable_counting();
-    let effective_now = harness.advance_playback_time_us(0);
+    let effective_now = harness.current_effective_time();
     let due_pending = harness.pop_due_pending_for_plan(effective_now, &plan);
-    let pop_allocs = disable_counting();
     assert_eq!(
         due_pending.len(),
         1,
         "plan must own one due pending release"
     );
-    enable_counting();
     let step = harness.dispatch_pending_release_with_plan(
         due_pending,
         Some(pending_plan),
         LatencyClass::Hot,
     );
-    let dispatch_allocs = disable_counting();
-    let allocs = plan_allocs + pop_allocs + dispatch_allocs;
+    let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
@@ -463,4 +464,65 @@ fn production_pending_release_hard_path_no_alloc() {
     assert_eq!(harness.backend_active_mask(), 0);
     assert_eq!(harness.backend_possibly_active_mask(), 0);
     assert_eq!(harness.chord_integrity_lost_count(), 0);
+}
+
+fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness) -> DispatchStep {
+    for _ in 0..=usize::from(sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES) {
+        let plan = harness.plan_current_dispatch();
+        let pending_plan = plan.pending().expect("recovery must retain pending plan");
+        let due_pending =
+            harness.pop_due_pending_for_plan(TimelineTicks::from_raw(u64::MAX), &plan);
+        assert_eq!(
+            due_pending.len(),
+            1,
+            "recovery retry must remain coordinator-owned"
+        );
+        let step = harness.dispatch_pending_release_with_plan(
+            due_pending,
+            Some(pending_plan),
+            LatencyClass::Hot,
+        );
+        if matches!(step, DispatchStep::Terminate(_)) {
+            return step;
+        }
+    }
+    panic!("persistent release failure did not exhaust recovery");
+}
+
+#[test]
+fn exhausted_release_recovery_precedes_telemetry_failure() {
+    let _lock = TEST_LOCK.lock();
+    let _hooks = observer_test_hook_guard();
+    set_release_telemetry_failure_on_recovery(true);
+    let calls = Arc::new(AtomicU64::new(0));
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    harness.configure_persistent_release_failure(Arc::clone(&calls));
+    harness.advance_playback_time_us(1000);
+    harness.seed_pending_release_for_test();
+
+    let step = exhaust_pending_release_recovery(&mut harness);
+
+    assert!(matches!(step, DispatchStep::Terminate(message) if message.contains("telemetry")));
+    assert!(harness.full_instrument_release_calls() > 0);
+    assert!(calls.load(Ordering::SeqCst) > 0);
+    assert!(sky_player_rs::engine::observer_test_hooks::release_recovery_completed_before_ready());
+}
+
+#[test]
+fn exhausted_release_recovery_precedes_observer_failure() {
+    let _lock = TEST_LOCK.lock();
+    let _hooks = observer_test_hook_guard();
+    set_release_observer_failure_on_recovery(true);
+    let calls = Arc::new(AtomicU64::new(0));
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    harness.configure_persistent_release_failure(Arc::clone(&calls));
+    harness.advance_playback_time_us(1000);
+    harness.seed_pending_release_for_test();
+
+    let step = exhaust_pending_release_recovery(&mut harness);
+
+    assert!(matches!(step, DispatchStep::Terminate(message) if message.contains("observer")));
+    assert!(harness.full_instrument_release_calls() > 0);
+    assert!(calls.load(Ordering::SeqCst) > 0);
+    assert!(sky_player_rs::engine::observer_test_hooks::release_recovery_completed_before_ready());
 }

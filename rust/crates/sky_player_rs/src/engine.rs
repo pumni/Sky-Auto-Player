@@ -83,6 +83,24 @@ pub mod observer_test_hooks {
     pub fn reset_observer_test_hooks() {
         super::worker::dispatch::observer::reset_observer_test_hooks();
     }
+
+    /// Inject a post-send telemetry error only when release recovery is
+    /// exhausted. Test-only: production never enables this hook.
+    pub fn set_release_telemetry_failure_on_recovery(enabled: bool) {
+        super::worker::dispatch::observer::set_release_telemetry_failure_on_recovery(enabled);
+    }
+
+    /// Inject a post-send observer error only when release recovery is
+    /// exhausted. Test-only: production never enables this hook.
+    pub fn set_release_observer_failure_on_recovery(enabled: bool) {
+        super::worker::dispatch::observer::set_release_observer_failure_on_recovery(enabled);
+    }
+
+    /// Return whether exhausted release recovery completed before the ready
+    /// boundary was sampled in the current test scenario.
+    pub fn release_recovery_completed_before_ready() -> bool {
+        super::worker::dispatch::release_recovery_completed_before_ready()
+    }
 }
 
 use parking_lot::Mutex;
