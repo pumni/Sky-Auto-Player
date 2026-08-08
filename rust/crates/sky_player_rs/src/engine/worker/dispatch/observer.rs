@@ -717,7 +717,7 @@ pub(crate) fn drain_down_send_outcome(
             observation.batch_intent_count,
             observation.lead_down,
             observation.completion_error_us,
-            is_clean_estimator_observation(observation.estimator_evidence),
+            observation.estimator_evidence,
             observation.latency_class,
         );
     }
@@ -783,7 +783,7 @@ pub(crate) fn drain_up_send_outcome(
             observation.scan_count,
             observation.lead_up,
             observation.up_completion_error_us,
-            is_clean_estimator_observation(observation.estimator_evidence),
+            observation.estimator_evidence,
             observation.latency_class,
         );
     }

@@ -1,4 +1,7 @@
+use super::dispatch::timing::{EstimatorObservationEvidence, is_clean_estimator_observation};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
+#[cfg(test)]
+use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -12,6 +15,22 @@ pub(crate) fn update_estimator_after_send(
     completion_error_us: i64,
     clean_sample: bool,
 ) {
+    let evidence = EstimatorObservationEvidence {
+        status: if clean_sample {
+            SendTransactionStatus::Complete
+        } else {
+            SendTransactionStatus::IntegrityLost
+        },
+        attempts: 1,
+        retry_reason: PacketRetryReason::None,
+        requested_count: sent_count,
+        confirmed_count: if clean_sample { sent_count } else { 0 },
+        skipped_count: 0,
+        timing_valid: true,
+        transport_anomaly: false,
+        recovery_used: false,
+        chord_integrity_lost: !clean_sample,
+    };
     let _ = update_estimator_after_send_class(
         estimator,
         path,
@@ -20,7 +39,7 @@ pub(crate) fn update_estimator_after_send(
         authored_polyphony,
         applied_lead_us,
         completion_error_us,
-        clean_sample,
+        evidence,
         LatencyClass::Hot,
     );
 }
@@ -34,10 +53,10 @@ pub(crate) fn update_estimator_after_send_class(
     authored_polyphony: usize,
     applied_lead_us: u64,
     completion_error_us: i64,
-    clean_sample: bool,
+    evidence: EstimatorObservationEvidence,
     latency_class: LatencyClass,
 ) -> Result<(), sky_dispatch_core::estimator::EstimatorStateError> {
-    if !clean_sample || sent_count == 0 {
+    if !is_clean_estimator_observation(evidence) || sent_count == 0 {
         return Ok(());
     }
     estimator.update_observation(

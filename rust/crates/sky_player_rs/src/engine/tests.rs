@@ -1891,6 +1891,7 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
 
 #[test]
 fn up_estimator_receives_exact_syscall_duration_sample() {
+    use super::worker::dispatch::timing::EstimatorObservationEvidence;
     use super::worker::update_estimator_after_send_class;
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
@@ -1903,7 +1904,18 @@ fn up_estimator_receives_exact_syscall_duration_sample() {
         1,
         500,
         100,
-        true,
+        EstimatorObservationEvidence {
+            status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+            attempts: 1,
+            retry_reason: sky_dispatch_win32::input::PacketRetryReason::None,
+            requested_count: 1,
+            confirmed_count: 1,
+            skipped_count: 0,
+            timing_valid: true,
+            transport_anomaly: false,
+            recovery_used: false,
+            chord_integrity_lost: false,
+        },
         LatencyClass::Hot,
     )
     .unwrap();
