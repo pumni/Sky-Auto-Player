@@ -70,7 +70,8 @@ Adding worker state requires assigning it to one `WorkerCore` capability before
 it is read by a phase. Adding a phase requires documenting the invariant it
 owns, its allowed inputs, and its exact position relative to focus checks,
 preflight, SendInput, coordinator commit, telemetry, and cleanup. Timing-boundary
-changes require a dedicated regression test and a baseline/candidate benchmark.
+changes require a dedicated regression test. Baseline/candidate A/B benchmarks and
+real `SendInput` qualification are optional manual diagnostics, not required CI or release gates.
 
 ## Public API Boundaries
 

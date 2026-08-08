@@ -417,24 +417,28 @@ def test_no_outlier_exclusion_contract() -> None:
     assert stats["max"] == 100
 
 
-def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
+def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> None:
     workflow = (
         Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
     ).read_text(encoding="utf-8")
     manual_branch = 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]'
     path_diff = 'changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"'
     assert workflow.index(manual_branch) < workflow.index(path_diff)
-    assert "--dispatch-repeats 3" in workflow
-    assert "--command-samples 100" in workflow
-    assert "--rt-priority-mode off" in workflow
-    assert "scripts/bench_native_ab.py" in workflow
     assert "fetch-depth: 0" in workflow
-    assert "baseline_comparison=unavailable_initial_push" in workflow
-    assert "--budget-seconds 600" in workflow
-    assert "adaptive-cold" in workflow
-    assert "--backend sendinput --allow-real-input" in workflow
-    assert "SKY_NATIVE_TARGET_HWND" in workflow
-    assert "native-sendinput-${{ github.run_id }}" in workflow
+    assert "cargo fmt --manifest-path rust/Cargo.toml --all -- --check" in workflow
+    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features" in workflow
+    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings" in workflow
+    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features" in workflow
+    assert "scripts/build_rust_wheel.py --test-support" in workflow
+    assert "uv run pytest -m \"not slow\"" in workflow
+    assert "baseline_sha:" not in workflow
+    assert "performance_scope:" not in workflow
+    assert "scripts/bench_native_ab.py" not in workflow
+    assert "native-ab-" not in workflow
+    assert "native-sendinput-" not in workflow
+    assert "--backend sendinput" not in workflow
+    assert "--allow-real-input" not in workflow
+    assert "SKY_NATIVE_TARGET_HWND" not in workflow
 
 
 @pytest.mark.windows
