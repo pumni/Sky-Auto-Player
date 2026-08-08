@@ -5,7 +5,7 @@ export const homeVi: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Trình phát nhạc Sky tự động trên Windows',
     description:
-      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng nhịp — căn theo khung hình game, tự bù độ trễ, không phải phát lại macro.',
+      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng nhịp — căn theo mô hình timing của sheet và bù độ trễ phía gửi, không phải phát lại macro.',
   },
   navigation: {
     playback: 'Phát nhạc',
@@ -19,7 +19,7 @@ export const homeVi: HomeContent = {
     kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 10/11',
     titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
-      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — căn theo khung hình của game, chứ không chỉ gửi phím tuần tự.',
+      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — lên lịch theo mô hình timing của sheet và bù độ trễ phía gửi, chứ không chỉ gửi phím tuần tự.',
     primaryCta: 'Tải xuống cho Windows',
     secondaryCta: 'Xem cách hoạt động',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'PORTABLE', 'KHÔNG CẦN CÀI ĐẶT'],

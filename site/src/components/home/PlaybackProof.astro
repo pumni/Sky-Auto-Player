@@ -10,8 +10,8 @@ interface Props {
 const { data, locale } = Astro.props;
 const isVi = locale === 'vi';
 const diagramLabels = isVi
-  ? ['SỰ KIỆN SHEET', 'CỬA SỔ FRAME', 'INPUT ĐỒNG BỘ']
-  : ['SHEET EVENT', 'FRAME WINDOW', 'SYNCED INPUT'];
+  ? ['SỰ KIỆN SHEET', 'CỬA SỔ TIMING', 'INPUT THEO BATCH']
+  : ['SHEET EVENT', 'TIMING WINDOW', 'BATCHED INPUT'];
 ---
 
 <section id="playback" class="section-shell section-shell--open" aria-labelledby="playback-title">
@@ -57,8 +57,8 @@ const diagramLabels = isVi
                   : index === 1
                     ? '00:13.066'
                     : isVi
-                      ? 'CÙNG FRAME'
-                      : 'SAME FRAME'}
+                      ? 'CÙNG BATCH GỬI'
+                      : 'SAME SEND BATCH'}
               </span>
             </li>
           ))

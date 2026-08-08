@@ -147,11 +147,18 @@ const FORBIDDEN_CLAIM_PATTERNS = [
   { phrase: 'sub-millisecond', note: 'unsupported universal sub-ms claim' },
   { phrase: 'same game frame', note: 'unsupported in-game frame guarantee' },
   { phrase: 'moment it actually lands', note: 'unsupported actual-landing-time claim' },
+  { phrase: "aligned to the game's frames", note: 'unsupported in-game frame alignment claim' },
+  { phrase: 'aligned to the game', note: 'unsupported in-game alignment claim' },
+  { phrase: 'frame-aligned', note: 'unsupported frame-aligned claim' },
+  { phrase: 'SAME FRAME', note: 'unsupported in-game frame claim in diagram' },
   // VI equivalents
   { phrase: 'lệch dưới 1 phần nghìn', note: 'unsupported universal sub-ms claim (VI)' },
   { phrase: 'rơi cùng một khung hình', note: 'unsupported in-game frame guarantee (VI)' },
   { phrase: 'thực sự vang lên', note: 'unsupported actual-audio-onset claim (VI)' },
   { phrase: 'cùng một khung hình của game', note: 'unsupported in-game frame guarantee (VI)' },
+  { phrase: 'căn theo khung hình game', note: 'unsupported frame alignment claim (VI)' },
+  { phrase: 'căn theo khung hình của game', note: 'unsupported frame alignment claim (VI)' },
+  { phrase: 'CÙNG FRAME', note: 'unsupported in-game frame claim in diagram (VI)' },
 ];
 
 const HOMEPAGE_PATHS = ['/', '/vi/'];

@@ -1,7 +1,7 @@
 # Plan: Sky Auto Player — SEO/GEO Growth Architecture 2026
 
-> **Status:** IMPLEMENTED — ACCEPTANCE IN PROGRESS (local gates pending, GitHub Pages deploy not yet verified)
-> **Date:** 2026-08-08
+> **Status:** IMPLEMENTED — ACCEPTED / SHIPPED (Verified on HEAD `7c48b3ed82f8eda979c7eabbff9aec1a35e09598`, GitHub Pages deployment run #30 `31279125167`)
+> **Date:** 2026-08-08 (Accepted 2026-08-09)
 > **Repository:** `pumni/Sky-Auto-Player`
 > **Primary scope:** `site/` GitHub Pages marketing website
 > **Implemented by:** Antigravity AI coding agent
@@ -120,7 +120,8 @@ bun run format:check   # all formatted
 bun run build          # 18 canonical pages built
 bun run verify:dist    # 18 required files present
 bun run verify:seo     # 0 errors, 0 warnings
-bun run test:e2e       # all passing
+bun run test:functional# 0 failures (Functional E2E + Accessibility)
+bun run test:visual    # 0 failures (Visual regression default snapshots)
 ```
 
 ---

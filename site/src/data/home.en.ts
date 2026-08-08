@@ -5,7 +5,7 @@ export const homeEn: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows',
     description:
-      'Load a Sky music sheet and play notes, chords and holds on time — frame-aligned, latency-compensated, no macro replay.',
+      'Load a Sky music sheet and play notes, chords and holds on time — timing-first, sender-side latency compensated, no macro replay.',
   },
   navigation: {
     playback: 'Playback',
@@ -19,7 +19,7 @@ export const homeEn: HomeContent = {
     kicker: 'Sky Auto Player for Sky: Children of the Light · Windows 10/11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
-      "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — aligned to the game's frames, not just sequenced.",
+      "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — scheduled from the sheet's timing model and dispatched through Windows SendInput.",
     primaryCta: 'Download for Windows',
     secondaryCta: 'See how it works',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
