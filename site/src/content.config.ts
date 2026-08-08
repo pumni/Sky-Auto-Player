@@ -67,11 +67,11 @@ const guides = defineCollection({
     /** When true, renders the ArchitectureDiagram component below the prose. */
     showDiagram: z.boolean().optional().default(false),
     /**
-     * Explicit related guide keys (1–3). Must match the `key` field of another non-draft guide
+     * Explicit related guide keys (2–3). Must match the `key` field of another non-draft guide
      * in the same locale. Drives related-guides sidebar — avoids empty sidebar on
      * single-guide categories.
      */
-    related: z.array(z.string().min(1)).min(1).max(3),
+    related: z.array(z.string().min(1)).min(2).max(3),
   }),
 });
 

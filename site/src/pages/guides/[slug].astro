@@ -15,13 +15,32 @@ const { guide } = Astro.props;
 const { Content } = await render(guide);
 
 // Resolve related guides by explicit key (guide.data.related) instead of category-match.
-// This guarantees related links even for single-guide categories.
+// Strictly validates missing key, self-reference, duplicate key, and draft target.
 const allGuides = await getCollection('guides', (g) => g.data.locale === 'en' && !g.data.draft);
-const guideBySlug = new Map(allGuides.map((g) => [g.data.slug, g]));
-const relatedGuides = guide.data.related
-  .map((key) => guideBySlug.get(key))
-  .filter((g): g is NonNullable<typeof g> => g !== undefined)
-  .map((g) => ({ title: g.data.title, slug: g.data.slug, locale: g.data.locale as 'en' | 'vi' }));
+const guideByKey = new Map(allGuides.map((g) => [g.data.key, g]));
+const seenKeys = new Set<string>();
+
+const relatedGuides = guide.data.related.map((relKey) => {
+  if (relKey === guide.data.key) {
+    throw new Error(
+      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) self-references its own key: "${relKey}"`,
+    );
+  }
+  if (seenKeys.has(relKey)) {
+    throw new Error(
+      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) has duplicate related key: "${relKey}"`,
+    );
+  }
+  seenKeys.add(relKey);
+
+  const target = guideByKey.get(relKey);
+  if (!target) {
+    throw new Error(
+      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) references missing or draft target key: "${relKey}"`,
+    );
+  }
+  return { title: target.data.title, slug: target.data.slug, locale: target.data.locale as 'en' | 'vi' };
+});
 ---
 
 <GuideLayout

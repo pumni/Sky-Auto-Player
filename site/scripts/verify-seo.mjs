@@ -385,6 +385,28 @@ for (const slug of GUIDE_SLUGS) {
   }
 }
 
+// ── Related guides contract validation ────────────────────────────────────
+console.log('\nChecking related guides contract');
+for (const slug of GUIDE_SLUGS) {
+  for (const langPrefix of ['', 'vi/']) {
+    const pageRoute = `/${langPrefix}guides/${slug}/`;
+    const html = readHtml(pageRoute);
+    if (!html) continue;
+
+    const matches = [...html.matchAll(/href="[^"]*?\/(?:vi\/)?guides\/([^/]+)\/"/gi)];
+    const relatedSlugs = matches
+      .map((m) => m[1])
+      .filter((s) => s !== slug && s !== '' && GUIDE_SLUGS.includes(s));
+    const uniqueSlugs = new Set(relatedSlugs);
+
+    if (uniqueSlugs.size < 2 || uniqueSlugs.size > 3) {
+      fail(`Guide page ${pageRoute} has ${uniqueSlugs.size} valid related guide links, expected 2–3`);
+    } else {
+      pass(`${pageRoute} has ${uniqueSlugs.size} valid related guide links`);
+    }
+  }
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(
