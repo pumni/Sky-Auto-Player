@@ -84,7 +84,7 @@ def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_five_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
         "game_fps": 60,
@@ -102,7 +102,11 @@ def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> No
         "warmup_cycles": 8,
     }
     report = {
-        "benchmark_schema_version": 4,
+        "benchmark_schema_version": 5,
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
+        "timeline_semantics_version": 2,
         "command_timing_domain": "native_qpc_v1",
         "latency_segment_domain": "native_trace_v1",
         "benchmark_config": config,
@@ -116,16 +120,88 @@ def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> No
         "spin_cpu_ratio_ppm": {"p50": 1},
         "peak_rss_bytes": {"max": 1},
     }
-    ACCEPTANCE._assert_baseline_compatible(report, dict(report))
+    baseline = {
+        **report,
+        "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+    }
+    ACCEPTANCE._assert_baseline_compatible(report, baseline)
 
     legacy = {"command_timing_domain": "native_qpc"}
     with pytest.raises(SystemExit, match="legacy baseline"):
         ACCEPTANCE._assert_baseline_compatible(report, legacy)
 
-    mismatched = dict(report)
+    mismatched = dict(baseline)
     mismatched["benchmark_config"] = {**config, "rt_priority_mode": "auto"}
     with pytest.raises(SystemExit, match="fingerprint mismatch"):
         ACCEPTANCE._assert_baseline_compatible(report, mismatched)
+
+
+def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
+    candidate = {
+        "benchmark_schema_version": 5,
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
+        "timeline_semantics_version": 2,
+    }
+    baseline = {
+        "benchmark_schema_version": 5,
+        "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "timeline_semantics_version": 1,
+    }
+    with pytest.raises(SystemExit, match="SAME_SEMANTICS"):
+        ACCEPTANCE._assert_comparison_contract(candidate, baseline)
+
+
+def test_transport_reference_allows_v2_candidate_against_known_v1() -> None:
+    candidate = {
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.TRANSPORT_REFERENCE,
+        "timeline_semantics_version": 2,
+    }
+    baseline = {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
+    ACCEPTANCE._assert_comparison_contract(candidate, baseline)
+
+
+def test_unknown_missing_timeline_semantics_is_rejected() -> None:
+    with pytest.raises(SystemExit, match="unknown SHA"):
+        ACCEPTANCE._timeline_semantics_version({"candidate_sha": "unknown-sha"})
+
+
+def test_known_historical_sha_maps_missing_timeline_semantics() -> None:
+    assert ACCEPTANCE._timeline_semantics_version(
+        {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
+    ) == 1
+    assert ACCEPTANCE._timeline_semantics_version(
+        {"candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA}
+    ) == 2
+
+
+def test_absolute_fixed_hot_wake_slo_is_exact() -> None:
+    config = {"game_fps": 60, "gap_profile": "hot", "lead_mode": "fixed"}
+    for value in (300,):
+        ACCEPTANCE._assert_absolute_wake_slo(
+            {
+                "benchmark_config": config,
+                "wake_error_us": {"absolute": {"p99": value}},
+            }
+        )
+    with pytest.raises(SystemExit, match="absolute wake SLO"):
+        ACCEPTANCE._assert_absolute_wake_slo(
+            {
+                "benchmark_config": config,
+                "wake_error_us": {"absolute": {"p99": 301}},
+            }
+        )
+
+
+def test_correctness_is_checked_before_percentiles() -> None:
+    with pytest.raises(SystemExit, match="correctness failure"):
+        ACCEPTANCE._assert_report_correctness(
+            {"correctness": {"chord_integrity_lost": 1}}
+        )
 
 
 def test_p999_uses_nearest_rank() -> None:

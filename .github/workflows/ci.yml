@@ -52,13 +52,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Classify changed paths
         id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
-          CURRENT_SHA: ${{ github.sha }}
+          CURRENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
@@ -114,6 +115,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
@@ -145,6 +147,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
@@ -182,7 +185,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BEFORE: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          CURRENT_SHA: ${{ github.sha }}
+          CURRENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MANUAL_BASELINE_SHA: ${{ inputs.baseline_sha }}
           PERFORMANCE_SCOPE: ${{ inputs.performance_scope }}
         run: |
@@ -206,24 +209,41 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($baseline)) {
             throw 'baseline SHA is required for this event'
           }
+          if ($env:EVENT_NAME -eq 'pull_request' -and $baseline -ne '9ef9e5785c746ff45678a8a4cc5b9b6d66ede466') {
+            throw "PR same-semantics baseline must be 9ef9e5785c746ff45678a8a4cc5b9b6d66ede466; got $baseline"
+          }
 
           $matrices = @(
-            @{ Name = 'fixed-hot'; Actions = 256; Repeats = 3; Commands = 100; Lead = 'fixed'; Gap = 'hot' }
+            @{ Name = 'fixed-hot-60'; Fps = 60; Actions = 512; Repeats = 10; Commands = 500; Lead = 'fixed'; Gap = 'hot'; Priority = 'off' },
+            @{ Name = 'adaptive-hot-60'; Fps = 60; Actions = 512; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'hot'; Priority = 'auto' },
+            @{ Name = 'adaptive-cold-60'; Fps = 60; Actions = 64; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'cold'; Priority = 'auto' },
+            @{ Name = 'adaptive-hot-144'; Fps = 144; Actions = 512; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'hot'; Priority = 'auto' },
+            @{ Name = 'adaptive-cold-144'; Fps = 144; Actions = 64; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'cold'; Priority = 'auto' }
           )
-          if ($env:EVENT_NAME -eq 'workflow_dispatch' -and $env:PERFORMANCE_SCOPE -eq 'full') {
-            $matrices = @(
-              @{ Name = 'fixed-hot'; Actions = 512; Repeats = 10; Commands = 500; Lead = 'fixed'; Gap = 'hot' },
-              @{ Name = 'adaptive-hot'; Actions = 512; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'hot' },
-              @{ Name = 'fixed-cold'; Actions = 64; Repeats = 10; Commands = 0; Lead = 'fixed'; Gap = 'cold' },
-              @{ Name = 'adaptive-cold'; Actions = 64; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'cold' }
-            )
-          }
           foreach ($matrix in $matrices) {
             $matrixDir = Join-Path $artifactRoot $matrix.Name
             New-Item -ItemType Directory -Force -Path $matrixDir | Out-Null
-            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --actions $matrix.Actions --dispatch-repeats $matrix.Repeats --command-samples $matrix.Commands --polyphony 1,2,3,5,8,15 --lead-mode $matrix.Lead --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode off --budget-seconds 120 --output-dir $matrixDir
+            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --actions $matrix.Actions --dispatch-repeats $matrix.Repeats --command-samples $matrix.Commands --polyphony 1,2,3,5,8,15 --game-fps $matrix.Fps --lead-mode $matrix.Lead --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode $matrix.Priority --budget-seconds 120 --output-dir $matrixDir
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+      - name: Verify native A/B artifact files before upload
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactRoot = Join-Path $env:RUNNER_TEMP 'sky-native-ab-artifacts'
+          if (-not (Test-Path -LiteralPath $artifactRoot -PathType Container)) {
+            throw "Native A/B artifact directory is missing: $artifactRoot"
+          }
+          $files = @(Get-ChildItem -LiteralPath $artifactRoot -File -Recurse)
+          if ($files.Count -eq 0) {
+            throw 'Native A/B artifact directory contains no files'
+          }
+          $size = ($files | Measure-Object -Property Length -Sum).Sum
+          if ($size -le 0) {
+            throw 'Native A/B artifact files have zero total size'
+          }
+          "artifact_files=$($files.Count) artifact_size_bytes=$size"
 
       - name: Upload native A/B artifacts
         if: always()
@@ -231,7 +251,7 @@ jobs:
         with:
           name: native-ab-${{ github.run_id }}
           path: ${{ runner.temp }}/sky-native-ab-artifacts
-          if-no-files-found: warn
+          if-no-files-found: error
 
   status:
     name: Sky Auto Player — full altitude gate
