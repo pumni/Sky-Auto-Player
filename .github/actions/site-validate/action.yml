@@ -51,9 +51,27 @@ runs:
       working-directory: site
       run: bunx playwright install chromium --with-deps
 
-    - name: Run E2E and accessibility tests
+    - name: Run Functional E2E and accessibility tests
       shell: bash
       working-directory: site
       env:
         CI: true
-      run: bun run test:e2e
+      run: bun run test:functional
+
+    - name: Run Visual regression tests
+      shell: bash
+      working-directory: site
+      env:
+        CI: true
+      run: bun run test:visual
+
+    - name: Upload Playwright failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@4bec8e081f65027303d8ba4f652030f2430349f2 # v4.6.1
+      with:
+        name: playwright-failure-${{ github.run_id }}
+        path: |
+          site/test-results/
+          site/playwright-report/
+        if-no-files-found: ignore
+        retention-days: 7

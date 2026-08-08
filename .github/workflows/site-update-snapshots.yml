@@ -75,14 +75,14 @@ jobs:
           if [ -n "${{ inputs.grep }}" ]; then
             args+=("-g" "${{ inputs.grep }}")
           fi
-          bun run test:e2e -- "${args[@]}"
+          bun run test:visual -- "${args[@]}"
 
       - name: Verify baselines (clean run, no updates)
         shell: bash
         working-directory: site
         env:
           CI: 'true'
-        run: bun run test:e2e
+        run: bun run test:visual
 
       - name: Commit regenerated linux baselines
         shell: bash

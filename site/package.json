@@ -20,7 +20,9 @@
     "verify:dist": "bun scripts/verify-dist.mjs",
     "verify:seo": "bun scripts/verify-seo.mjs",
     "test:e2e": "bun scripts/run-e2e.mjs",
-    "test:update": "bun scripts/run-e2e.mjs --update-snapshots=all",
+    "test:functional": "bun scripts/run-e2e.mjs tests/e2e/accessibility.spec.ts tests/e2e/locale-switch-contrast.spec.ts tests/e2e/navigation.spec.ts tests/e2e/site-contracts.spec.ts",
+    "test:visual": "bun scripts/run-e2e.mjs tests/e2e/visual.spec.ts",
+    "test:update": "bun scripts/run-e2e.mjs tests/e2e/visual.spec.ts --update-snapshots=all",
     "astro": "astro"
   },
   "dependencies": {

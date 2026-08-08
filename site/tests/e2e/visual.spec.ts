@@ -31,7 +31,7 @@ const screenshotOptions = {
 };
 
 test.describe('visual regression', () => {
-  test.describe.configure({ mode: 'serial' });
+  test.describe.configure({ mode: 'default' });
 
   for (const visualCase of [
     { name: 'home-en-desktop-1440.png', route: '/', width: 1440, height: 900 },
@@ -41,25 +41,17 @@ test.describe('visual regression', () => {
   ] as const) {
     test(visualCase.name, async ({ page }) => {
       await prepare(page, visualCase.route, visualCase.width, visualCase.height);
-      const screenshot = await page.screenshot({
+      await expect(page).toHaveScreenshot(visualCase.name, {
         fullPage: true,
-        animations: 'disabled',
-        caret: 'hide',
-      });
-      expect(screenshot).toMatchSnapshot(visualCase.name, {
-        maxDiffPixelRatio: screenshotOptions.maxDiffPixelRatio,
+        ...screenshotOptions,
       });
     });
   }
 
   test('header and hero desktop', async ({ page }) => {
     await prepare(page, '/', 1440, 900);
-    const screenshot = await page.locator('.hero').screenshot({
-      animations: 'disabled',
-      caret: 'hide',
-    });
-    expect(screenshot).toMatchSnapshot('header-hero-1440.png', {
-      maxDiffPixelRatio: screenshotOptions.maxDiffPixelRatio,
+    await expect(page.locator('.hero')).toHaveScreenshot('header-hero-1440.png', {
+      ...screenshotOptions,
     });
   });
 
