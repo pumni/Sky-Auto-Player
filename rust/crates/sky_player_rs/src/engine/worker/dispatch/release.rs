@@ -118,7 +118,7 @@ impl ReleaseTransportEvidence {
 /// and the SendInput note-off evidence.
 pub(super) struct ReleaseReconciliation {
     pub(super) recovery_required: bool,
-    pub(super) bookkeeping_completed_us: u64,
+    pub(super) recovery_pause_ticks: Option<DurationTicks>,
     pub(super) first_index: usize,
     pub(super) effective_deadline_ticks: TimelineTicks,
     pub(super) scheduled_ticks: TimelineTicks,
@@ -202,7 +202,6 @@ pub(crate) fn dispatch_due_pending_releases(
         qpc_clock,
         clock_state,
         timing,
-        local_metrics,
         &due_pending,
         &send,
         lead_up_ticks,
@@ -211,12 +210,52 @@ pub(crate) fn dispatch_due_pending_releases(
         Err(step) => return step,
     };
 
+    // (1) HARD BOUNDARY: dispatch_ready boundary QPC sample taken immediately after
+    // coordinator release completion and BEFORE telemetry trace append or observer work.
+    let dispatch_ready_qpc = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return DispatchStep::Terminate(format!(
+                "note-off dispatch_ready QPC failure: {error:?}"
+            ));
+        }
+    };
+    let core_post_send_us =
+        match dispatch_ready_qpc.checked_duration_since(send.sender_completed_qpc) {
+            Ok(duration) => match qpc_clock.duration_to_us(duration) {
+                Ok(us) => us,
+                Err(error) => {
+                    return DispatchStep::Terminate(format!(
+                        "note-off post-send conversion failure: {error:?}"
+                    ));
+                }
+            },
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "dispatch-ready QPC ordering failure: {error:?}"
+                ));
+            }
+        };
+
+    if let Some(pause_ticks) = reconciliation.recovery_pause_ticks {
+        let recovery_pause_us = match qpc_clock.duration_to_us(pause_ticks) {
+            Ok(value) => value,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "recovery telemetry conversion failure: {error:?}"
+                ));
+            }
+        };
+        local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
+    }
+
     if let Err(step) = record_release_telemetry(
         telemetry,
         &due_pending,
         &send,
         &reconciliation,
         lead_up_ticks,
+        core_post_send_us,
     ) {
         return step;
     }
@@ -236,6 +275,7 @@ pub(crate) fn dispatch_due_pending_releases(
         latency_class,
         pending_plan,
         scan_count,
+        core_post_send_us,
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -397,7 +437,6 @@ fn reconcile_release_recovery(
     qpc_clock: QpcClock,
     clock_state: &mut PlaybackClockState,
     timing: &WorkerTimingState,
-    local_metrics: &mut WorkerMetricsLocal,
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
@@ -427,20 +466,12 @@ fn reconcile_release_recovery(
             "coordinator release completion failure: {error}"
         )));
     }
+    let mut recovery_pause_ticks = None;
     if !recovery_required {
         match coordinator.finish_release_recovery_ticks(send.completed_effective_ticks) {
-            Ok(Some(recovery_pause_ticks)) => {
-                let recovery_pause_us = match qpc_clock.duration_to_us(recovery_pause_ticks) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return Err(DispatchStep::Terminate(format!(
-                            "recovery telemetry conversion failure: {error:?}"
-                        )));
-                    }
-                };
-                local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
+            Ok(pause_ticks) => {
+                recovery_pause_ticks = pause_ticks;
             }
-            Ok(None) => {}
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
                     "coordinator recovery completion failure: {error}"
@@ -455,38 +486,20 @@ fn reconcile_release_recovery(
         send,
         lead_up_ticks,
         recovery_required,
+        recovery_pause_ticks,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn reconcile_release_outcome(
     qpc_clock: QpcClock,
-    clock_state: &mut PlaybackClockState,
+    _clock_state: &mut PlaybackClockState,
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
     recovery_required: bool,
+    recovery_pause_ticks: Option<DurationTicks>,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
-    let bookkeeping_completed_us = match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "bookkeeping QPC us conversion failure: {error:?}"
-                    )));
-                }
-            }
-        }
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "bookkeeping QPC failure: {error:?}"
-            )));
-        }
-    };
     let mut first_index: Option<usize> = None;
     let mut first_deadline: Option<TimelineTicks> = None;
     for (index, pending) in due_pending.iter().enumerate() {
@@ -619,7 +632,7 @@ fn reconcile_release_outcome(
         && !mixed_source;
     Ok(ReleaseReconciliation {
         recovery_required,
-        bookkeeping_completed_us,
+        recovery_pause_ticks,
         first_index,
         effective_deadline_ticks,
         scheduled_ticks,

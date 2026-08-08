@@ -1274,7 +1274,16 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 fn failed_send_does_not_seed_estimator_or_residual() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 0, 3, 500, 120, false);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        0,
+        3,
+        500,
+        120,
+        false,
+    );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
@@ -1284,7 +1293,16 @@ fn failed_send_does_not_seed_estimator_or_residual() {
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
 
-    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        1,
+        3,
+        500,
+        120,
+        true,
+    );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
     assert_eq!(estimator.export_state().residuals[0].count, 1);
@@ -1333,7 +1351,16 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
         serde_json::to_string(&before.hist_down).unwrap()
     );
 
-    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        2,
+        2,
+        500,
+        120,
+        true,
+    );
     let after_down = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_down.hist_down).unwrap(),
@@ -2538,4 +2565,13 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
         expected_authored,
         "B authored timestamp must stay at 150ms"
     );
+}
+
+#[test]
+fn test_qpc_ordering_failure_is_terminal() {
+    // Construct dispatch_ready_qpc < sender_completed_qpc ordering failure
+    let sender_completed_qpc = QpcTicks::from_raw(200);
+    let dispatch_ready_qpc = QpcTicks::from_raw(100);
+    let ordering_res = dispatch_ready_qpc.checked_duration_since(sender_completed_qpc);
+    assert!(ordering_res.is_err());
 }

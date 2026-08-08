@@ -67,10 +67,32 @@ pub(super) fn publisher_down_send_outcome(
         retry_late_abort,
         strict_completion_late,
         saturation_abort,
-        bookkeeping_completed_us,
         ..
     } = *timing_proof;
-    // (1) Mandatory trace append — hard path, O(1), no allocation.
+    // (1) HARD BOUNDARY: dispatch_ready boundary QPC sample taken immediately
+    // after coordinator/backend commit and BEFORE telemetry trace append or observer work.
+    let dispatch_ready_qpc = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
+        }
+    };
+    let core_post_send_us = match dispatch_ready_qpc.checked_duration_since(sender_completed_qpc) {
+        Ok(duration) => match qpc_clock.duration_to_us(duration) {
+            Ok(us) => us,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-on post-send conversion failure: {error:?}"
+                ));
+            }
+        },
+        Err(error) => {
+            return DispatchStep::Terminate(format!(
+                "dispatch-ready QPC ordering failure: {error:?}"
+            ));
+        }
+    };
+    // (2) Mandatory trace append — occurs AFTER dispatch_ready_qpc using core_post_send_us.
     let mut force_dispatch_publish = match record_down_send_telemetry(
         view,
         telemetry,
@@ -89,7 +111,7 @@ pub(super) fn publisher_down_send_outcome(
         completed_effective_ticks,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
-        bookkeeping_completed_us,
+        core_post_send_us,
         requested_count,
         recovered_retry_late,
         recovered_partial_up,
@@ -103,26 +125,6 @@ pub(super) fn publisher_down_send_outcome(
         force_dispatch_publish = true;
     }
     runtime.pending_pre_send_spin_us = 0;
-    // (2) dispatch_ready boundary: typed QPC sample taken immediately after the
-    // coordinator commit and trace append, and strictly before the observer
-    // work (estimator / health / publish) which now lives in the drain.
-    let dispatch_ready_qpc = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
-        }
-    };
-    let core_post_send_us = match dispatch_ready_qpc.checked_duration_since(sender_completed_qpc) {
-        Ok(duration) => match qpc_clock.duration_to_us(duration) {
-            Ok(us) => us,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "note-on post-send conversion failure: {error:?}"
-                ));
-            }
-        },
-        Err(_) => 0,
-    };
     // (3) Enqueue an allocation-free snapshot for the deferred drain.  Drops
     // the oldest entry when the fixed queue is full (see queue docs).
     observer.push(
@@ -220,7 +222,7 @@ pub(super) fn record_down_send_telemetry(
     effective_now_ticks: TimelineTicks,
     lead_down_ticks: DurationTicks,
     result_success: bool,
-    completed_effective: u64,
+    _completed_effective: u64,
     result_sent: &SmallVec<[u16; 15]>,
     result_skipped_duplicates: &SmallVec<[u16; 15]>,
     result_send_attempts: u8,
@@ -231,7 +233,7 @@ pub(super) fn record_down_send_telemetry(
     completed_effective_ticks: TimelineTicks,
     completion_error_ticks_value: i64,
     authored_completion_error_ticks_value: i64,
-    bookkeeping_completed_us: u64,
+    core_post_send_us: u64,
     requested_count: usize,
     recovered_retry_late: bool,
     recovered_partial_up: bool,
@@ -283,8 +285,7 @@ pub(super) fn record_down_send_telemetry(
                 wake_ticks: effective_now_ticks,
                 send_started_ticks: Some(sender_started_effective_ticks),
                 send_completed_ticks: Some(completed_effective_ticks),
-                core_post_send_duration_us: bookkeeping_completed_us
-                    .saturating_sub(completed_effective),
+                core_post_send_duration_us: core_post_send_us,
                 completion_error_ticks: completion_error_ticks_value,
                 authored_completion_error_ticks: authored_completion_error_ticks_value,
                 applied_lead_ticks: lead_down_ticks,
@@ -423,8 +424,13 @@ pub(super) fn record_release_telemetry(
     send: &ReleaseSend,
     reconciliation: &ReleaseReconciliation,
     lead_up_ticks: DurationTicks,
+    core_post_send_us: u64,
 ) -> Result<(), DispatchStep> {
-    let first = &due_pending[reconciliation.first_index];
+    let Some(first) = due_pending.first() else {
+        return Err(DispatchStep::Terminate(
+            "empty pending release batch in telemetry recording".to_string(),
+        ));
+    };
     let scan_count = due_pending.len();
     let release_outcome = release_runtime_outcome(
         reconciliation.deferred_by_us,
@@ -461,9 +467,7 @@ pub(super) fn record_release_telemetry(
                 wake_ticks: send.actual_ticks,
                 send_started_ticks: send.sender_started_effective_ticks,
                 send_completed_ticks: Some(send.completed_effective_ticks),
-                core_post_send_duration_us: reconciliation
-                    .bookkeeping_completed_us
-                    .saturating_sub(send.completed_effective_us),
+                core_post_send_duration_us: core_post_send_us,
                 completion_error_ticks: reconciliation.up_completion_error_ticks,
                 authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
                 applied_lead_ticks: lead_up_ticks,
@@ -492,7 +496,7 @@ pub(super) fn record_release_telemetry(
 /// drain (`drain_up_send_outcome`) via the queued `UpObservation`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn observe_release_send_health(
-    qpc_clock: QpcClock,
+    _qpc_clock: QpcClock,
     config: &WorkerConfig,
     timing: &WorkerTimingState,
     health: &mut WorkerHealthState,
@@ -506,6 +510,7 @@ pub(super) fn observe_release_send_health(
     latency_class: LatencyClass,
     pending_plan: Option<&PendingDispatchPlan>,
     scan_count: usize,
+    core_post_send_us: u64,
 ) -> Result<ReleaseOutcomeFlags, DispatchStep> {
     let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
         && reconciliation.up_completion_lateness_ticks.is_some();
@@ -522,29 +527,6 @@ pub(super) fn observe_release_send_health(
             .up_completion_lateness_ticks
             .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
     runtime.pending_pre_send_spin_us = 0;
-    // §8.5 DISPATCH_READY boundary: typed QPC sample taken immediately after
-    // the coordinator commit (reconcile_release_recovery) and trace append, and
-    // strictly before the estimator/health/publish observer work (now deferred).
-    let dispatch_ready_qpc = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-off dispatch_ready QPC failure: {error:?}"
-            )));
-        }
-    };
-    let core_post_send_us =
-        match dispatch_ready_qpc.checked_duration_since(send.sender_completed_qpc) {
-            Ok(duration) => match qpc_clock.duration_to_us(duration) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "note-off post-send conversion failure: {error:?}"
-                    )));
-                }
-            },
-            Err(_) => 0,
-        };
     observer.push(
         DispatchObservation::Up(UpObservation {
             latency_class,

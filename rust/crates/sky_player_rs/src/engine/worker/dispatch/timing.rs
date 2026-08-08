@@ -188,7 +188,6 @@ pub(crate) struct DownSendTiming {
     pub(crate) strict_completion_late: bool,
     pub(crate) retry_late_abort: bool,
     pub(crate) saturation_abort: bool,
-    pub(crate) bookkeeping_completed_us: u64,
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, and computes the
@@ -449,7 +448,6 @@ pub(crate) fn interpret_down_send_timing(
                 && health.down_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK
         }
     };
-    let bookkeeping_completed_us = read_qpc_us(qpc_clock, clock_state)?;
     if recovered_zero_progress && result_success {
         local_metrics.recovered_zero_progress_retries = local_metrics
             .recovered_zero_progress_retries
@@ -476,7 +474,6 @@ pub(crate) fn interpret_down_send_timing(
         strict_completion_late,
         retry_late_abort,
         saturation_abort,
-        bookkeeping_completed_us,
     })
 }
 
