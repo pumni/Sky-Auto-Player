@@ -14,12 +14,13 @@ export async function getStaticPaths() {
 const { guide } = Astro.props;
 const { Content } = await render(guide);
 
-// Build related guides: same category, different slug, same locale, non-draft
+// Resolve related guides by explicit key (guide.data.related) instead of category-match.
+// This guarantees related links even for single-guide categories.
 const allGuides = await getCollection('guides', (g) => g.data.locale === 'en' && !g.data.draft);
-const relatedGuides = allGuides
-  .filter((g) => g.data.category === guide.data.category && g.data.slug !== guide.data.slug)
-  .sort((a, b) => a.data.order - b.data.order)
-  .slice(0, 3)
+const guideBySlug = new Map(allGuides.map((g) => [g.data.slug, g]));
+const relatedGuides = guide.data.related
+  .map((key) => guideBySlug.get(key))
+  .filter((g): g is NonNullable<typeof g> => g !== undefined)
   .map((g) => ({ title: g.data.title, slug: g.data.slug, locale: g.data.locale as 'en' | 'vi' }));
 ---
 

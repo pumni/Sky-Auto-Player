@@ -16,6 +16,10 @@ published: '2026-08-08'
 updated: '2026-08-08'
 lastReviewedVersion: '3.0.0'
 draft: false
+related:
+  - how-it-works
+  - windows-setup
+  - timing-engine
 evidence:
   - category: security
     label: SECURITY.md — chính sách bảo mật đầy đủ

@@ -17,6 +17,10 @@ updated: '2026-08-08'
 lastReviewedVersion: '3.0.0'
 draft: false
 showDiagram: true
+related:
+  - sheet-formats
+  - timing-engine
+  - security-boundaries
 evidence:
   - category: architecture
     label: Tổng quan kiến trúc bốn lớp

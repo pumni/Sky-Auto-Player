@@ -1,6 +1,6 @@
 # Plan: Sky Auto Player — SEO/GEO Growth Architecture 2026
 
-> **Status:** IMPLEMENTED (PRs 1–3 merged)
+> **Status:** IMPLEMENTED — ACCEPTANCE IN PROGRESS (local gates pending, GitHub Pages deploy not yet verified)
 > **Date:** 2026-08-08
 > **Repository:** `pumni/Sky-Auto-Player`
 > **Primary scope:** `site/` GitHub Pages marketing website

@@ -15,6 +15,10 @@ published: '2026-08-08'
 updated: '2026-08-08'
 lastReviewedVersion: '3.0.0'
 draft: false
+related:
+  - sheet-formats
+  - troubleshooting
+  - security-boundaries
 evidence:
   - category: implementation
     label: README — quick start và yêu cầu hệ thống

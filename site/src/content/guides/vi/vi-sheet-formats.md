@@ -15,6 +15,10 @@ published: '2026-08-08'
 updated: '2026-08-08'
 lastReviewedVersion: '3.0.0'
 draft: false
+related:
+  - windows-setup
+  - how-it-works
+  - troubleshooting
 evidence:
   - category: implementation
     label: README — định dạng được hỗ trợ và workflow
