@@ -14,7 +14,6 @@ category: technical-safety
 order: 1
 published: '2026-08-08'
 updated: '2026-08-08'
-lastReviewedVersion: '3.1.0'
 draft: false
 related:
   - how-it-works
@@ -98,7 +97,7 @@ Every release produces three files:
 Verify the archive before extracting:
 
 ```powershell
-(Get-FileHash "Sky-Auto-Player-v3.1.0.zip" -Algorithm SHA256).Hash
+(Get-FileHash "Sky-Auto-Player-v<version>.zip" -Algorithm SHA256).Hash
 # Compare with the content of the .sha256 file
 ```
 

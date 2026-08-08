@@ -14,7 +14,6 @@ category: support
 order: 1
 published: '2026-08-08'
 updated: '2026-08-08'
-lastReviewedVersion: '3.1.0'
 draft: false
 related:
   - windows-setup

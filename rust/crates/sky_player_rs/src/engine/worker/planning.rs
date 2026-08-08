@@ -9,6 +9,7 @@ pub(crate) use super::dispatch::timing::{
     AuthoredDispatchPlan, next_authored_path, pending_lead_for_polyphony, resolve_authored_lead,
     startup_lead_for_first_packet,
 };
+#[cfg(any(test, feature = "test-support"))]
 use super::health::DispatchPath;
 use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{

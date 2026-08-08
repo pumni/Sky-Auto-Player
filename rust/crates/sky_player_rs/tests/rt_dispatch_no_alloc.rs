@@ -154,8 +154,6 @@ fn down_observation(n: u64) -> DispatchObservation {
             recovered_retry_late: false,
             recovered_partial_up: false,
             strict_completion_late: false,
-            retry_late_abort: false,
-            saturation_abort: false,
         },
     })
 }
@@ -178,8 +176,6 @@ fn up_observation(n: u64) -> DispatchObservation {
         send_warn_us: 0,
         core_post_send_warn_us: 0,
         recovery_pause_ticks: None,
-        strict_up_completion_late: false,
-        saturation_abort: false,
         trace: UpTraceObservation {
             event_index: 0,
             trace_kind: 1,

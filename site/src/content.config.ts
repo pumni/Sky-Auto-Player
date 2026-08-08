@@ -36,8 +36,6 @@ const guides = defineCollection({
     published: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     /** ISO 8601 date: YYYY-MM-DD. Only update when content actually changes. */
     updated: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    /** Application version this guide was last reviewed against. */
-    lastReviewedVersion: z.string().min(1),
     /** Draft guides are excluded from routes and sitemap. */
     draft: z.boolean().default(false),
     /** Optional page-specific OG image path (relative to public/). */

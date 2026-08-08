@@ -41,8 +41,6 @@ pub struct DownTraceObservation {
     pub recovered_retry_late: bool,
     pub recovered_partial_up: bool,
     pub strict_completion_late: bool,
-    pub retry_late_abort: bool,
-    pub saturation_abort: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,8 +108,6 @@ pub struct UpObservation {
     pub core_post_send_warn_us: u64,
     pub trace: UpTraceObservation,
     pub recovery_pause_ticks: Option<DurationTicks>,
-    pub strict_up_completion_late: bool,
-    pub saturation_abort: bool,
 }
 
 /// Drain-side wait conversion. Raw wait evidence stays on the worker-owned

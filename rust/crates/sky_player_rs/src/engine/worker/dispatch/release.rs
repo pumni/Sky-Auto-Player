@@ -14,7 +14,9 @@ use super::observer::PendingObservationQueue;
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
@@ -336,8 +338,6 @@ pub(crate) fn dispatch_due_pending_releases(
         send_warn_us: frozen_budget.send_warn_us,
         core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
         recovery_pause_ticks: reconciliation.recovery_pause_ticks,
-        strict_up_completion_late: flags.strict_up_completion_late,
-        saturation_abort: flags.saturation_abort,
         trace: UpTraceObservation {
             event_index: due_pending[reconciliation.first_index].source_action_index,
             trace_kind: super::super::TRACE_KIND_UP,

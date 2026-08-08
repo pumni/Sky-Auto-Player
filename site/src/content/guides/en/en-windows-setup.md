@@ -13,7 +13,6 @@ category: getting-started
 order: 3
 published: '2026-08-08'
 updated: '2026-08-08'
-lastReviewedVersion: '3.1.0'
 draft: false
 related:
   - sheet-formats
@@ -44,7 +43,7 @@ evidence:
 
    ```powershell
    # In PowerShell, in the folder where you downloaded the zip:
-   (Get-FileHash "Sky-Auto-Player-v3.1.0.zip" -Algorithm SHA256).Hash
+   (Get-FileHash "Sky-Auto-Player-v<version>.zip" -Algorithm SHA256).Hash
    # Compare the output with the contents of the .sha256 file
    ```
 

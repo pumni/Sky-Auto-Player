@@ -57,8 +57,6 @@ pub(crate) use health::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
-#[cfg(not(any(test, feature = "test-support")))]
-pub(crate) use planning::NextDispatchPlan;
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::startup_lead_for_first_packet;
 pub(crate) use startup::WorkerSchedulingGuards;

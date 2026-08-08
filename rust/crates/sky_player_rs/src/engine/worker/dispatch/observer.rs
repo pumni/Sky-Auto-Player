@@ -150,8 +150,6 @@ pub(crate) fn publisher_down_send_outcome(
             recovered_retry_late,
             recovered_partial_up,
             strict_completion_late,
-            retry_late_abort,
-            saturation_abort,
         },
     };
     observer.push(
@@ -463,6 +461,7 @@ impl PendingObservationQueue {
         self.len -= 1;
         entry
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub fn len(&self) -> usize {
         self.len
     }

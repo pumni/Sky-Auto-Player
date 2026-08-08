@@ -26,7 +26,6 @@ interface Props {
     category: string;
     published: string;
     updated: string;
-    lastReviewedVersion: string;
     evidence: { category: string; label: string; url: string }[];
     slug: string;
   };
@@ -109,12 +108,8 @@ const structuredData = [
         <p class="guide-page__category kicker">{guide.category.replace(/-/g, ' ')}</p>
         <h1 id="guide-title">{guide.title}</h1>
         <p class="guide-page__summary">{guide.summary}</p>
-        <p class="guide-page__reviewed">
-          {
-            isVi
-              ? `Đã xem xét lần cuối cho Sky Auto Player v${guide.lastReviewedVersion} · Cập nhật: ${guide.updated}`
-              : `Last reviewed for Sky Auto Player v${guide.lastReviewedVersion} · Updated: ${guide.updated}`
-          }
+        <p class="guide-page__updated">
+          {isVi ? `Cập nhật: ${guide.updated}` : `Updated: ${guide.updated}`}
         </p>
       </div>
     </div>
@@ -206,7 +201,7 @@ const structuredData = [
     line-height: var(--leading-lead);
   }
 
-  .guide-page__reviewed {
+  .guide-page__updated {
     font-size: var(--type-small);
     color: var(--color-text-tertiary);
     font-family: var(--font-mono);
