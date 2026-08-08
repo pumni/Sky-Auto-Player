@@ -563,13 +563,13 @@ impl TestDispatchSessionPy {
         };
         let fault_script = match fault_mode {
             "none" => FaultInjectionScript::none(),
-            "zero_progress_recovered" => FaultInjectionScript::zero_progress_down_once(),
+            "zero_progress" => FaultInjectionScript::zero_progress_down_once(),
             "zero_progress_failed" => FaultInjectionScript::persistent_zero_down(),
             "partial" => FaultInjectionScript::partial_down_first_attempt(),
             "partial_after_zero_retry" => FaultInjectionScript::partial_down_after_zero_retry(),
             _ => {
                 return Err(PyValueError::new_err(
-                    "fault_mode must be none, zero_progress_recovered, zero_progress_failed, partial, or partial_after_zero_retry",
+                    "fault_mode must be none, zero_progress, zero_progress_failed, partial, or partial_after_zero_retry",
                 ));
             }
         };

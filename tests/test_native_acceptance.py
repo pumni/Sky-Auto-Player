@@ -473,7 +473,7 @@ def test_test_support_pause_timing_waits_for_startup_ready_boundary() -> None:
     ("fault_mode", "expected_outcome", "counter"),
     [
         ("none", "finished", None),
-        ("zero_progress_recovered", "finished", None),
+        ("zero_progress", "error", "sendinput_zero_progress_failures"),
         ("zero_progress_failed", "error", "sendinput_zero_progress_failures"),
         ("partial", "error", "sendinput_partial_events"),
     ],
