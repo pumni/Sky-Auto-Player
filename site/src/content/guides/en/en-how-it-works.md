@@ -16,6 +16,7 @@ published: '2026-08-08'
 updated: '2026-08-08'
 lastReviewedVersion: '3.0.0'
 draft: false
+showDiagram: true
 evidence:
   - category: architecture
     label: Four-layer architecture overview

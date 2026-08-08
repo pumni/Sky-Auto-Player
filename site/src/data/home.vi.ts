@@ -167,6 +167,10 @@ export const homeVi: HomeContent = {
         href: '/vi/faq/#account-safety',
       },
     ],
+    guideLinks: [
+      { label: 'Sky Auto Player hoạt động như thế nào', href: '/vi/guides/how-it-works/' },
+      { label: 'Xử lý sự cố thường gặp', href: '/vi/guides/troubleshooting/' },
+    ],
   },
   finalCta: {
     title: 'Màn trình diễn tiếp theo đã nằm sẵn trong sheet.',

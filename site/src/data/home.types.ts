@@ -78,6 +78,8 @@ export interface HomeContent {
       /** Locale path without origin; may include hash. Example: "/faq/#download" */
       href: string;
     }>;
+    /** Optional contextual guide cross-links below FAQ items. */
+    guideLinks?: ReadonlyArray<{ label: string; href: string }>;
   };
   finalCta: {
     title: string;

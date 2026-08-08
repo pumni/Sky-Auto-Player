@@ -43,6 +43,26 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
         ))
       }
     </ul>
+
+    {
+      data.guideLinks && data.guideLinks.length > 0 && (
+        <aside
+          class="faq-preview__guides"
+          aria-label={isVi ? 'Hướng dẫn liên quan' : 'Related guides'}
+        >
+          <p class="faq-preview__guides-label">{isVi ? 'Hướng dẫn' : 'Guides'}</p>
+          <ul class="faq-preview__guides-list">
+            {data.guideLinks.map((link) => (
+              <li>
+                <a class="faq-preview__guide-link" href={withBase(link.href)}>
+                  {link.label} <span aria-hidden="true">→</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )
+    }
   </div>
 </section>
 
@@ -136,5 +156,46 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
     .faq-teasers__link:focus-visible .faq-teasers__go {
       transform: none;
     }
+  }
+
+  .faq-preview__guides {
+    padding-block-start: var(--space-5);
+    border-block-start: 1px solid var(--line-faint);
+  }
+
+  .faq-preview__guides-label {
+    font-size: var(--type-micro);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-tertiary);
+    margin-block-end: var(--space-3);
+  }
+
+  .faq-preview__guides-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .faq-preview__guide-link {
+    display: inline-block;
+    font-size: var(--type-small);
+    color: var(--color-text-secondary);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    transition:
+      border-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard);
+    text-decoration: none;
+  }
+
+  .faq-preview__guide-link:hover {
+    border-color: var(--line-accent);
+    color: var(--color-text-primary);
   }
 </style>

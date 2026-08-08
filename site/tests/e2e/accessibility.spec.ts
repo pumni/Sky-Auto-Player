@@ -333,4 +333,44 @@ test.describe('accessibility and responsive contracts', () => {
     expect(jsonLd.mainEntity.length).toBeGreaterThan(0);
     await expect(page.locator('body')).toHaveCSS('font-family', /Inter Variable/);
   });
+
+  for (const guideRoute of [
+    '/guides/how-it-works/',
+    '/guides/security-boundaries/',
+    '/vi/guides/how-it-works/',
+    '/vi/guides/troubleshooting/',
+  ]) {
+    test(`${guideRoute} has no axe violations`, async ({ page }) => {
+      await page.goto(`/Sky-Auto-Player${guideRoute}`);
+      const results = await new AxeBuilder({ page })
+        // Shiki's github-dark theme uses #6a737d comments on #24292e bg (3.04:1, below 4.5:1).
+        // This is a known third-party theme limitation — exclude code blocks from color-contrast.
+        .exclude('pre.astro-code')
+        .analyze();
+      expect(results.violations).toEqual([]);
+    });
+  }
+
+  test('guide page has Article JSON-LD, breadcrumb and evidence section', async ({ page }) => {
+    await page.goto('/Sky-Auto-Player/guides/how-it-works/');
+    // BaseLayout emits structuredData array as a single <script> tag containing a JSON array.
+    // Parse each script tag and flatten any arrays to get a flat list of schema objects.
+    const scripts = await page.locator('script[type="application/ld+json"]').allTextContents();
+    type SchemaObj = Record<string, unknown>;
+    const schemas: SchemaObj[] = scripts.flatMap((s) => {
+      const parsed = JSON.parse(s) as SchemaObj | SchemaObj[];
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
+    const article = schemas.find((s) => s['@type'] === 'Article');
+    expect(article).toBeDefined();
+    expect(article?.headline).toBeTruthy();
+    // BreadcrumbList
+    const breadcrumb = schemas.find((s) => s['@type'] === 'BreadcrumbList');
+    expect(breadcrumb).toBeDefined();
+    expect((breadcrumb?.itemListElement as unknown[])?.length).toBe(3);
+    // H1 inside article element
+    await expect(page.locator('article h1')).toBeVisible();
+    // Evidence section
+    await expect(page.locator('.guide-page__evidence')).toBeVisible();
+  });
 });

@@ -64,6 +64,8 @@ const guides = defineCollection({
         }),
       )
       .min(1),
+    /** When true, renders the ArchitectureDiagram component below the prose. */
+    showDiagram: z.boolean().optional().default(false),
   }),
 });
 

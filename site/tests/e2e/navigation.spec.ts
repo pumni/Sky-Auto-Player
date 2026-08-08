@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-const routes = ['/', '/faq/', '/vi/', '/vi/faq/'];
+const routes = ['/', '/faq/', '/vi/', '/vi/faq/', '/guides/', '/vi/guides/'];
+
+const guideRoutes = [
+  { en: '/guides/how-it-works/', vi: '/vi/guides/how-it-works/' },
+  { en: '/guides/security-boundaries/', vi: '/vi/guides/security-boundaries/' },
+];
 
 test.describe('navigation and route contracts', () => {
   for (const route of routes) {
@@ -22,7 +27,30 @@ test.describe('navigation and route contracts', () => {
     });
   }
 
-  test('locale switching preserves the current page', async ({ page }) => {
+  for (const pair of guideRoutes) {
+    for (const [locale, route] of Object.entries(pair)) {
+      const lang = locale as 'en' | 'vi';
+      test(`${route} guide page has breadcrumb and H1`, async ({ page }) => {
+        const response = await page.goto(`/Sky-Auto-Player${route}`);
+        expect(response?.status()).toBe(200);
+        await expect(page.locator('article h1')).toBeVisible();
+        // Breadcrumb must have 3 items: Home / Guides / [title]
+        const breadcrumb = page.locator('.breadcrumb__list li:not(.breadcrumb__item--separator)');
+        await expect(breadcrumb).toHaveCount(3);
+        // Canonical must match route
+        const canonical = await page.locator('link[rel="canonical"]').getAttribute('href');
+        expect(canonical).toBe(`https://pumni.github.io/Sky-Auto-Player${route}`);
+        // hreflang must include the opposite locale
+        const alternates = await page
+          .locator('link[rel="alternate"]')
+          .evaluateAll((links) => links.map((link) => link.getAttribute('href')));
+        const opposite = lang === 'en' ? pair.vi : pair.en;
+        expect(alternates).toContain(`https://pumni.github.io/Sky-Auto-Player${opposite}`);
+      });
+    }
+  }
+
+  test('locale switching preserves the current page (FAQ)', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/faq/');
     await page.locator('.locale-switch__option').filter({ hasText: 'VI' }).click();
     await expect(page).toHaveURL(/\/Sky-Auto-Player\/vi\/faq\/$/);
@@ -62,7 +90,7 @@ test.describe('navigation and route contracts', () => {
     await expect(nav).not.toHaveClass(/is-open/);
 
     await toggle.click();
-    await nav.locator('a[href*="how-it-works"]').click();
+    await nav.locator('a[href*="guides"]').first().click();
     await expect(nav).not.toHaveClass(/is-open/);
   });
 

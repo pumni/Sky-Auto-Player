@@ -289,11 +289,15 @@ const structuredData = [
 
   .guide-page__content :global(a) {
     color: var(--color-action);
+    text-decoration: underline;
     text-underline-offset: 0.2em;
+    text-decoration-color: color-mix(in oklch, var(--color-action) 50%, transparent);
+    transition: text-decoration-color var(--duration-fast) var(--ease-standard);
   }
 
-  .guide-page__content :global(a:hover) {
-    text-decoration: none;
+  .guide-page__content :global(a:hover),
+  .guide-page__content :global(a:focus-visible) {
+    text-decoration-color: var(--color-action);
   }
 
   .guide-page__content :global(blockquote) {

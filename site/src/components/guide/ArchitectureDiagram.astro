@@ -1,0 +1,365 @@
+---
+/**
+ * ArchitectureDiagram — SVG flow diagram showing how Sky Auto Player processes a sheet file
+ * and produces keyboard input without touching the game process.
+ *
+ * Accessible: <title> + <desc> + role="img". Text equivalent provided in HTML below SVG.
+ * Responsive: viewBox scales, no fixed width/height.
+ */
+
+interface Props {
+  /** 'en' or 'vi' — controls label language */
+  locale?: 'en' | 'vi';
+}
+
+const { locale = 'en' } = Astro.props;
+const isVi = locale === 'vi';
+
+const labels = isVi
+  ? {
+      title: 'Luồng xử lý của Sky Auto Player',
+      desc: 'Sơ đồ khối: File Sheet → Parser → Mô hình Timing → Bộ điều phối Rust → Windows SendInput → Game nhận phím',
+      step1: 'File Sheet',
+      step1sub: '.json / .skysheet / .txt',
+      step2: 'Parser',
+      step2sub: 'domain, thuần túy',
+      step3: 'Timing\nModel',
+      step3sub: 'pure, unit-tested',
+      step4: 'Rust\nDispatch',
+      step4sub: 'goroutine timing',
+      step5: 'SendInput',
+      step5sub: 'Windows API',
+      step6: 'Game',
+      step6sub: 'nhận phím bình thường',
+      boundary: 'Ranh giới process — không có memory access',
+    }
+  : {
+      title: 'Sky Auto Player processing flow',
+      desc: 'Block diagram: Sheet File → Parser → Timing Model → Rust Dispatcher → Windows SendInput → Game receives keys',
+      step1: 'Sheet\nFile',
+      step1sub: '.json / .skysheet / .txt',
+      step2: 'Parser',
+      step2sub: 'domain, pure',
+      step3: 'Timing\nModel',
+      step3sub: 'pure, unit-tested',
+      step4: 'Rust\nDispatch',
+      step4sub: 'high-res timing',
+      step5: 'SendInput',
+      step5sub: 'Windows API',
+      step6: 'Game',
+      step6sub: 'receives keys normally',
+      boundary: 'Process boundary — no memory access',
+    };
+
+const diagramId = `arch-diagram-${locale}`;
+const titleId = `${diagramId}-title`;
+const descId = `${diagramId}-desc`;
+---
+
+<figure class="arch-diagram" aria-label={labels.title}>
+  <svg
+    id={diagramId}
+    role="img"
+    aria-labelledby={`${titleId} ${descId}`}
+    viewBox="0 0 760 200"
+    xmlns="http://www.w3.org/2000/svg"
+    class="arch-diagram__svg"
+  >
+    <title id={titleId}>{labels.title}</title>
+    <desc id={descId}>{labels.desc}</desc>
+
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="currentColor" class="arch-diagram__arrow-fill"></path>
+      </marker>
+    </defs>
+
+    <!-- Step boxes -->
+    <!-- Step 1: Sheet file -->
+    <rect
+      x="4"
+      y="60"
+      width="100"
+      height="80"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--input"></rect>
+    <text x="54" y="93" class="arch-diagram__label">{labels.step1.split('\n')[0]}</text>
+    {
+      labels.step1.split('\n')[1] && (
+        <text x="54" y="109" class="arch-diagram__label">
+          {labels.step1.split('\n')[1]}
+        </text>
+      )
+    }
+    <text x="54" y="127" class="arch-diagram__sublabel">{labels.step1sub}</text>
+
+    <!-- Arrow 1→2 -->
+    <line
+      x1="104"
+      y1="100"
+      x2="124"
+      y2="100"
+      class="arch-diagram__connector"
+      marker-end="url(#arrow)"></line>
+
+    <!-- Step 2: Parser -->
+    <rect
+      x="128"
+      y="68"
+      width="90"
+      height="64"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--domain"></rect>
+    <text x="173" y="97" class="arch-diagram__label">{labels.step2}</text>
+    <text x="173" y="115" class="arch-diagram__sublabel">{labels.step2sub}</text>
+
+    <!-- Arrow 2→3 -->
+    <line
+      x1="218"
+      y1="100"
+      x2="238"
+      y2="100"
+      class="arch-diagram__connector"
+      marker-end="url(#arrow)"></line>
+
+    <!-- Step 3: Timing Model -->
+    <rect
+      x="242"
+      y="68"
+      width="90"
+      height="64"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--domain"></rect>
+    <text x="287" y="93" class="arch-diagram__label">{labels.step3.split('\n')[0]}</text>
+    <text x="287" y="109" class="arch-diagram__label">{labels.step3.split('\n')[1]}</text>
+    <text x="287" y="123" class="arch-diagram__sublabel">{labels.step3sub}</text>
+
+    <!-- Arrow 3→4 -->
+    <line
+      x1="332"
+      y1="100"
+      x2="352"
+      y2="100"
+      class="arch-diagram__connector"
+      marker-end="url(#arrow)"></line>
+
+    <!-- Step 4: Rust Dispatch -->
+    <rect
+      x="356"
+      y="68"
+      width="90"
+      height="64"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--infra"></rect>
+    <text x="401" y="93" class="arch-diagram__label">{labels.step4.split('\n')[0]}</text>
+    <text x="401" y="109" class="arch-diagram__label">{labels.step4.split('\n')[1]}</text>
+    <text x="401" y="123" class="arch-diagram__sublabel">{labels.step4sub}</text>
+
+    <!-- Arrow 4→5 -->
+    <line
+      x1="446"
+      y1="100"
+      x2="466"
+      y2="100"
+      class="arch-diagram__connector"
+      marker-end="url(#arrow)"></line>
+
+    <!-- Step 5: SendInput -->
+    <rect
+      x="470"
+      y="68"
+      width="90"
+      height="64"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--platform"></rect>
+    <text x="515" y="97" class="arch-diagram__label">{labels.step5}</text>
+    <text x="515" y="113" class="arch-diagram__sublabel">{labels.step5sub}</text>
+
+    <!-- Process boundary dashed line -->
+    <line x1="575" y1="20" x2="575" y2="180" class="arch-diagram__boundary" stroke-dasharray="4 3"
+    ></line>
+    <text x="578" y="18" class="arch-diagram__boundary-label">{labels.boundary}</text>
+
+    <!-- Arrow 5→6 -->
+    <line
+      x1="560"
+      y1="100"
+      x2="592"
+      y2="100"
+      class="arch-diagram__connector"
+      marker-end="url(#arrow)"></line>
+
+    <!-- Step 6: Game -->
+    <rect
+      x="596"
+      y="68"
+      width="90"
+      height="64"
+      rx="6"
+      class="arch-diagram__box arch-diagram__box--game"></rect>
+    <text x="641" y="97" class="arch-diagram__label">{labels.step6}</text>
+    <text x="641" y="113" class="arch-diagram__sublabel">{labels.step6sub}</text>
+  </svg>
+
+  <!-- Text equivalent for screen readers and non-SVG environments -->
+  <figcaption class="arch-diagram__caption">
+    <ol class="arch-diagram__steps">
+      <li>
+        <strong>{isVi ? 'File Sheet' : 'Sheet file'}</strong>
+        {isVi ? ' — đọc và parse bởi Sky Auto Player' : ' — read and parsed by Sky Auto Player'}
+      </li>
+      <li>
+        <strong>{isVi ? 'Parser' : 'Parser'}</strong>
+        {isVi ? ' — domain thuần túy, không có I/O' : ' — pure domain, no I/O'}
+      </li>
+      <li>
+        <strong>{isVi ? 'Timing Model' : 'Timing model'}</strong>
+        {
+          isVi
+            ? ' — lên lịch nốt nhạc theo timeline theo frame'
+            : ' — schedules notes on a frame-aligned timeline'
+        }
+      </li>
+      <li>
+        <strong>{isVi ? 'Rust Dispatch' : 'Rust dispatch'}</strong>
+        {
+          isVi
+            ? ' — vòng lặp dispatch độ phân giải cao, MMCSS, đo telemetry'
+            : ' — high-res dispatch loop, MMCSS, telemetry'
+        }
+      </li>
+      <li>
+        <strong>Windows SendInput</strong>
+        {
+          isVi
+            ? ' — phương thức input duy nhất, không hook, không inject'
+            : ' — only input mechanism, no hooks, no injection'
+        }
+      </li>
+      <li>
+        <strong>{isVi ? 'Game' : 'Game'}</strong>
+        {
+          isVi
+            ? ' — nhận phím bình thường qua message queue Windows'
+            : ' — receives keys normally via Windows message queue'
+        }
+      </li>
+    </ol>
+  </figcaption>
+</figure>
+
+<style>
+  .arch-diagram {
+    margin: var(--space-7) 0;
+    overflow-x: auto;
+  }
+
+  .arch-diagram__svg {
+    display: block;
+    width: 100%;
+    max-width: 760px;
+    height: auto;
+    color: var(--color-text-primary);
+  }
+
+  /* Box types */
+  .arch-diagram__box {
+    fill: var(--color-surface-quiet);
+    stroke-width: 1.5;
+  }
+
+  .arch-diagram__box--input {
+    stroke: var(--color-text-tertiary);
+  }
+
+  .arch-diagram__box--domain {
+    stroke: color-mix(in oklch, var(--color-action) 60%, transparent);
+    fill: color-mix(in oklch, var(--color-action) 8%, var(--color-surface-quiet));
+  }
+
+  .arch-diagram__box--infra {
+    stroke: color-mix(in oklch, var(--color-action) 80%, transparent);
+    fill: color-mix(in oklch, var(--color-action) 12%, var(--color-surface-quiet));
+  }
+
+  .arch-diagram__box--platform {
+    stroke: color-mix(in oklch, var(--color-action) 100%, transparent);
+    fill: color-mix(in oklch, var(--color-action) 18%, var(--color-surface-quiet));
+  }
+
+  .arch-diagram__box--game {
+    stroke: var(--line-default);
+    fill: var(--color-page);
+    opacity: 0.7;
+  }
+
+  .arch-diagram__label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--color-text-primary);
+    text-anchor: middle;
+    dominant-baseline: auto;
+  }
+
+  .arch-diagram__sublabel {
+    font-size: 9px;
+    fill: var(--color-text-tertiary);
+    text-anchor: middle;
+    dominant-baseline: auto;
+  }
+
+  .arch-diagram__connector {
+    stroke: var(--color-text-secondary);
+    stroke-width: 1.5;
+  }
+
+  .arch-diagram__arrow-fill {
+    color: var(--color-text-secondary);
+  }
+
+  .arch-diagram__boundary {
+    stroke: var(--color-text-tertiary);
+    stroke-width: 1;
+    opacity: 0.5;
+  }
+
+  .arch-diagram__boundary-label {
+    font-size: 8px;
+    fill: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+  }
+
+  .arch-diagram__caption {
+    font-size: var(--type-small);
+    color: var(--color-text-secondary);
+    margin-block-start: var(--space-4);
+  }
+
+  .arch-diagram__steps {
+    margin: 0;
+    padding-inline-start: 1.4em;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  @media (min-width: 40rem) {
+    .arch-diagram__steps {
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      padding: 0;
+      list-style: none;
+    }
+
+    .arch-diagram__steps li::after {
+      content: '→';
+      margin-inline-start: var(--space-2);
+      color: var(--color-text-tertiary);
+    }
+
+    .arch-diagram__steps li:last-child::after {
+      content: '';
+    }
+  }
+</style>

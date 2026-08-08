@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,11 +73,34 @@ const canonicalRoutes = [
   'https://pumni.github.io/Sky-Auto-Player/faq/',
   'https://pumni.github.io/Sky-Auto-Player/vi/',
   'https://pumni.github.io/Sky-Auto-Player/vi/faq/',
+  'https://pumni.github.io/Sky-Auto-Player/guides/',
+  'https://pumni.github.io/Sky-Auto-Player/vi/guides/',
 ];
 for (const route of canonicalRoutes) {
   if (!sitemap.includes(`<loc>${route}</loc>`)) {
     throw new Error(`Missing canonical route in sitemap: ${route}`);
   }
+}
+
+// HTML size sanity: no page should exceed 200 KB
+function* walkHtml(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = resolve(dir, entry.name);
+    if (entry.isDirectory()) yield* walkHtml(full);
+    else if (entry.name === 'index.html') yield full;
+  }
+}
+const HTML_MAX_BYTES = 200_000;
+let htmlOverBudget = 0;
+for (const htmlFile of walkHtml(dist)) {
+  const bytes = statSync(htmlFile).size;
+  if (bytes > HTML_MAX_BYTES) {
+    console.warn(`[warn] HTML over ${HTML_MAX_BYTES / 1000}KB: ${htmlFile} (${bytes} bytes)`);
+    htmlOverBudget++;
+  }
+}
+if (htmlOverBudget > 0) {
+  throw new Error(`${htmlOverBudget} HTML file(s) exceed the ${HTML_MAX_BYTES / 1000}KB budget`);
 }
 
 console.log(`dist verification passed (${requiredFiles.length} required files).`);

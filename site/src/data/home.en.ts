@@ -170,6 +170,10 @@ export const homeEn: HomeContent = {
         href: '/faq/#account-safety',
       },
     ],
+    guideLinks: [
+      { label: 'How Sky Auto Player works', href: '/guides/how-it-works/' },
+      { label: 'Troubleshooting common issues', href: '/guides/troubleshooting/' },
+    ],
   },
   finalCta: {
     title: 'Your next performance is already written.',

@@ -1,6 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
 import GuideLayout from '../../../layouts/GuideLayout.astro';
+import ArchitectureDiagram from '../../../components/guide/ArchitectureDiagram.astro';
 
 export async function getStaticPaths() {
   const guides = await getCollection('guides', (g) => g.data.locale === 'vi' && !g.data.draft);
@@ -42,4 +43,5 @@ const relatedGuides = allGuides
   relatedGuides={relatedGuides}
 >
   <Content />
+  {guide.data.showDiagram && <ArchitectureDiagram locale="vi" />}
 </GuideLayout>
