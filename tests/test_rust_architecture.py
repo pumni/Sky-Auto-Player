@@ -35,6 +35,7 @@ def _dispatch_fixture(tmp_path: Path, files: set[str]) -> Path:
 CANONICAL_DISPATCH_FILES = {
     "authored.rs",
     "mod.rs",
+    "observation.rs",
     "observer.rs",
     "release.rs",
     "timing.rs",
