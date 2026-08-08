@@ -618,8 +618,8 @@ mod tests {
     #[test]
     fn physical_packet_send_seam_compiles_and_returns_complete_for_valid_packet() {
         let clock = QpcClock::initialize().expect("clock");
-        let packet = PhysicalPacket::new(1, 0).expect("packet");
+        let packet = PhysicalPacket::new(1, 0);
         let res = send_physical_packet_once_with_clock(packet, clock);
-        assert_eq!(res.outcome.status, SendTransactionStatus::Complete);
+        assert_eq!(res.status, SendTransactionStatus::Complete);
     }
 }
