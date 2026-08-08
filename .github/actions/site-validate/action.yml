@@ -41,6 +41,11 @@ runs:
       working-directory: site
       run: bun run verify:dist
 
+    - name: Verify SEO contracts
+      shell: bash
+      working-directory: site
+      run: bun run verify:seo
+
     - name: Install Playwright Chromium
       shell: bash
       working-directory: site

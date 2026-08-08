@@ -18,17 +18,41 @@ interface Props {
   seo: {
     title: string;
     description: string;
+    /** Override canonical URL (absolute). Defaults to current page URL. */
+    canonical?: string;
+    /** OG type. Defaults to 'website'. Use 'article' for guide pages. */
+    ogType?: 'website' | 'article';
+    /** Page-specific OG image (absolute URL). Defaults to project OG banner. */
+    image?: string;
+    /** Alt text for the OG image. */
+    imageAlt?: string;
+    /** Set true for noindex pages (aliases, drafts). Canonical pages must not set this. */
+    noindex?: boolean;
+    /** ISO 8601 date string for article:published_time */
+    publishedTime?: string;
+    /** ISO 8601 date string for article:modified_time */
+    modifiedTime?: string;
   };
-  structuredData?: Record<string, unknown>;
+  /** JSON-LD structured data — single object or array for @graph. */
+  structuredData?: Record<string, unknown> | Record<string, unknown>[];
 }
 
 const { locale, seo, structuredData } = Astro.props;
 const isVi = locale === 'vi';
 const currentPath = Astro.url.pathname;
-const canonicalUrl = new URL(currentPath, SITE.productionOrigin);
+const canonicalUrl = seo.canonical ?? new URL(currentPath, SITE.productionOrigin).href;
 const hreflangEn = new URL(localizedPath(currentPath, 'en'), SITE.productionOrigin).href;
 const hreflangVi = new URL(localizedPath(currentPath, 'vi'), SITE.productionOrigin).href;
-const ogImage = new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href;
+const ogImage = seo.image ?? new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href;
+const ogImageAlt = seo.imageAlt ?? 'Sky Auto Player';
+const ogType = seo.ogType ?? 'website';
+const noindex = seo.noindex ?? false;
+const robotsContent = noindex
+  ? 'noindex,follow'
+  : 'index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1';
+
+// structuredData may be a single object or array; normalise to string for inline script
+const structuredDataJson = structuredData ? JSON.stringify(structuredData) : null;
 ---
 
 <!doctype html>
@@ -40,8 +64,9 @@ const ogImage = new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin
     <meta name="description" content={seo.description} />
     <meta name="author" content="pumni" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="robots" content={robotsContent} />
 
-    <link rel="canonical" href={canonicalUrl.href} />
+    <link rel="canonical" href={canonicalUrl} />
     <link rel="alternate" hreflang="en" href={hreflangEn} />
     <link rel="alternate" hreflang="vi" href={hreflangVi} />
     <link rel="alternate" hreflang="x-default" href={hreflangEn} />
@@ -52,28 +77,31 @@ const ogImage = new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin
     <link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
     <link rel="apple-touch-icon" href={withBase('/favicon.svg')} />
 
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
     <meta property="og:site_name" content={SITE.name} />
     <meta property="og:title" content={seo.title} />
     <meta property="og:description" content={seo.description} />
-    <meta property="og:url" content={canonicalUrl.href} />
+    <meta property="og:url" content={canonicalUrl} />
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:type" content="image/jpeg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Sky Auto Player" />
+    <meta property="og:image:alt" content={ogImageAlt} />
     <meta property="og:locale" content={isVi ? 'vi_VN' : 'en_US'} />
     <meta property="og:locale:alternate" content={isVi ? 'en_US' : 'vi_VN'} />
+
+    {seo.publishedTime && <meta property="article:published_time" content={seo.publishedTime} />}
+    {seo.modifiedTime && <meta property="article:modified_time" content={seo.modifiedTime} />}
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={seo.title} />
     <meta name="twitter:description" content={seo.description} />
     <meta name="twitter:image" content={ogImage} />
-    <meta name="twitter:image:alt" content="Sky Auto Player" />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
 
     {
-      structuredData && (
-        <script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData)} />
+      structuredDataJson && (
+        <script is:inline type="application/ld+json" set:html={structuredDataJson} />
       )
     }
   </head>

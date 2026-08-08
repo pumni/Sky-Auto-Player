@@ -11,11 +11,12 @@ export const homeEn: HomeContent = {
     playback: 'Playback',
     howItWorks: 'How it works',
     technical: 'Technical',
+    guides: 'Guides',
     faq: 'FAQ',
     github: 'GitHub',
   },
   hero: {
-    kicker: 'Music automation for Sky · Windows 10/11',
+    kicker: 'Sky Auto Player for Sky: Children of the Light · Windows 10/11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
       "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — aligned to the game's frames, not just sequenced.",
@@ -24,6 +25,8 @@ export const homeEn: HomeContent = {
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
     riskNote: 'Automated playback may conflict with Sky’s Terms of Service.',
     riskNoteLink: 'Use responsibly and at your own risk.',
+    affiliationDisclaimer:
+      'Unofficial community project. Not affiliated with or endorsed by thatgamecompany.',
   },
   proofStrip: {
     kicker: 'Performance profile',

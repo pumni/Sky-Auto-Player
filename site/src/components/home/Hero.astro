@@ -53,6 +53,7 @@ const { data, locale } = Astro.props;
           >{data.riskNoteLink}</a
         >
       </p>
+      <p class="affiliation-note">{data.affiliationDisclaimer}</p>
     </div>
 
     <div class="hero__visual">
@@ -153,6 +154,12 @@ const { data, locale } = Astro.props;
   .risk-note a {
     color: var(--color-text-primary);
     text-decoration: underline;
+  }
+
+  .affiliation-note {
+    margin-block-start: var(--space-2);
+    color: var(--color-text-tertiary);
+    font-size: var(--type-micro);
   }
 
   .hero__visual {

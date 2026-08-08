@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "astro dev",
+    "prebuild": "bun scripts/sync-version.mjs",
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
@@ -15,6 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify:dist": "bun scripts/verify-dist.mjs",
+    "verify:seo": "bun scripts/verify-seo.mjs",
     "test:e2e": "bun scripts/run-e2e.mjs",
     "test:update": "bun scripts/run-e2e.mjs --update-snapshots=all",
     "astro": "astro"

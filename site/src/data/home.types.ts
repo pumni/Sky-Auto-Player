@@ -10,6 +10,7 @@ export interface HomeContent {
     playback: string;
     howItWorks: string;
     technical: string;
+    guides: string;
     faq: string;
     github: string;
   };
@@ -22,6 +23,8 @@ export interface HomeContent {
     metadata: string[];
     riskNote: string;
     riskNoteLink: string;
+    /** Visible unofficial project disclaimer. */
+    affiliationDisclaimer: string;
   };
   /** Dense transition strip under hero — product signals, not playback mechanism bullets. */
   proofStrip: {

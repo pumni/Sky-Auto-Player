@@ -15,6 +15,7 @@ const content = isVi ? homeVi : homeEn;
 const nav = content.navigation;
 const currentPath = Astro.url.pathname;
 const isFaq = currentPath.includes('/faq');
+const isGuide = currentPath.includes('/guides');
 const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 ---
 
@@ -40,6 +41,10 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <a href={withBase(isVi ? '/vi/#playback' : '/#playback')}>{nav.playback}</a>
       <a href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>{nav.howItWorks}</a>
       <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
+      <a
+        href={withBase(isVi ? '/vi/guides/' : '/guides/')}
+        aria-current={isGuide ? 'page' : undefined}>{nav.guides}</a
+      >
       <a href={withBase(isVi ? '/vi/faq/' : '/faq/')} aria-current={isFaq ? 'page' : undefined}
         >{nav.faq}</a
       >

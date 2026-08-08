@@ -33,6 +33,7 @@ const isVi = locale === 'vi';
       </p>
     </div>
     <nav class="site-footer__links" aria-label={isVi ? 'Chân trang' : 'Footer'}>
+      <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
       <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
       <a href={SITE.repositoryUrl}>GitHub</a>
       <a href={`${SITE.repositoryUrl}/releases`}>{isVi ? 'Bản phát hành' : 'Releases'}</a>

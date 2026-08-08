@@ -4,20 +4,44 @@ import HomePage from '../components/home/HomePage.astro';
 import { homeEn } from '../data/home.en';
 import { SITE } from '../data/site';
 import { withBase } from '../utils/urls';
+import { APP_VERSION } from '../generated/version';
+
+const siteUrl = new URL(withBase('/'), SITE.productionOrigin).href;
+const softwareId = `${siteUrl}#software`;
+const siteId = `${siteUrl}#website`;
 
 const structuredData = {
   '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'Sky Auto Player',
-  softwareVersion: '3.0.0',
-  applicationCategory: 'MultimediaApplication',
-  operatingSystem: 'Windows 10, Windows 11 (64-bit)',
-  url: new URL(withBase('/'), SITE.productionOrigin).href,
-  image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
-  downloadUrl: SITE.releaseUrl,
-  license: 'https://www.gnu.org/licenses/gpl-3.0.html',
-  isAccessibleForFree: true,
-  inLanguage: 'en',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      '@id': siteId,
+      name: 'Sky Auto Player',
+      url: siteUrl,
+      inLanguage: 'en',
+      mainEntity: { '@id': softwareId },
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': softwareId,
+      name: 'Sky Auto Player',
+      description:
+        'A timing-first music sheet player for Sky: Children of the Light on Windows. Reads user-provided sheet files and simulates keyboard input through the Windows SendInput API. Not affiliated with thatgamecompany.',
+      softwareVersion: APP_VERSION,
+      applicationCategory: 'MultimediaApplication',
+      operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+      url: siteUrl,
+      image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
+      downloadUrl: SITE.releaseUrl,
+      license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+      isAccessibleForFree: true,
+      inLanguage: 'en',
+      offers: {
+        '@type': 'Offer',
+        price: 0,
+      },
+    },
+  ],
 };
 ---
 

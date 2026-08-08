@@ -4,20 +4,45 @@ import HomePage from '../../components/home/HomePage.astro';
 import { homeVi } from '../../data/home.vi';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
+import { APP_VERSION } from '../../generated/version';
+
+const siteUrlEn = new URL(withBase('/'), SITE.productionOrigin).href;
+const siteUrlVi = new URL(withBase('/vi/'), SITE.productionOrigin).href;
+const softwareId = `${siteUrlEn}#software`;
+const siteViId = `${siteUrlVi}#website`;
 
 const structuredData = {
   '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'Sky Auto Player',
-  softwareVersion: '3.0.0',
-  applicationCategory: 'MultimediaApplication',
-  operatingSystem: 'Windows 10, Windows 11 (64-bit)',
-  url: new URL(withBase('/vi/'), SITE.productionOrigin).href,
-  image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
-  downloadUrl: SITE.releaseUrl,
-  license: 'https://www.gnu.org/licenses/gpl-3.0.html',
-  isAccessibleForFree: true,
-  inLanguage: 'vi',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      '@id': siteViId,
+      name: 'Sky Auto Player',
+      url: siteUrlVi,
+      inLanguage: 'vi',
+      mainEntity: { '@id': softwareId },
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': softwareId,
+      name: 'Sky Auto Player',
+      description:
+        'Trình phát sheet nhạc ưu tiên timing cho Sky: Children of the Light trên Windows. Đọc file sheet do người dùng cung cấp và mô phỏng đầu vào bàn phím qua Windows SendInput API. Không có liên kết với thatgamecompany.',
+      softwareVersion: APP_VERSION,
+      applicationCategory: 'MultimediaApplication',
+      operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+      url: siteUrlEn,
+      image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
+      downloadUrl: SITE.releaseUrl,
+      license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+      isAccessibleForFree: true,
+      inLanguage: 'vi',
+      offers: {
+        '@type': 'Offer',
+        price: 0,
+      },
+    },
+  ],
 };
 ---
 

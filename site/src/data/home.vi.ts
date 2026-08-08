@@ -11,11 +11,12 @@ export const homeVi: HomeContent = {
     playback: 'Phát nhạc',
     howItWorks: 'Cách hoạt động',
     technical: 'Kỹ thuật',
+    guides: 'Hướng dẫn',
     faq: 'FAQ',
     github: 'GitHub',
   },
   hero: {
-    kicker: 'Trình phát nhạc tự động cho Sky · Windows 10/11',
+    kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 10/11',
     titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
       'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — căn theo khung hình của game, chứ không chỉ gửi phím tuần tự.',
@@ -24,6 +25,8 @@ export const homeVi: HomeContent = {
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'PORTABLE', 'KHÔNG CẦN CÀI ĐẶT'],
     riskNote: 'Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
     riskNoteLink: 'Hãy dùng có trách nhiệm và tự chịu rủi ro.',
+    affiliationDisclaimer:
+      'Dự án cộng đồng không chính thức. Không có liên kết hay sự chứng thực từ thatgamecompany.',
   },
   proofStrip: {
     kicker: 'Hồ sơ trình diễn',
