@@ -13,7 +13,6 @@ pub use down_transaction::{emit_down, emit_down_with};
 pub use outcome::{
     PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult,
     ReleaseAllOutcome, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
-    is_clean_estimator_observation,
 };
 
 pub use packet::{MAX_PACKET_EVENTS, send_physical_packet_with_clock};

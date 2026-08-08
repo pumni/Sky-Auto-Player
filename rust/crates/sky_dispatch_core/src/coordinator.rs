@@ -929,7 +929,9 @@ mod tests {
         let (up, _) = coordinator
             .pop_next_due_authored(1_000, 0)
             .expect("release is due");
-        let _ = coordinator.request_releases(&up.intents);
+        // Requeue only key 0x15; key 0x16 remains physically active and
+        // continues to block the next authored chord.
+        let _ = coordinator.request_releases(&up.intents[..1]);
         let due = coordinator.pop_due_pending(1_000, 0);
         assert!(
             !coordinator
@@ -1016,7 +1018,9 @@ mod tests {
         let due = coordinator.pop_due_pending_with_plan(1_000, &plan);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].scan_code, 0x15);
-        assert_eq!(coordinator.pending_mask.count_ones(), 1);
+        // The due cohort is borrowed while transport is in flight.  Pending
+        // ownership is cleared only by confirmed reconciliation.
+        assert_eq!(coordinator.pending_mask.count_ones(), 2);
     }
 
     // --- P2.2 tests: GenerationCounters invariants ---
@@ -1194,13 +1198,11 @@ mod tests {
         assert!(coordinator.check_invariants().is_ok());
         assert!(coordinator.cancel_live_generations().unwrap().is_empty());
 
-        let err = coordinator
+        let stale_up = coordinator
             .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
-        ));
+            .expect("cancelled generation makes its future Up stale")
+            .expect("stale authored Up remains in the immutable timeline");
+        assert_eq!(stale_up.packet_kind, None);
     }
 
     #[test]
@@ -2104,6 +2106,7 @@ pub struct RuntimeDispatchCoordinator {
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     recovery_offset_ticks: DurationTicks,
+    up_intent_locations: Box<[Option<(usize, usize)>]>,
     timeline_rebase_count: u64,
     timeline_rebase_total_ticks: u64,
     timeline_rebase_max_ticks: u64,
@@ -2148,18 +2151,58 @@ impl RuntimeDispatchCoordinator {
         F: Fn(u64) -> Result<TimelineTicks, CoordinatorError>,
     {
         let generation_count = schedule.generation_count;
-        let generation_states = vec![
-            GenerationStatus::Scheduled;
-            usize::try_from(generation_count)
-                .map_err(|_| CoordinatorError::GenerationCountOverflow)?
-        ]
-        .into_boxed_slice();
+        let generation_count_usize = usize::try_from(generation_count)
+            .map_err(|_| CoordinatorError::GenerationCountOverflow)?;
+        let generation_states =
+            vec![GenerationStatus::Scheduled; generation_count_usize].into_boxed_slice();
         let batch_scheduled_ticks = schedule
             .batches
             .iter()
             .map(|b| us_to_ticks(b.scheduled_us))
             .collect::<Result<Vec<_>, _>>()?
             .into_boxed_slice();
+        let mut up_intent_locations = vec![None; generation_count_usize];
+        for (packet_index, packet) in schedule.packets.iter().enumerate() {
+            let start = packet.up_intent_start as usize;
+            let end = start.checked_add(usize::from(packet.up_intent_len)).ok_or(
+                CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: packet_index,
+                }),
+            )?;
+            let intents = schedule
+                .intents
+                .get(start..end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: packet_index,
+                    },
+                ))?;
+            for (offset, compact) in intents.iter().enumerate() {
+                let generation_id = compact.generation_id();
+                if generation_id == NO_GENERATION_ID {
+                    continue;
+                }
+                let generation_index = usize::try_from(generation_id).map_err(|_| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "generation id does not fit in usize".to_string(),
+                    ))
+                })?;
+                let location = up_intent_locations.get_mut(generation_index).ok_or(
+                    CoordinatorError::Invariant(CoordinatorInvariantError::UnknownGeneration {
+                        generation_id,
+                        generation_count,
+                    }),
+                )?;
+                if location.is_some() {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "generation owns more than one authored Up intent".to_string(),
+                        ),
+                    ));
+                }
+                *location = Some((packet_index, start + offset));
+            }
+        }
 
         Ok(Self {
             schedule,
@@ -2178,6 +2221,7 @@ impl RuntimeDispatchCoordinator {
             generation_states,
             generation_count,
             recovery_offset_ticks: DurationTicks::ZERO,
+            up_intent_locations: up_intent_locations.into_boxed_slice(),
             timeline_rebase_count: 0,
             timeline_rebase_total_ticks: 0,
             timeline_rebase_max_ticks: 0,
@@ -2325,6 +2369,37 @@ impl RuntimeDispatchCoordinator {
         self.transition_generation(generation_id, GenerationStatus::Scheduled, status)
     }
 
+    /// Make the authored Up for a generation stale after its Down was
+    /// terminalized without ever becoming physically active.
+    ///
+    /// The authored timestamp and packet/batch ordering remain unchanged.
+    /// Only the lifecycle identity and derived physical Up mask are changed;
+    /// otherwise a later release-floor lookup would correctly reject a real
+    /// Up that no longer has an active generation.  This is lifecycle
+    /// reconciliation, not a timeline rebase.
+    fn invalidate_up_for_generation(&mut self, generation_id: GenerationId) {
+        if generation_id == NO_GENERATION_ID {
+            return;
+        }
+        let Ok(generation_index) = usize::try_from(generation_id) else {
+            return;
+        };
+        let Some(location) = self.up_intent_locations.get(generation_index) else {
+            return;
+        };
+        let Some((packet_index, intent_index)) = *location else {
+            return;
+        };
+        let Some(compact) = self.schedule.intents.get_mut(intent_index) else {
+            return;
+        };
+        if compact.generation_id() == generation_id {
+            let slot = compact.key_slot();
+            *compact = CompactIntent::new(NO_GENERATION_ID, slot);
+            self.schedule.packets[packet_index].up_mask &= !Self::bit_for_slot(slot);
+        }
+    }
+
     fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
         if batch.kind != ActionKind::Down {
             return false;
@@ -2410,11 +2485,9 @@ impl RuntimeDispatchCoordinator {
     /// Fail-closed: a physical Up with a real generation must be backed by an
     /// active generation that owns its key slot, and that generation must match
     /// the authored generation. `NO_GENERATION_ID` (stale Up) does not require
-    /// an active generation, nor does an Up whose referenced generation is
-    /// already terminal (cancelled, released, or dropped) — the deliberate
-    /// teardown path leaves authored Ups behind and they must remain stale, not
-    /// raise an invariant. Any other case is a coordinator accounting invariant
-    /// and rejects the deadline computation before `SendInput`.
+    /// an active generation. Every real generation, including a generation
+    /// whose lifecycle is terminal, must still be owned by the exact active
+    /// slot or the deadline computation fails before `SendInput`.
     fn packet_release_floor_ticks(
         &self,
         packet_index: usize,
@@ -2582,13 +2655,13 @@ impl RuntimeDispatchCoordinator {
         let mut polyphony = 1usize;
         for _ in 0..=MAX_KEYS {
             let (lead_ticks, lead_saturated) = lead_for_polyphony(polyphony)?;
-            let deadline_ticks =
-                self.next_pending_release_ticks(lead_ticks)?
-                    .ok_or(CoordinatorError::Invariant(
-                        CoordinatorInvariantError::Accounting(
-                            "pending mask is set but no pending release exists".to_string(),
-                        ),
-                    ))?;
+            let deadline_ticks = self
+                .next_pending_release_ticks(lead_ticks)?
+                .ok_or_else(|| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "pending mask is set but no pending release exists".to_string(),
+                    ))
+                })?;
             let next_polyphony = self
                 .pending_count_due_at_ticks(deadline_ticks, lead_ticks)?
                 .clamp(1, MAX_KEYS);
@@ -2603,13 +2676,13 @@ impl RuntimeDispatchCoordinator {
             polyphony = next_polyphony;
         }
         let (lead_ticks, lead_saturated) = lead_for_polyphony(polyphony)?;
-        let deadline_ticks =
-            self.next_pending_release_ticks(lead_ticks)?
-                .ok_or(CoordinatorError::Invariant(
-                    CoordinatorInvariantError::Accounting(
-                        "pending mask is set but no pending release exists".to_string(),
-                    ),
-                ))?;
+        let deadline_ticks = self
+            .next_pending_release_ticks(lead_ticks)?
+            .ok_or_else(|| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                    "pending mask is set but no pending release exists".to_string(),
+                ))
+            })?;
         Ok(Some(PendingDispatchPlan {
             deadline_ticks,
             lead_ticks,
@@ -2895,12 +2968,10 @@ impl RuntimeDispatchCoordinator {
             )
         });
 
-        for p in &due {
-            let slot = p.key_slot as usize;
-            self.pending_by_slot[slot] = None;
-            self.pending_mask &= !Self::bit_for_slot(p.key_slot);
-        }
-
+        // Keep the coordinator-owned pending slots intact while the physical
+        // sender is in flight.  A due batch is a borrow of release work, not a
+        // logical ownership transfer; only confirmed reconciliation may clear
+        // the generation and its pending mask.
         due
     }
 
@@ -2945,8 +3016,6 @@ impl RuntimeDispatchCoordinator {
                     },
                 ));
             }
-            self.pending_by_slot[slot] = None;
-            self.pending_mask &= !Self::bit_for_slot(pending.key_slot);
         }
         Ok(due)
     }
@@ -3323,7 +3392,9 @@ impl RuntimeDispatchCoordinator {
             if conflict_mask & Self::bit_for_slot(compact.key_slot()) != 0 {
                 // Only Down intents with a generation ID need terminalizing.
                 if compact.generation_id() != NO_GENERATION_ID {
-                    self.terminalize(compact.generation_id(), GenerationStatus::DroppedConflict)?;
+                    let generation_id = compact.generation_id();
+                    self.terminalize(generation_id, GenerationStatus::DroppedConflict)?;
+                    self.invalidate_up_for_generation(generation_id);
                 }
             }
         }
@@ -3382,6 +3453,7 @@ impl RuntimeDispatchCoordinator {
                     GenerationStatus::Scheduled,
                     GenerationStatus::DroppedBackend,
                 )?;
+                self.invalidate_up_for_generation(generation_id);
                 continue;
             }
             self.transition_generation(
@@ -3434,6 +3506,7 @@ impl RuntimeDispatchCoordinator {
                         GenerationStatus::Scheduled,
                         GenerationStatus::DroppedBackend,
                     )?;
+                    self.invalidate_up_for_generation(generation_id);
                     continue;
                 }
                 self.transition_generation(
@@ -3475,6 +3548,7 @@ impl RuntimeDispatchCoordinator {
                     GenerationStatus::Scheduled,
                     GenerationStatus::DroppedBackend,
                 )?;
+                self.invalidate_up_for_generation(generation_id);
                 continue;
             }
             self.transition_generation(
@@ -3539,6 +3613,7 @@ impl RuntimeDispatchCoordinator {
                 conflicts.push(intent.clone());
                 if let Some(gen_id) = intent.generation_id {
                     self.terminalize(gen_id, GenerationStatus::DroppedConflict)?;
+                    self.invalidate_up_for_generation(gen_id);
                 }
             } else {
                 playable.push(intent.clone());
@@ -3557,6 +3632,7 @@ impl RuntimeDispatchCoordinator {
         for intent in intents {
             if let Some(generation_id) = intent.generation_id {
                 self.terminalize(generation_id, GenerationStatus::DroppedConflict)?;
+                self.invalidate_up_for_generation(generation_id);
             }
         }
         Ok(())
@@ -3569,6 +3645,7 @@ impl RuntimeDispatchCoordinator {
         for intent in intents {
             if let Some(gen_id) = intent.generation_id {
                 self.terminalize(gen_id, GenerationStatus::DroppedExpired)?;
+                self.invalidate_up_for_generation(gen_id);
             }
         }
         Ok(())
@@ -3933,6 +4010,7 @@ impl RuntimeDispatchCoordinator {
                     ))
                 })?;
                 self.transition_generation(generation_id, state, GenerationStatus::Cancelled)?;
+                self.invalidate_up_for_generation(generation_id);
             }
         }
 
@@ -3983,6 +4061,7 @@ impl RuntimeDispatchCoordinator {
                 }),
             )?;
             self.transition_generation(generation_id, state, GenerationStatus::Cancelled)?;
+            self.invalidate_up_for_generation(generation_id);
         }
 
         self.active_by_slot.fill(None);

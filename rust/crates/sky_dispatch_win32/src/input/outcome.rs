@@ -50,23 +50,6 @@ pub enum SendTransactionStatus {
     ClockFailureAfterSend,
 }
 
-#[inline]
-pub fn is_clean_estimator_observation(
-    status: SendTransactionStatus,
-    attempts: u8,
-    retry_reason: PacketRetryReason,
-    timing_valid: bool,
-    transport_anomaly: bool,
-    recovery: bool,
-) -> bool {
-    status == SendTransactionStatus::Complete
-        && attempts == 1
-        && retry_reason == PacketRetryReason::None
-        && timing_valid
-        && !transport_anomaly
-        && !recovery
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SendEvidence {
     pub requested_mask: u16,

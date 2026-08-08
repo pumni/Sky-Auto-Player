@@ -269,7 +269,6 @@ fn run_soak_scenario(
 
     // Track whether we have a pending failed-release retry in flight.
     let mut failed_release_note_idx: Option<usize> = None;
-    let mut ui_stall_recovery_pending = false;
 
     while !coordinator.is_finished() {
         // Focus-loss: cancel mid-session.
@@ -301,10 +300,6 @@ fn run_soak_scenario(
             now_us = now_us
                 .checked_add(UI_STALL_US)
                 .ok_or_else(|| "simulation timestamp overflow".to_string())?;
-            coordinator
-                .cancel_live_generations()
-                .map_err(|error| format!("live-input suspension failed: {error}"))?;
-            ui_stall_recovery_pending = true;
             inject_ui_stall_at = None;
         }
 
@@ -381,11 +376,6 @@ fn run_soak_scenario(
             let authored_us = batch.scheduled_us;
             match batch.kind {
                 ActionKind::Down => {
-                    if ui_stall_recovery_pending {
-                        coordinator
-                            .cancel_live_generations()
-                            .map_err(|error| format!("ui stall cleanup failed: {error}"))?;
-                    }
                     // Check for expiration (e.g. after UI stall)
                     let age_us = now_us.checked_sub(authored_us).ok_or_else(|| {
                         "simulation clock moved before authored deadline".to_string()
