@@ -633,15 +633,6 @@ pub(super) fn dispatch(
                 Some(plan) => plan.lead_ticks,
                 None => DurationTicks::ZERO,
             };
-            let lead_up = match qpc_clock.duration_to_us(lead_up_ticks) {
-                Ok(lead) => lead,
-                Err(error) => {
-                    core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error =
-                        Some(format!("lead telemetry conversion failure: {error:?}"));
-                    break;
-                }
-            };
             let due_pending = match pending_plan.as_ref() {
                 Some(plan) => match resources
                     .coordinator
@@ -663,7 +654,6 @@ pub(super) fn dispatch(
                         due_pending,
                         pending_plan: pending_plan.as_ref(),
                         lead_up_ticks,
-                        lead_up,
                         latency_class,
                         observer: &mut core.observer.pending,
                     },

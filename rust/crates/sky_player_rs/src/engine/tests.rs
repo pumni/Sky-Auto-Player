@@ -151,7 +151,7 @@ fn startup_boundary_publishes_after_worker_startup() {
 }
 
 #[test]
-fn native_telemetry_records_are_complete_beyond_303_events() {
+fn native_telemetry_drops_observations_without_blocking_dispatch() {
     let actions: Vec<KeyActionInput> = (0_u32..160)
         .flat_map(|index| {
             let cycle_us = u64::from(index) * 10_000;
@@ -206,17 +206,23 @@ fn native_telemetry_records_are_complete_beyond_303_events() {
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
             .expect("valid telemetry JSON");
-    assert_eq!(telemetry["attempted"], actions.len());
-    assert_eq!(telemetry["accepted"], actions.len());
+    assert_eq!(telemetry["attempted"], telemetry["accepted"]);
     assert_eq!(telemetry["dropped"], 0);
     assert_eq!(telemetry["truncated"], false);
+    assert!(snapshot.observer_dropped_samples > 0);
     let records = telemetry["records"].as_array().expect("records array");
-    assert_eq!(records.len(), actions.len());
+    assert_eq!(
+        records.len(),
+        telemetry["accepted"].as_u64().unwrap() as usize
+    );
     let indices: Vec<u64> = records
         .iter()
         .map(|record| record["event_index"].as_u64().expect("event index"))
         .collect();
-    assert_eq!(indices, (0..actions.len() as u64).collect::<Vec<_>>());
+    assert!(
+        indices.iter().copied().max().unwrap_or_default() >= 300,
+        "drop-oldest queue should retain observations near the end of the schedule"
+    );
 }
 
 #[test]
@@ -2766,7 +2772,6 @@ fn test_qpc_ordering_failure_is_terminal() {
         &mut health,
         &mut local_metrics,
         qpc_clock,
-        &mut telemetry,
         TimelineTicks::ZERO,
         0,
         false,

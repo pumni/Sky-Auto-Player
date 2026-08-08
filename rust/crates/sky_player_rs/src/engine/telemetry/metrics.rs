@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -102,6 +103,8 @@ pub struct WorkerMetricsLocal {
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_us: u64,
     pub timeline_rebase_max_us: u64,
+    pub timeline_rebase_total_ticks: DurationTicks,
+    pub timeline_rebase_max_ticks: DurationTicks,
     /// 0 = none, 3 = release_recovery. Authored lateness and release-floor
     /// enforcement never rebase the authored timeline.
     pub timeline_rebase_last_reason: u8,

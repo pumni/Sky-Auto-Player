@@ -362,17 +362,10 @@ impl ProductionDispatchTestHarness {
         latency_class: LatencyClass,
     ) -> DispatchStep {
         let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |p| p.lead_ticks);
-        let lead_up = pending_plan.map_or(0, |p| {
-            self.resources
-                .clock
-                .duration_to_us(p.lead_ticks)
-                .unwrap_or(0)
-        });
         let ctx = PendingReleaseContext {
             due_pending,
             pending_plan,
             lead_up_ticks,
-            lead_up,
             latency_class,
             observer: &mut self.observer,
         };

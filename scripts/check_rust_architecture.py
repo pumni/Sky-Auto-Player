@@ -37,6 +37,7 @@ LEGACY_DISPATCH_PATHS = {
 CANONICAL_DISPATCH_FILES = {
     "authored.rs",
     "mod.rs",
+    "observation.rs",
     "observer.rs",
     "release.rs",
     "timing.rs",

@@ -116,6 +116,10 @@ fn down_observation(n: u64) -> DispatchObservation {
         latency_class: LatencyClass::Hot,
         lead_down_saturated: false,
         lead_down: n,
+        timeline_rebase_count: 0,
+        timeline_rebase_total_ticks: DurationTicks::ZERO,
+        timeline_rebase_max_ticks: DurationTicks::ZERO,
+        timeline_rebase_last_reason: 0,
         sender_duration_us: n,
         delivered_count: 1,
         batch_intent_count: 1,
@@ -162,7 +166,7 @@ fn up_observation(n: u64) -> DispatchObservation {
         sender_duration_us: n,
         sent_count: 1,
         scan_count: 1,
-        lead_up: n,
+        lead_up_ticks: DurationTicks::from_raw(n),
         lead_up_saturated: false,
         completed_effective: n,
         scheduled_us: 0,
@@ -359,6 +363,53 @@ fn push_at_capacity_eviction_no_alloc() {
         OBSERVATION_QUEUE_CAPACITY,
         "queue must remain at capacity after eviction"
     );
+}
+
+/// Queue overflow is a producer-only drop-oldest operation.  The newest raw
+/// record remains queued for deferred processing; no observer materialization
+/// or telemetry builder is available on this path.
+#[test]
+fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
+    let _lock = TEST_LOCK.lock();
+
+    for (newest, expected_marker) in [
+        (down_observation(999), 999_u64),
+        (up_observation(999), 999_u64),
+    ] {
+        let mut queue = PendingObservationQueue::default();
+        let mut dropped = 0_u64;
+        let mut high = 0_u64;
+        for index in 0..OBSERVATION_QUEUE_CAPACITY {
+            queue.push(down_observation(index as u64), &mut dropped, &mut high);
+        }
+
+        queue.push(newest, &mut dropped, &mut high);
+
+        assert_eq!(dropped, 1, "one oldest observation must be evicted");
+        assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
+        let first = queue.pop_front().expect("queue remains non-empty");
+        match first {
+            DispatchObservation::Down(observation) => {
+                assert_eq!(observation.lead_down, 1);
+            }
+            DispatchObservation::Up(_) => panic!("oldest Down observation was not retained order"),
+            DispatchObservation::Wait(_) => panic!("wait observation not expected"),
+        }
+
+        let mut last = None;
+        while let Some(observation) = queue.pop_front() {
+            last = Some(observation);
+        }
+        match last.expect("newest observation must be retained") {
+            DispatchObservation::Down(observation) => {
+                assert_eq!(observation.lead_down, expected_marker)
+            }
+            DispatchObservation::Up(observation) => {
+                assert_eq!(observation.lead_up_ticks.as_u64(), expected_marker)
+            }
+            DispatchObservation::Wait(_) => panic!("wait observation not expected"),
+        }
+    }
 }
 
 /// Burst of N pushes followed by a full drain — no allocations throughout.

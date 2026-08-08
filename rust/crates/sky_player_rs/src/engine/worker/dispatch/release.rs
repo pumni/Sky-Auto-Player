@@ -10,7 +10,7 @@ use super::super::{
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
-use super::observer::{PendingObservationQueue, flush_overflow_observation};
+use super::observer::PendingObservationQueue;
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
@@ -20,7 +20,6 @@ pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
     pub(crate) pending_plan: Option<&'a PendingDispatchPlan>,
     pub(crate) lead_up_ticks: DurationTicks,
-    pub(crate) lead_up: u64,
     pub(crate) latency_class: LatencyClass,
     pub(crate) observer: &'a mut PendingObservationQueue,
 }
@@ -134,6 +133,7 @@ pub(super) struct ReleaseReconciliation {
 
 /// Strict/SLO flags computed after the health observation stage; the release
 /// orchestrator uses them for terminal decisions.
+#[derive(Clone, Copy)]
 pub(super) struct ReleaseOutcomeFlags {
     pub(super) strict_up_completion_late: bool,
     pub(super) saturation_abort: bool,
@@ -222,7 +222,6 @@ pub(crate) fn dispatch_due_pending_releases(
         due_pending,
         pending_plan,
         lead_up_ticks,
-        lead_up,
         latency_class,
         observer,
     } = ctx;
@@ -232,7 +231,6 @@ pub(crate) fn dispatch_due_pending_releases(
         coordinator,
         playback: clock_state,
         estimator,
-        telemetry,
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
@@ -321,12 +319,12 @@ pub(crate) fn dispatch_due_pending_releases(
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
-    let mut observation = UpObservation {
+    let observation = UpObservation {
         latency_class,
         sender_duration_us: send.sender_duration_us,
         sent_count: send.sent_count,
         scan_count,
-        lead_up,
+        lead_up_ticks,
         lead_up_saturated: up_saturated_positive,
         completed_effective: send.completed_effective_us,
         scheduled_us: reconciliation.scheduled_us,
@@ -360,27 +358,6 @@ pub(crate) fn dispatch_due_pending_releases(
             recovery_required: reconciliation.recovery_required,
         },
     };
-    if observer.is_full() {
-        let evicted = match observer.pop_front() {
-            Some(value) => value,
-            None => {
-                return DispatchStep::Terminate(
-                    "observer queue fullness state is inconsistent".to_string(),
-                );
-            }
-        };
-        if let Err(step) = flush_overflow_observation(evicted, telemetry, qpc_clock) {
-            return step;
-        }
-        observation.worker_ready_qpc = match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "observer overflow worker-ready QPC failure: {error:?}"
-                ));
-            }
-        };
-    }
     #[cfg(any(test, feature = "test-support"))]
     mark_release_ready();
     observer.push(
@@ -389,14 +366,26 @@ pub(crate) fn dispatch_due_pending_releases(
         &mut local_metrics.observer_queue_high_watermark,
     );
 
+    release_terminal_step(
+        recovery_outcome,
+        flags,
+        due_pending[reconciliation.first_index].source_action_index,
+        reconciliation.up_completion_error_us,
+    )
+}
+
+fn release_terminal_step(
+    recovery_outcome: Option<ReleaseRecoveryOutcome>,
+    flags: ReleaseOutcomeFlags,
+    first_action_index: u32,
+    completion_error_us: i64,
+) -> DispatchStep {
     if let Some(outcome) = recovery_outcome {
         return DispatchStep::Terminate(outcome.terminal_error);
     }
     if flags.strict_up_completion_late {
-        let first = &due_pending[reconciliation.first_index];
         return DispatchStep::Terminate(format!(
-            "strict timing completion SLO exceeded for note-off at action {}: completion was {}us late",
-            first.source_action_index, reconciliation.up_completion_error_us
+            "strict timing completion SLO exceeded for note-off at action {first_action_index}: completion was {completion_error_us}us late"
         ));
     }
     if flags.saturation_abort {

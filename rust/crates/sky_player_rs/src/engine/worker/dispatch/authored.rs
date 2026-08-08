@@ -77,24 +77,8 @@ pub(crate) fn dispatch_authored_packet(
             }
         };
     local_metrics.timeline_rebase_count = coordinator.timeline_rebase_count();
-    local_metrics.timeline_rebase_total_us =
-        match qpc_clock.duration_to_us(coordinator.timeline_rebase_total_ticks()) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "timeline rebase telemetry conversion failure: {error:?}"
-                ));
-            }
-        };
-    local_metrics.timeline_rebase_max_us =
-        match qpc_clock.duration_to_us(coordinator.timeline_rebase_max_ticks()) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "timeline rebase telemetry conversion failure: {error:?}"
-                ));
-            }
-        };
+    local_metrics.timeline_rebase_total_ticks = coordinator.timeline_rebase_total_ticks();
+    local_metrics.timeline_rebase_max_ticks = coordinator.timeline_rebase_max_ticks();
     local_metrics.timeline_rebase_last_reason = match coordinator.last_timeline_rebase_reason() {
         None => 0,
         Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseRecovery) => 3,
@@ -238,7 +222,6 @@ fn commit_down_send_outcome(
         backend,
         coordinator,
         clock_state,
-        telemetry,
         effective_now_ticks,
         lead_down,
         lead_down_saturated,
@@ -480,7 +463,6 @@ fn record_down_send_outcome(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
     lead_down_saturated: bool,
@@ -535,7 +517,6 @@ fn record_down_send_outcome(
         runtime,
         local_metrics,
         qpc_clock,
-        telemetry,
         coordinator,
         clock_state,
         effective_now_ticks,
@@ -568,7 +549,6 @@ fn finalize_down_send_outcome(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
-    telemetry: &mut TelemetryCollector,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
@@ -620,7 +600,6 @@ fn finalize_down_send_outcome(
         health,
         local_metrics,
         qpc_clock,
-        telemetry,
         effective_now_ticks,
         lead_down,
         lead_down_saturated,

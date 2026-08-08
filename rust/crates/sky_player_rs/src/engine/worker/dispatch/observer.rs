@@ -31,7 +31,6 @@ pub(crate) fn publisher_down_send_outcome(
     health: &mut WorkerHealthState,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
-    telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
     lead_down_saturated: bool,
@@ -104,11 +103,15 @@ pub(crate) fn publisher_down_send_outcome(
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
-    let mut observation = DownObservation {
+    let observation = DownObservation {
         path: frozen_budget.path,
         latency_class,
         lead_down_saturated,
         lead_down,
+        timeline_rebase_count: local_metrics.timeline_rebase_count,
+        timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
+        timeline_rebase_max_ticks: local_metrics.timeline_rebase_max_ticks,
+        timeline_rebase_last_reason: local_metrics.timeline_rebase_last_reason,
         sender_duration_us,
         delivered_count,
         batch_intent_count: view.batch_intent_count,
@@ -151,27 +154,6 @@ pub(crate) fn publisher_down_send_outcome(
             saturation_abort,
         },
     };
-    if observer.is_full() {
-        let evicted = match observer.pop_front() {
-            Some(value) => value,
-            None => {
-                return DispatchStep::Terminate(
-                    "observer queue fullness state is inconsistent".to_string(),
-                );
-            }
-        };
-        if let Err(step) = flush_overflow_observation(evicted, telemetry, qpc_clock) {
-            return step;
-        }
-        observation.worker_ready_qpc = match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "observer overflow worker-ready QPC failure: {error:?}"
-                ));
-            }
-        };
-    }
     observer.push(
         DispatchObservation::Down(observation),
         &mut local_metrics.observer_dropped_samples,
@@ -439,45 +421,6 @@ pub(super) fn record_release_telemetry(
     Ok(())
 }
 
-pub(super) fn flush_overflow_observation(
-    observation: DispatchObservation,
-    telemetry: &mut TelemetryCollector,
-    qpc_clock: QpcClock,
-) -> Result<(), DispatchStep> {
-    if matches!(observation, DispatchObservation::Wait(_)) {
-        return Ok(());
-    }
-    let (worker_ready_qpc, sender_completed_qpc) = match observation {
-        DispatchObservation::Down(value) => (value.worker_ready_qpc, value.sender_completed_qpc),
-        DispatchObservation::Up(value) => (value.worker_ready_qpc, value.sender_completed_qpc),
-        DispatchObservation::Wait(_) => unreachable!("wait observations are not telemetry records"),
-    };
-    let core_post_send_us = qpc_clock
-        .duration_to_us(
-            worker_ready_qpc
-                .checked_duration_since(sender_completed_qpc)
-                .map_err(|error| {
-                    DispatchStep::Terminate(format!(
-                        "observer overflow QPC ordering failure: {error:?}"
-                    ))
-                })?,
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "observer overflow post-send conversion failure: {error:?}"
-            ))
-        })?;
-    match observation {
-        DispatchObservation::Down(value) => {
-            record_down_send_telemetry(&value, telemetry, core_post_send_us).map(|_| ())
-        }
-        DispatchObservation::Up(value) => {
-            record_release_telemetry(telemetry, &value, core_post_send_us)
-        }
-        DispatchObservation::Wait(_) => unreachable!("wait observations are not telemetry records"),
-    }
-}
-
 #[derive(Debug)]
 pub struct PendingObservationQueue {
     entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
@@ -619,6 +562,22 @@ pub(crate) fn drain_down_send_outcome(
         }
     }
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+    local_metrics.timeline_rebase_count = observation.timeline_rebase_count;
+    local_metrics.timeline_rebase_total_us = qpc_clock
+        .duration_to_us(observation.timeline_rebase_total_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "timeline rebase total conversion failure: {error:?}"
+            ))
+        })?;
+    local_metrics.timeline_rebase_max_us = qpc_clock
+        .duration_to_us(observation.timeline_rebase_max_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "timeline rebase maximum conversion failure: {error:?}"
+            ))
+        })?;
+    local_metrics.timeline_rebase_last_reason = observation.timeline_rebase_last_reason;
     let core_post_send_us = qpc_clock
         .duration_to_us(
             observation
@@ -725,6 +684,11 @@ pub(crate) fn drain_up_send_outcome(
     local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
     local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+    let lead_up = qpc_clock
+        .duration_to_us(observation.lead_up_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off lead conversion failure: {error:?}"))
+        })?;
     let core_post_send_us = qpc_clock
         .duration_to_us(
             observation
@@ -765,7 +729,7 @@ pub(crate) fn drain_up_send_outcome(
             observation.sender_duration_us,
             observation.sent_count,
             observation.scan_count,
-            observation.lead_up,
+            lead_up,
             observation.up_completion_error_us,
             observation.estimator_evidence,
             observation.latency_class,
@@ -857,7 +821,7 @@ pub(crate) fn drain_one_observer(
             now_us,
         )?,
         DispatchObservation::Wait(wait) => {
-            super::super::wait::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
+            super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
         }
     }
     #[cfg(any(test, feature = "test-support"))]
