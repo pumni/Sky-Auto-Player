@@ -38,6 +38,15 @@ async function prepare(page: Page, route: string, width: number, height: number)
         transition: none !important;
         caret-color: transparent !important;
       }
+      html, body {
+        overflow-y: scroll !important;
+        scrollbar-width: none !important;
+      }
+      ::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
       .site-header {
         position: relative !important;
       }
