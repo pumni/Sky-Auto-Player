@@ -4,83 +4,39 @@
  * SEO hard-gate validator. Runs against the Astro build output (site/dist/).
  *
  * Hard failures:
+ *   - missing canonical route (all 18 required unconditionally via canonical-routes.mjs)
  *   - missing title, description, canonical, H1, robots, OG fields, hreflang
  *   - noindex on canonical pages
  *   - duplicate titles or descriptions across canonical pages
  *   - duplicate canonical URLs
  *   - invalid canonical (not absolute, not self-referencing)
  *   - hreflang reciprocal mismatch
+ *   - hreflang x-default not pointing to EN version
  *   - JSON-LD not parseable
  *   - localhost URL in canonical pages
  *   - sitemap missing canonical routes
  *   - aliases present in sitemap
- *   - guide hub HTML files missing (when present in dist)
+ *   - forbidden unsupported timing claims in homepage HTML
  *
  * Warnings (non-fatal):
  *   - title > ~65 characters
- *   - description > ~170 characters
+ *   - description > ~200 characters
  */
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  CANONICAL_ROUTES,
+  COMPATIBILITY_ALIASES,
+  GUIDE_SLUGS,
+  routeToDistHtml,
+  PRODUCTION_ORIGIN,
+  BASE,
+} from './canonical-routes.mjs';
 
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const dist = resolve(scriptDir, '..', 'dist');
-const PRODUCTION_ORIGIN = 'https://pumni.github.io';
-const BASE = '/Sky-Auto-Player';
-
-// ── Canonical routes that must be indexable ────────────────────────────────
-const canonicalRoutes = [
-  { path: '/', lang: 'en', altLang: 'vi', altPath: '/vi/' },
-  { path: '/faq/', lang: 'en', altLang: 'vi', altPath: '/vi/faq/' },
-  { path: '/vi/', lang: 'vi', altLang: 'en', altPath: '/' },
-  { path: '/vi/faq/', lang: 'vi', altLang: 'en', altPath: '/faq/' },
-];
-
-// Guide routes are added dynamically if they exist in dist
-const guideSlugs = [
-  'how-it-works',
-  'sheet-formats',
-  'windows-setup',
-  'timing-engine',
-  'security-boundaries',
-  'troubleshooting',
-];
-
-for (const slug of guideSlugs) {
-  const enFile = resolve(dist, 'guides', slug, 'index.html');
-  const viFile = resolve(dist, 'vi', 'guides', slug, 'index.html');
-  if (existsSync(enFile)) {
-    canonicalRoutes.push({
-      path: `/guides/${slug}/`,
-      lang: 'en',
-      altLang: 'vi',
-      altPath: `/vi/guides/${slug}/`,
-    });
-  }
-  if (existsSync(viFile)) {
-    canonicalRoutes.push({
-      path: `/vi/guides/${slug}/`,
-      lang: 'vi',
-      altLang: 'en',
-      altPath: `/guides/${slug}/`,
-    });
-  }
-}
-
-// Guide hub pages
-const enHubFile = resolve(dist, 'guides', 'index.html');
-const viHubFile = resolve(dist, 'vi', 'guides', 'index.html');
-if (existsSync(enHubFile)) {
-  canonicalRoutes.push({ path: '/guides/', lang: 'en', altLang: 'vi', altPath: '/vi/guides/' });
-}
-if (existsSync(viHubFile)) {
-  canonicalRoutes.push({ path: '/vi/guides/', lang: 'vi', altLang: 'en', altPath: '/guides/' });
-}
-
-// Compatibility aliases — must NOT be in sitemap
-const aliasRoutes = ['/faq.html', '/vi/faq.html'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 let errors = 0;
@@ -100,16 +56,19 @@ function pass(msg) {
   console.log(`  ✓ ${msg}`);
 }
 
-/** Read HTML file from dist. Returns null if file doesn't exist. */
-function readHtml(route) {
-  const filePath = resolve(dist, route.replace(/^\//, ''), 'index.html');
-  if (!existsSync(filePath)) {
-    // For alias .html files
-    const directPath = resolve(dist, route.replace(/^\//, ''));
-    if (existsSync(directPath)) return readFileSync(directPath, 'utf8');
-    return null;
+/** Read HTML file from dist given a route path or alias path. Returns null if missing. */
+function readHtml(routePath) {
+  // Alias paths like /faq.html
+  if (routePath.endsWith('.html')) {
+    const directPath = resolve(dist, routePath.replace(/^\//, ''));
+    return existsSync(directPath) ? readFileSync(directPath, 'utf8') : null;
   }
-  return readFileSync(filePath, 'utf8');
+  const filePath = resolve(dist, routeToDistHtml(routePath));
+  return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null;
+}
+
+function escapeRe(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Extract content of first matching meta/link tag. */
@@ -160,10 +119,6 @@ function extractMeta(html, selector) {
   return null;
 }
 
-function escapeRe(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function countH1(html) {
   return (html.match(/<h1\b/gi) ?? []).length;
 }
@@ -183,12 +138,44 @@ function extractJsonLd(html) {
   return scripts;
 }
 
+// ── Claim regression guard ────────────────────────────────────────────────
+// Scope: only homepage (dist/index.html and dist/vi/index.html).
+// These phrases are marketing claims that exceed current evidence boundary.
+// Does NOT apply to guide content or technical docs discussing WHY claims are not made.
+const FORBIDDEN_CLAIM_PATTERNS = [
+  { phrase: 'under 1 millisecond', note: 'unsupported universal sub-ms claim' },
+  { phrase: 'sub-millisecond', note: 'unsupported universal sub-ms claim' },
+  { phrase: 'same game frame', note: 'unsupported in-game frame guarantee' },
+  { phrase: 'moment it actually lands', note: 'unsupported actual-landing-time claim' },
+  // VI equivalents
+  { phrase: 'lệch dưới 1 phần nghìn', note: 'unsupported universal sub-ms claim (VI)' },
+  { phrase: 'rơi cùng một khung hình', note: 'unsupported in-game frame guarantee (VI)' },
+  { phrase: 'thực sự vang lên', note: 'unsupported actual-audio-onset claim (VI)' },
+  { phrase: 'cùng một khung hình của game', note: 'unsupported in-game frame guarantee (VI)' },
+];
+
+const HOMEPAGE_PATHS = ['/', '/vi/'];
+console.log('\nChecking claim regression guard (homepage only)');
+for (const homePath of HOMEPAGE_PATHS) {
+  const html = readHtml(homePath);
+  if (!html) {
+    fail(`Homepage HTML not found: ${homePath}`);
+    continue;
+  }
+  for (const { phrase, note } of FORBIDDEN_CLAIM_PATTERNS) {
+    if (html.includes(phrase)) {
+      fail(`Forbidden claim in ${homePath}: "${phrase}" — ${note}`);
+    }
+  }
+  pass(`${homePath} claim regression guard passed`);
+}
+
 // ── Check each canonical route ──────────────────────────────────────────────
 const seenTitles = new Map();
 const seenDescriptions = new Map();
 const seenCanonicals = new Map();
 
-for (const route of canonicalRoutes) {
+for (const route of CANONICAL_ROUTES) {
   console.log(`\nChecking ${route.path}`);
   const html = readHtml(route.path);
   if (!html) {
@@ -277,26 +264,31 @@ for (const route of canonicalRoutes) {
   else if (!ogImage.startsWith('http')) fail(`og:image not absolute: "${ogImage}"`);
   else pass('og:image present and absolute');
 
-  // hreflang
+  // hreflang — exact URL comparison
   const hreflangEn = extractMeta(html, 'hreflang="en"');
   const hreflangVi = extractMeta(html, 'hreflang="vi"');
   const hreflangXDefault = extractMeta(html, 'hreflang="x-default"');
 
+  // Expected EN and VI absolute URLs
+  const enAbsUrl = `${PRODUCTION_ORIGIN}${BASE}${route.lang === 'en' ? route.path : route.altPath}`;
+  const viAbsUrl = `${PRODUCTION_ORIGIN}${BASE}${route.lang === 'vi' ? route.path : route.altPath}`;
+
   if (!hreflangEn) fail('Missing hreflang="en"');
+  else if (hreflangEn !== enAbsUrl)
+    fail(`hreflang en mismatch: got "${hreflangEn}", expected "${enAbsUrl}"`);
   else pass(`hreflang en: ${hreflangEn}`);
 
   if (!hreflangVi) fail('Missing hreflang="vi"');
+  else if (hreflangVi !== viAbsUrl)
+    fail(`hreflang vi mismatch: got "${hreflangVi}", expected "${viAbsUrl}"`);
   else pass(`hreflang vi: ${hreflangVi}`);
 
-  if (!hreflangXDefault) fail('Missing hreflang="x-default"');
-  else {
-    // x-default must point to EN version
-    const enVersion = `${PRODUCTION_ORIGIN}${BASE}${route.lang === 'en' ? route.path : route.altPath}`;
-    if (!hreflangXDefault.includes(BASE + (route.lang === 'en' ? route.path : route.altPath))) {
-      warn(`hreflang x-default "${hreflangXDefault}" may not point to EN version`);
-    } else {
-      pass(`hreflang x-default: ${hreflangXDefault}`);
-    }
+  if (!hreflangXDefault) {
+    fail('Missing hreflang="x-default"');
+  } else if (hreflangXDefault !== enAbsUrl) {
+    fail(`hreflang x-default must equal EN URL "${enAbsUrl}", got "${hreflangXDefault}"`);
+  } else {
+    pass(`hreflang x-default: ${hreflangXDefault}`);
   }
 
   // localhost check
@@ -327,7 +319,7 @@ for (const route of canonicalRoutes) {
 
 // ── Check aliases have noindex ─────────────────────────────────────────────
 console.log('\nChecking compatibility aliases');
-for (const alias of aliasRoutes) {
+for (const alias of COMPATIBILITY_ALIASES) {
   const html = readHtml(alias);
   if (!html) {
     fail(`Alias file not found: ${alias}`);
@@ -349,8 +341,7 @@ if (!existsSync(sitemapPath)) {
 } else {
   const sitemap = readFileSync(sitemapPath, 'utf8');
 
-  // Canonical routes must be in sitemap
-  for (const route of canonicalRoutes) {
+  for (const route of CANONICAL_ROUTES) {
     const expectedLoc = `${PRODUCTION_ORIGIN}${BASE}${route.path}`;
     if (!sitemap.includes(`<loc>${expectedLoc}</loc>`)) {
       fail(`Canonical route missing from sitemap: ${expectedLoc}`);
@@ -359,8 +350,7 @@ if (!existsSync(sitemapPath)) {
     }
   }
 
-  // Aliases must NOT be in sitemap
-  for (const alias of aliasRoutes) {
+  for (const alias of COMPATIBILITY_ALIASES) {
     const aliasLoc = `${PRODUCTION_ORIGIN}${BASE}${alias}`;
     if (sitemap.includes(aliasLoc)) {
       fail(`Alias should not be in sitemap: ${aliasLoc}`);
@@ -369,8 +359,6 @@ if (!existsSync(sitemapPath)) {
     }
   }
 
-  // Must not have draft routes (none expected unless explicitly added)
-  // Must use production origin
   if (sitemap.includes('localhost')) {
     fail('sitemap contains localhost URL');
   } else {
@@ -378,22 +366,23 @@ if (!existsSync(sitemapPath)) {
   }
 }
 
-// ── EN/VI guide pair validation ────────────────────────────────────────────
+// ── EN/VI guide pair validation (hard contract — both must exist) ──────────
 console.log('\nChecking EN/VI guide pairs');
-for (const slug of guideSlugs) {
+for (const slug of GUIDE_SLUGS) {
   const enFile = resolve(dist, 'guides', slug, 'index.html');
   const viFile = resolve(dist, 'vi', 'guides', slug, 'index.html');
   const enExists = existsSync(enFile);
   const viExists = existsSync(viFile);
 
-  if (enExists && !viExists) {
+  if (!enExists && !viExists) {
+    fail(`Guide pair missing entirely: ${slug} (both EN and VI required)`);
+  } else if (enExists && !viExists) {
     fail(`EN guide /guides/${slug}/ has no VI pair at /vi/guides/${slug}/`);
   } else if (viExists && !enExists) {
     fail(`VI guide /vi/guides/${slug}/ has no EN pair at /guides/${slug}/`);
-  } else if (enExists && viExists) {
+  } else {
     pass(`guide pair exists: ${slug}`);
   }
-  // Both missing = guide not shipped yet = OK (no constraint)
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────

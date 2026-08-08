@@ -7,11 +7,13 @@
     "node": "^22.22.3 || ^24.16.0 || >=26.3.0"
   },
   "scripts": {
-    "dev": "astro dev",
-    "prebuild": "bun scripts/sync-version.mjs",
+    "dev": "bun run sync:version && astro dev",
+    "sync:version": "bun scripts/sync-version.mjs",
+    "precheck": "bun run sync:version",
+    "check": "astro check",
+    "prebuild": "bun run sync:version",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -30,10 +30,10 @@ export const homeVi: HomeContent = {
   },
   proofStrip: {
     kicker: 'Hồ sơ trình diễn',
-    metric: 'ĐỒNG BỘ FRAME / MỤC TIÊU 60 FPS',
+    metric: 'SENDINPUT BATCH / MỤC TIÊU 60 FPS',
     signals: [
-      'Hợp âm rơi cùng một khung hình của game',
-      'Tự học độ trễ từng máy — lệch dưới 1 phần nghìn giây',
+      'Nốt trong hợp âm được gửi trong cùng một batch SendInput — giảm độ lệch phía gửi',
+      'Ứng dụng thích nghi theo độ trễ hoàn tất phía gửi đo được trên từng máy',
       'Nốt ngân giữ đủ trường độ, không bị cắt ngang',
       'Phát nhạc và giao diện chạy rời rành — HUD vẫn mượt',
     ],
@@ -42,12 +42,12 @@ export const homeVi: HomeContent = {
     kicker: 'Được xây dựng quanh bản nhạc',
     title: 'Timing cũng là một phần của nhạc cụ.',
     description:
-      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung. Mỗi nốt được đối chiếu với thời điểm nó thực sự vang lên, chứ không chỉ thời điểm được lên lịch.',
+      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung. Timing được đo tại ranh giới hoàn tất phía gửi — không phụ thuộc vào thời điểm game nhận phím hoặc phát âm thanh.',
     points: [
-      'Hợp âm căn theo frame',
+      'Nốt trong hợp âm trong một batch SendInput',
       'Phát theo tempo',
       'Nốt, hợp âm và nốt ngân',
-      'Tự học độ trễ từng máy',
+      'Độ trễ phía gửi tự học theo từng máy',
       'Phát nhạc và HUD chạy trên hai luồng riêng',
       'Xem thử bằng dry-run',
     ],

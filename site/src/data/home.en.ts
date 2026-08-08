@@ -30,10 +30,10 @@ export const homeEn: HomeContent = {
   },
   proofStrip: {
     kicker: 'Performance profile',
-    metric: 'FRAME-SYNC / 60 FPS TARGET',
+    metric: 'SENDINPUT BATCH / 60 FPS TARGET',
     signals: [
-      'Chords land in the same game frame',
-      'Latency learned per machine — under 1 millisecond off the beat',
+      'Chord notes submitted in one SendInput batch — sender-side skew minimised',
+      'Adaptive lead learns sender-side completion delay on this machine',
       'Holds keep their full duration, never clipped',
       'Player and display on separate threads — HUD stays smooth',
     ],
@@ -42,12 +42,12 @@ export const homeEn: HomeContent = {
     kicker: 'Built around the music',
     title: 'Timing is the instrument.',
     description:
-      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro. Every note is checked against the moment it actually lands, not just the moment it was scheduled.',
+      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro. Dispatch timing is measured at sender-side completion — not just the scheduled timestamp.',
     points: [
-      'Frame-aligned chords',
+      'Chord notes in one SendInput batch',
       'Tempo-aware playback',
       'Notes, chords and holds',
-      'Latency learned per machine',
+      'Sender-side latency learned per machine',
       'Player and HUD on separate threads',
       'Dry-run preview',
     ],
