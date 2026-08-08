@@ -3,6 +3,24 @@ import { test, expect, type Page } from '@playwright/test';
 async function prepare(page: Page, route: string, width: number, height: number) {
   await page.setViewportSize({ width, height });
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    const orig = window.matchMedia;
+    window.matchMedia = (query: string) => {
+      if (query.includes('prefers-reduced-motion')) {
+        return {
+          matches: true,
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        } as MediaQueryList;
+      }
+      return orig.call(window, query);
+    };
+  });
   await page.goto(`/Sky-Auto-Player${route}`);
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(
