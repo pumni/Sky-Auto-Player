@@ -48,6 +48,36 @@ def test_mock_backend_defaults_preserve_latency_model() -> None:
     ) == (80, 40)
 
 
+def test_known_schema_seven_baseline_projects_legacy_post_send_field() -> None:
+    output: dict[str, Any] = {
+        "schema_version": 7,
+        "records": [{"bookkeeping_duration_us": 4}],
+    }
+
+    normalized = ACCEPTANCE._normalize_historical_native_trace(
+        output,
+        native_build_commit=ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+    )
+
+    assert normalized["records"][0]["core_post_send_duration_us"] == 4
+    assert "core_post_send_duration_us" not in output["records"][0]
+
+
+def test_unknown_schema_seven_does_not_project_legacy_post_send_field() -> None:
+    output: dict[str, Any] = {
+        "schema_version": 7,
+        "records": [{"bookkeeping_duration_us": 4}],
+    }
+
+    normalized = ACCEPTANCE._normalize_historical_native_trace(
+        output,
+        native_build_commit="unknown-sha",
+    )
+
+    assert normalized is output
+    assert "core_post_send_duration_us" not in output["records"][0]
+
+
 def test_mock_latency_overrides_are_preserved_for_mock_backend() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",

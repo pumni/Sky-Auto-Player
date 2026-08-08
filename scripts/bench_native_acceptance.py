@@ -61,6 +61,45 @@ COLD_CYCLE_US = 60_000
 BENCHMARK_HOLD_GUARD_US = 2_500
 
 
+def _normalize_historical_native_trace(
+    output: dict[str, Any], *, native_build_commit: str
+) -> dict[str, Any]:
+    """Project the known schema-7 baseline field into the canonical metric.
+
+    The same-semantics reference predates the ``core_post_send`` name but has
+    the same authored timeline semantics. Keep this compatibility projection
+    scoped to that exact SHA and schema; current candidate telemetry remains
+    strict and the raw envelope is retained separately for diagnostics.
+    """
+
+    if (
+        native_build_commit != SAME_SEMANTICS_REFERENCE_SHA
+        or output.get("schema_version") != 7
+    ):
+        return output
+    records = output.get("records")
+    if not isinstance(records, list):
+        return output
+    normalized_records: list[dict[str, Any]] = []
+    changed = False
+    for record in records:
+        if not isinstance(record, dict):
+            return output
+        normalized = dict(record)
+        if (
+            "core_post_send_duration_us" not in normalized
+            and "bookkeeping_duration_us" in normalized
+        ):
+            normalized["core_post_send_duration_us"] = normalized[
+                "bookkeeping_duration_us"
+            ]
+            changed = True
+        normalized_records.append(normalized)
+    if not changed:
+        return output
+    return {**output, "records": normalized_records}
+
+
 def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
     if not 15 <= game_fps <= 240:
         raise ValueError("game_fps must be in 15..=240")
@@ -704,6 +743,7 @@ def _run_dispatch(
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
+    native_build_commit: str | None = None,
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -757,7 +797,12 @@ def _run_dispatch(
         telemetry = json.loads(session.take_telemetry_json())
         if not isinstance(telemetry, dict):
             raise RuntimeError("native telemetry envelope must be an object")
-        records = materialize_native_trace(telemetry)
+        records = materialize_native_trace(
+            _normalize_historical_native_trace(
+                telemetry,
+                native_build_commit=native_build_commit or "",
+            )
+        )
         diagnostics = _validate_telemetry_integrity(
             actions=actions,
             telemetry=telemetry,
@@ -1556,6 +1601,7 @@ def main() -> int:
                     game_fps=args.game_fps,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
+                    native_build_commit=expected_native_commit,
                 )
                 _assert_correctness(run)
                 run.pop("_snapshot", None)
