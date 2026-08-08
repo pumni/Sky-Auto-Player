@@ -121,6 +121,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         timeline_rebase_max_ticks: DurationTicks::ZERO,
         timeline_rebase_last_reason: 0,
         sender_duration_us: n,
+        wake_to_send_start_us: None,
         delivered_count: 1,
         batch_intent_count: 1,
         completion_error_us: 0,
@@ -162,6 +163,7 @@ fn up_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Up(UpObservation {
         latency_class: LatencyClass::Hot,
         sender_duration_us: n,
+        wake_to_send_start_us: None,
         sent_count: 1,
         scan_count: 1,
         lead_up_ticks: DurationTicks::from_raw(n),
@@ -497,7 +499,7 @@ fn production_mixed_hard_path_no_alloc() {
     assert!(harness.has_active_generation(0x15));
 
     // Step 2: Advance deterministic effective time to mixed packet deadline
-    harness.advance_playback_time_us(1000);
+    harness.advance_playback_time_us(10_000);
 
     // Step 3: Measurement window covering real production plan + prepare + admission + send + commit
     enable_counting();
@@ -536,7 +538,7 @@ fn production_pending_release_hard_path_no_alloc() {
     // Down A was physically dispatched outside the window. Advance to the
     // authored Up request, then let the production coordinator create the
     // pending release outside the measurement window.
-    harness.advance_playback_time_us(1000);
+    harness.advance_playback_time_us(10_000);
     harness.seed_pending_release_for_test();
 
     enable_counting();
@@ -613,7 +615,7 @@ fn exhausted_release_recovery_precedes_telemetry_failure() {
     let calls = Arc::new(AtomicU64::new(0));
     let mut harness = ProductionDispatchTestHarness::new_uponly_release();
     harness.configure_persistent_release_failure(Arc::clone(&calls));
-    harness.advance_playback_time_us(1000);
+    harness.advance_playback_time_us(10_000);
     harness.seed_pending_release_for_test();
 
     let step = exhaust_pending_release_recovery(&mut harness);
@@ -632,7 +634,7 @@ fn exhausted_release_recovery_precedes_observer_failure() {
     let calls = Arc::new(AtomicU64::new(0));
     let mut harness = ProductionDispatchTestHarness::new_uponly_release();
     harness.configure_persistent_release_failure(Arc::clone(&calls));
-    harness.advance_playback_time_us(1000);
+    harness.advance_playback_time_us(10_000);
     harness.seed_pending_release_for_test();
 
     let step = exhaust_pending_release_recovery(&mut harness);

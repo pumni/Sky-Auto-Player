@@ -7,8 +7,7 @@
 //! margin comes from:
 //!
 //! ```text
-//! lead = syscall_us + delivery_proxy_us + wake_reserve_us
-//!        + cold_reserve_us + residual_bias_us
+//! lead = syscall_us + wake_reserve_us + cold_reserve_us + correction_us
 //! ```
 //!
 //! Each component is estimated by a dedicated sub-model:
@@ -16,10 +15,9 @@
 //! | Component | Model |
 //! |---|---|
 //! | `syscall_us` | Bounded histogram (fast model) + slow tail reserve |
-//! | `delivery_proxy_us` | Static calibrated prior (updated by calibration harness) |
 //! | `wake_reserve_us` | Constant scheduler guard |
 //! | `cold_reserve_us` | Polyphony-linear cold prior |
-//! | `residual_bias_us` | EMA of completion-error residual across six `(SendPath × LatencyClass)` channels |
+//! | `correction_us` | Bounded integral correction of SendInput completion error |
 //!
 //! The histogram model is updated outside the precision decision and publishes
 //! a fixed lookup table. Dispatch queries are O(1): no allocation, sort,
@@ -30,7 +28,7 @@
 //!
 //! ## State version
 //!
-//! Version 9 publishes six timing channels: DownOnly Hot/Cold, UpOnly
+//! Version 10 publishes six timing channels: DownOnly Hot/Cold, UpOnly
 //! Hot/Cold, and Mixed Hot/Cold. Timing cache state is ephemeral diagnostic
 //! data, so only the current schema is accepted; older or newer versions are
 //! discarded and the conservative prior is used.
@@ -59,9 +57,12 @@ const TAIL_RESERVE_DECAY: f64 = 0.99729605608547;
 /// outlier.  Prevents the reserve from decaying to zero even with no new data.
 const TAIL_RESERVE_FLOOR_US: u64 = 25;
 
-/// Residual clamp: late by at most 1 000 µs, early correction at 0.25×.
-const MAX_RESIDUAL_US: i64 = 1_000;
-const EARLY_CORRECTION_DECAY: f64 = 0.25;
+/// Per-sample correction clamp prevents one scheduling outlier from moving
+/// the integral controller by more than a bounded amount.
+const MAX_CORRECTION_SAMPLE_US: i64 = 1_000;
+/// Integral correction is bounded independently from the lead cap so a
+/// saturated channel can recover without hidden wind-up.
+const MAX_CORRECTION_US: i64 = 10_000;
 
 /// Samples that exceed this value are clamped before storage to prevent a
 /// single catastrophic observation from ruining the model.
@@ -77,7 +78,7 @@ const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const WAKE_RESERVE_US: u64 = 50;
 
 /// Current on-disk state format version.
-pub const ESTIMATOR_STATE_VERSION: u32 = 9;
+pub const ESTIMATOR_STATE_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum EstimatorConfigError {
@@ -93,9 +94,6 @@ pub enum EstimatorConfigError {
 pub enum EstimatorStateError {
     #[error("polyphony bucket {0} is outside the configured range")]
     InvalidPolyphony(usize),
-    #[error("delivery proxy exceeds MAX_SAMPLE_US")]
-    InvalidDeliveryProxy,
-
     #[error("estimator arithmetic overflow while updating {0}")]
     ArithmeticOverflow(&'static str),
 }
@@ -133,14 +131,12 @@ pub fn channel_index(path: SendPath, class: LatencyClass) -> usize {
 pub struct LeadComponents {
     /// SendInput syscall completion contribution (fast model + slow tail).
     pub syscall_us: u64,
-    /// Delivery proxy contribution (calibrated prior or zero when uncalibrated).
-    pub delivery_proxy_us: u64,
     /// Scheduler wake-jitter guard (constant).
     pub wake_reserve_us: u64,
     /// Cold-start polyphony reserve (only nonzero when latency class is Cold).
     pub cold_reserve_us: u64,
-    /// Signed residual bias (completion error EMA).
-    pub residual_bias_us: i64,
+    /// Signed bounded integral correction of sender-completion error.
+    pub correction_us: i64,
 }
 
 impl LeadComponents {
@@ -148,18 +144,17 @@ impl LeadComponents {
     #[allow(clippy::implicit_saturating_sub)]
     pub fn total_uncapped(&self) -> u64 {
         let positive = u128::from(self.syscall_us)
-            + u128::from(self.delivery_proxy_us)
             + u128::from(self.wake_reserve_us)
             + u128::from(self.cold_reserve_us);
-        let adjusted = if self.residual_bias_us < 0 {
-            let magnitude = self.residual_bias_us.unsigned_abs() as u128;
+        let adjusted = if self.correction_us < 0 {
+            let magnitude = self.correction_us.unsigned_abs() as u128;
             if magnitude > positive {
                 0
             } else {
                 positive - magnitude
             }
         } else {
-            positive + self.residual_bias_us as u128
+            positive + self.correction_us as u128
         };
         adjusted.min(u128::from(u64::MAX)) as u64
     }
@@ -386,60 +381,47 @@ impl SlowTailReserve {
     }
 }
 
-// ─── Residual EMA (6 independent channels) ───────────────────────────────────
+// ─── Completion correction (6 independent channels) ─────────────────────────
 
-/// EMA-based completion-error residual for one (kind × class) channel.
-#[derive(Debug, Clone, Default)]
-struct ResidualEma {
-    count: u64,
-    sum: i64,
-    ema: f64,
-    warm: bool,
+/// Bounded integral controller for one `(SendPath × LatencyClass)` channel.
+#[derive(Debug, Clone, Copy, Default)]
+struct CompletionCorrection {
+    value_us: f64,
 }
 
-impl ResidualEma {
-    fn ensure_update(&self, sample: i64) -> Result<(), EstimatorStateError> {
-        let clamped = sample.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
-        self.count
-            .checked_add(1)
-            .ok_or(EstimatorStateError::ArithmeticOverflow("residual count"))?;
-        self.sum
-            .checked_add(clamped)
-            .ok_or(EstimatorStateError::ArithmeticOverflow("residual sum"))?;
-        Ok(())
-    }
-
-    fn update(&mut self, alpha: f64, sample: i64) -> Result<(), EstimatorStateError> {
-        let clamped = sample.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
-        let next_count = self
-            .count
-            .checked_add(1)
-            .ok_or(EstimatorStateError::ArithmeticOverflow("residual count"))?;
-        let next_sum = self
-            .sum
-            .checked_add(clamped)
-            .ok_or(EstimatorStateError::ArithmeticOverflow("residual sum"))?;
-        self.count = next_count;
-        self.sum = next_sum;
-        if self.warm {
-            self.ema = alpha * clamped as f64 + (1.0 - alpha) * self.ema;
-        } else if self.count >= SEED_SAMPLES as u64 {
-            self.ema = self.sum as f64 / self.count as f64;
-            self.warm = true;
-        }
-        Ok(())
-    }
-
-    fn adjustment_us(&self) -> i64 {
-        if !self.warm {
-            return 0;
-        }
-        let rounded = round_half_to_even(self.ema);
-        if rounded >= 0 {
-            rounded.min(MAX_RESIDUAL_US)
+impl CompletionCorrection {
+    fn ensure_update(&self, _sample: i64) -> Result<(), EstimatorStateError> {
+        if self.value_us.is_finite() {
+            Ok(())
         } else {
-            round_half_to_even(rounded as f64 * EARLY_CORRECTION_DECAY)
+            Err(EstimatorStateError::ArithmeticOverflow(
+                "completion correction",
+            ))
         }
+    }
+
+    fn update(
+        &mut self,
+        alpha: f64,
+        sample: i64,
+        integrate: bool,
+    ) -> Result<(), EstimatorStateError> {
+        self.ensure_update(sample)?;
+        if integrate {
+            let sample = sample.clamp(-MAX_CORRECTION_SAMPLE_US, MAX_CORRECTION_SAMPLE_US);
+            let next = self.value_us + alpha * sample as f64;
+            if !next.is_finite() {
+                return Err(EstimatorStateError::ArithmeticOverflow(
+                    "completion correction",
+                ));
+            }
+            self.value_us = next.clamp(-(MAX_CORRECTION_US as f64), MAX_CORRECTION_US as f64);
+        }
+        Ok(())
+    }
+
+    fn adjustment_us(self) -> i64 {
+        round_half_to_even(self.value_us).clamp(-MAX_CORRECTION_US, MAX_CORRECTION_US)
     }
 }
 
@@ -597,19 +579,6 @@ pub struct HistBucketJson {
     pub cold_tail_reserve_us: u64,
 }
 
-/// Version-9 residual channel export.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ResidualChannelJson {
-    #[serde(default)]
-    pub count: u64,
-    #[serde(default)]
-    pub sum: i64,
-    #[serde(default)]
-    pub ema: f64,
-    #[serde(default)]
-    pub warm: bool,
-}
-
 /// Current on-disk format. Timing cache state is disposable diagnostic state;
 /// older and newer schemas are rejected instead of being migrated in the
 /// dispatch core.
@@ -625,10 +594,10 @@ pub struct EstimatorStateJson {
     /// Per-polyphony histogram state for Mixed direction.
     pub hist_mixed: Vec<HistBucketJson>,
 
-    /// Six residual channels: down_hot, down_cold, up_hot, up_cold, mixed_hot, mixed_cold.
-    pub residuals: Vec<ResidualChannelJson>,
-    /// Delivery proxy channels ordered as Down/Hot, Down/Cold, Up/Hot, Up/Cold, Mixed/Hot, Mixed/Cold.
-    pub delivery_proxy_channels: Vec<[u64; 6]>,
+    /// Six bounded completion corrections ordered as Down/Hot, Down/Cold,
+    /// Up/Hot, Up/Cold, Mixed/Hot, Mixed/Cold.
+    #[serde(default)]
+    pub completion_corrections: Vec<f64>,
 }
 
 // ─── Main estimator ───────────────────────────────────────────────────────────
@@ -651,10 +620,8 @@ pub struct SendLatencyEstimator {
 
     /// Residual channels indexed by `channel_index(path, class)`.
     /// Order: [down_hot, down_cold, up_hot, up_cold, mixed_hot, mixed_cold].
-    residuals: [ResidualEma; 6],
-
-    /// Calibrated delivery proxy prior by path/class and polyphony.
-    delivery_proxy_us: [Vec<u64>; 6],
+    /// Completion correction channels ordered by path then class.
+    corrections: [CompletionCorrection; 6],
 
     /// Cached normal/strict estimates indexed by polyphony, channel and
     /// policy. The cache is refreshed in place after a sample or calibration
@@ -701,8 +668,7 @@ impl SendLatencyEstimator {
             down_totals: PathTotals::default(),
             up_totals: PathTotals::default(),
             mixed_totals: PathTotals::default(),
-            residuals: Default::default(),
-            delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
+            corrections: Default::default(),
             lead_cache: vec![[[empty; 2]; 6]; size],
             #[cfg(test)]
             refresh_count: 0,
@@ -806,8 +772,10 @@ impl SendLatencyEstimator {
                 self.mixed_totals.ensure_push(duration_us, class)?;
             }
         }
+        let saturated = completion_error_us
+            .is_some_and(|error_us| error_us > 0 && self.lead_cache[n][channel][0].saturated);
         if let Some(error_us) = completion_error_us {
-            self.residuals[channel].ensure_update(error_us)?;
+            self.corrections[channel].ensure_update(error_us)?;
         }
         match path {
             SendPath::DownOnly => {
@@ -824,8 +792,7 @@ impl SendLatencyEstimator {
             }
         }
         if let Some(error_us) = completion_error_us {
-            let alpha = self.alpha;
-            self.residuals[channel].update(alpha, error_us)?;
+            self.corrections[channel].update(self.alpha, error_us, !saturated)?;
         }
         self.refresh_channel(path, class);
         Ok(())
@@ -845,63 +812,21 @@ impl SendLatencyEstimator {
         error_us: i64,
         class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
-        let alpha = self.alpha;
         let channel = channel_index(path, class);
-        self.residuals[channel].update(alpha, error_us)?;
+        let saturated = error_us > 0 && self.lead_cache[1][channel][0].saturated;
+        self.corrections[channel].update(self.alpha, error_us, !saturated)?;
         self.refresh_channel(path, class);
         Ok(())
-    }
-
-    pub fn set_delivery_proxy_us(
-        &mut self,
-        n_keys: usize,
-        value_us: u64,
-    ) -> Result<(), EstimatorStateError> {
-        self.set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Hot, n_keys, value_us)
-    }
-
-    pub fn try_set_delivery_proxy_us_for(
-        &mut self,
-        path: SendPath,
-        class: LatencyClass,
-        n_keys: usize,
-        value_us: u64,
-    ) -> Result<(), EstimatorStateError> {
-        if value_us > MAX_SAMPLE_US {
-            return Err(EstimatorStateError::InvalidDeliveryProxy);
-        }
-        if n_keys == 0 || n_keys > self.max_poly {
-            return Err(EstimatorStateError::InvalidPolyphony(n_keys));
-        }
-        let n = 1.max(self.max_poly.min(n_keys));
-        let channel = channel_index(path, class);
-        self.delivery_proxy_us[channel][n] = value_us;
-        self.refresh_channel(path, class);
-        Ok(())
-    }
-
-    pub fn set_delivery_proxy_us_for(
-        &mut self,
-        path: SendPath,
-        class: LatencyClass,
-        n_keys: usize,
-        value_us: u64,
-    ) -> Result<(), EstimatorStateError> {
-        self.try_set_delivery_proxy_us_for(path, class, n_keys, value_us)
     }
 
     // ── Query API ─────────────────────────────────────────────────────────────
 
-    pub fn residual_bias_us(&self) -> u64 {
-        self.residual_adjustment_us().max(0) as u64
+    pub fn correction_us(&self) -> i64 {
+        self.correction_us_for(SendPath::DownOnly)
     }
 
-    pub fn residual_adjustment_us(&self) -> i64 {
-        self.residual_adjustment_us_for(SendPath::DownOnly)
-    }
-
-    pub fn residual_adjustment_us_for(&self, path: SendPath) -> i64 {
-        self.residuals[channel_index(path, LatencyClass::Hot)].adjustment_us()
+    pub fn correction_us_for(&self, path: SendPath) -> i64 {
+        self.corrections[channel_index(path, LatencyClass::Hot)].adjustment_us()
     }
 
     fn cold_prior_us(n: usize) -> u64 {
@@ -962,7 +887,6 @@ impl SendLatencyEstimator {
 
         let syscall_us = self.syscall_estimate_us(buckets, total, n, class, strict_upper_tail);
         let channel = channel_index(path, class);
-        let delivery_proxy_us = self.delivery_proxy_us[channel][n];
         let wake_reserve_us = WAKE_RESERVE_US;
 
         let cold_reserve_us =
@@ -972,14 +896,13 @@ impl SendLatencyEstimator {
                 0
             };
 
-        let residual_bias_us = self.residuals[channel].adjustment_us();
+        let correction_us = self.corrections[channel].adjustment_us();
 
         let components = LeadComponents {
             syscall_us,
-            delivery_proxy_us,
             wake_reserve_us,
             cold_reserve_us,
-            residual_bias_us,
+            correction_us,
         };
 
         let local_total = match class {
@@ -1052,20 +975,10 @@ impl SendLatencyEstimator {
         let hist_up = export_buckets(&self.up);
         let hist_mixed = export_buckets(&self.mixed);
 
-        let residuals = self
-            .residuals
+        let completion_corrections = self
+            .corrections
             .iter()
-            .map(|r| ResidualChannelJson {
-                count: r.count,
-                sum: r.sum,
-                ema: r.ema,
-                warm: r.warm,
-            })
-            .collect();
-        let delivery_proxy_channels: Vec<[u64; 6]> = (0..=self.max_poly)
-            .map(|polyphony| {
-                std::array::from_fn(|channel| self.delivery_proxy_us[channel][polyphony])
-            })
+            .map(|correction| correction.value_us)
             .collect();
 
         EstimatorStateJson {
@@ -1074,8 +987,7 @@ impl SendLatencyEstimator {
             hist_down,
             hist_up,
             hist_mixed,
-            residuals,
-            delivery_proxy_channels,
+            completion_corrections,
         }
     }
 
@@ -1161,51 +1073,15 @@ impl SendLatencyEstimator {
             new_mixed_totals.cold.merge_counts_from(h)?;
         }
 
-        let mut new_residuals: [ResidualEma; 6] = Default::default();
-
-        if state.residuals.len() != 6 {
-            return Err("residuals must contain exactly six channels".to_string());
+        if state.completion_corrections.len() != 6 {
+            return Err("completion_corrections must contain exactly six channels".to_string());
         }
-        for (i, ch) in state.residuals.iter().enumerate() {
-            if !ch.ema.is_finite()
-                || ch.ema < -(MAX_RESIDUAL_US as f64)
-                || ch.ema > (MAX_RESIDUAL_US * 2) as f64
-            {
-                return Err(format!("residual channel {i} ema is out of range"));
+        let mut new_corrections: [CompletionCorrection; 6] = Default::default();
+        for (index, value) in state.completion_corrections.iter().copied().enumerate() {
+            if !value.is_finite() || value.abs() > MAX_CORRECTION_US as f64 {
+                return Err(format!("completion correction {index} is out of range"));
             }
-            if (ch.warm && ch.count < SEED_SAMPLES as u64)
-                || (!ch.warm && ch.count >= SEED_SAMPLES as u64)
-            {
-                return Err(format!("residual channel {i} has inconsistent warm state"));
-            }
-            if ch.sum.unsigned_abs()
-                > ch.count
-                    .checked_mul((MAX_RESIDUAL_US * 2) as u64)
-                    .ok_or_else(|| format!("residual channel {i} sum overflows"))?
-            {
-                return Err(format!("residual channel {i} sum is out of range"));
-            }
-            new_residuals[i] = ResidualEma {
-                count: ch.count,
-                sum: ch.sum,
-                ema: ch.ema,
-                warm: ch.warm,
-            };
-        }
-
-        let mut new_delivery_proxy: [Vec<u64>; 6] = std::array::from_fn(|_| vec![0u64; target_len]);
-        if state.delivery_proxy_channels.len() != expected_len {
-            return Err("delivery_proxy_channels length does not match max_poly".to_string());
-        }
-        for (polyphony, channels) in state.delivery_proxy_channels.iter().enumerate() {
-            for (channel, &value) in channels.iter().enumerate() {
-                if value > MAX_SAMPLE_US {
-                    return Err(format!(
-                        "delivery proxy channel {channel} at polyphony {polyphony} exceeds sample cap"
-                    ));
-                }
-                new_delivery_proxy[channel][polyphony] = value;
-            }
+            new_corrections[index] = CompletionCorrection { value_us: value };
         }
 
         // ── Atomically apply all validated state ──────────────────────────────
@@ -1216,8 +1092,7 @@ impl SendLatencyEstimator {
         self.down_totals = new_down_totals;
         self.up_totals = new_up_totals;
         self.mixed_totals = new_mixed_totals;
-        self.residuals = new_residuals;
-        self.delivery_proxy_us = new_delivery_proxy;
+        self.corrections = new_corrections;
         self.refresh_lead_cache();
         Ok(())
     }
@@ -1298,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn observation_update_matches_separate_histogram_and_residual_updates() {
+    fn observation_update_matches_separate_histogram_and_correction_updates() {
         let mut combined = SendLatencyEstimator::new(0.2, 10_000, 4);
         let mut separate = combined.clone();
         for (path, class, duration, polyphony, residual) in [
@@ -1454,10 +1329,7 @@ mod tests {
             "syscall component must be nonzero"
         );
         assert_eq!(est.components.wake_reserve_us, WAKE_RESERVE_US);
-        assert_eq!(
-            est.components.delivery_proxy_us, 0,
-            "uncalibrated proxy should be 0"
-        );
+        assert_eq!(est.components.correction_us, 0);
         assert_eq!(est.confidence, LeadConfidence::Learned);
     }
 
@@ -1485,18 +1357,6 @@ mod tests {
     }
 
     #[test]
-    fn delivery_proxy_component_is_additive() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
-        for _ in 0..10 {
-            estimator.update(SendPath::DownOnly, 200, 2);
-        }
-        let without_proxy = estimator.get_lead_us(SendPath::DownOnly, 2);
-        estimator.set_delivery_proxy_us(2, 300).unwrap();
-        let with_proxy = estimator.get_lead_us(SendPath::DownOnly, 2);
-        assert_eq!(with_proxy, without_proxy + 300);
-    }
-
-    #[test]
     fn hot_and_cold_histograms_are_class_isolated() {
         let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 3);
         for _ in 0..SEED_SAMPLES {
@@ -1510,62 +1370,6 @@ mod tests {
         }
         assert_eq!(estimator.down.hot[1].total, SEED_SAMPLES as u64);
         assert_eq!(estimator.down.cold[1].total, SEED_SAMPLES as u64);
-    }
-
-    #[test]
-    fn delivery_proxy_is_independent_by_direction_and_class() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
-        estimator
-            .set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Hot, 1, 100)
-            .unwrap();
-        estimator
-            .set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Cold, 1, 200)
-            .unwrap();
-        estimator
-            .set_delivery_proxy_us_for(SendPath::UpOnly, LatencyClass::Hot, 1, 300)
-            .unwrap();
-        estimator
-            .set_delivery_proxy_us_for(SendPath::UpOnly, LatencyClass::Cold, 1, 400)
-            .unwrap();
-        estimator
-            .set_delivery_proxy_us_for(SendPath::Mixed, LatencyClass::Hot, 1, 500)
-            .unwrap();
-
-        assert_eq!(
-            estimator
-                .estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Hot)
-                .components
-                .delivery_proxy_us,
-            100
-        );
-        assert_eq!(
-            estimator
-                .estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Cold)
-                .components
-                .delivery_proxy_us,
-            200
-        );
-        assert_eq!(
-            estimator
-                .estimate_lead_with_class(SendPath::UpOnly, 1, LatencyClass::Hot)
-                .components
-                .delivery_proxy_us,
-            300
-        );
-        assert_eq!(
-            estimator
-                .estimate_lead_with_class(SendPath::UpOnly, 1, LatencyClass::Cold)
-                .components
-                .delivery_proxy_us,
-            400
-        );
-        assert_eq!(
-            estimator
-                .estimate_lead_with_class(SendPath::Mixed, 1, LatencyClass::Hot)
-                .components
-                .delivery_proxy_us,
-            500
-        );
     }
 
     #[test]
@@ -1601,20 +1405,20 @@ mod tests {
     }
 
     #[test]
-    fn up_residual_is_learned_separately_from_down_residual() {
+    fn completion_correction_is_learned_separately_by_channel() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
             estimator.update(SendPath::UpOnly, 100, 1);
             estimator.update_completion_error(SendPath::UpOnly, 300);
         }
-        let adj_up = estimator.residual_adjustment_us_for(SendPath::UpOnly);
-        let adj_down = estimator.residual_adjustment_us_for(SendPath::DownOnly);
-        assert!(adj_up > 0, "up residual must be learned");
-        assert_eq!(adj_down, 0, "down residual must remain zero");
+        let adj_up = estimator.correction_us_for(SendPath::UpOnly);
+        let adj_down = estimator.correction_us_for(SendPath::DownOnly);
+        assert!(adj_up > 0, "up correction must be learned");
+        assert_eq!(adj_down, 0, "down correction must remain zero");
     }
 
     #[test]
-    fn cold_residual_is_learned_separately_from_hot_residual() {
+    fn cold_correction_is_learned_separately_from_hot_correction() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
             estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
@@ -1632,32 +1436,35 @@ mod tests {
             );
         }
 
-        let adj_hot = estimator.residual_adjustment_us_for(SendPath::DownOnly);
+        let adj_hot = estimator.correction_us_for(SendPath::DownOnly);
         let cold_idx = channel_index(SendPath::DownOnly, LatencyClass::Cold);
-        let adj_cold = estimator.residuals[cold_idx].adjustment_us();
+        let adj_cold = estimator.corrections[cold_idx].adjustment_us();
 
-        assert!(adj_hot > 0, "hot residual must be positive learned");
-        assert!(adj_cold < 0, "cold residual must be negative learned");
+        assert!(adj_hot > 0, "hot correction must be positive");
+        assert!(adj_cold < 0, "cold correction must be negative");
     }
 
     #[test]
-    fn early_residual_reduces_lead_more_slowly_than_late_residual_increases_it() {
+    fn correction_is_symmetric_for_early_and_late_error() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
-        for _ in 0..SEED_SAMPLES {
+        for _ in 0..20 {
             estimator.update(SendPath::DownOnly, 800, 1);
-            estimator.update_completion_error(SendPath::DownOnly, -400);
+            let error = -400 - estimator.correction_us();
+            estimator
+                .update_completion_error(SendPath::DownOnly, error)
+                .unwrap();
         }
-        let adj = estimator.residual_adjustment_us();
+        let adj = estimator.correction_us();
         assert!(adj < 0, "early residual should be negative");
-        assert!(
-            adj > -400,
-            "dampened early residual must be less than raw -400"
-        );
+        assert!(adj >= -400, "integral correction must move symmetrically");
 
-        for _ in 0..SEED_SAMPLES {
-            estimator.update_completion_error(SendPath::DownOnly, 400);
+        for _ in 0..20 {
+            let error = 400 - estimator.correction_us();
+            estimator
+                .update_completion_error(SendPath::DownOnly, error)
+                .unwrap();
         }
-        let adj2 = estimator.residual_adjustment_us();
+        let adj2 = estimator.correction_us();
         assert!(
             adj2 > adj,
             "late samples must push residual back toward positive"
@@ -1696,16 +1503,16 @@ mod tests {
     }
 
     #[test]
-    fn v9_empty_state_roundtrip() {
+    fn v10_empty_state_roundtrip() {
         let estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
         let json = serde_json::to_string(&estimator.export_state()).unwrap();
         let mut restored = SendLatencyEstimator::new(0.2, 5_000, 2);
         restored.import_state(&json).unwrap();
-        assert_eq!(restored.export_state().version, 9);
+        assert_eq!(restored.export_state().version, 10);
     }
 
     #[test]
-    fn v9_populated_roundtrip() {
+    fn v10_populated_roundtrip() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
         for _ in 0..10 {
             estimator.update(SendPath::DownOnly, 150, 1);
@@ -1719,6 +1526,70 @@ mod tests {
             restored.get_lead_us(SendPath::Mixed, 8),
             estimator.get_lead_us(SendPath::Mixed, 8)
         );
+    }
+
+    #[test]
+    fn v9_state_is_rejected_without_migration() {
+        let estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        let mut state = estimator.export_state();
+        state.version = 9;
+        let json = serde_json::to_string(&state).unwrap();
+        let mut restored = SendLatencyEstimator::new(0.2, 5_000, 2);
+        let error = restored.import_state(&json).unwrap_err();
+        assert!(error.contains("unsupported estimator version 9"));
+    }
+
+    #[test]
+    fn bounded_integral_correction_converges_on_constant_completion_error() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 1);
+        for _ in 0..40 {
+            let error = 200 - estimator.correction_us();
+            estimator
+                .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 1, Some(error))
+                .unwrap();
+        }
+        let correction = estimator.correction_us();
+        assert!((correction - 200).abs() <= 10, "correction={correction}");
+    }
+
+    #[test]
+    fn early_error_moves_correction_back_toward_zero() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 1);
+        for _ in 0..40 {
+            let error = 200 - estimator.correction_us();
+            estimator
+                .update_completion_error(SendPath::DownOnly, error)
+                .unwrap();
+        }
+        let positive = estimator.correction_us();
+        for _ in 0..40 {
+            let error = -150 - estimator.correction_us();
+            estimator
+                .update_completion_error(SendPath::DownOnly, error)
+                .unwrap();
+        }
+        let recovered = estimator.correction_us();
+        assert!(recovered < positive);
+        assert!((recovered + 150).abs() <= 10, "recovered={recovered}");
+    }
+
+    #[test]
+    fn positive_error_does_not_wind_up_at_lead_cap() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 500, 1);
+        for _ in 0..10 {
+            estimator.update(SendPath::DownOnly, 1_000, 1).unwrap();
+        }
+        assert!(estimator.lead_saturated(SendPath::DownOnly, 1));
+        for _ in 0..100 {
+            estimator
+                .update_observation(SendPath::DownOnly, LatencyClass::Hot, 1_000, 1, Some(500))
+                .unwrap();
+        }
+        assert_eq!(estimator.correction_us(), 0);
+        estimator
+            .update_completion_error(SendPath::DownOnly, -500)
+            .unwrap();
+        assert!(estimator.correction_us() < 0);
     }
 
     #[test]

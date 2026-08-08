@@ -24,6 +24,42 @@ use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+pub(crate) fn take_wake_to_send_start_us(
+    runtime: &mut WorkerRuntime,
+    qpc_clock: QpcClock,
+    sender_started_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Option<u64> {
+    runtime
+        .last_dispatch_deadline_wake_qpc
+        .take()
+        .and_then(|wake| sender_started_qpc.checked_duration_since(wake).ok())
+        .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
+}
+#[cfg(test)]
+mod wake_tests {
+    use super::take_wake_to_send_start_us;
+    use crate::engine::worker::WorkerRuntime;
+    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn deadline_wake_is_consumed_by_only_one_observation() {
+        let mut runtime = WorkerRuntime {
+            last_dispatch_deadline_wake_qpc: Some(QpcTicks::from_raw(100)),
+            ..WorkerRuntime::default()
+        };
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).expect("frequency"));
+
+        assert_eq!(
+            take_wake_to_send_start_us(&mut runtime, clock, QpcTicks::from_raw(125)),
+            Some(25)
+        );
+        assert_eq!(
+            take_wake_to_send_start_us(&mut runtime, clock, QpcTicks::from_raw(150)),
+            None
+        );
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -49,6 +85,7 @@ pub(crate) fn publisher_down_send_outcome(
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
     let DownSendTiming {
+        sender_started_qpc,
         sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,
@@ -68,6 +105,7 @@ pub(crate) fn publisher_down_send_outcome(
         saturation_abort,
         ..
     } = *timing_proof;
+    let wake_to_send_start_us = take_wake_to_send_start_us(runtime, qpc_clock, sender_started_qpc);
     if recovered_retry_late {
         local_metrics.recovered_zero_progress_but_late = local_metrics
             .recovered_zero_progress_but_late
@@ -113,6 +151,7 @@ pub(crate) fn publisher_down_send_outcome(
         timeline_rebase_max_ticks: local_metrics.timeline_rebase_max_ticks,
         timeline_rebase_last_reason: local_metrics.timeline_rebase_last_reason,
         sender_duration_us,
+        wake_to_send_start_us,
         delivered_count,
         batch_intent_count: view.batch_intent_count,
         completion_error_us,

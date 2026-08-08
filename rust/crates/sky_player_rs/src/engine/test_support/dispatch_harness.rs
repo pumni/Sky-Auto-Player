@@ -15,8 +15,9 @@ use crate::engine::worker::dispatch::{
     dispatch_due_pending_releases,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, NextDispatchPlan, TargetStamp, WorkerHealthState,
-    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState, plan_next_dispatch,
+    DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, NextDispatchPlan, TargetStamp,
+    WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    plan_next_dispatch,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{
@@ -48,6 +49,8 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
     pub(crate) desired_pause: AtomicBool,
+    pub(crate) supervisor_heartbeat_ticks: AtomicU64,
+    pub(crate) pending_budget: FrozenDispatchBudget,
     pub(crate) metrics: SharedMetrics,
     pub(crate) observer: PendingObservationQueue,
     effective_now_ticks: TimelineTicks,
@@ -69,6 +72,30 @@ impl ProductionDispatchTestHarness {
                 scheduled_us: 10_000,
                 scan_codes: vec![0x15].into(),
                 reason: "up".into(),
+            },
+        ])
+    }
+
+    /// Build a DownOnly chord whose physical deadline is at 10 ms.
+    pub fn new_down_chord(key_count: usize) -> Self {
+        assert!((1..=15).contains(&key_count), "key count must be 1..=15");
+        let scan_codes: Vec<u16> = (0..key_count)
+            .map(|index| 0x15u16.saturating_add(index as u16))
+            .collect();
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: scan_codes.clone().into(),
+                reason: "bench-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: scan_codes.into(),
+                reason: "bench-up".into(),
             },
         ])
     }
@@ -99,7 +126,54 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Build a retrigger packet with `event_count` physical INPUT events at
+    /// one deadline (half Up, half Down). Initial owners are dispatched during
+    /// setup so the measured packet is genuinely Mixed.
+    pub fn new_mixed_events(event_count: usize) -> Self {
+        assert!(
+            event_count.is_multiple_of(2) && (2..=30).contains(&event_count),
+            "mixed event count must be an even value in 2..=30"
+        );
+        let key_count = event_count / 2;
+        let scan_codes: Vec<u16> = (0..key_count)
+            .map(|index| 0x15u16.saturating_add(index as u16))
+            .collect();
+        let mut actions = Vec::with_capacity(1 + event_count);
+        actions.push(KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: scan_codes.clone().into(),
+            reason: "bench-seed".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 10_000,
+            scan_codes: scan_codes.clone().into(),
+            reason: "bench-up".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: scan_codes.into(),
+            reason: "bench-down".into(),
+        });
+        let mut harness = Self::create_harness(&actions);
+        let plan = harness.plan_current_dispatch();
+        assert!(matches!(
+            harness.dispatch_authored_with_plan(&plan),
+            DispatchStep::Dispatched
+        ));
+        harness
+    }
+
     pub fn new_uponly_release() -> Self {
+        Self::new_uponly_release_with_gap(1_000)
+    }
+
+    pub fn new_uponly_release_with_gap(gap_us: u64) -> Self {
         let mut harness = Self::create_harness(&[
             KeyActionInput {
                 source_action_index: 0,
@@ -111,7 +185,7 @@ impl ProductionDispatchTestHarness {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 1000,
+                scheduled_us: gap_us,
                 scan_codes: vec![0x15].into(),
                 reason: "up".into(),
             },
@@ -123,7 +197,13 @@ impl ProductionDispatchTestHarness {
     }
 
     fn create_harness(actions: &[KeyActionInput]) -> Self {
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &[0x15, 0x16])
+        let mut scan_codes: Vec<u16> = actions
+            .iter()
+            .flat_map(|action| action.scan_codes.iter().copied())
+            .collect();
+        scan_codes.sort_unstable();
+        scan_codes.dedup();
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
             .expect("schedule");
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
             schedule,
@@ -179,6 +259,14 @@ impl ProductionDispatchTestHarness {
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
             desired_pause: AtomicBool::new(false),
+            supervisor_heartbeat_ticks: AtomicU64::new(0),
+            pending_budget: crate::engine::worker::health::build_dispatch_budget(
+                &SendLatencyEstimator::default(),
+                DispatchPath::UpOnly { up_count: 1 },
+                LatencyClass::Hot,
+                health_options,
+                false,
+            ),
             metrics: SharedMetrics::default(),
             observer: PendingObservationQueue::default(),
             effective_now_ticks: TimelineTicks::ZERO,
@@ -294,11 +382,15 @@ impl ProductionDispatchTestHarness {
 
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
+        self.plan_current_dispatch_class(LatencyClass::Hot)
+    }
+
+    pub fn plan_current_dispatch_class(&mut self, latency_class: LatencyClass) -> NextDispatchPlan {
         plan_next_dispatch(
             &self.resources.coordinator,
             &self.resources.estimator,
             self.resources.clock,
-            LatencyClass::Hot,
+            latency_class,
             &self.config.timing,
             self.config.estimator.enable_adaptive_lead,
         )
@@ -332,6 +424,8 @@ impl ProductionDispatchTestHarness {
             now_ticks,
             latency_class: plan.latency_class(),
             focus_loss_fault: false,
+            supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
+            lease_timeout_ticks: DurationTicks::ZERO,
         };
         dispatch_authored_packet(
             ctx,
@@ -367,6 +461,13 @@ impl ProductionDispatchTestHarness {
             pending_plan,
             lead_up_ticks,
             latency_class,
+            frozen_budget: self.pending_budget,
+            quit_requested: &self.quit_requested,
+            skip_requested: &self.skip_requested,
+            panic_requested: &self.panic_requested,
+            desired_pause: &self.desired_pause,
+            supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
+            lease_timeout_ticks: DurationTicks::ZERO,
             observer: &mut self.observer,
         };
         dispatch_due_pending_releases(
@@ -397,5 +498,11 @@ impl ProductionDispatchTestHarness {
             0,
             &mut self.timing,
         )
+    }
+
+    pub fn pop_observation(
+        &mut self,
+    ) -> Option<super::super::worker::dispatch::DispatchObservation> {
+        self.observer.pop_front()
     }
 }

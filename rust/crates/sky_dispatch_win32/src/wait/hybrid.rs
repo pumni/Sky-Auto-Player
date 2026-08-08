@@ -194,20 +194,17 @@ impl HybridWaiter {
                     if self.event_wait_enabled
                         && interrupt.signal_generation() != observed_generation
                     {
-                        if interrupt.try_take() {
-                            let completed_ticks = match qpc_clock.now() {
-                                Ok(ticks) => ticks,
-                                Err(_) => {
-                                    return WaitResult::failed(WaitFailure::Clock);
-                                }
-                            };
-                            return wait_result_with_spin(
-                                WaitOutcome::Interrupted,
-                                spin_started_ticks,
-                                completed_ticks,
-                            );
-                        }
-                        observed_generation = interrupt.signal_generation();
+                        let completed_ticks = match qpc_clock.now() {
+                            Ok(ticks) => ticks,
+                            Err(_) => {
+                                return WaitResult::failed(WaitFailure::Clock);
+                            }
+                        };
+                        return wait_result_with_spin(
+                            WaitOutcome::Interrupted,
+                            spin_started_ticks,
+                            completed_ticks,
+                        );
                     }
 
                     let now_ticks = match qpc_clock.now() {

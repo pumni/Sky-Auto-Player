@@ -4,18 +4,19 @@ use super::test_support::command_timing::{
 };
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchPath, DownAdmission,
-    EstimatorOptions, FaultInjectionScript, FocusOptions, HealthWindow, HealthWindowPolicy,
-    InjectedSendOutcome, NativeDispatchSession, NativeSessionOptions, PlatformSendResult,
-    PriorityOptions, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL,
-    TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions,
-    TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions,
-    WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
-    anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
-    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    estimator_path_for_dispatch, exact_sender_durations, final_down_admission, focus_gate_matches,
-    focus_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
-    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-    target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    EstimatorOptions, FaultInjectionScript, FinalControlSignals, FinalTargetSignals, FocusOptions,
+    HealthWindow, HealthWindowPolicy, InjectedSendOutcome, NativeDispatchSession,
+    NativeSessionOptions, PlatformSendResult, PriorityOptions, RELEASE_RETRY_BACKOFF_US,
+    RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp,
+    TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
+    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+    classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
+    derive_spin_threshold_us, ensure_preflight_for_target, estimator_path_for_dispatch,
+    exact_sender_durations, final_down_admission, final_down_admission_with_lease,
+    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
+    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
@@ -47,7 +48,6 @@ fn test_session_options(
             strict_up_completion_late_us: 2_000,
             input_path_warn_us: 300,
             spin_threshold_us: 150,
-            core_warmup_budget_us: 0,
             spin_floor_us: 700,
         },
         focus: FocusOptions {
@@ -851,6 +851,57 @@ fn final_down_admission_rejects_each_command_state() {
 }
 
 #[test]
+fn authoritative_final_gate_prioritizes_controls_and_lease() {
+    let target = AtomicIsize::new(456);
+    let generation = AtomicU64::new(2);
+    let focus_active = AtomicBool::new(false);
+    let quit_requested = AtomicBool::new(true);
+    let skip_requested = AtomicBool::new(true);
+    let panic_requested = AtomicBool::new(true);
+    let desired_pause = AtomicBool::new(true);
+    let heartbeat = AtomicU64::new(1);
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 1,
+    };
+    let signals = || FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        supervisor_heartbeat_ticks: &heartbeat,
+    };
+    let target_signals = || FinalTargetSignals {
+        expected,
+        require_focus: true,
+        focus_active: &focus_active,
+        target_hwnd: &target,
+        target_generation: &generation,
+        now_qpc: QpcTicks::from_raw(100),
+        lease_timeout_ticks: DurationTicks::from_raw(10),
+    };
+
+    assert_eq!(
+        final_down_admission_with_lease(target_signals(), signals(),).expect("gate query"),
+        DownAdmission::PanicRequested
+    );
+
+    panic_requested.store(false, Ordering::Release);
+    assert_eq!(
+        final_down_admission_with_lease(target_signals(), signals(),).expect("gate query"),
+        DownAdmission::QuitRequested
+    );
+
+    quit_requested.store(false, Ordering::Release);
+    skip_requested.store(false, Ordering::Release);
+    desired_pause.store(false, Ordering::Release);
+    assert_eq!(
+        final_down_admission_with_lease(target_signals(), signals(),).expect("gate query"),
+        DownAdmission::LeaseExpired
+    );
+}
+
+#[test]
 fn supervisor_lease_treats_equal_heartbeat_as_fresh() {
     let heartbeat = AtomicU64::new(1_000);
     assert_eq!(
@@ -1308,7 +1359,7 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 }
 
 #[test]
-fn failed_send_does_not_seed_estimator_or_residual() {
+fn failed_send_does_not_seed_estimator_or_correction() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
     update_estimator_after_send(
@@ -1323,12 +1374,12 @@ fn failed_send_does_not_seed_estimator_or_residual() {
     );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
-    assert_eq!(state.residuals[0].count, 0);
+    assert_eq!(state.completion_corrections[0], 0.0);
 
     update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 0, 120, false);
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
-    assert_eq!(state.residuals[0].count, 0);
+    assert_eq!(state.completion_corrections[0], 0.0);
 
     update_estimator_after_send(
         &mut estimator,
@@ -1342,7 +1393,7 @@ fn failed_send_does_not_seed_estimator_or_residual() {
     );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
-    assert_eq!(estimator.export_state().residuals[0].count, 1);
+    assert_ne!(estimator.export_state().completion_corrections[0], 0.0);
 }
 
 #[test]
@@ -1406,7 +1457,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
 }
 
 #[test]
-fn estimator_v9_predicts_path_specific_leads() {
+fn estimator_v10_predicts_path_specific_leads() {
     let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
     let down_lead = estimator.estimate_lead(SendPath::DownOnly, 2).applied_us;
     let up_lead = estimator.estimate_lead(SendPath::UpOnly, 2).applied_us;
@@ -2735,6 +2786,7 @@ fn test_qpc_ordering_failure_is_terminal() {
     // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)
     // so dispatch_ready_qpc < sender_completed_qpc ordering fails inside publisher_down_send_outcome.
     let timing_proof = DownSendTiming {
+        sender_started_qpc: QpcTicks::ZERO,
         sender_completed_qpc: QpcTicks::from_raw(u64::MAX),
         sender_started_effective_ticks: TimelineTicks::ZERO,
         completed_effective_ticks: TimelineTicks::ZERO,

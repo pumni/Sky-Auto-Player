@@ -57,7 +57,6 @@ impl NativeDispatchSessionPy {
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
         let spin_threshold_us = 150;
-        let core_warmup_budget_us = 0;
         let parsed_telemetry_mode = if config.telemetry {
             crate::engine::TelemetryMode::Ring
         } else {
@@ -100,7 +99,6 @@ impl NativeDispatchSessionPy {
                 strict_up_completion_late_us,
                 input_path_warn_us,
                 spin_threshold_us,
-                core_warmup_budget_us,
                 spin_floor_us,
             },
             focus: FocusOptions {
@@ -594,7 +592,6 @@ impl TestDispatchSessionPy {
                 strict_up_completion_late_us: 2_000,
                 input_path_warn_us: 300,
                 spin_threshold_us: 150,
-                core_warmup_budget_us: 0,
                 spin_floor_us: 700,
             },
             focus: FocusOptions {

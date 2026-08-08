@@ -21,8 +21,11 @@ mod startup;
 mod timing;
 mod wait;
 
+#[cfg(test)]
+pub(crate) use admission::final_down_admission;
 pub(crate) use admission::{
-    DownAdmission, TargetStamp, ensure_preflight_for_target, final_down_admission, focus_matches,
+    DownAdmission, FinalControlSignals, FinalTargetSignals, TargetStamp,
+    ensure_preflight_for_target, final_down_admission_with_lease, focus_matches,
     focus_matches_hwnd, load_target_stamp, target_stamp_still_current,
 };
 use cleanup::{
@@ -51,26 +54,29 @@ pub(crate) use health::HealthWindowPolicy;
 #[cfg(test)]
 pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
-    DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
-    HealthWindow, build_dispatch_budget, estimator_path_for_dispatch, focus_gate_matches,
+    DispatchHealthObservation, DispatchHealthOptions, DispatchPath, FrozenDispatchBudget,
+    HEALTH_WINDOW_CAPACITY, HealthWindow, estimator_path_for_dispatch, focus_gate_matches,
     observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
-pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::startup_lead_for_first_packet;
+pub(crate) use planning::{
+    ProjectedPlanningInput, plan_next_dispatch, plan_next_dispatch_projected,
+};
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
+#[cfg(test)]
+pub(crate) use timing::classify_latency_class;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
     exact_sender_durations,
 };
 pub(crate) use timing::{
-    anchored_dispatch_target_ticks_typed, classify_latency_class, derive_spin_threshold_us,
-    lease_bounded_ticks, publish_wake_error_stats, signed_delta, signed_ticks_to_us,
-    signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
-    wake_lateness_ticks,
+    anchored_dispatch_target_ticks_typed, derive_spin_threshold_us, lease_bounded_ticks,
+    publish_wake_error_stats, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
+    supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
 use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -92,6 +98,7 @@ pub(crate) struct WorkerRuntime {
     startup_gate: Option<(TimelineTicks, DurationTicks)>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_send_qpc_ticks: Option<QpcTicks>,
+    last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     force_full_cleanup: bool,
     terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
@@ -131,7 +138,6 @@ pub(crate) struct WorkerTimingState {
     pub(super) focus_restore_grace_ticks: DurationTicks,
     pub(super) paused_poll_ticks: DurationTicks,
     pub(super) cold_threshold_ticks: DurationTicks,
-    pub(super) core_warmup_ticks: DurationTicks,
     pub(super) lease_timeout_ticks: DurationTicks,
     pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
     pub(super) effective_spin_threshold_ticks: DurationTicks,
@@ -152,7 +158,6 @@ impl WorkerTimingState {
             focus_restore_grace_ticks: DurationTicks::ZERO,
             paused_poll_ticks: DurationTicks::ZERO,
             cold_threshold_ticks: DurationTicks::ZERO,
-            core_warmup_ticks: DurationTicks::ZERO,
             lease_timeout_ticks: DurationTicks::ZERO,
             retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,

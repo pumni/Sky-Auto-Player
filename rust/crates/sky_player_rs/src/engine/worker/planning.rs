@@ -1,36 +1,40 @@
 //! Immutable per-epoch dispatch planning.
 //!
-//! One loop epoch samples QPC, classifies latency, then builds exactly one
-//! [`NextDispatchPlan`]. That plan owns path-aware authored lead, pending
-//! release lead, and the earliest wait deadline so prepare-due and wait-until
-//! cannot disagree on lead selection.
+//! One loop epoch builds exactly one [`NextDispatchPlan`]. That plan owns
+//! projected Hot/Cold classification, path-aware leads, frozen health
+//! budgets, pending release lead, and the earliest wait deadline so
+//! prepare-due and wait-until cannot disagree on lead selection.
 
 pub(crate) use super::dispatch::timing::{
     AuthoredDispatchPlan, next_authored_path, pending_lead_for_polyphony, resolve_authored_lead,
     startup_lead_for_first_packet,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::health::DispatchPath;
+use super::health::{
+    DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, build_dispatch_budget,
+};
 use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{
     CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use sky_dispatch_win32::clock::QpcClock;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use std::fmt;
 
 /// Immutable plan for one worker loop epoch.
 ///
 /// Does not borrow the coordinator. Callers must discard the plan after any
-/// interrupt, command, focus/pause transition, backend call, release recovery
-/// change, or wait wake — never cache across loop iterations.
+/// interrupt, command, focus/pause transition, backend call, or release
+/// recovery change. A normal physical deadline wake reuses the plan directly
+/// so the precision handoff does not restart the worker epoch.
 #[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NextDispatchPlan {
     pub(crate) latency_class: LatencyClass,
     pub(crate) authored: Option<AuthoredDispatchPlan>,
+    pub(crate) authored_budget: Option<FrozenDispatchBudget>,
     pub(crate) pending: Option<PendingDispatchPlan>,
+    pub(crate) pending_budget: Option<FrozenDispatchBudget>,
     pub(crate) deadline_ticks: Option<TimelineTicks>,
 }
 
@@ -39,7 +43,9 @@ pub(crate) struct NextDispatchPlan {
 pub struct NextDispatchPlan {
     pub(crate) latency_class: LatencyClass,
     pub(crate) authored: Option<AuthoredDispatchPlan>,
+    pub(crate) authored_budget: Option<FrozenDispatchBudget>,
     pub(crate) pending: Option<PendingDispatchPlan>,
+    pub(crate) pending_budget: Option<FrozenDispatchBudget>,
     pub(crate) deadline_ticks: Option<TimelineTicks>,
 }
 
@@ -48,7 +54,9 @@ impl Default for NextDispatchPlan {
         Self {
             latency_class: LatencyClass::Hot,
             authored: None,
+            authored_budget: None,
             pending: None,
+            pending_budget: None,
             deadline_ticks: None,
         }
     }
@@ -117,6 +125,101 @@ pub(crate) fn plan_next_dispatch(
     timing: &TimingOptions,
     enable_adaptive_lead: bool,
 ) -> Result<NextDispatchPlan, PlanningError> {
+    plan_next_dispatch_with_class(
+        coordinator,
+        estimator,
+        qpc_clock,
+        latency_class,
+        timing,
+        enable_adaptive_lead,
+        DispatchHealthOptions::default(),
+    )
+}
+
+pub(crate) struct ProjectedPlanningInput<'a> {
+    pub(crate) coordinator: &'a RuntimeDispatchCoordinator,
+    pub(crate) estimator: &'a SendLatencyEstimator,
+    pub(crate) qpc_clock: QpcClock,
+    pub(crate) playback_epoch_qpc: QpcTicks,
+    pub(crate) last_send_qpc: Option<QpcTicks>,
+    pub(crate) cold_threshold_ticks: DurationTicks,
+    pub(crate) timing: &'a TimingOptions,
+    pub(crate) health_options: DispatchHealthOptions,
+    pub(crate) enable_adaptive_lead: bool,
+}
+
+/// Build a plan with classification projected from the next uncompensated
+/// physical boundary.  The planner is deliberately clock-free: the caller
+/// supplies the already sampled playback epoch and previous send completion.
+pub(crate) fn plan_next_dispatch_projected(
+    input: ProjectedPlanningInput<'_>,
+) -> Result<NextDispatchPlan, PlanningError> {
+    let ProjectedPlanningInput {
+        coordinator,
+        estimator,
+        qpc_clock,
+        playback_epoch_qpc,
+        last_send_qpc,
+        cold_threshold_ticks,
+        timing,
+        health_options,
+        enable_adaptive_lead,
+    } = input;
+    let latency_class = projected_latency_class(
+        coordinator,
+        playback_epoch_qpc,
+        last_send_qpc,
+        cold_threshold_ticks,
+    )?;
+    plan_next_dispatch_with_class(
+        coordinator,
+        estimator,
+        qpc_clock,
+        latency_class,
+        timing,
+        enable_adaptive_lead,
+        health_options,
+    )
+}
+
+fn projected_latency_class(
+    coordinator: &RuntimeDispatchCoordinator,
+    playback_epoch_qpc: QpcTicks,
+    last_send_qpc: Option<QpcTicks>,
+    cold_threshold_ticks: DurationTicks,
+) -> Result<LatencyClass, PlanningError> {
+    let Some(last_send_qpc) = last_send_qpc else {
+        return Ok(LatencyClass::Cold);
+    };
+    let Some(next_boundary) = coordinator.next_uncompensated_deadline_ticks()? else {
+        return Ok(LatencyClass::Hot);
+    };
+    let target_qpc = playback_epoch_qpc
+        .checked_add_duration(DurationTicks::from_raw(next_boundary.as_u64()))
+        .map_err(|error| PlanningError::TimeConversion(format!("{error:?}")))?;
+    let gap = if target_qpc > last_send_qpc {
+        target_qpc
+            .checked_duration_since(last_send_qpc)
+            .map_err(|error| PlanningError::TimeConversion(format!("{error:?}")))?
+    } else {
+        DurationTicks::ZERO
+    };
+    Ok(if gap > cold_threshold_ticks {
+        LatencyClass::Cold
+    } else {
+        LatencyClass::Hot
+    })
+}
+
+fn plan_next_dispatch_with_class(
+    coordinator: &RuntimeDispatchCoordinator,
+    estimator: &SendLatencyEstimator,
+    qpc_clock: QpcClock,
+    latency_class: LatencyClass,
+    timing: &TimingOptions,
+    enable_adaptive_lead: bool,
+    health_options: DispatchHealthOptions,
+) -> Result<NextDispatchPlan, PlanningError> {
     let authored = match next_authored_path(coordinator) {
         Some(path) => {
             let lead =
@@ -151,10 +254,33 @@ pub(crate) fn plan_next_dispatch(
         .map_or(DurationTicks::ZERO, |plan| plan.lead_ticks);
     let deadline_ticks = coordinator.next_deadline_ticks(authored_lead_ticks, pending.as_ref())?;
 
+    let authored_budget = authored.as_ref().map(|plan| {
+        build_dispatch_budget(
+            estimator,
+            plan.path,
+            latency_class,
+            health_options,
+            timing.strict_timing,
+        )
+    });
+    let pending_budget = pending.as_ref().map(|plan| {
+        build_dispatch_budget(
+            estimator,
+            DispatchPath::UpOnly {
+                up_count: plan.polyphony,
+            },
+            latency_class,
+            health_options,
+            timing.strict_timing,
+        )
+    });
+
     Ok(NextDispatchPlan {
         latency_class,
         authored,
+        authored_budget,
         pending,
+        pending_budget,
         deadline_ticks,
     })
 }
@@ -162,17 +288,19 @@ pub(crate) fn plan_next_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthoredDispatchPlan, NextDispatchPlan, plan_next_dispatch, resolve_authored_lead,
-        startup_lead_for_first_packet,
+        AuthoredDispatchPlan, NextDispatchPlan, ProjectedPlanningInput, plan_next_dispatch,
+        plan_next_dispatch_projected, resolve_authored_lead, startup_lead_for_first_packet,
     };
     use crate::engine::config::TimingOptions;
-    use crate::engine::worker::health::{DispatchPath, estimate_dispatch_path_lead};
+    use crate::engine::worker::health::{
+        DispatchHealthOptions, DispatchPath, estimate_dispatch_path_lead,
+    };
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator};
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-    use sky_dispatch_win32::clock::QpcClock;
+    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     use std::num::NonZeroU64;
 
     fn us_clock() -> QpcClock {
@@ -191,7 +319,6 @@ mod tests {
             strict_up_completion_late_us: 2_000,
             input_path_warn_us: 300,
             spin_threshold_us: 150,
-            core_warmup_budget_us: 0,
             spin_floor_us: 700,
         }
     }
@@ -230,6 +357,87 @@ mod tests {
                 .update_with_class(SendPath::UpOnly, up_syscall_us, 1, LatencyClass::Hot)
                 .expect("up seed");
         }
+    }
+
+    fn projected_plan(
+        coordinator: &RuntimeDispatchCoordinator,
+        estimator: &SendLatencyEstimator,
+        last_send_qpc: Option<QpcTicks>,
+        cold_threshold_ticks: DurationTicks,
+        timing: &TimingOptions,
+    ) -> NextDispatchPlan {
+        plan_next_dispatch_projected(ProjectedPlanningInput {
+            coordinator,
+            estimator,
+            qpc_clock: us_clock(),
+            playback_epoch_qpc: QpcTicks::ZERO,
+            last_send_qpc,
+            cold_threshold_ticks,
+            timing,
+            health_options: DispatchHealthOptions::default(),
+            enable_adaptive_lead: false,
+        })
+        .expect("projected plan")
+    }
+
+    #[test]
+    fn projected_class_uses_the_upcoming_physical_idle_interval() {
+        let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
+        let opts = timing(0, 2_000);
+        let threshold = DurationTicks::from_raw(20_000);
+
+        let first_dispatch = coordinator_from_actions(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first-dispatch".into(),
+        }]);
+        let first_plan = projected_plan(&first_dispatch, &estimator, None, threshold, &opts);
+        assert_eq!(first_plan.latency_class(), LatencyClass::Cold);
+
+        let near_dispatch = coordinator_from_actions(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "near-dispatch".into(),
+        }]);
+        let near_plan = projected_plan(
+            &near_dispatch,
+            &estimator,
+            Some(QpcTicks::ZERO),
+            threshold,
+            &opts,
+        );
+        assert_eq!(near_plan.latency_class(), LatencyClass::Hot);
+
+        let idle_dispatch = coordinator_from_actions(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 50_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "idle-dispatch".into(),
+        }]);
+        let idle_plan = projected_plan(
+            &idle_dispatch,
+            &estimator,
+            Some(QpcTicks::ZERO),
+            threshold,
+            &opts,
+        );
+        assert_eq!(idle_plan.latency_class(), LatencyClass::Cold);
+
+        // The result depends on the projected physical boundary, not on a
+        // loop-build timestamp that happened to precede the wait.
+        let rebuilt_at_same_send = projected_plan(
+            &idle_dispatch,
+            &estimator,
+            Some(QpcTicks::ZERO),
+            threshold,
+            &opts,
+        );
+        assert_eq!(rebuilt_at_same_send.latency_class(), LatencyClass::Cold);
     }
 
     #[test]
@@ -521,6 +729,34 @@ mod tests {
         assert!(pending.deadline_ticks.as_u64() < 50_000u64.saturating_sub(authored.lead_us));
 
         assert_eq!(plan.deadline_ticks, Some(pending.deadline_ticks));
+
+        // The pending release is the projected earliest physical boundary,
+        // so it keeps this plan Hot even though the next authored Down is a
+        // cold-sized idle interval away.
+        let projected = projected_plan(
+            &coordinator,
+            &estimator,
+            Some(QpcTicks::ZERO),
+            DurationTicks::from_raw(20_000),
+            &timing(0, 2_000),
+        );
+        assert_eq!(projected.latency_class(), LatencyClass::Hot);
+
+        let authored_only = coordinator_from_actions(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 50_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "cold-authored-only".into(),
+        }]);
+        let authored_only_plan = projected_plan(
+            &authored_only,
+            &estimator,
+            Some(QpcTicks::ZERO),
+            DurationTicks::from_raw(20_000),
+            &timing(0, 2_000),
+        );
+        assert_eq!(authored_only_plan.latency_class(), LatencyClass::Cold);
     }
 
     #[test]

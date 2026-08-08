@@ -2474,6 +2474,29 @@ impl RuntimeDispatchCoordinator {
         Ok(Some(effective))
     }
 
+    /// Return the earliest upcoming physical boundary without applying an
+    /// adaptive dispatch lead.
+    ///
+    /// Planning uses this projection to classify the interval that will
+    /// actually precede the next physical operation.  Release floors and
+    /// recovery ownership remain part of the projection; only lead
+    /// subtraction is omitted.
+    pub fn next_uncompensated_deadline_ticks(
+        &self,
+    ) -> Result<Option<TimelineTicks>, CoordinatorError> {
+        let authored = self.next_authored_ticks(DurationTicks::ZERO)?;
+        let pending = self.next_pending_release_ticks(DurationTicks::ZERO)?;
+        if self.release_recovery_started_ticks.is_some() {
+            return Ok(pending);
+        }
+        Ok(match (authored, pending) {
+            (Some(authored), Some(pending)) => Some(authored.min(pending)),
+            (Some(authored), None) => Some(authored),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        })
+    }
+
     /// Return the next dispatch deadline for one physical packet.
     ///
     /// A packet containing releases cannot be dispatched before the latest

@@ -1,4 +1,5 @@
 use super::{TrackedKeyState, focus_gate_matches};
+use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -50,9 +51,29 @@ pub(crate) enum DownAdmission {
     QuitRequested,
     SkipRequested,
     PanicRequested,
+    LeaseExpired,
+}
+
+pub(crate) struct FinalControlSignals<'a> {
+    pub(crate) quit_requested: &'a AtomicBool,
+    pub(crate) skip_requested: &'a AtomicBool,
+    pub(crate) panic_requested: &'a AtomicBool,
+    pub(crate) desired_pause: &'a AtomicBool,
+    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
+}
+
+pub(crate) struct FinalTargetSignals<'a> {
+    pub(crate) expected: TargetStamp,
+    pub(crate) require_focus: bool,
+    pub(crate) focus_active: &'a AtomicBool,
+    pub(crate) target_hwnd: &'a AtomicIsize,
+    pub(crate) target_generation: &'a AtomicU64,
+    pub(crate) now_qpc: QpcTicks,
+    pub(crate) lease_timeout_ticks: sky_dispatch_core::time::DurationTicks,
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn final_down_admission(
     expected: TargetStamp,
     require_focus: bool,
@@ -83,6 +104,50 @@ pub(crate) fn final_down_admission(
         return DownAdmission::PauseRequested;
     }
     DownAdmission::Allowed
+}
+
+/// Authoritative last-mile gate used by production Down-bearing dispatch.
+/// Control state is checked before target/focus state so an explicit command
+/// always wins over a newly-arriving note.  The lease check is deliberately
+/// performed here, immediately before transport admission.
+pub(crate) fn final_down_admission_with_lease(
+    target: FinalTargetSignals<'_>,
+    signals: FinalControlSignals<'_>,
+) -> Result<DownAdmission, QpcError> {
+    if signals.panic_requested.load(Ordering::Acquire) {
+        return Ok(DownAdmission::PanicRequested);
+    }
+    if signals.quit_requested.load(Ordering::Acquire) {
+        return Ok(DownAdmission::QuitRequested);
+    }
+    if signals.skip_requested.load(Ordering::Acquire) {
+        return Ok(DownAdmission::SkipRequested);
+    }
+    if signals.desired_pause.load(Ordering::Acquire) {
+        return Ok(DownAdmission::PauseRequested);
+    }
+    if super::supervisor_lease_expired(
+        target.now_qpc,
+        target.lease_timeout_ticks,
+        signals.supervisor_heartbeat_ticks,
+    )? {
+        return Ok(DownAdmission::LeaseExpired);
+    }
+    if !target_stamp_still_current(
+        target.target_hwnd,
+        target.target_generation,
+        target.expected,
+    ) {
+        return Ok(DownAdmission::TargetChanged);
+    }
+    if !focus_matches_hwnd(
+        target.require_focus,
+        target.focus_active,
+        target.expected.hwnd,
+    ) {
+        return Ok(DownAdmission::FocusLost);
+    }
+    Ok(DownAdmission::Allowed)
 }
 
 pub(crate) fn ensure_preflight_for_target(

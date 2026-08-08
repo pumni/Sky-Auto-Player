@@ -3,26 +3,31 @@ use super::super::super::{
     RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
-    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
-    WorkerRuntime, WorkerTimingState, build_dispatch_budget, cancel_coordinator_or_terminal,
-    describe_release_outcome, record_termination_error, release_state_verified, signed_ticks_to_us,
-    signed_timeline_delta_ticks,
+    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
+    WorkerTimingState, cancel_coordinator_or_terminal, describe_release_outcome,
+    record_termination_error, release_state_verified, signed_ticks_to_us,
+    signed_timeline_delta_ticks, supervisor_lease_expired,
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
-use super::observer::PendingObservationQueue;
+use super::observer::{PendingObservationQueue, take_wake_to_send_start_us};
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
     pub(crate) pending_plan: Option<&'a PendingDispatchPlan>,
     pub(crate) lead_up_ticks: DurationTicks,
     pub(crate) latency_class: LatencyClass,
+    pub(crate) frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
+    pub(crate) quit_requested: &'a AtomicBool,
+    pub(crate) skip_requested: &'a AtomicBool,
+    pub(crate) panic_requested: &'a AtomicBool,
+    pub(crate) desired_pause: &'a AtomicBool,
+    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
+    pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) observer: &'a mut PendingObservationQueue,
 }
 
@@ -34,6 +39,7 @@ pub(super) struct ReleaseSend {
     pub(super) completed_effective_us: u64,
     /// §8.6 typed QPC completion boundary used by the deferred observer to
     /// derive `core_post_send_us`.  Replaces the old mixed us/QPC subtraction.
+    pub(super) sender_started_qpc: QpcTicks,
     pub(super) sender_completed_qpc: QpcTicks,
     pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
     pub(super) last_win32_error: Option<u32>,
@@ -225,6 +231,13 @@ pub(crate) fn dispatch_due_pending_releases(
         pending_plan,
         lead_up_ticks,
         latency_class,
+        frozen_budget,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
         observer,
     } = ctx;
     let WorkerResources {
@@ -232,23 +245,24 @@ pub(crate) fn dispatch_due_pending_releases(
         backend,
         coordinator,
         playback: clock_state,
-        estimator,
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
     let scan_codes: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
     let scan_count = scan_codes.len();
-    let frozen_budget = build_dispatch_budget(
-        estimator,
-        DispatchPath::UpOnly {
-            up_count: scan_count,
-        },
-        latency_class,
-        health.options,
-        config.timing.strict_timing,
-    );
-
-    let send = match prepare_release_send(qpc_clock, backend, clock_state, runtime, &scan_codes) {
+    let send = match prepare_release_send(
+        qpc_clock,
+        backend,
+        clock_state,
+        runtime,
+        &scan_codes,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
+    ) {
         Ok(value) => value,
         Err(step) => return step,
     };
@@ -317,6 +331,8 @@ pub(crate) fn dispatch_due_pending_releases(
             ));
         }
     };
+    let wake_to_send_start_us =
+        take_wake_to_send_start_us(runtime, qpc_clock, send.sender_started_qpc);
     // HARD DISPATCH READY BOUNDARY:
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
@@ -324,6 +340,7 @@ pub(crate) fn dispatch_due_pending_releases(
     let observation = UpObservation {
         latency_class,
         sender_duration_us: send.sender_duration_us,
+        wake_to_send_start_us,
         sent_count: send.sent_count,
         scan_count,
         lead_up_ticks,
@@ -405,6 +422,12 @@ fn prepare_release_send(
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     scan_codes: &SmallVec<[u16; 15]>,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    desired_pause: &AtomicBool,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
 ) -> Result<ReleaseSend, DispatchStep> {
     let started_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
@@ -424,6 +447,21 @@ fn prepare_release_send(
             )));
         }
     };
+    if panic_requested.load(Ordering::Acquire)
+        || quit_requested.load(Ordering::Acquire)
+        || skip_requested.load(Ordering::Acquire)
+        || desired_pause.load(Ordering::Acquire)
+        || supervisor_lease_expired(
+            started_ticks,
+            lease_timeout_ticks,
+            supervisor_heartbeat_ticks,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("release admission QPC failure: {error:?}"))
+        })?
+    {
+        return Err(DispatchStep::Continue);
+    }
     let result = backend.key_up(scan_codes);
     if let Some(error) = backend.timing_error.take() {
         return Err(DispatchStep::Terminate(format!(
@@ -510,6 +548,7 @@ fn prepare_release_send(
         completed_effective_ticks,
         completed_effective_us,
         sender_completed_qpc: completed_qpc_ticks,
+        sender_started_qpc: result.evidence.started_ticks.unwrap_or(QpcTicks::ZERO),
         sender_started_effective_ticks,
         last_win32_error,
         sender_duration_us,

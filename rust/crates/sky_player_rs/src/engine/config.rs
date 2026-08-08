@@ -80,7 +80,6 @@ impl Default for WorkerConfig {
                 strict_up_completion_late_us: 2_000,
                 input_path_warn_us: 300,
                 spin_threshold_us: 150,
-                core_warmup_budget_us: 0,
                 spin_floor_us: 700,
             },
             focus: FocusOptions {
@@ -118,7 +117,6 @@ pub(crate) struct TimingOptions {
     pub(crate) strict_up_completion_late_us: u64,
     pub(crate) input_path_warn_us: u64,
     pub(crate) spin_threshold_us: u64,
-    pub(crate) core_warmup_budget_us: u64,
     pub(crate) spin_floor_us: u64,
 }
 

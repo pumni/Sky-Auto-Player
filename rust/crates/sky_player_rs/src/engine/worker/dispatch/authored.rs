@@ -1,13 +1,13 @@
 use super::super::super::{
     ActionKind, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass, PlaybackClockState,
-    QpcClock, QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK,
-    SendLatencyEstimator, SharedMetrics, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector,
-    TimelineTicks, TrackedKeyState, try_publish_metrics,
+    QpcClock, QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SharedMetrics,
+    TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TrackedKeyState,
+    try_publish_metrics,
 };
 use super::super::{
-    DispatchPath, DownAdmission, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerResources, WorkerRuntime, WorkerTimingState, build_dispatch_budget,
-    ensure_preflight_for_target, final_down_admission, focus_matches, load_target_stamp,
+    DispatchPath, DownAdmission, FinalControlSignals, FinalTargetSignals, WorkerConfig,
+    WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
+    ensure_preflight_for_target, final_down_admission_with_lease, focus_matches, load_target_stamp,
     suspend_live_input, target_stamp_still_current,
 };
 use super::observer::{
@@ -45,6 +45,8 @@ pub(crate) fn dispatch_authored_packet(
         now_ticks,
         latency_class,
         focus_loss_fault,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
     } = ctx;
 
     let WorkerResources {
@@ -52,7 +54,6 @@ pub(crate) fn dispatch_authored_packet(
         backend,
         coordinator,
         playback: clock_state,
-        estimator,
         telemetry,
         ..
     } = resources;
@@ -65,6 +66,9 @@ pub(crate) fn dispatch_authored_packet(
             authored.lead_ticks,
         ),
         None => (0, false, DurationTicks::ZERO),
+    };
+    let Some(frozen_budget) = dispatch_plan.authored_budget.as_ref() else {
+        return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
     let prepared_batch =
@@ -116,7 +120,6 @@ pub(crate) fn dispatch_authored_packet(
             backend,
             coordinator,
             clock_state,
-            estimator,
             telemetry,
             effective_now_ticks,
             now_ticks,
@@ -125,6 +128,9 @@ pub(crate) fn dispatch_authored_packet(
             lead_down_ticks,
             latency_class,
             focus_loss_fault,
+            frozen_budget,
+            supervisor_heartbeat_ticks,
+            lease_timeout_ticks,
             observer,
         );
     }
@@ -167,7 +173,6 @@ fn commit_down_send_outcome(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    estimator: &mut SendLatencyEstimator,
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
@@ -176,6 +181,9 @@ fn commit_down_send_outcome(
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
     focus_loss_fault: bool,
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
     observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
@@ -204,9 +212,9 @@ fn commit_down_send_outcome(
         timing,
         has_conflicts,
         focus_loss_fault,
-        latency_class,
-        estimator,
-        health,
+        frozen_budget,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
     ) {
         Ok(admission) => admission,
         Err(step) => return step,
@@ -275,9 +283,9 @@ fn admit_authored_down(
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
-    latency_class: LatencyClass,
-    estimator: &SendLatencyEstimator,
-    health: &mut WorkerHealthState,
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     if !view
         .packet_masks
@@ -357,17 +365,27 @@ fn admit_authored_down(
         {
             DownAdmission::Allowed
         } else {
-            final_down_admission(
-                preflight_target,
-                config.focus.require_focus,
-                focus_active,
-                target_hwnd,
-                target_generation,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                desired_pause,
+            final_down_admission_with_lease(
+                FinalTargetSignals {
+                    expected: preflight_target,
+                    require_focus: config.focus.require_focus,
+                    focus_active,
+                    target_hwnd,
+                    target_generation,
+                    now_qpc: now_ticks,
+                    lease_timeout_ticks,
+                },
+                FinalControlSignals {
+                    quit_requested,
+                    skip_requested,
+                    panic_requested,
+                    desired_pause,
+                    supervisor_heartbeat_ticks,
+                },
             )
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+            })?
         };
         match admission {
             DownAdmission::Allowed => {}
@@ -403,6 +421,7 @@ fn admit_authored_down(
                 return Ok(AdmissionOutcome::FocusLost);
             }
             DownAdmission::TargetChanged
+            | DownAdmission::LeaseExpired
             | DownAdmission::PauseRequested
             | DownAdmission::QuitRequested
             | DownAdmission::SkipRequested
@@ -411,13 +430,7 @@ fn admit_authored_down(
                 return Ok(AdmissionOutcome::TargetChanged);
             }
         }
-        return Ok(finalize_allowed_admission(
-            view,
-            config,
-            health,
-            estimator,
-            latency_class,
-        ));
+        return Ok(finalize_allowed_admission(view, frozen_budget));
     }
     Ok(AdmissionOutcome::ConflictReject)
 }
@@ -427,18 +440,8 @@ fn admit_authored_down(
 /// dispatch-function line limit.
 fn finalize_allowed_admission(
     view: &AuthoredBatchView,
-    config: &WorkerConfig,
-    health: &WorkerHealthState,
-    estimator: &SendLatencyEstimator,
-    latency_class: LatencyClass,
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
 ) -> AdmissionOutcome {
-    let frozen_budget = build_dispatch_budget(
-        estimator,
-        view.dispatch_path,
-        latency_class,
-        health.options,
-        config.timing.strict_timing,
-    );
     let trace_kind = match view.prepared_batch.packet_kind {
         Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => TRACE_KIND_UP,
         Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => TRACE_KIND_DOWN,
@@ -446,7 +449,7 @@ fn finalize_allowed_admission(
         None => TRACE_KIND_DOWN,
     };
     AdmissionOutcome::Allowed {
-        frozen_budget,
+        frozen_budget: *frozen_budget,
         trace_kind,
     }
 }
