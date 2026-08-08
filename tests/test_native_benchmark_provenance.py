@@ -41,6 +41,22 @@ def test_build_wheel_sets_expected_github_sha(monkeypatch, tmp_path: Path) -> No
     assert captured["env"]["GITHUB_SHA"] == "baseline-sha"  # type: ignore[index]
 
 
+def test_benchmark_subprocess_output_uses_utf8_replacement(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_native_ab.subprocess, "run", fake_subprocess_run)
+
+    bench_native_ab._run(["benchmark"], cwd=tmp_path, capture=True)
+
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
 def _ab_args(output_dir: Path) -> SimpleNamespace:
     return SimpleNamespace(
         baseline_ref="baseline",

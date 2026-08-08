@@ -37,6 +37,8 @@ def _run(
         env=env,
         capture_output=capture,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
