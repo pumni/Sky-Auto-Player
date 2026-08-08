@@ -77,3 +77,17 @@ def test_recovered_partial_release_has_neutral_warning() -> None:
         "recovered-partial-up-retry"
     ]
     assert "partially accepted a release packet" in notices.runtime_notices[0].message
+
+
+def test_observer_flag_alone_produces_no_misleading_warning() -> None:
+    ledger = PlaybackNoticeLedger()
+    # Observer degradation alone (or plain ledger update without send/core/wait flags) produces no runtime notices
+    res = ledger.update()
+    assert not res.runtime_notices
+
+    # Old code "native-bookkeeping-slow" is never in runtime notices
+    core_post_send = ledger.update(core_post_send_degraded=True)
+    codes = [notice.code for notice in core_post_send.runtime_notices]
+    assert "native-bookkeeping-slow" not in codes
+    assert "native-core-post-send-slow" in codes
+

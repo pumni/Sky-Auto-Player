@@ -340,6 +340,9 @@ pub(crate) fn observe_wait_health(
         }
     }
     local_metrics.wait_path_degraded = window.is_degraded();
+    local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
+        || local_metrics.core_post_send_degraded
+        || local_metrics.wait_path_degraded;
     local_metrics.wait_window_bad_count = window.bad_count() as u64;
     local_metrics.wait_window_sample_count = window.sample_count() as u64;
 }
@@ -492,11 +495,12 @@ pub(crate) fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY, HealthState, HealthTransition,
-        HealthWindow, HealthWindowPolicy, SEND_WARNING_MARGIN_US, WorkerMetricsLocal,
-        build_dispatch_budget, observe_wait_health, record_degraded_sample,
-        record_input_path_health,
+        DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
+        HealthState, HealthTransition, HealthWindow, HealthWindowPolicy, SEND_WARNING_MARGIN_US,
+        build_dispatch_budget, observe_dispatch_health, observe_observer_health,
+        observe_wait_health, record_degraded_sample, record_input_path_health,
     };
+    use crate::engine::telemetry::metrics::WorkerMetricsLocal;
     use sky_dispatch_core::estimator::LatencyClass;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
 
@@ -672,5 +676,82 @@ mod tests {
             window.is_degraded(),
         );
         assert_eq!(before, (1, 1, true));
+    }
+
+    #[test]
+    fn health_domain_isolation_only_degrades_target_domain() {
+        let policy = HealthWindowPolicy {
+            minimum_samples: 1,
+            bad_sample_count: 1,
+            degrade_hold_us: 0,
+            recovery_hold_us: 0,
+        };
+
+        // 1. Slow SendInput degrades sendinput_window only
+        {
+            let mut send_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut core_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut metrics = WorkerMetricsLocal::default();
+            let obs = DispatchHealthObservation {
+                send_duration_us: 1000,
+                post_send_duration_us: 10,
+                path: DispatchPath::DownOnly { down_count: 1 },
+                send_warn_us: 300,
+                core_post_send_warn_us: 300,
+                elapsed_us: 10_000,
+            };
+            observe_dispatch_health(obs, policy, &mut send_win, &mut core_win, &mut metrics);
+            assert!(send_win.is_degraded());
+            assert!(!core_win.is_degraded());
+            assert!(metrics.sendinput_path_degraded);
+            assert!(!metrics.core_post_send_degraded);
+            assert!(metrics.input_path_degraded);
+        }
+
+        // 2. Slow core commit degrades core_post_send_window only
+        {
+            let mut send_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut core_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut metrics = WorkerMetricsLocal::default();
+            let obs = DispatchHealthObservation {
+                send_duration_us: 100,
+                post_send_duration_us: 1000,
+                path: DispatchPath::DownOnly { down_count: 1 },
+                send_warn_us: 300,
+                core_post_send_warn_us: 300,
+                elapsed_us: 10_000,
+            };
+            observe_dispatch_health(obs, policy, &mut send_win, &mut core_win, &mut metrics);
+            assert!(!send_win.is_degraded());
+            assert!(core_win.is_degraded());
+            assert!(!metrics.sendinput_path_degraded);
+            assert!(metrics.core_post_send_degraded);
+            assert!(metrics.input_path_degraded);
+        }
+
+        // 3. Slow observer degrades observer_window only and DOES NOT set input_path_degraded
+        {
+            let mut obs_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut metrics = WorkerMetricsLocal::default();
+            observe_observer_health(10_000, 5_000, 10_000, policy, &mut obs_win, &mut metrics);
+            assert!(obs_win.is_degraded());
+            assert!(metrics.observer_degraded);
+            assert!(!metrics.sendinput_path_degraded);
+            assert!(!metrics.core_post_send_degraded);
+            assert!(!metrics.input_path_degraded);
+        }
+
+        // 4. Slow wake degrades wait_window only
+        {
+            let mut wait_win = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+            let mut metrics = WorkerMetricsLocal::default();
+            observe_wait_health(1000, 300, 10_000, policy, &mut wait_win, &mut metrics);
+            assert!(wait_win.is_degraded());
+            assert!(metrics.wait_path_degraded);
+            assert!(metrics.input_path_degraded);
+            assert!(!metrics.sendinput_path_degraded);
+            assert!(!metrics.core_post_send_degraded);
+            assert!(!metrics.observer_degraded);
+        }
     }
 }
