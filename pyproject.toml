@@ -13,13 +13,13 @@ readme = "README.md"
 # by `.python-version`; keep these two in sync.
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "packaging>=24.0",
+    "packaging>=26.3",
     "rapidfuzz>=3.14.5",
-    "textual>=8.2.7",
+    "textual>=8.2.8",
 ]
 
 [build-system]
-requires = ["setuptools>=61.0.0"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -32,13 +32,13 @@ py-modules = ["main", "build_app"]
 [dependency-groups]
 dev = [
     "maturin>=1.13.3,<2",
-    "pyinstaller>=6.0.0",
-    "pyrefly>=1.1.1",
+    "pyinstaller>=6.21.0",
+    "pyrefly>=1.2.0",
     "pyright>=1.1.411",
     "pytest>=8.4.2",
     "pytest-benchmark>=5.2.3",
     "pytest-textual-snapshot>=1.1.0",
-    "ruff>=0.15.20",
+    "ruff>=0.16.1",
     "soundcard>=0.4.6",
 ]
 
