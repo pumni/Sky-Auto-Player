@@ -1,14 +1,9 @@
 use super::TrackedKeyState;
 use crate::engine::telemetry::{SharedMetrics, WorkerMetricsLocal};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-use sky_dispatch_core::model::ActionKind;
 
 pub(crate) const SEND_WARNING_MARGIN_US: u64 = 50;
 pub(crate) const HEALTH_WINDOW_CAPACITY: usize = 64;
-/// Existing cold-start per-event prior used by the estimator for a mixed
-/// packet. Mixed packets are one syscall, so this is an event increment, not
-/// the sum of two independent directional leads.
-pub(crate) const MIXED_PACKET_PER_EXTRA_EVENT_US: u64 = 40;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DispatchHealthOptions {
@@ -99,11 +94,11 @@ impl DispatchPath {
     }
 }
 
-pub(crate) fn estimator_kind_for_path(path: DispatchPath) -> Option<ActionKind> {
+pub(crate) fn estimator_path_for_dispatch(path: DispatchPath) -> sky_dispatch_core::estimator::SendPath {
     match path {
-        DispatchPath::DownOnly { .. } => Some(ActionKind::Down),
-        DispatchPath::UpOnly { .. } => Some(ActionKind::Up),
-        DispatchPath::Mixed { .. } => None,
+        DispatchPath::DownOnly { .. } => sky_dispatch_core::estimator::SendPath::DownOnly,
+        DispatchPath::UpOnly { .. } => sky_dispatch_core::estimator::SendPath::UpOnly,
+        DispatchPath::Mixed { .. } => sky_dispatch_core::estimator::SendPath::Mixed,
     }
 }
 
@@ -128,39 +123,12 @@ pub(crate) fn estimate_dispatch_path_lead(
     strict_timing: bool,
     max_lead_us: u64,
 ) -> DispatchLeadEstimate {
-    let estimate = |kind, count| {
-        estimator.estimate_lead_with_class_and_policy(kind, count, latency_class, strict_timing)
-    };
-    match path {
-        DispatchPath::DownOnly { down_count } => {
-            let value = estimate(ActionKind::Down, down_count);
-            DispatchLeadEstimate {
-                applied_us: value.applied_us.min(max_lead_us),
-                saturated: value.saturated,
-            }
-        }
-        DispatchPath::UpOnly { up_count } => {
-            let value = estimate(ActionKind::Up, up_count);
-            DispatchLeadEstimate {
-                applied_us: value.applied_us.min(max_lead_us),
-                saturated: value.saturated,
-            }
-        }
-        DispatchPath::Mixed {
-            up_count,
-            down_count,
-        } => {
-            let up = estimate(ActionKind::Up, up_count);
-            let down = estimate(ActionKind::Down, down_count);
-            let extra_events = up_count.min(down_count);
-            let uncapped = up.applied_us.max(down.applied_us).saturating_add(
-                MIXED_PACKET_PER_EXTRA_EVENT_US.saturating_mul(extra_events as u64),
-            );
-            DispatchLeadEstimate {
-                applied_us: uncapped.min(max_lead_us),
-                saturated: up.saturated || down.saturated || uncapped > max_lead_us,
-            }
-        }
+    let send_path = estimator_path_for_dispatch(path);
+    let count = path.event_count();
+    let value = estimator.estimate_lead_with_class_and_policy(send_path, count, latency_class, strict_timing);
+    DispatchLeadEstimate {
+        applied_us: value.applied_us.min(max_lead_us),
+        saturated: value.saturated,
     }
 }
 
@@ -171,53 +139,18 @@ pub(crate) fn build_dispatch_budget(
     options: DispatchHealthOptions,
     strict_timing: bool,
 ) -> FrozenDispatchBudget {
-    let estimate_for = |kind: ActionKind, count: usize| {
-        estimator.estimate_lead_with_class_and_policy(kind, count, latency_class, strict_timing)
-    };
-    let expected_send_us = match path {
-        DispatchPath::DownOnly { down_count } => {
-            let estimate = estimate_for(ActionKind::Down, down_count);
-            let cold = estimator
-                .estimate_lead_with_class_and_policy(
-                    ActionKind::Down,
-                    down_count,
-                    LatencyClass::Cold,
-                    strict_timing,
-                )
-                .components
-                .cold_reserve_us;
-            estimate.components.syscall_us.max(cold)
-        }
-        DispatchPath::UpOnly { up_count } => {
-            let estimate = estimate_for(ActionKind::Up, up_count);
-            let cold = estimator
-                .estimate_lead_with_class_and_policy(
-                    ActionKind::Up,
-                    up_count,
-                    LatencyClass::Cold,
-                    strict_timing,
-                )
-                .components
-                .cold_reserve_us;
-            estimate.components.syscall_us.max(cold)
-        }
-        DispatchPath::Mixed {
-            up_count,
-            down_count,
-        } => {
-            let up = estimate_for(ActionKind::Up, up_count);
-            let down = estimate_for(ActionKind::Down, down_count);
-            up.components
-                .syscall_us
-                .max(down.components.syscall_us)
-                .saturating_add(
-                    MIXED_PACKET_PER_EXTRA_EVENT_US.saturating_mul(up_count.min(down_count) as u64),
-                )
-        }
-    };
+    let send_path = estimator_path_for_dispatch(path);
+    let count = path.event_count();
+    let estimate = estimator.estimate_lead_with_class_and_policy(send_path, count, latency_class, strict_timing);
+    let cold = estimator
+        .estimate_lead_with_class_and_policy(send_path, count, LatencyClass::Cold, strict_timing)
+        .components
+        .cold_reserve_us;
+    let expected_send_us = estimate.components.syscall_us.max(cold);
+
     FrozenDispatchBudget {
         path,
-        observed_polyphony: path.event_count(),
+        observed_polyphony: count,
         send_warn_us: options.send_warn_threshold_us(expected_send_us),
         bookkeeping_warn_us: options.bookkeeping_warn_us,
     }

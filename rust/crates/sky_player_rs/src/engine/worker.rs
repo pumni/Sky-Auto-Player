@@ -50,7 +50,7 @@ pub(crate) use health::HealthWindowPolicy;
 pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
-    HealthWindow, build_dispatch_budget, estimator_kind_for_path, focus_gate_matches,
+    HealthWindow, build_dispatch_budget, estimator_path_for_dispatch, focus_gate_matches,
     observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
 pub(crate) use planning::plan_next_dispatch;

@@ -9,7 +9,7 @@
 //! a note-on observation.
 
 use super::super::super::{
-    ActionKind, DurationTicks, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics,
+    DurationTicks, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics,
     TimelineTicks, TrackedKeyState, try_publish_metrics,
 };
 use super::super::{
@@ -41,7 +41,6 @@ pub enum DispatchObservation {
 pub struct DownObservation {
     pub path: DispatchPath,
     pub latency_class: LatencyClass,
-    pub estimator_kind: Option<ActionKind>,
     pub lead_down_saturated: bool,
     pub lead_down: u64,
     pub sender_duration_us: u64,
@@ -255,15 +254,11 @@ pub(crate) fn drain_down_send_outcome(
             ),
         }
     }
-    if config.estimator.enable_adaptive_lead
-        && let Some(kind) = observation.estimator_kind
-    {
-        // Deferred estimator updates are droppable by design: a failure here
-        // must never terminate the worker, so it is swallowed and left to the
-        // next sample to recover.
+    if config.estimator.enable_adaptive_lead {
+        let send_path = super::super::estimator_path_for_dispatch(observation.path);
         let _ = update_estimator_after_send_class(
             estimator,
-            kind,
+            send_path,
             observation.sender_duration_us,
             observation.delivered_count,
             observation.batch_intent_count,
@@ -334,7 +329,7 @@ pub(crate) fn drain_up_send_outcome(
     if config.estimator.enable_adaptive_lead {
         let _ = update_estimator_after_send_class(
             estimator,
-            ActionKind::Up,
+            sky_dispatch_core::estimator::SendPath::UpOnly,
             observation.sender_duration_us,
             observation.sent_count,
             observation.scan_count,
@@ -446,7 +441,6 @@ mod tests {
         DispatchObservation::Down(DownObservation {
             path: DispatchPath::DownOnly { down_count: 1 },
             latency_class: LatencyClass::Hot,
-            estimator_kind: Some(ActionKind::Down),
             lead_down_saturated: false,
             lead_down: n,
             sender_duration_us: n,

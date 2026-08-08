@@ -84,7 +84,6 @@ fn down_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Down(DownObservation {
         path: DispatchPath::DownOnly { down_count: 1 },
         latency_class: LatencyClass::Hot,
-        estimator_kind: None,
         lead_down_saturated: false,
         lead_down: n,
         sender_duration_us: n,

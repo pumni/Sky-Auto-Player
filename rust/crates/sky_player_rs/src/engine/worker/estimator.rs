@@ -1,11 +1,10 @@
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-use sky_dispatch_core::model::ActionKind;
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_estimator_after_send(
     estimator: &mut SendLatencyEstimator,
-    kind: ActionKind,
+    path: SendPath,
     duration_us: u64,
     sent_count: usize,
     authored_polyphony: usize,
@@ -15,7 +14,7 @@ pub(crate) fn update_estimator_after_send(
 ) {
     let _ = update_estimator_after_send_class(
         estimator,
-        kind,
+        path,
         duration_us,
         sent_count,
         authored_polyphony,
@@ -29,7 +28,7 @@ pub(crate) fn update_estimator_after_send(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_estimator_after_send_class(
     estimator: &mut SendLatencyEstimator,
-    kind: ActionKind,
+    path: SendPath,
     duration_us: u64,
     sent_count: usize,
     authored_polyphony: usize,
@@ -42,7 +41,7 @@ pub(crate) fn update_estimator_after_send_class(
         return Ok(());
     }
     estimator.update_observation(
-        kind,
+        path,
         latency_class,
         duration_us,
         authored_polyphony,

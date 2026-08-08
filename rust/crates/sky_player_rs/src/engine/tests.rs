@@ -12,13 +12,13 @@ use super::{
     WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
     anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
     deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    estimator_kind_for_path, exact_sender_durations, final_down_admission, focus_gate_matches,
+    estimator_path_for_dispatch, exact_sender_durations, final_down_admission, focus_gate_matches,
     focus_matches_hwnd, record_input_path_health, record_termination_error,
     release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
     target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
@@ -1274,17 +1274,17 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 fn failed_send_does_not_seed_estimator_or_residual() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120, false);
+    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 0, 3, 500, 120, false);
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120, false);
+    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 0, 120, false);
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 500, 120, true);
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
     assert_eq!(estimator.export_state().residuals[0].count, 1);
@@ -1294,20 +1294,19 @@ fn failed_send_does_not_seed_estimator_or_residual() {
 fn directional_estimator_training_is_not_cross_contaminated() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
     let after_up = estimator.export_state();
     assert_eq!(after_up.hist_up[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(after_up.hist_down[2].hot_pairs, Vec::<[u64; 2]>::new());
 
-    // Mixed packets deliberately have no estimator kind in this phase.
     let before_mixed = estimator.export_state();
-    if let Some(kind) = estimator_kind_for_path(DispatchPath::Mixed {
+    let send_path = estimator_path_for_dispatch(DispatchPath::Mixed {
         up_count: 2,
         down_count: 2,
-    }) {
-        update_estimator_after_send(&mut estimator, kind, 900, 2, 2, 500, 120, true);
-    }
+    });
+    update_estimator_after_send(&mut estimator, send_path, 900, 2, 2, 500, 120, true);
     let after_mixed = estimator.export_state();
+    assert_eq!(after_mixed.hist_mixed[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(
         serde_json::to_string(&after_mixed.hist_up).unwrap(),
         serde_json::to_string(&before_mixed.hist_up).unwrap()
@@ -1323,7 +1322,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
     let before = estimator.export_state();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
     let after_up = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_up.hist_up).unwrap(),
@@ -1334,7 +1333,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
         serde_json::to_string(&before.hist_down).unwrap()
     );
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 2, 2, 500, 120, true);
     let after_down = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_down.hist_down).unwrap(),
@@ -1345,10 +1344,12 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
 #[test]
 fn estimator_v9_predicts_path_specific_leads() {
     let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
-    let down_lead = estimator.estimate_lead(ActionKind::Down, 2).applied_us;
-    let up_lead = estimator.estimate_lead(ActionKind::Up, 2).applied_us;
+    let down_lead = estimator.estimate_lead(SendPath::DownOnly, 2).applied_us;
+    let up_lead = estimator.estimate_lead(SendPath::UpOnly, 2).applied_us;
+    let mixed_lead = estimator.estimate_lead(SendPath::Mixed, 2).applied_us;
     assert!(down_lead > 0);
     assert!(up_lead > 0);
+    assert!(mixed_lead > 0);
 }
 
 #[test]
@@ -1870,7 +1871,7 @@ fn up_estimator_receives_exact_syscall_duration_sample() {
     // Up sample of 425us should register in estimator for Up (index 0)
     update_estimator_after_send_class(
         &mut estimator,
-        ActionKind::Up,
+        SendPath::UpOnly,
         425,
         1,
         1,

@@ -13,7 +13,7 @@ use super::super::super::{
 };
 use super::super::{
     DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerRuntime,
-    WorkerTimingState, estimator_kind_for_path, signed_ticks_to_us, signed_timeline_delta_ticks,
+    WorkerTimingState, signed_ticks_to_us, signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
 use sky_dispatch_core::coordinator::PreparedBatch;
@@ -182,7 +182,6 @@ pub(crate) struct DownSendTiming {
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
     pub(crate) completion_error_us: i64,
-    pub(crate) estimator_kind: Option<ActionKind>,
     pub(crate) clean_directional_sample: bool,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
@@ -394,13 +393,10 @@ pub(crate) fn interpret_down_send_timing(
     } else {
         result_sent.len()
     };
-    let estimator_kind = estimator_kind_for_path(view.dispatch_path);
     let clean_directional_sample = result_success
         && result_skipped_duplicates.is_empty()
         && result_send_attempts == 1
         && !result_chord_integrity_lost
-        && !matches!(view.dispatch_path, DispatchPath::Mixed { .. })
-        && estimator_kind.is_some()
         && delivered_count == requested_count;
     let recovered_zero_progress = matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
     let recovered_partial_up = matches!(
@@ -474,7 +470,6 @@ pub(crate) fn interpret_down_send_timing(
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         completion_error_us,
-        estimator_kind,
         clean_directional_sample,
         recovered_partial_up,
         recovered_retry_late,

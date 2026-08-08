@@ -10,8 +10,7 @@ use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{
     CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator, physical_packet_kind,
 };
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-use sky_dispatch_core::model::ActionKind;
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcClock;
@@ -130,7 +129,7 @@ fn pending_lead_for_polyphony(
         (timing.dispatch_lead_us, false)
     } else if enable_adaptive_lead {
         let estimate = estimator.estimate_lead_with_class_and_policy(
-            ActionKind::Up,
+            SendPath::UpOnly,
             polyphony,
             latency_class,
             timing.strict_timing,
@@ -238,7 +237,7 @@ mod tests {
     use crate::engine::worker::health::{DispatchPath, estimate_dispatch_path_lead};
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator};
-    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::QpcClock;
@@ -293,26 +292,24 @@ mod tests {
         // is added by the estimator on top of the syscall component.
         for _ in 0..32 {
             estimator
-                .update_with_class(ActionKind::Down, down_syscall_us, 1, LatencyClass::Hot)
+                .update_with_class(SendPath::DownOnly, down_syscall_us, 1, LatencyClass::Hot)
                 .expect("down seed");
             estimator
-                .update_with_class(ActionKind::Up, up_syscall_us, 1, LatencyClass::Hot)
+                .update_with_class(SendPath::UpOnly, up_syscall_us, 1, LatencyClass::Hot)
                 .expect("up seed");
         }
     }
 
     #[test]
     fn up_only_lead_is_consistent_for_prepare_and_wait() {
-        // Plan 4.1.1: Up-only must use the Up lead for both prepare and wait.
         let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
-        // Target: Down ≈ 100 µs, Up ≈ 700 µs (syscall + 50 µs wake reserve).
         seed_directional_leads(&mut estimator, 50, 650);
 
         let down_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         let up_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::UpOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         assert!(
             up_lead > down_lead,
@@ -499,7 +496,7 @@ mod tests {
         let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
         seed_directional_leads(&mut estimator, 50, 650);
         let down_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         let coordinator = coordinator_from_actions(&[KeyActionInput {
             source_action_index: 0,

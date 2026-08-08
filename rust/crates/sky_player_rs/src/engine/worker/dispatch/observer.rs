@@ -61,7 +61,6 @@ pub(super) fn publisher_down_send_outcome(
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         completion_error_us,
-        estimator_kind,
         clean_directional_sample,
         recovered_partial_up,
         recovered_retry_late,
@@ -130,7 +129,6 @@ pub(super) fn publisher_down_send_outcome(
         DispatchObservation::Down(DownObservation {
             path: frozen_budget.path,
             latency_class,
-            estimator_kind,
             lead_down_saturated,
             lead_down,
             sender_duration_us,

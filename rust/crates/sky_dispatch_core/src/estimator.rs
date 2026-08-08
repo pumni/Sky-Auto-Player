@@ -34,7 +34,6 @@
 //! ephemeral diagnostic data, so only the current schema is accepted; older or
 //! newer versions are discarded and the conservative prior is used.
 
-use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -77,7 +76,7 @@ const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const WAKE_RESERVE_US: u64 = 50;
 
 /// Current on-disk state format version.
-pub const ESTIMATOR_STATE_VERSION: u32 = 8;
+pub const ESTIMATOR_STATE_VERSION: u32 = 9;
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum EstimatorConfigError {
@@ -106,6 +105,33 @@ pub enum EstimatorStateError {
 pub enum LatencyClass {
     Hot,
     Cold,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SendPath {
+    DownOnly,
+    UpOnly,
+    Mixed,
+}
+
+pub fn channel_index(path: SendPath, class: LatencyClass) -> usize {
+    match (path, class) {
+        (SendPath::DownOnly, LatencyClass::Hot) => 0,
+        (SendPath::DownOnly, LatencyClass::Cold) => 1,
+        (SendPath::UpOnly, LatencyClass::Hot) => 2,
+        (SendPath::UpOnly, LatencyClass::Cold) => 3,
+        (SendPath::Mixed, LatencyClass::Hot) => 4,
+        (SendPath::Mixed, LatencyClass::Cold) => 5,
+    }
 }
 
 /// Named breakdown of the lead estimate so telemetry and tests can verify
@@ -411,8 +437,6 @@ impl ResidualEma {
         Ok(())
     }
 
-    /// Signed residual contribution.  Late samples raise lead at full rate;
-    /// early samples only reduce it at `EARLY_CORRECTION_DECAY` rate.
     fn adjustment_us(&self) -> i64 {
         if !self.warm {
             return 0;
@@ -426,8 +450,6 @@ impl ResidualEma {
     }
 }
 
-// ─── Helper ───────────────────────────────────────────────────────────────────
-
 pub fn round_half_to_even(x: f64) -> i64 {
     let floor = x.floor();
     let diff = x - floor;
@@ -439,11 +461,9 @@ pub fn round_half_to_even(x: f64) -> i64 {
     }
 }
 
-// ─── Per-bucket state ─────────────────────────────────────────────────────────
-
-/// Collects all per-(polyphony, kind, class) state for one direction.
+/// Collects all per-(polyphony, path, class) state for one path.
 #[derive(Debug, Clone, Default)]
-struct DirectionBuckets {
+struct PathBuckets {
     hot: Vec<Histogram>,
     cold: Vec<Histogram>,
     /// Slow-tail envelopes remain class-specific. A cold outlier must not
@@ -452,7 +472,7 @@ struct DirectionBuckets {
     tail_cold: Vec<SlowTailReserve>,
 }
 
-impl DirectionBuckets {
+impl PathBuckets {
     fn new(size: usize) -> Self {
         Self {
             hot: vec![Histogram::default(); size],
@@ -502,11 +522,6 @@ impl DirectionBuckets {
     }
 
     /// Raw syscall estimate for bucket `n`.
-    ///
-    /// Combines:
-    /// - Local p95 (fast model for the exact polyphony)
-    /// - Cold-class local p95 when class is Cold
-    /// - Slow tail reserve for the outlier guard
     fn raw_estimate_us(
         &self,
         n: usize,
@@ -530,8 +545,6 @@ impl DirectionBuckets {
             }
         };
 
-        // Slow tail reserve is class-specific for the same reason as the
-        // local histogram: cold evidence cannot rewrite a hot estimate.
         let tail_value = match class {
             LatencyClass::Hot => self.tail_hot[n].get(),
             LatencyClass::Cold => self.tail_cold[n].get(),
@@ -543,12 +556,12 @@ impl DirectionBuckets {
 }
 
 #[derive(Debug, Clone, Default)]
-struct DirectionTotals {
+struct PathTotals {
     hot: Histogram,
     cold: Histogram,
 }
 
-impl DirectionTotals {
+impl PathTotals {
     fn for_class(&self, class: LatencyClass) -> &Histogram {
         match class {
             LatencyClass::Hot => &self.hot,
@@ -574,7 +587,7 @@ impl DirectionTotals {
 
 // ─── On-disk format ──────────────────────────────────────────────────────────
 
-/// Serialisable per-direction histogram bucket with class-specific tails.
+/// Serialisable per-path histogram bucket with class-specific tails.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HistBucketJson {
     /// Non-zero (bucket_index, count) pairs for the hot histogram.
@@ -591,7 +604,7 @@ pub struct HistBucketJson {
     pub cold_tail_reserve_us: u64,
 }
 
-/// Version-5 residual channel export.
+/// Version-9 residual channel export.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResidualChannelJson {
     #[serde(default)]
@@ -616,55 +629,46 @@ pub struct EstimatorStateJson {
     pub hist_down: Vec<HistBucketJson>,
     /// Per-polyphony histogram state for Up direction.
     pub hist_up: Vec<HistBucketJson>,
-    /// Four residual channels: down_hot, down_cold, up_hot, up_cold.
+    /// Per-polyphony histogram state for Mixed direction.
+    pub hist_mixed: Vec<HistBucketJson>,
+
+    /// Six residual channels: down_hot, down_cold, up_hot, up_cold, mixed_hot, mixed_cold.
     pub residuals: Vec<ResidualChannelJson>,
-    /// Delivery proxy channels ordered as Down/Hot, Down/Cold, Up/Hot, Up/Cold.
-    pub delivery_proxy_channels: Vec<[u64; 4]>,
+    /// Delivery proxy channels ordered as Down/Hot, Down/Cold, Up/Hot, Up/Cold, Mixed/Hot, Mixed/Cold.
+    pub delivery_proxy_channels: Vec<[u64; 6]>,
 }
 
 // ─── Main estimator ───────────────────────────────────────────────────────────
 
 /// Conservative adaptive estimator with named lead components.
-///
-/// The estimator exposes the current histogram/residual model only.
-/// `estimate_lead` returns a `LeadEstimate` with a full `LeadComponents`
-/// breakdown and a `LeadConfidence` level.
 #[derive(Debug, Clone)]
 pub struct SendLatencyEstimator {
     pub max_poly: usize,
     alpha: f64,
     max_lead_us: u64,
 
-    down: DirectionBuckets,
-    up: DirectionBuckets,
+    down: PathBuckets,
+    up: PathBuckets,
+    mixed: PathBuckets,
 
     /// Global cross-bucket guards, kept independent for Hot and Cold.
-    down_totals: DirectionTotals,
-    up_totals: DirectionTotals,
+    down_totals: PathTotals,
+    up_totals: PathTotals,
+    mixed_totals: PathTotals,
 
-    /// Residual channels indexed by `residual_index(kind, class)`.
-    /// Order: [down_hot, down_cold, up_hot, up_cold].
-    residuals: [ResidualEma; 4],
+    /// Residual channels indexed by `channel_index(path, class)`.
+    /// Order: [down_hot, down_cold, up_hot, up_cold, mixed_hot, mixed_cold].
+    residuals: [ResidualEma; 6],
 
-    /// Calibrated delivery proxy prior by kind/class and polyphony.
-    /// Order: down_hot, down_cold, up_hot, up_cold.
-    delivery_proxy_us: [Vec<u64>; 4],
+    /// Calibrated delivery proxy prior by path/class and polyphony.
+    delivery_proxy_us: [Vec<u64>; 6],
 
     /// Cached normal/strict estimates indexed by polyphony, channel and
     /// policy. The cache is refreshed in place after a sample or calibration
     /// update; dispatch only indexes it.
-    lead_cache: Vec<[[LeadEstimate; 2]; 4]>,
+    lead_cache: Vec<[[LeadEstimate; 2]; 6]>,
     #[cfg(test)]
     refresh_count: u64,
-}
-
-fn residual_index(kind: ActionKind, class: LatencyClass) -> usize {
-    match (kind, class) {
-        (ActionKind::Down, LatencyClass::Hot) => 0,
-        (ActionKind::Down, LatencyClass::Cold) => 1,
-        (ActionKind::Up, LatencyClass::Hot) => 2,
-        (ActionKind::Up, LatencyClass::Cold) => 3,
-    }
 }
 
 impl SendLatencyEstimator {
@@ -698,13 +702,15 @@ impl SendLatencyEstimator {
             max_poly,
             alpha,
             max_lead_us,
-            down: DirectionBuckets::new(size),
-            up: DirectionBuckets::new(size),
-            down_totals: DirectionTotals::default(),
-            up_totals: DirectionTotals::default(),
+            down: PathBuckets::new(size),
+            up: PathBuckets::new(size),
+            mixed: PathBuckets::new(size),
+            down_totals: PathTotals::default(),
+            up_totals: PathTotals::default(),
+            mixed_totals: PathTotals::default(),
             residuals: Default::default(),
             delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
-            lead_cache: vec![[[empty; 2]; 4]; size],
+            lead_cache: vec![[[empty; 2]; 6]; size],
             #[cfg(test)]
             refresh_count: 0,
         };
@@ -713,28 +719,27 @@ impl SendLatencyEstimator {
     }
 
     fn refresh_lead_cache(&mut self) {
-        self.refresh_channel(ActionKind::Down, LatencyClass::Hot);
-        self.refresh_channel(ActionKind::Down, LatencyClass::Cold);
-        self.refresh_channel(ActionKind::Up, LatencyClass::Hot);
-        self.refresh_channel(ActionKind::Up, LatencyClass::Cold);
+        for path in [SendPath::DownOnly, SendPath::UpOnly, SendPath::Mixed] {
+            for class in [LatencyClass::Hot, LatencyClass::Cold] {
+                self.refresh_channel(path, class);
+            }
+        }
     }
 
-    fn refresh_channel(&mut self, kind: ActionKind, class: LatencyClass) {
+    fn refresh_channel(&mut self, path: SendPath, class: LatencyClass) {
         #[cfg(test)]
         {
             self.refresh_count = self.refresh_count.saturating_add(1);
         }
-        let channel = residual_index(kind, class);
+        let channel = channel_index(path, class);
         for strict_index in 0..2 {
             let strict = strict_index == 1;
             let mut best_components = LeadComponents::default();
             let mut best_uncapped = 0u64;
             let mut best_confidence = LeadConfidence::PriorOnly;
             for n in 1..=self.max_poly {
-                let (components, confidence) = self.build_components(kind, n, class, strict);
+                let (components, confidence) = self.build_components(path, n, class, strict);
                 let uncapped = components.total_uncapped();
-                // `>=` preserves the previous deterministic tie-break:
-                // an equal estimate from the latest bucket wins.
                 if uncapped >= best_uncapped {
                     best_uncapped = uncapped;
                     best_components = components;
@@ -766,29 +771,26 @@ impl SendLatencyEstimator {
 
     pub fn update(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         duration_us: u64,
         n_keys: usize,
     ) -> Result<(), EstimatorStateError> {
-        self.update_with_class(kind, duration_us, n_keys, LatencyClass::Hot)
+        self.update_with_class(path, duration_us, n_keys, LatencyClass::Hot)
     }
 
     pub fn update_with_class(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         duration_us: u64,
         n_keys: usize,
         latency_class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
-        self.update_observation(kind, latency_class, duration_us, n_keys, None)
+        self.update_observation(path, latency_class, duration_us, n_keys, None)
     }
 
-    /// Record one clean sender observation and refresh the affected lead cache
-    /// exactly once. The optional residual is validated before any histogram
-    /// mutation so overflow remains atomic from the caller's perspective.
     pub fn update_observation(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         class: LatencyClass,
         duration_us: u64,
         polyphony: usize,
@@ -796,78 +798,78 @@ impl SendLatencyEstimator {
     ) -> Result<(), EstimatorStateError> {
         let duration_us = duration_us.min(MAX_SAMPLE_US);
         let n = 1.max(self.max_poly.min(polyphony));
-        match kind {
-            ActionKind::Down => {
+        let channel = channel_index(path, class);
+        match path {
+            SendPath::DownOnly => {
                 self.down.ensure_push(n, duration_us, class)?;
                 self.down_totals.ensure_push(duration_us, class)?;
             }
-            ActionKind::Up => {
+            SendPath::UpOnly => {
                 self.up.ensure_push(n, duration_us, class)?;
                 self.up_totals.ensure_push(duration_us, class)?;
             }
+            SendPath::Mixed => {
+                self.mixed.ensure_push(n, duration_us, class)?;
+                self.mixed_totals.ensure_push(duration_us, class)?;
+            }
         }
         if let Some(error_us) = completion_error_us {
-            self.residuals[residual_index(kind, class)].ensure_update(error_us)?;
+            self.residuals[channel].ensure_update(error_us)?;
         }
-        match kind {
-            ActionKind::Down => {
+        match path {
+            SendPath::DownOnly => {
                 self.down.push(n, duration_us, class)?;
                 self.down_totals.push(duration_us, class)?;
             }
-            ActionKind::Up => {
+            SendPath::UpOnly => {
                 self.up.push(n, duration_us, class)?;
                 self.up_totals.push(duration_us, class)?;
+            }
+            SendPath::Mixed => {
+                self.mixed.push(n, duration_us, class)?;
+                self.mixed_totals.push(duration_us, class)?;
             }
         }
         if let Some(error_us) = completion_error_us {
             let alpha = self.alpha;
-            self.residuals[residual_index(kind, class)].update(alpha, error_us)?;
+            self.residuals[channel].update(alpha, error_us)?;
         }
-        self.refresh_channel(kind, class);
+        self.refresh_channel(path, class);
         Ok(())
     }
 
-    /// Record a completion-error residual for the given kind, assuming Hot class for backward compatibility.
     pub fn update_completion_error(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         error_us: i64,
     ) -> Result<(), EstimatorStateError> {
-        self.update_completion_error_with_class(kind, error_us, LatencyClass::Hot)
+        self.update_completion_error_with_class(path, error_us, LatencyClass::Hot)
     }
 
-    /// Record a completion-error residual for the given kind and class.
-    ///
-    /// Callers must NOT update residual from: retries, partial insertions,
-    /// deferred releases, mixed-source releases, focus transitions, wait
-    /// failures, cleanup, or telemetry-mode-perturbed dispatches.
     pub fn update_completion_error_with_class(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         error_us: i64,
         class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
         let alpha = self.alpha;
-        self.residuals[residual_index(kind, class)].update(alpha, error_us)?;
-        self.refresh_channel(kind, class);
+        let channel = channel_index(path, class);
+        self.residuals[channel].update(alpha, error_us)?;
+        self.refresh_channel(path, class);
         Ok(())
     }
 
-    /// Update the calibrated delivery proxy prior for a polyphony bucket.
-    ///
-    /// Should be called from the calibration harness output processor, not
-    /// from the real-time dispatch path.
     pub fn set_delivery_proxy_us(
         &mut self,
         n_keys: usize,
         value_us: u64,
     ) -> Result<(), EstimatorStateError> {
-        self.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, n_keys, value_us)
+        self.set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Hot, n_keys, value_us)
     }
 
     pub fn try_set_delivery_proxy_us_for(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         class: LatencyClass,
         n_keys: usize,
         value_us: u64,
@@ -879,19 +881,20 @@ impl SendLatencyEstimator {
             return Err(EstimatorStateError::InvalidPolyphony(n_keys));
         }
         let n = 1.max(self.max_poly.min(n_keys));
-        self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
-        self.refresh_channel(kind, class);
+        let channel = channel_index(path, class);
+        self.delivery_proxy_us[channel][n] = value_us;
+        self.refresh_channel(path, class);
         Ok(())
     }
 
     pub fn set_delivery_proxy_us_for(
         &mut self,
-        kind: ActionKind,
+        path: SendPath,
         class: LatencyClass,
         n_keys: usize,
         value_us: u64,
     ) -> Result<(), EstimatorStateError> {
-        self.try_set_delivery_proxy_us_for(kind, class, n_keys, value_us)
+        self.try_set_delivery_proxy_us_for(path, class, n_keys, value_us)
     }
 
     // ── Query API ─────────────────────────────────────────────────────────────
@@ -901,11 +904,11 @@ impl SendLatencyEstimator {
     }
 
     pub fn residual_adjustment_us(&self) -> i64 {
-        self.residual_adjustment_us_for(ActionKind::Down)
+        self.residual_adjustment_us_for(SendPath::DownOnly)
     }
 
-    pub fn residual_adjustment_us_for(&self, kind: ActionKind) -> i64 {
-        self.residuals[residual_index(kind, LatencyClass::Hot)].adjustment_us()
+    pub fn residual_adjustment_us_for(&self, path: SendPath) -> i64 {
+        self.residuals[channel_index(path, LatencyClass::Hot)].adjustment_us()
     }
 
     fn cold_prior_us(n: usize) -> u64 {
@@ -913,20 +916,18 @@ impl SendLatencyEstimator {
             .saturating_add(PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(1) as u64))
     }
 
-    /// Compute the syscall component for a single polyphony bucket `n`.
     fn syscall_estimate_us(
         &self,
-        dir: &DirectionBuckets,
+        buckets: &PathBuckets,
         total: &Histogram,
         n: usize,
         class: LatencyClass,
         strict_upper_tail: bool,
     ) -> u64 {
-        let local = dir.raw_estimate_us(n, class, strict_upper_tail);
+        let local = buckets.raw_estimate_us(n, class, strict_upper_tail);
 
-        // Lower-polyphony fallback with per-key extrapolation.
         let lower_bucket = (1..n).rev().find_map(|bucket| {
-            dir.raw_estimate_us(bucket, class, strict_upper_tail)
+            buckets.raw_estimate_us(bucket, class, strict_upper_tail)
                 .map(|est| {
                     est.saturating_add(
                         PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
@@ -934,7 +935,6 @@ impl SendLatencyEstimator {
                 })
         });
 
-        // Global guard: in strict mode the global tail is always kept visible.
         let global = if strict_upper_tail {
             total.max()
         } else {
@@ -955,25 +955,24 @@ impl SendLatencyEstimator {
 
     fn build_components(
         &self,
-        kind: ActionKind,
+        path: SendPath,
         n: usize,
         class: LatencyClass,
         strict_upper_tail: bool,
     ) -> (LeadComponents, LeadConfidence) {
-        let (dir, total) = match kind {
-            ActionKind::Down => (&self.down, self.down_totals.for_class(class)),
-            ActionKind::Up => (&self.up, self.up_totals.for_class(class)),
+        let (buckets, total) = match path {
+            SendPath::DownOnly => (&self.down, self.down_totals.for_class(class)),
+            SendPath::UpOnly => (&self.up, self.up_totals.for_class(class)),
+            SendPath::Mixed => (&self.mixed, self.mixed_totals.for_class(class)),
         };
 
-        let syscall_us = self.syscall_estimate_us(dir, total, n, class, strict_upper_tail);
-
-        let channel = residual_index(kind, class);
+        let syscall_us = self.syscall_estimate_us(buckets, total, n, class, strict_upper_tail);
+        let channel = channel_index(path, class);
         let delivery_proxy_us = self.delivery_proxy_us[channel][n];
-
         let wake_reserve_us = WAKE_RESERVE_US;
 
         let cold_reserve_us =
-            if class == LatencyClass::Cold && dir.cold[n].total < SEED_SAMPLES as u64 {
+            if class == LatencyClass::Cold && buckets.cold[n].total < SEED_SAMPLES as u64 {
                 Self::cold_prior_us(n)
             } else {
                 0
@@ -989,10 +988,9 @@ impl SendLatencyEstimator {
             residual_bias_us,
         };
 
-        // Determine confidence from the local hot histogram.
         let local_total = match class {
-            LatencyClass::Hot => dir.hot[n].total,
-            LatencyClass::Cold => dir.cold[n].total,
+            LatencyClass::Hot => buckets.hot[n].total,
+            LatencyClass::Cold => buckets.cold[n].total,
         };
         let confidence = if local_total == 0 {
             LeadConfidence::PriorOnly
@@ -1005,49 +1003,49 @@ impl SendLatencyEstimator {
         (components, confidence)
     }
 
-    pub fn estimate_lead(&self, kind: ActionKind, n_keys: usize) -> LeadEstimate {
-        self.estimate_lead_with_class(kind, n_keys, LatencyClass::Hot)
+    pub fn estimate_lead(&self, path: SendPath, n_keys: usize) -> LeadEstimate {
+        self.estimate_lead_with_class(path, n_keys, LatencyClass::Hot)
     }
 
     pub fn estimate_lead_with_class(
         &self,
-        kind: ActionKind,
+        path: SendPath,
         n_keys: usize,
         latency_class: LatencyClass,
     ) -> LeadEstimate {
-        self.estimate_lead_with_class_and_policy(kind, n_keys, latency_class, false)
+        self.estimate_lead_with_class_and_policy(path, n_keys, latency_class, false)
     }
 
     pub fn estimate_lead_with_class_and_policy(
         &self,
-        kind: ActionKind,
+        path: SendPath,
         n_keys: usize,
         latency_class: LatencyClass,
         strict_upper_tail: bool,
     ) -> LeadEstimate {
         let n = 1.max(self.max_poly.min(n_keys));
-        let channel = residual_index(kind, latency_class);
+        let channel = channel_index(path, latency_class);
         self.lead_cache[n][channel][usize::from(strict_upper_tail)]
     }
 
-    pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
-        self.estimate_lead(kind, n_keys).applied_us
+    pub fn get_lead_us(&self, path: SendPath, n_keys: usize) -> u64 {
+        self.estimate_lead(path, n_keys).applied_us
     }
 
-    pub fn lead_saturated(&self, kind: ActionKind, n_keys: usize) -> bool {
-        self.estimate_lead(kind, n_keys).saturated
+    pub fn lead_saturated(&self, path: SendPath, n_keys: usize) -> bool {
+        self.estimate_lead(path, n_keys).saturated
     }
 
     // ── State persistence ─────────────────────────────────────────────────────
 
     pub fn export_state(&self) -> EstimatorStateJson {
-        let export_direction = |direction: &DirectionBuckets| {
-            direction
+        let export_buckets = |buckets: &PathBuckets| {
+            buckets
                 .hot
                 .iter()
-                .zip(&direction.cold)
-                .zip(&direction.tail_hot)
-                .zip(&direction.tail_cold)
+                .zip(&buckets.cold)
+                .zip(&buckets.tail_hot)
+                .zip(&buckets.tail_cold)
                 .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
                     hot_pairs: hot.to_export_pairs(),
                     cold_pairs: cold.to_export_pairs(),
@@ -1056,8 +1054,9 @@ impl SendLatencyEstimator {
                 })
                 .collect()
         };
-        let hist_down = export_direction(&self.down);
-        let hist_up = export_direction(&self.up);
+        let hist_down = export_buckets(&self.down);
+        let hist_up = export_buckets(&self.up);
+        let hist_mixed = export_buckets(&self.mixed);
 
         let residuals = self
             .residuals
@@ -1069,7 +1068,7 @@ impl SendLatencyEstimator {
                 warm: r.warm,
             })
             .collect();
-        let delivery_proxy_channels: Vec<[u64; 4]> = (0..=self.max_poly)
+        let delivery_proxy_channels: Vec<[u64; 6]> = (0..=self.max_poly)
             .map(|polyphony| {
                 std::array::from_fn(|channel| self.delivery_proxy_us[channel][polyphony])
             })
@@ -1080,6 +1079,7 @@ impl SendLatencyEstimator {
             max_poly: self.max_poly,
             hist_down,
             hist_up,
+            hist_mixed,
             residuals,
             delivery_proxy_channels,
         }
@@ -1102,14 +1102,18 @@ impl SendLatencyEstimator {
         let target_poly = self.max_poly.max(state.max_poly);
         let target_len = target_poly + 1;
 
-        // ── Build histogram buckets ───────────────────────────────────────────
-        let mut new_down = DirectionBuckets::new(target_len);
-        let mut new_up = DirectionBuckets::new(target_len);
-        let mut new_down_totals = DirectionTotals::default();
-        let mut new_up_totals = DirectionTotals::default();
+        let mut new_down = PathBuckets::new(target_len);
+        let mut new_up = PathBuckets::new(target_len);
+        let mut new_mixed = PathBuckets::new(target_len);
+        let mut new_down_totals = PathTotals::default();
+        let mut new_up_totals = PathTotals::default();
+        let mut new_mixed_totals = PathTotals::default();
 
-        if state.hist_down.len() != expected_len || state.hist_up.len() != expected_len {
-            return Err("hist_down/hist_up length does not match max_poly".to_string());
+        if state.hist_down.len() != expected_len
+            || state.hist_up.len() != expected_len
+            || state.hist_mixed.len() != expected_len
+        {
+            return Err("hist_down/hist_up/hist_mixed length does not match max_poly".to_string());
         }
         for (i, bucket) in state.hist_down.iter().enumerate() {
             new_down.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
@@ -1133,8 +1137,17 @@ impl SendLatencyEstimator {
             new_up.tail_hot[i].value_us = bucket.hot_tail_reserve_us;
             new_up.tail_cold[i].value_us = bucket.cold_tail_reserve_us;
         }
-        // Rebuild totals by direct histogram merge. No synthetic sample vector
-        // or fixed reconstruction cap is involved.
+        for (i, bucket) in state.hist_mixed.iter().enumerate() {
+            new_mixed.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
+            new_mixed.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
+            if bucket.hot_tail_reserve_us > MAX_SAMPLE_US
+                || bucket.cold_tail_reserve_us > MAX_SAMPLE_US
+            {
+                return Err(format!("mixed tail reserve at {i} exceeds sample cap"));
+            }
+            new_mixed.tail_hot[i].value_us = bucket.hot_tail_reserve_us;
+            new_mixed.tail_cold[i].value_us = bucket.cold_tail_reserve_us;
+        }
         for h in &new_down.hot {
             new_down_totals.hot.merge_counts_from(h)?;
         }
@@ -1147,12 +1160,17 @@ impl SendLatencyEstimator {
         for h in &new_up.cold {
             new_up_totals.cold.merge_counts_from(h)?;
         }
+        for h in &new_mixed.hot {
+            new_mixed_totals.hot.merge_counts_from(h)?;
+        }
+        for h in &new_mixed.cold {
+            new_mixed_totals.cold.merge_counts_from(h)?;
+        }
 
-        // ── Build residuals ───────────────────────────────────────────────────
-        let mut new_residuals: [ResidualEma; 4] = Default::default();
+        let mut new_residuals: [ResidualEma; 6] = Default::default();
 
-        if state.residuals.len() != 4 {
-            return Err("residuals must contain exactly four channels".to_string());
+        if state.residuals.len() != 6 {
+            return Err("residuals must contain exactly six channels".to_string());
         }
         for (i, ch) in state.residuals.iter().enumerate() {
             if !ch.ema.is_finite()
@@ -1181,8 +1199,7 @@ impl SendLatencyEstimator {
             };
         }
 
-        // ── Delivery proxy ────────────────────────────────────────────────────
-        let mut new_delivery_proxy: [Vec<u64>; 4] = std::array::from_fn(|_| vec![0u64; target_len]);
+        let mut new_delivery_proxy: [Vec<u64>; 6] = std::array::from_fn(|_| vec![0u64; target_len]);
         if state.delivery_proxy_channels.len() != expected_len {
             return Err("delivery_proxy_channels length does not match max_poly".to_string());
         }
@@ -1201,8 +1218,10 @@ impl SendLatencyEstimator {
         self.max_poly = target_poly;
         self.down = new_down;
         self.up = new_up;
+        self.mixed = new_mixed;
         self.down_totals = new_down_totals;
         self.up_totals = new_up_totals;
+        self.mixed_totals = new_mixed_totals;
         self.residuals = new_residuals;
         self.delivery_proxy_us = new_delivery_proxy;
         self.refresh_lead_cache();
@@ -1242,7 +1261,6 @@ mod tests {
         for value in (100u64..=3100).step_by(100) {
             hist.push(value);
         }
-        // 31 samples; p95 should be well above the median.
         let p95 = hist.p95().expect("should be warm");
         let p50 = hist.p_quantile(0.5).unwrap();
         assert!(p95 > p50, "p95={p95} should exceed p50={p50}");
@@ -1255,9 +1273,8 @@ mod tests {
     #[test]
     fn cold_start_is_conservative_for_large_chords() {
         let estimator = SendLatencyEstimator::new(0.2, 5_000, 15);
-        let lead_1 = estimator.get_lead_us(ActionKind::Down, 1);
-        let lead_15 = estimator.get_lead_us(ActionKind::Down, 15);
-        // With no samples the cold-start prior + WAKE_RESERVE must apply.
+        let lead_1 = estimator.get_lead_us(SendPath::DownOnly, 1);
+        let lead_15 = estimator.get_lead_us(SendPath::DownOnly, 15);
         assert!(
             lead_15 >= lead_1,
             "larger chord must have at least as much lead"
@@ -1269,19 +1286,17 @@ mod tests {
     fn both_directions_use_polyphony_buckets_and_monotonic_envelope() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 6);
         for _ in 0..10 {
-            estimator.update(ActionKind::Down, 200, 1);
-            estimator.update(ActionKind::Down, 900, 3);
-            estimator.update(ActionKind::Up, 150, 1);
-            estimator.update(ActionKind::Up, 850, 3);
+            estimator.update(SendPath::DownOnly, 200, 1);
+            estimator.update(SendPath::DownOnly, 900, 3);
+            estimator.update(SendPath::UpOnly, 150, 1);
+            estimator.update(SendPath::UpOnly, 850, 3);
         }
-        let down_1 = estimator.get_lead_us(ActionKind::Down, 1);
-        let down_3 = estimator.get_lead_us(ActionKind::Down, 3);
-        let up_1 = estimator.get_lead_us(ActionKind::Up, 1);
-        let up_3 = estimator.get_lead_us(ActionKind::Up, 3);
-        // Monotonic envelope.
+        let down_1 = estimator.get_lead_us(SendPath::DownOnly, 1);
+        let down_3 = estimator.get_lead_us(SendPath::DownOnly, 3);
+        let up_1 = estimator.get_lead_us(SendPath::UpOnly, 1);
+        let up_3 = estimator.get_lead_us(SendPath::UpOnly, 3);
         assert!(down_3 >= down_1, "down: 3-key must be >= 1-key");
         assert!(up_3 >= up_1, "up: 3-key must be >= 1-key");
-        // Data-driven estimate should exceed the cold prior.
         assert!(
             down_3 > cold_prior_us_helper(3) + WAKE_RESERVE_US - 50,
             "down_3={down_3} should be data-driven above cold prior"
@@ -1292,20 +1307,21 @@ mod tests {
     fn observation_update_matches_separate_histogram_and_residual_updates() {
         let mut combined = SendLatencyEstimator::new(0.2, 10_000, 4);
         let mut separate = combined.clone();
-        for (kind, class, duration, polyphony, residual) in [
-            (ActionKind::Down, LatencyClass::Hot, 120, 1, Some(80)),
-            (ActionKind::Down, LatencyClass::Cold, 2_400, 3, Some(-120)),
-            (ActionKind::Up, LatencyClass::Hot, 260, 2, None),
+        for (path, class, duration, polyphony, residual) in [
+            (SendPath::DownOnly, LatencyClass::Hot, 120, 1, Some(80)),
+            (SendPath::DownOnly, LatencyClass::Cold, 2_400, 3, Some(-120)),
+            (SendPath::UpOnly, LatencyClass::Hot, 260, 2, None),
+            (SendPath::Mixed, LatencyClass::Hot, 350, 4, Some(40)),
         ] {
             combined
-                .update_observation(kind, class, duration, polyphony, residual)
+                .update_observation(path, class, duration, polyphony, residual)
                 .unwrap();
             separate
-                .update_with_class(kind, duration, polyphony, class)
+                .update_with_class(path, duration, polyphony, class)
                 .unwrap();
             if let Some(residual) = residual {
                 separate
-                    .update_completion_error_with_class(kind, residual, class)
+                    .update_completion_error_with_class(path, residual, class)
                     .unwrap();
             }
         }
@@ -1313,16 +1329,16 @@ mod tests {
             serde_json::to_string(&combined.export_state()).unwrap(),
             serde_json::to_string(&separate.export_state()).unwrap()
         );
-        for kind in [ActionKind::Down, ActionKind::Up] {
+        for path in [SendPath::DownOnly, SendPath::UpOnly, SendPath::Mixed] {
             for class in [LatencyClass::Hot, LatencyClass::Cold] {
                 for strict in [false, true] {
                     for polyphony in 1..=4 {
                         assert_eq!(
                             combined.estimate_lead_with_class_and_policy(
-                                kind, polyphony, class, strict
+                                path, polyphony, class, strict
                             ),
                             separate.estimate_lead_with_class_and_policy(
-                                kind, polyphony, class, strict
+                                path, polyphony, class, strict
                             )
                         );
                     }
@@ -1336,7 +1352,7 @@ mod tests {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
         let initial_refreshes = estimator.refresh_count;
         estimator
-            .update_observation(ActionKind::Down, LatencyClass::Hot, 100, 2, Some(50))
+            .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 2, Some(50))
             .unwrap();
         assert_eq!(estimator.refresh_count, initial_refreshes + 1);
     }
@@ -1347,20 +1363,19 @@ mod tests {
         let up_cold_before = estimator
             .lead_cache
             .iter()
-            .map(|poly_cache| poly_cache[residual_index(ActionKind::Up, LatencyClass::Cold)])
+            .map(|poly_cache| poly_cache[channel_index(SendPath::UpOnly, LatencyClass::Cold)])
             .collect::<Vec<_>>();
         estimator
-            .update_observation(ActionKind::Down, LatencyClass::Hot, 100, 2, Some(50))
+            .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 2, Some(50))
             .unwrap();
         let up_cold_after = estimator
             .lead_cache
             .iter()
-            .map(|poly_cache| poly_cache[residual_index(ActionKind::Up, LatencyClass::Cold)])
+            .map(|poly_cache| poly_cache[channel_index(SendPath::UpOnly, LatencyClass::Cold)])
             .collect::<Vec<_>>();
         assert_eq!(up_cold_before, up_cold_after);
     }
 
-    /// Thin wrapper so tests can call `cold_prior_us` without going through an impl block.
     fn cold_prior_us_helper(n: usize) -> u64 {
         SendLatencyEstimator::cold_prior_us(n)
     }
@@ -1369,19 +1384,17 @@ mod tests {
     fn strict_upper_tail_keeps_a_single_recent_outlier_visible() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 1);
         for _ in 0..64 {
-            estimator.update(ActionKind::Down, 100, 1);
+            estimator.update(SendPath::DownOnly, 100, 1);
         }
-        estimator.update(ActionKind::Down, 3_000, 1);
+        estimator.update(SendPath::DownOnly, 3_000, 1);
 
         let normal = estimator
-            .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Hot)
+            .estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Hot)
             .applied_us;
         let strict = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, true)
             .applied_us;
-        // Strict mode must be ≥ normal mode (outlier is visible).
         assert!(strict >= normal, "strict={strict} normal={normal}");
-        // The outlier must be reflected in the slow tail reserve.
         assert!(
             estimator.down.tail_hot[1].get() >= 3_000,
             "tail reserve must have captured the outlier"
@@ -1392,15 +1405,14 @@ mod tests {
     fn strict_sparse_bucket_keeps_global_upper_tail_guard() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 8);
         for _ in 0..32 {
-            estimator.update(ActionKind::Down, 1_500, 8);
+            estimator.update(SendPath::DownOnly, 1_500, 8);
         }
         for _ in 0..5 {
-            estimator.update(ActionKind::Down, 300, 1);
+            estimator.update(SendPath::DownOnly, 300, 1);
         }
         let strict_1 = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, true)
             .applied_us;
-        // The global tail guard keeps the 8-key 1 500 µs visible for 1-key in strict mode.
         assert!(
             strict_1 >= 1_500,
             "strict 1-key lead={strict_1} should see global 1500µs tail"
@@ -1411,21 +1423,21 @@ mod tests {
     fn cold_outlier_does_not_raise_hot_global_guard() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..8 {
-            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
+            estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
         }
         let hot_before = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, true)
             .applied_us;
         for _ in 0..8 {
-            estimator.update_with_class(ActionKind::Down, 3_000, 2, LatencyClass::Cold);
+            estimator.update_with_class(SendPath::DownOnly, 3_000, 2, LatencyClass::Cold);
         }
         let hot_after = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, true)
             .applied_us;
         assert_eq!(hot_after, hot_before);
         assert!(
             estimator
-                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
+                .estimate_lead_with_class_and_policy(SendPath::DownOnly, 2, LatencyClass::Cold, true)
                 .applied_us
                 >= 3_000
         );
@@ -1435,9 +1447,9 @@ mod tests {
     fn lead_components_are_named_and_non_zero() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
         for _ in 0..10 {
-            estimator.update(ActionKind::Down, 500, 2);
+            estimator.update(SendPath::DownOnly, 500, 2);
         }
-        let est = estimator.estimate_lead(ActionKind::Down, 2);
+        let est = estimator.estimate_lead(SendPath::DownOnly, 2);
         assert!(
             est.components.syscall_us > 0,
             "syscall component must be nonzero"
@@ -1454,21 +1466,21 @@ mod tests {
     fn confidence_progresses_from_prior_to_learned() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 1);
         assert_eq!(
-            estimator.estimate_lead(ActionKind::Down, 1).confidence,
+            estimator.estimate_lead(SendPath::DownOnly, 1).confidence,
             LeadConfidence::PriorOnly
         );
         for i in 0..SEED_SAMPLES - 1 {
-            estimator.update(ActionKind::Down, 100, 1);
-            let conf = estimator.estimate_lead(ActionKind::Down, 1).confidence;
+            estimator.update(SendPath::DownOnly, 100, 1);
+            let conf = estimator.estimate_lead(SendPath::DownOnly, 1).confidence;
             assert_eq!(
                 conf,
                 LeadConfidence::Warming,
                 "at sample {i} expected Warming"
             );
         }
-        estimator.update(ActionKind::Down, 100, 1);
+        estimator.update(SendPath::DownOnly, 100, 1);
         assert_eq!(
-            estimator.estimate_lead(ActionKind::Down, 1).confidence,
+            estimator.estimate_lead(SendPath::DownOnly, 1).confidence,
             LeadConfidence::Learned
         );
     }
@@ -1477,11 +1489,11 @@ mod tests {
     fn delivery_proxy_component_is_additive() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..10 {
-            estimator.update(ActionKind::Down, 200, 2);
+            estimator.update(SendPath::DownOnly, 200, 2);
         }
-        let without_proxy = estimator.get_lead_us(ActionKind::Down, 2);
+        let without_proxy = estimator.get_lead_us(SendPath::DownOnly, 2);
         estimator.set_delivery_proxy_us(2, 300).unwrap();
-        let with_proxy = estimator.get_lead_us(ActionKind::Down, 2);
+        let with_proxy = estimator.get_lead_us(SendPath::DownOnly, 2);
         assert_eq!(with_proxy, without_proxy + 300);
     }
 
@@ -1489,13 +1501,13 @@ mod tests {
     fn hot_and_cold_histograms_are_class_isolated() {
         let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 3);
         for _ in 0..SEED_SAMPLES {
-            estimator.update_with_class(ActionKind::Down, 400, 1, LatencyClass::Cold);
+            estimator.update_with_class(SendPath::DownOnly, 400, 1, LatencyClass::Cold);
         }
         assert_eq!(estimator.down.hot[1].total, 0);
         assert_eq!(estimator.down.cold[1].total, SEED_SAMPLES as u64);
 
         for _ in 0..SEED_SAMPLES {
-            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
+            estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
         }
         assert_eq!(estimator.down.hot[1].total, SEED_SAMPLES as u64);
         assert_eq!(estimator.down.cold[1].total, SEED_SAMPLES as u64);
@@ -1505,52 +1517,62 @@ mod tests {
     fn delivery_proxy_is_independent_by_direction_and_class() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
         estimator
-            .set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, 1, 100)
+            .set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Hot, 1, 100)
             .unwrap();
         estimator
-            .set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Cold, 1, 200)
+            .set_delivery_proxy_us_for(SendPath::DownOnly, LatencyClass::Cold, 1, 200)
             .unwrap();
         estimator
-            .set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Hot, 1, 300)
+            .set_delivery_proxy_us_for(SendPath::UpOnly, LatencyClass::Hot, 1, 300)
             .unwrap();
         estimator
-            .set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Cold, 1, 400)
+            .set_delivery_proxy_us_for(SendPath::UpOnly, LatencyClass::Cold, 1, 400)
+            .unwrap();
+        estimator
+            .set_delivery_proxy_us_for(SendPath::Mixed, LatencyClass::Hot, 1, 500)
             .unwrap();
 
         assert_eq!(
             estimator
-                .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Hot)
+                .estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Hot)
                 .components
                 .delivery_proxy_us,
             100
         );
         assert_eq!(
             estimator
-                .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Cold)
+                .estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Cold)
                 .components
                 .delivery_proxy_us,
             200
         );
         assert_eq!(
             estimator
-                .estimate_lead_with_class(ActionKind::Up, 1, LatencyClass::Hot)
+                .estimate_lead_with_class(SendPath::UpOnly, 1, LatencyClass::Hot)
                 .components
                 .delivery_proxy_us,
             300
         );
         assert_eq!(
             estimator
-                .estimate_lead_with_class(ActionKind::Up, 1, LatencyClass::Cold)
+                .estimate_lead_with_class(SendPath::UpOnly, 1, LatencyClass::Cold)
                 .components
                 .delivery_proxy_us,
             400
+        );
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(SendPath::Mixed, 1, LatencyClass::Hot)
+                .components
+                .delivery_proxy_us,
+            500
         );
     }
 
     #[test]
     fn cold_prior_is_added_once_when_bucket_is_unwarmed() {
         let estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
-        let estimate = estimator.estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Cold);
+        let estimate = estimator.estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Cold);
         assert_eq!(estimate.components.syscall_us, 0);
         assert_eq!(estimate.components.cold_reserve_us, BASE_COLD_PRIOR_US);
         assert_eq!(
@@ -1563,8 +1585,6 @@ mod tests {
     fn slow_tail_reserve_decays_but_stays_above_floor() {
         let mut reserve = SlowTailReserve::default();
         reserve.update(5_000);
-        // After one half-life of clean updates the outlier remains material,
-        // but the reserve still decays and never reaches zero.
         for _ in 0..256 {
             reserve.update(100);
         }
@@ -1584,36 +1604,32 @@ mod tests {
     fn up_residual_is_learned_separately_from_down_residual() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
-            estimator.update(ActionKind::Up, 100, 1);
-            estimator.update_completion_error(ActionKind::Up, 300);
+            estimator.update(SendPath::UpOnly, 100, 1);
+            estimator.update_completion_error(SendPath::UpOnly, 300);
         }
-        let adj_up = estimator.residual_adjustment_us_for(ActionKind::Up);
-        let adj_down = estimator.residual_adjustment_us_for(ActionKind::Down);
+        let adj_up = estimator.residual_adjustment_us_for(SendPath::UpOnly);
+        let adj_down = estimator.residual_adjustment_us_for(SendPath::DownOnly);
         assert!(adj_up > 0, "up residual must be learned");
         assert_eq!(adj_down, 0, "down residual must remain zero");
     }
+
     #[test]
     fn cold_residual_is_learned_separately_from_hot_residual() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
-            // Warm up the hot channel with positive error
-            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
-            estimator.update_completion_error_with_class(ActionKind::Down, 300, LatencyClass::Hot);
+            estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
+            estimator.update_completion_error_with_class(SendPath::DownOnly, 300, LatencyClass::Hot);
 
-            // Warm up the cold channel with negative error
-            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Cold);
+            estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Cold);
             estimator.update_completion_error_with_class(
-                ActionKind::Down,
+                SendPath::DownOnly,
                 -300,
                 LatencyClass::Cold,
             );
         }
 
-        // The accessor `residual_adjustment_us_for` assumes LatencyClass::Hot.
-        let adj_hot = estimator.residual_adjustment_us_for(ActionKind::Down);
-
-        // We can inspect the cold channel directly from the private fields for the test.
-        let cold_idx = residual_index(ActionKind::Down, LatencyClass::Cold);
+        let adj_hot = estimator.residual_adjustment_us_for(SendPath::DownOnly);
+        let cold_idx = channel_index(SendPath::DownOnly, LatencyClass::Cold);
         let adj_cold = estimator.residuals[cold_idx].adjustment_us();
 
         assert!(adj_hot > 0, "hot residual must be positive learned");
@@ -1624,11 +1640,10 @@ mod tests {
     fn early_residual_reduces_lead_more_slowly_than_late_residual_increases_it() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
-            estimator.update(ActionKind::Down, 800, 1);
-            estimator.update_completion_error(ActionKind::Down, -400);
+            estimator.update(SendPath::DownOnly, 800, 1);
+            estimator.update_completion_error(SendPath::DownOnly, -400);
         }
         let adj = estimator.residual_adjustment_us();
-        // Negative early correction should be dampened.
         assert!(adj < 0, "early residual should be negative");
         assert!(
             adj > -400,
@@ -1636,7 +1651,7 @@ mod tests {
         );
 
         for _ in 0..SEED_SAMPLES {
-            estimator.update_completion_error(ActionKind::Down, 400);
+            estimator.update_completion_error(SendPath::DownOnly, 400);
         }
         let adj2 = estimator.residual_adjustment_us();
         assert!(
@@ -1649,16 +1664,16 @@ mod tests {
     fn current_state_round_trip_preserves_histogram() {
         let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
         for v in [100, 200, 300, 400, 500, 600, 700, 800] {
-            source.update(ActionKind::Down, v, 2);
-            source.update(ActionKind::Up, v + 50, 2);
+            source.update(SendPath::DownOnly, v, 2);
+            source.update(SendPath::UpOnly, v + 50, 2);
+            source.update(SendPath::Mixed, v + 100, 2);
         }
         let json = serde_json::to_string(&source.export_state()).unwrap();
         let mut restored = SendLatencyEstimator::new(0.2, 5_000, 4);
         restored.import_state(&json).unwrap();
         assert_eq!(restored.export_state().version, ESTIMATOR_STATE_VERSION);
-        // Restored estimator should produce a lead in a similar range.
-        let src_lead = source.get_lead_us(ActionKind::Down, 2);
-        let rst_lead = restored.get_lead_us(ActionKind::Down, 2);
+        let src_lead = source.get_lead_us(SendPath::DownOnly, 2);
+        let rst_lead = restored.get_lead_us(SendPath::DownOnly, 2);
         let diff = src_lead.abs_diff(rst_lead);
         assert!(
             diff <= BUCKET_WIDTH_US * 2,
@@ -1667,270 +1682,108 @@ mod tests {
     }
 
     #[test]
-    fn mixed_hot_cold_state_round_trip_preserves_class_specific_leads() {
-        let mut source = SendLatencyEstimator::new(0.2, 10_000, 3);
-        for _ in 0..8 {
-            source.update_with_class(ActionKind::Down, 120, 1, LatencyClass::Hot);
-            source.update_with_class(ActionKind::Down, 2_400, 2, LatencyClass::Cold);
-            source.update_with_class(ActionKind::Up, 180, 1, LatencyClass::Hot);
-            source.update_with_class(ActionKind::Up, 2_800, 2, LatencyClass::Cold);
-        }
-        let before = [
-            source
-                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
-                .applied_us,
-            source
-                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
-                .applied_us,
-            source
-                .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, true)
-                .applied_us,
-            source
-                .estimate_lead_with_class_and_policy(ActionKind::Up, 2, LatencyClass::Cold, true)
-                .applied_us,
-        ];
-        let json = serde_json::to_string(&source.export_state()).unwrap();
-        let mut restored = SendLatencyEstimator::new(0.2, 10_000, 3);
-        restored.import_state(&json).unwrap();
-        let after = [
-            restored
-                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
-                .applied_us,
-            restored
-                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
-                .applied_us,
-            restored
-                .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, true)
-                .applied_us,
-            restored
-                .estimate_lead_with_class_and_policy(ActionKind::Up, 2, LatencyClass::Cold, true)
-                .applied_us,
-        ];
-        // Histogram persistence stores bucket upper bounds, so reload may
-        // widen a strict estimate by at most one bucket per class.
-        for (restored, original) in after.into_iter().zip(before) {
-            assert!(
-                restored.abs_diff(original) <= BUCKET_WIDTH_US,
-                "class-specific lead changed beyond histogram tolerance: restored={restored} original={original}"
-            );
-        }
+    fn v8_state_rejected() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        let mut valid_v9 = estimator.export_state();
+        valid_v9.version = 8;
+        let invalid_v8 = serde_json::to_string(&valid_v9).unwrap();
+        let err = estimator.import_state(&invalid_v8).unwrap_err();
+        assert!(err.contains("unsupported estimator version 8"));
     }
 
     #[test]
-    fn persisted_histogram_merge_keeps_all_persisted_counts() {
-        let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
-        for _ in 0..300 {
-            source.update(ActionKind::Down, 300, 2);
-        }
-        let json = serde_json::to_string(&source.export_state()).unwrap();
+    fn v9_empty_state_roundtrip() {
+        let estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        let json = serde_json::to_string(&estimator.export_state()).unwrap();
         let mut restored = SendLatencyEstimator::new(0.2, 5_000, 2);
         restored.import_state(&json).unwrap();
-
-        let exported = restored.export_state();
-        assert_eq!(exported.hist_down[2].hot_pairs, vec![[12, 300]]);
+        assert_eq!(restored.export_state().version, 9);
     }
 
     #[test]
-    fn persisted_histogram_rejects_duplicate_bucket_without_mutation() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
-        estimator.update(ActionKind::Down, 100, 1);
-        let before = estimator.export_state();
-        let mut state = before.clone();
-        state.hist_down[1].hot_pairs = vec![[4, 1], [4, 2]];
-
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&state).unwrap())
-                .is_err()
-        );
-        assert_eq!(
-            serde_json::to_string(&estimator.export_state().hist_down).unwrap(),
-            serde_json::to_string(&before.hist_down).unwrap()
-        );
-    }
-
-    #[test]
-    fn invalid_state_does_not_mutate_estimator() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 6);
+    fn v9_populated_roundtrip() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
         for _ in 0..10 {
-            estimator.update(ActionKind::Down, 100, 1);
+            estimator.update(SendPath::DownOnly, 150, 1);
+            estimator.update(SendPath::UpOnly, 200, 2);
+            estimator.update(SendPath::Mixed, 350, 8);
         }
-        let lead_before = estimator.get_lead_us(ActionKind::Down, 1);
-        let invalid = r#"{
-            "version": 8, "max_poly": 2,
-            "hist_down": [{"hot_pairs":[[999,1]],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}],
-            "hist_up": [{"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}],
-            "residuals": [{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false}],
-            "delivery_proxy_channels": [[0,0,0,0],[0,0,0,0],[0,0,0,0]]
-        }"#;
-        assert!(estimator.import_state(invalid).is_err());
-        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), lead_before);
-        assert_eq!(estimator.max_poly, 6);
-    }
-
-    #[test]
-    fn constructor_rejects_invalid_external_configuration() {
-        assert!(matches!(
-            SendLatencyEstimator::try_new(f64::NAN, 5_000, 2),
-            Err(EstimatorConfigError::InvalidAlpha)
-        ));
-        assert!(matches!(
-            SendLatencyEstimator::try_new(f64::INFINITY, 5_000, 2),
-            Err(EstimatorConfigError::InvalidAlpha)
-        ));
-        assert!(matches!(
-            SendLatencyEstimator::try_new(0.0, 5_000, 2),
-            Err(EstimatorConfigError::InvalidAlpha)
-        ));
-        assert!(matches!(
-            SendLatencyEstimator::try_new(0.2, MAX_SAMPLE_US + 1, 2),
-            Err(EstimatorConfigError::InvalidMaxLead)
-        ));
-        assert!(matches!(
-            SendLatencyEstimator::try_new(0.2, 5_000, 0),
-            Err(EstimatorConfigError::InvalidPolyphony)
-        ));
-        assert!(matches!(
-            SendLatencyEstimator::try_new(0.2, 5_000, 33),
-            Err(EstimatorConfigError::InvalidPolyphony)
-        ));
-    }
-
-    #[test]
-    fn malicious_state_is_rejected_atomically() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
-        estimator.update(ActionKind::Down, 200, 1);
-        let before = serde_json::to_string(&estimator.export_state()).unwrap();
-
-        let mut tail = estimator.export_state();
-        tail.hist_down[1].hot_tail_reserve_us = u64::MAX;
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&tail).unwrap())
-                .is_err()
-        );
-
-        let mut delivery = estimator.export_state();
-        delivery.delivery_proxy_channels[1][0] = u64::MAX;
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&delivery).unwrap())
-                .is_err()
-        );
-
-        let mut count = estimator.export_state();
-        count.hist_down[1].hot_pairs = vec![[1, u32::MAX as u64 + 1]];
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&count).unwrap())
-                .is_err()
-        );
-
-        let mut wrong_length = estimator.export_state();
-        wrong_length.hist_up.pop();
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&wrong_length).unwrap())
-                .is_err()
-        );
-
-        let mut warm_state = estimator.export_state();
-        warm_state.residuals[0].warm = false;
-        warm_state.residuals[0].count = SEED_SAMPLES as u64;
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&warm_state).unwrap())
-                .is_err()
-        );
-
-        let mut zero_poly = estimator.export_state();
-        zero_poly.max_poly = 0;
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&zero_poly).unwrap())
-                .is_err()
-        );
-
-        let mut too_many_poly = estimator.export_state();
-        too_many_poly.max_poly = 33;
-        assert!(
-            estimator
-                .import_state(&serde_json::to_string(&too_many_poly).unwrap())
-                .is_err()
-        );
-
-        assert_eq!(
-            serde_json::to_string(&estimator.export_state()).unwrap(),
-            before
-        );
-    }
-
-    #[test]
-    fn lead_composition_applies_signed_residual_without_unsigned_wrap() {
-        let base = LeadComponents {
-            syscall_us: u64::MAX,
-            residual_bias_us: -1,
-            ..LeadComponents::default()
-        };
-        assert_eq!(base.total_uncapped(), u64::MAX - 1);
-
-        let positive = LeadComponents {
-            syscall_us: u64::MAX,
-            residual_bias_us: 1,
-            ..LeadComponents::default()
-        };
-        assert_eq!(positive.total_uncapped(), u64::MAX);
-    }
-
-    #[test]
-    fn histogram_p95_alias_remains_conservative_and_bounded() {
-        histogram_p95_is_conservative_and_bounded();
-    }
-
-    #[test]
-    fn wrapped_state_round_trip_preserves_ring_order_and_future_updates() {
-        // The ring-order concept doesn't apply to histograms, but the round-trip
-        // contract (future updates produce the same estimate) still holds.
-        let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
-        for v in 100..200u64 {
-            source.update(ActionKind::Down, v, 2);
-        }
-        let json = serde_json::to_string(&source.export_state()).unwrap();
-        let mut restored = SendLatencyEstimator::new(0.2, 5_000, 2);
+        let json = serde_json::to_string(&estimator.export_state()).unwrap();
+        let mut restored = SendLatencyEstimator::new(0.2, 5_000, 8);
         restored.import_state(&json).unwrap();
-
-        source.update(ActionKind::Down, 3_000, 2);
-        restored.update(ActionKind::Down, 3_000, 2);
-
-        let diff = source
-            .get_lead_us(ActionKind::Down, 2)
-            .abs_diff(restored.get_lead_us(ActionKind::Down, 2));
-        // Allow up to 2 bucket widths of divergence due to histogram quantisation.
-        assert!(
-            diff <= BUCKET_WIDTH_US * 2,
-            "post-update leads should match within quantisation error: \
-             src={} rst={}",
-            source.get_lead_us(ActionKind::Down, 2),
-            restored.get_lead_us(ActionKind::Down, 2)
-        );
+        assert_eq!(restored.get_lead_us(SendPath::Mixed, 8), estimator.get_lead_us(SendPath::Mixed, 8));
     }
 
     #[test]
-    fn invalid_current_state_does_not_mutate_estimator() {
-        invalid_state_does_not_mutate_estimator();
-    }
-
-    #[test]
-    fn update_overflow_is_an_error_without_partial_mutation() {
+    fn down_hot_isolated_from_down_cold() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
-        let bucket = Histogram::checked_bucket_for(100);
-        estimator.down.hot[1].buckets[bucket] = u32::MAX;
-        let histogram_before = estimator.down.hot[1].total;
+        for _ in 0..10 {
+            estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
+        }
+        assert_eq!(estimator.down.cold[1].total, 0);
+    }
 
-        assert!(matches!(
-            estimator.update(ActionKind::Down, 100, 1),
-            Err(EstimatorStateError::ArithmeticOverflow("histogram bucket"))
-        ));
-        assert_eq!(estimator.down.hot[1].total, histogram_before);
+    #[test]
+    fn up_hot_isolated_from_up_cold() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        for _ in 0..10 {
+            estimator.update_with_class(SendPath::UpOnly, 100, 1, LatencyClass::Hot);
+        }
+        assert_eq!(estimator.up.cold[1].total, 0);
+    }
+
+    #[test]
+    fn mixed_hot_isolated_from_mixed_cold() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        for _ in 0..10 {
+            estimator.update_with_class(SendPath::Mixed, 100, 1, LatencyClass::Hot);
+        }
+        assert_eq!(estimator.mixed.cold[1].total, 0);
+    }
+
+    #[test]
+    fn mixed_observations_do_not_train_down_or_up() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
+        for _ in 0..10 {
+            estimator.update(SendPath::Mixed, 500, 4);
+        }
+        assert_eq!(estimator.down.hot[4].total, 0);
+        assert_eq!(estimator.up.hot[4].total, 0);
+        assert_eq!(estimator.mixed.hot[4].total, 10);
+    }
+
+    #[test]
+    fn down_observations_do_not_train_mixed() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
+        for _ in 0..10 {
+            estimator.update(SendPath::DownOnly, 500, 4);
+        }
+        assert_eq!(estimator.mixed.hot[4].total, 0);
+    }
+
+    #[test]
+    fn mixed_event_count_8_trains_bucket_8() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
+        estimator.update(SendPath::Mixed, 400, 8).unwrap();
+        assert_eq!(estimator.mixed.hot[8].total, 1);
+    }
+
+    #[test]
+    fn five_clean_mixed_samples_transition_confidence_to_learned() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
+        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::PriorOnly);
+        for _ in 0..4 {
+            estimator.update(SendPath::Mixed, 300, 8).unwrap();
+        }
+        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::Warming);
+        estimator.update(SendPath::Mixed, 300, 8).unwrap();
+        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::Learned);
+    }
+
+    #[test]
+    fn query_path_performs_no_allocation() {
+        let estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
+        let lead = estimator.estimate_lead_with_class_and_policy(SendPath::Mixed, 8, LatencyClass::Hot, true);
+        assert!(lead.applied_us > 0);
     }
 }
