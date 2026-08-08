@@ -41,13 +41,16 @@ pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
     pub use super::test_support::ProductionDispatchTestHarness;
+    pub use super::worker::NextDispatchPlan;
     pub use super::worker::dispatch::DispatchStep;
-    pub use super::worker::dispatch::observer_drain::{
+    pub use super::worker::dispatch::observer::{
         DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
         UpObservation,
     };
+    pub use super::worker::dispatch::timing::{
+        EstimatorObservationEvidence, is_clean_estimator_observation,
+    };
     pub use super::worker::health::DispatchPath;
-    pub use super::worker::NextDispatchPlan;
 }
 
 /// Test-only hooks for §8.12 slow-observer regression scenarios.
@@ -59,26 +62,26 @@ pub mod dispatch_primitives {
 /// into the public API (E0364).
 #[cfg(any(test, feature = "test-support"))]
 pub mod observer_test_hooks {
-    pub use super::worker::dispatch::observer_drain::ObserverTestHookGuard;
+    pub use super::worker::dispatch::observer::ObserverTestHookGuard;
 
     /// Acquire exclusive access to observer test timing hooks.
     pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
-        super::worker::dispatch::observer_drain::observer_test_hook_guard()
+        super::worker::dispatch::observer::observer_test_hook_guard()
     }
 
     /// Force every observer drain to sleep this many microseconds.
     pub fn set_observer_artificial_cost_us(us: u64) {
-        super::worker::dispatch::observer_drain::set_observer_artificial_cost_us(us);
+        super::worker::dispatch::observer::set_observer_artificial_cost_us(us);
     }
 
     /// Override the worker's initial observer budget in microseconds (0 disables).
     pub fn set_observer_initial_budget_override_us(us: u64) {
-        super::worker::dispatch::observer_drain::set_observer_initial_budget_override_us(us);
+        super::worker::dispatch::observer::set_observer_initial_budget_override_us(us);
     }
 
     /// Clear artificial cost and budget override after a scenario.
     pub fn reset_observer_test_hooks() {
-        super::worker::dispatch::observer_drain::reset_observer_test_hooks();
+        super::worker::dispatch::observer::reset_observer_test_hooks();
     }
 }
 

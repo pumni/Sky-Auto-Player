@@ -1,11 +1,15 @@
+#![cfg(any(test, feature = "test-support"))]
+
 //! Test harness for production dispatch paths (DownOnly, Mixed, UpOnly release).
 //!
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
 use crate::engine::config::WorkerConfig;
-use crate::engine::telemetry::{SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal};
-use crate::engine::worker::dispatch::observer_drain::PendingObservationQueue;
+use crate::engine::telemetry::{
+    SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
+};
+use crate::engine::worker::dispatch::observer::PendingObservationQueue;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
     dispatch_due_pending_releases,
@@ -132,11 +136,9 @@ impl ProductionDispatchTestHarness {
         let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
         backend.set_test_emitters();
         let waiter = HybridWaiter::new();
-        let playback = PlaybackClockState::new(
-            qpc_clock.now().expect("qpc now"),
-            DurationTicks::ZERO,
-        )
-        .expect("playback");
+        let playback =
+            PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
+                .expect("playback");
         let estimator = SendLatencyEstimator::default();
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
         let scheduling = WorkerSchedulingGuards::create_test_guards();
@@ -208,7 +210,15 @@ impl ProductionDispatchTestHarness {
 
     /// Query coordinator chord integrity lost count.
     pub fn chord_integrity_lost_count(&self) -> u64 {
-        0
+        self.runtime.chord_integrity_lost_count()
+    }
+
+    pub fn backend_active_mask(&self) -> u16 {
+        self.resources.backend.active_mask
+    }
+
+    pub fn backend_possibly_active_mask(&self) -> u16 {
+        self.resources.backend.possibly_active_mask
     }
 
     /// Pop due pending releases using plan.
@@ -222,6 +232,28 @@ impl ProductionDispatchTestHarness {
             .coordinator
             .pop_due_pending_ticks(effective_now, pending)
             .expect("pop due pending")
+    }
+
+    /// Create a real coordinator-owned pending release during test setup.
+    /// The measurement must exercise `plan_next_dispatch` and
+    /// `dispatch_due_pending_releases`, not the authored Up packet path.
+    pub fn seed_pending_release_for_test(&mut self) {
+        let now_ticks = self.resources.clock.now().expect("qpc now");
+        let effective_now = self
+            .resources
+            .playback
+            .get_elapsed(now_ticks)
+            .expect("effective now");
+        let prepared = self
+            .resources
+            .coordinator
+            .prepare_next_due_authored(effective_now, DurationTicks::ZERO)
+            .expect("prepare pending-release request")
+            .expect("authored release request");
+        self.resources
+            .coordinator
+            .commit_up_request(prepared)
+            .expect("commit pending-release request");
     }
 
     /// Run production `plan_next_dispatch` for the harness state.
@@ -300,7 +332,10 @@ impl ProductionDispatchTestHarness {
     ) -> DispatchStep {
         let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |p| p.lead_ticks);
         let lead_up = pending_plan.map_or(0, |p| {
-            self.resources.clock.duration_to_us(p.lead_ticks).unwrap_or(0)
+            self.resources
+                .clock
+                .duration_to_us(p.lead_ticks)
+                .unwrap_or(0)
         });
         let ctx = PendingReleaseContext {
             due_pending,

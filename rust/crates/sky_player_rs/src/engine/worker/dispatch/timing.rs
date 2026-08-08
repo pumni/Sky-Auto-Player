@@ -1,5 +1,5 @@
 //! Pure timing projection for the authored note-on path: resolves the QPC
-//! evidence into typed timeline values, flags, and bookkeeping markers used by
+//! evidence into typed timeline values, flags, and deferred observation data used by
 //! telemetry, estimator updates, and the terminal SLO decision.
 //!
 //! Structural ownership: this module must not import `SharedMetrics`,
@@ -11,29 +11,160 @@ use super::super::super::{
     ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
     STRICT_SATURATION_ABORT_STREAK, TimelineTicks,
 };
+use super::super::health::{DispatchLeadEstimate, estimate_dispatch_path_lead};
 use super::super::{
-    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerRuntime,
-    WorkerTimingState, signed_ticks_to_us, signed_timeline_delta_ticks,
+    DispatchPath, WorkerConfig, WorkerHealthState, WorkerRuntime, WorkerTimingState,
+    signed_ticks_to_us, signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
-use sky_dispatch_core::coordinator::PreparedBatch;
-use sky_dispatch_win32::input::PacketRetryReason;
+use crate::engine::config::TimingOptions;
+use sky_dispatch_core::coordinator::{PreparedBatch, physical_packet_kind};
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
+use sky_dispatch_core::model::PhysicalPacketKind;
+use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 use smallvec::SmallVec;
 
-/// Predicate defining clean directional sample eligibility for send latency estimator training.
-pub(crate) fn is_clean_directional_sample(
-    result_success: bool,
-    skipped_duplicates_empty: bool,
-    send_attempts: u8,
-    chord_integrity_lost: bool,
-    delivered_count: usize,
-    requested_count: usize,
-) -> bool {
-    result_success
-        && skipped_duplicates_empty
-        && send_attempts == 1
-        && !chord_integrity_lost
-        && delivered_count == requested_count
+/// Snapshot of the next authored packet's dispatch path and lead.
+///
+/// Built once per worker loop epoch and reused for both
+/// `prepare_next_due_authored` and `next_deadline_ticks`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AuthoredDispatchPlan {
+    pub(crate) path: DispatchPath,
+    pub(crate) lead_us: u64,
+    pub(crate) lead_ticks: DurationTicks,
+    pub(crate) lead_saturated: bool,
+}
+
+/// Resolve the path-aware lead for one authored packet without reading QPC.
+pub(crate) fn resolve_authored_lead(
+    estimator: &SendLatencyEstimator,
+    path: DispatchPath,
+    latency_class: LatencyClass,
+    timing: &TimingOptions,
+    enable_adaptive_lead: bool,
+) -> DispatchLeadEstimate {
+    if timing.dispatch_lead_us > 0 {
+        return DispatchLeadEstimate {
+            applied_us: timing.dispatch_lead_us,
+            saturated: false,
+        };
+    }
+    if !enable_adaptive_lead {
+        return DispatchLeadEstimate {
+            applied_us: 0,
+            saturated: false,
+        };
+    }
+    estimate_dispatch_path_lead(
+        estimator,
+        path,
+        latency_class,
+        timing.strict_timing,
+        timing.max_lead_us,
+    )
+}
+
+/// Classify the next authored packet into a [`DispatchPath`].
+///
+/// Empty physical masks (stale Up suppression metadata) keep the historical
+/// Down-polyphony fallback so wait/prepare stay consistent with prior behavior.
+pub(crate) fn next_authored_path(coordinator: &RuntimeDispatchCoordinator) -> Option<DispatchPath> {
+    let (up_mask, down_mask) = coordinator.next_authored_packet_masks()?;
+    let up_count = up_mask.count_ones() as usize;
+    let down_count = down_mask.count_ones() as usize;
+    match physical_packet_kind(up_mask, down_mask) {
+        Ok(PhysicalPacketKind::UpOnly) => Some(DispatchPath::UpOnly { up_count }),
+        Ok(PhysicalPacketKind::DownOnly) => Some(DispatchPath::DownOnly { down_count }),
+        Ok(PhysicalPacketKind::Mixed) => Some(DispatchPath::Mixed {
+            up_count,
+            down_count,
+        }),
+        Err(_) => {
+            let polyphony = coordinator.next_authored_polyphony().max(1);
+            Some(DispatchPath::DownOnly {
+                down_count: polyphony,
+            })
+        }
+    }
+}
+
+pub(crate) fn pending_lead_for_polyphony(
+    estimator: &SendLatencyEstimator,
+    qpc_clock: QpcClock,
+    polyphony: usize,
+    latency_class: LatencyClass,
+    timing: &TimingOptions,
+    enable_adaptive_lead: bool,
+) -> Result<(DurationTicks, bool), sky_dispatch_win32::clock::TimeConversionError> {
+    let (lead_us, saturated) = if timing.dispatch_lead_us > 0 {
+        (timing.dispatch_lead_us, false)
+    } else if enable_adaptive_lead {
+        let estimate = estimator.estimate_lead_with_class_and_policy(
+            SendPath::UpOnly,
+            polyphony,
+            latency_class,
+            timing.strict_timing,
+        );
+        (estimate.applied_us, estimate.saturated)
+    } else {
+        (0, false)
+    };
+    qpc_clock
+        .duration_from_us(lead_us)
+        .map(|ticks| (ticks, saturated))
+}
+
+/// Resolve the path-aware lead used to anchor the startup wait before the
+/// first main-loop `NextDispatchPlan` is built.
+///
+/// The normal loop derives lead from the next authored packet's path; startup
+/// must use the same policy instead of a hard-coded Down lead, otherwise a
+/// first authored `UpOnly`/`Mixed` packet anchors its physical boundary with
+/// the wrong directional lead.
+pub(crate) fn startup_lead_for_first_packet(
+    coordinator: &RuntimeDispatchCoordinator,
+    estimator: &SendLatencyEstimator,
+    latency_class: LatencyClass,
+    timing: &TimingOptions,
+    enable_adaptive_lead: bool,
+) -> u64 {
+    let path = next_authored_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
+        down_count: coordinator.next_authored_polyphony().max(1),
+    });
+    resolve_authored_lead(estimator, path, latency_class, timing, enable_adaptive_lead).applied_us
+}
+
+/// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
+/// estimator observations.  The observer applies the one canonical predicate
+/// after the hard dispatch-ready boundary; dispatch code only constructs this
+/// immutable evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EstimatorObservationEvidence {
+    pub status: SendTransactionStatus,
+    pub attempts: u8,
+    pub retry_reason: PacketRetryReason,
+    pub requested_count: usize,
+    pub confirmed_count: usize,
+    pub skipped_count: usize,
+    pub timing_valid: bool,
+    pub transport_anomaly: bool,
+    pub recovery_used: bool,
+    pub chord_integrity_lost: bool,
+}
+
+/// Canonical clean estimator eligibility.  Every transport direction uses
+/// this exact predicate, including Mixed, with no weaker UpOnly shortcut.
+pub fn is_clean_estimator_observation(evidence: EstimatorObservationEvidence) -> bool {
+    evidence.status == SendTransactionStatus::Complete
+        && evidence.attempts == 1
+        && evidence.retry_reason == PacketRetryReason::None
+        && evidence.skipped_count == 0
+        && evidence.confirmed_count == evidence.requested_count
+        && evidence.timing_valid
+        && !evidence.transport_anomaly
+        && !evidence.recovery_used
+        && !evidence.chord_integrity_lost
 }
 
 /// Project the prepared authored batch into a snapshot used by admission, send,
@@ -198,12 +329,14 @@ pub(crate) struct DownSendTiming {
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
     pub(crate) completion_error_us: i64,
-    pub(crate) clean_directional_sample: bool,
+    pub(crate) estimator_evidence: EstimatorObservationEvidence,
+    pub(crate) recovered_zero_progress: bool,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
     pub(crate) strict_completion_late: bool,
     pub(crate) retry_late_abort: bool,
     pub(crate) saturation_abort: bool,
+    pub(crate) saturation_streak: u8,
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, and computes the
@@ -330,9 +463,9 @@ fn resolve_send_boundaries(
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, computes timing
-/// SLO flags, the saturation-abort streak, and the bookkeeping completion
-/// marker.  Mutates `coordinator` (commit) and `health` (saturation streak).
-/// Does not record telemetry or call the estimator.
+/// SLO flags and the saturation-observation value.  Mutates `coordinator`
+/// (commit) and `runtime` (last-send boundary), but does not mutate health,
+/// record telemetry, or call the estimator.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interpret_down_send_timing(
     view: &AuthoredBatchView,
@@ -341,10 +474,10 @@ pub(crate) fn interpret_down_send_timing(
     runtime: &mut WorkerRuntime,
     qpc_clock: QpcClock,
     coordinator: &mut RuntimeDispatchCoordinator,
-    health: &mut WorkerHealthState,
+    health: &WorkerHealthState,
     timing: &WorkerTimingState,
-    local_metrics: &mut WorkerMetricsLocal,
     result_success: bool,
+    result_status: SendTransactionStatus,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
     result_sent: &SmallVec<[u16; 15]>,
@@ -352,6 +485,7 @@ pub(crate) fn interpret_down_send_timing(
     result_send_attempts: u8,
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
+    result_last_win32_error: Option<u32>,
     lead_down_saturated: bool,
 ) -> Result<DownSendTiming, DispatchStep> {
     let (
@@ -408,14 +542,6 @@ pub(crate) fn interpret_down_send_timing(
     } else {
         result_sent.len()
     };
-    let clean_directional_sample = is_clean_directional_sample(
-        result_success,
-        result_skipped_duplicates.is_empty(),
-        result_send_attempts,
-        result_chord_integrity_lost,
-        delivered_count,
-        requested_count,
-    );
     let recovered_zero_progress = matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
     let recovered_partial_up = matches!(
         (view.dispatch_path, result_retry_reason),
@@ -428,8 +554,21 @@ pub(crate) fn interpret_down_send_timing(
         && result_success
         && completion_lateness_ticks.is_some_and(|late| late > timing.retry_late_threshold_ticks);
     let retry_late_abort = config.timing.strict_timing && recovered_retry_late;
+    let estimator_evidence = EstimatorObservationEvidence {
+        status: result_status,
+        attempts: result_send_attempts,
+        retry_reason: result_retry_reason,
+        requested_count,
+        confirmed_count: delivered_count,
+        skipped_count: result_skipped_duplicates.len(),
+        timing_valid: true,
+        transport_anomaly: result_last_win32_error.is_some(),
+        recovery_used: !matches!(result_retry_reason, PacketRetryReason::None),
+        chord_integrity_lost: result_chord_integrity_lost,
+    };
+    let clean_estimator_sample = is_clean_estimator_observation(estimator_evidence);
     let strict_completion_late = config.timing.strict_timing
-        && clean_directional_sample
+        && clean_estimator_sample
         && completion_lateness_ticks.is_some_and(|late| {
             late > match view.dispatch_path {
                 DispatchPath::UpOnly { .. } => timing.strict_up_completion_late_ticks,
@@ -438,44 +577,25 @@ pub(crate) fn interpret_down_send_timing(
                 }
             }
         });
-    if recovered_retry_late {
-        local_metrics.recovered_zero_progress_but_late = local_metrics
-            .recovered_zero_progress_but_late
-            .saturating_add(1);
-    }
-    let saturation_abort = match view.dispatch_path {
+    let saturation_positive = lead_down_saturated && completion_lateness_ticks.is_some();
+    let saturation_streak = match view.dispatch_path {
         DispatchPath::UpOnly { .. } => {
-            health.down_saturation_positive_streak = 0;
-            health.up_saturation_positive_streak =
-                if lead_down_saturated && completion_lateness_ticks.is_some() {
-                    health.up_saturation_positive_streak.saturating_add(1)
-                } else {
-                    0
-                };
-            config.timing.strict_timing
-                && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK
+            if saturation_positive {
+                health.up_saturation_positive_streak.saturating_add(1)
+            } else {
+                0
+            }
         }
         DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
-            health.up_saturation_positive_streak = 0;
-            health.down_saturation_positive_streak =
-                if lead_down_saturated && completion_lateness_ticks.is_some() {
-                    health.down_saturation_positive_streak.saturating_add(1)
-                } else {
-                    0
-                };
-            config.timing.strict_timing
-                && health.down_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK
+            if saturation_positive {
+                health.down_saturation_positive_streak.saturating_add(1)
+            } else {
+                0
+            }
         }
     };
-    if recovered_zero_progress && result_success {
-        local_metrics.recovered_zero_progress_retries = local_metrics
-            .recovered_zero_progress_retries
-            .saturating_add(1);
-    }
-    if recovered_partial_up {
-        local_metrics.recovered_partial_up_retries =
-            local_metrics.recovered_partial_up_retries.saturating_add(1);
-    }
+    let saturation_abort =
+        config.timing.strict_timing && saturation_streak >= STRICT_SATURATION_ABORT_STREAK;
     Ok(DownSendTiming {
         sender_completed_qpc,
         sender_started_effective_ticks,
@@ -487,12 +607,14 @@ pub(crate) fn interpret_down_send_timing(
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         completion_error_us,
-        clean_directional_sample,
+        estimator_evidence,
+        recovered_zero_progress,
         recovered_partial_up,
         recovered_retry_late,
         strict_completion_late,
         retry_late_abort,
         saturation_abort,
+        saturation_streak,
     })
 }
 

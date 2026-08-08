@@ -97,6 +97,7 @@ pub(crate) struct WorkerRuntime {
     focus_loss_fault_injected: bool,
     allow_pre_epoch_startup_dispatch: bool,
     pending_pre_send_spin_us: u64,
+    chord_integrity_lost: u64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -106,6 +107,10 @@ impl WorkerRuntime {
             verified_target,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn chord_integrity_lost_count(&self) -> u64 {
+        self.chord_integrity_lost
     }
 }
 

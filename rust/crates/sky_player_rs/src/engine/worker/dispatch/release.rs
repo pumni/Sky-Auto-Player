@@ -9,8 +9,9 @@ use super::super::{
     signed_timeline_delta_ticks,
 };
 use super::DispatchStep;
+use super::observer::PendingObservationQueue;
 use super::observer::{observe_release_send_health, record_release_telemetry};
-use super::observer_drain::PendingObservationQueue;
+use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -39,7 +40,7 @@ pub(super) struct ReleaseSend {
     pub(super) sent_count: usize,
     pub(super) skipped_count: usize,
     pub(super) attempts: u8,
-    pub(super) is_success: bool,
+    pub(super) retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     pub(super) transport: ReleaseTransportEvidence,
 }
 
@@ -128,7 +129,7 @@ pub(super) struct ReleaseReconciliation {
     pub(super) up_completion_error_ticks: i64,
     pub(super) up_authored_completion_error_ticks: i64,
     pub(super) up_completion_error_us: i64,
-    pub(super) clean_up_sample: bool,
+    pub(super) estimator_evidence: EstimatorObservationEvidence,
 }
 
 /// Strict/SLO flags computed after the health observation stage; the release
@@ -210,8 +211,6 @@ pub(crate) fn dispatch_due_pending_releases(
         Err(step) => return step,
     };
 
-    // (1) HARD BOUNDARY: dispatch_ready boundary QPC sample taken immediately after
-    // coordinator release completion and BEFORE telemetry trace append or observer work.
     let dispatch_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -236,6 +235,9 @@ pub(crate) fn dispatch_due_pending_releases(
                 ));
             }
         };
+
+    // HARD DISPATCH READY BOUNDARY:
+    // gameplay-critical dispatch ownership ends here.
 
     if let Some(pause_ticks) = reconciliation.recovery_pause_ticks {
         let recovery_pause_us = match qpc_clock.duration_to_us(pause_ticks) {
@@ -409,7 +411,7 @@ fn prepare_release_send(
     let skipped_count = result.skipped_duplicates().len();
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
-    let is_success = result.is_success();
+    let retry_reason = result.evidence.retry_reason;
     let transport = ReleaseTransportEvidence::from_outcome(&result).map_err(|error| {
         DispatchStep::Terminate(format!(
             "release transport evidence validation failure: {error}"
@@ -426,7 +428,7 @@ fn prepare_release_send(
         sent_count,
         skipped_count,
         attempts,
-        is_success,
+        retry_reason,
         transport,
     })
 }
@@ -544,7 +546,6 @@ fn reconcile_release_outcome(
             "coordinator returned no release deadline".to_string(),
         ));
     };
-    let first = &due_pending[first_index];
     let Some(scheduled_ticks) = due_pending
         .iter()
         .map(|pending| pending.scheduled_release_ticks)
@@ -588,10 +589,6 @@ fn reconcile_release_outcome(
         };
         deferred_by_us = deferred_by_us.max(deferred_us);
     }
-    let mixed_source = due_pending.iter().any(|pending| {
-        pending.source_action_index != first.source_action_index
-            || pending.reason_id != first.reason_id
-    });
     let up_completion_lateness_ticks = send
         .completed_effective_ticks
         .checked_duration_since(scheduled_ticks)
@@ -623,13 +620,19 @@ fn reconcile_release_outcome(
             )));
         }
     };
-    let scan_count = due_pending.len();
-    let clean_up_sample = send.is_success
-        && send.sent_count == scan_count
-        && send.skipped_count == 0
-        && send.attempts == 1
-        && deferred_by_us == 0
-        && !mixed_source;
+    let estimator_evidence = EstimatorObservationEvidence {
+        status: send.transport.status,
+        attempts: send.attempts,
+        retry_reason: send.retry_reason,
+        requested_count: send.transport.requested_mask.count_ones() as usize,
+        confirmed_count: send.transport.confirmed_mask.count_ones() as usize,
+        skipped_count: send.transport.skipped_mask.count_ones() as usize,
+        timing_valid: true,
+        transport_anomaly: send.last_win32_error.is_some()
+            || send.transport.status != sky_dispatch_win32::input::SendTransactionStatus::Complete,
+        recovery_used: recovery_required || deferred_by_us > 0,
+        chord_integrity_lost: false,
+    };
     Ok(ReleaseReconciliation {
         recovery_required,
         recovery_pause_ticks,
@@ -642,7 +645,7 @@ fn reconcile_release_outcome(
         up_completion_error_ticks,
         up_authored_completion_error_ticks,
         up_completion_error_us,
-        clean_up_sample,
+        estimator_evidence,
     })
 }
 

@@ -1,14 +1,14 @@
 use super::super::super::{
     ActionKind, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass, PlaybackClockState,
-    QpcClock, QpcTicks, RuntimeDispatchCoordinator, SendLatencyEstimator, SharedMetrics,
-    TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TrackedKeyState,
-    try_publish_metrics,
+    QpcClock, QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK,
+    SendLatencyEstimator, SharedMetrics, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector,
+    TimelineTicks, TrackedKeyState, try_publish_metrics,
 };
 use super::super::{
-    DownAdmission, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
-    WorkerRuntime, WorkerTimingState, build_dispatch_budget, ensure_preflight_for_target,
-    final_down_admission, focus_matches, load_target_stamp, suspend_live_input,
-    target_stamp_still_current,
+    DispatchPath, DownAdmission, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
+    WorkerResources, WorkerRuntime, WorkerTimingState, build_dispatch_budget,
+    ensure_preflight_for_target, final_down_admission, focus_matches, load_target_stamp,
+    suspend_live_input, target_stamp_still_current,
 };
 use super::observer::{
     commit_suppressed_up_request, publisher_down_send_outcome, record_blocked_unfocused_telemetry,
@@ -515,6 +515,10 @@ fn record_down_send_outcome(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
     );
+    if result_chord_integrity_lost {
+        runtime.chord_integrity_lost = runtime.chord_integrity_lost.saturating_add(1);
+        local_metrics.chord_integrity_lost = local_metrics.chord_integrity_lost.saturating_add(1);
+    }
     let result_last_win32_error = result.evidence.last_win32_error;
     if !result_success {
         return DispatchStep::Terminate(format!(
@@ -542,6 +546,7 @@ fn record_down_send_outcome(
         frozen_budget,
         trace_kind,
         result_success,
+        result.status,
         result_started_ticks,
         result_completed_ticks,
         &result_sent,
@@ -574,6 +579,7 @@ fn finalize_down_send_outcome(
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
     result_success: bool,
+    result_status: sky_dispatch_win32::input::SendTransactionStatus,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
     result_sent: &SmallVec<[u16; 15]>,
@@ -593,8 +599,8 @@ fn finalize_down_send_outcome(
         coordinator,
         health,
         timing,
-        local_metrics,
         result_success,
+        result_status,
         result_started_ticks,
         result_completed_ticks,
         result_sent,
@@ -602,6 +608,7 @@ fn finalize_down_send_outcome(
         result_send_attempts,
         result_retry_reason,
         result_chord_integrity_lost,
+        result_last_win32_error,
         lead_down_saturated,
     ) {
         Ok(value) => value,
@@ -610,6 +617,7 @@ fn finalize_down_send_outcome(
     publisher_down_send_outcome(
         view,
         runtime,
+        health,
         local_metrics,
         qpc_clock,
         telemetry,
@@ -630,4 +638,51 @@ fn finalize_down_send_outcome(
         observer,
         &timing_proof,
     )
+}
+
+pub(super) fn resolve_slo_terminal_step(
+    result_chord_integrity_lost: bool,
+    retry_late_abort: bool,
+    strict_completion_late: bool,
+    saturation_abort: bool,
+    completion_error_us: i64,
+    view: &AuthoredBatchView,
+    runtime: &mut WorkerRuntime,
+) -> DispatchStep {
+    if result_chord_integrity_lost {
+        runtime.verified_target = None;
+        return DispatchStep::Terminate(format!(
+            "SendInput split authored chord at action {}",
+            view.batch_source_action_index
+        ));
+    }
+    if retry_late_abort {
+        return DispatchStep::Terminate(format!(
+            "strict timing rejected zero-progress retry at action {}: completion was {}us late",
+            view.batch_source_action_index, completion_error_us
+        ));
+    }
+    if strict_completion_late {
+        let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
+            "note-off"
+        } else {
+            "note-on"
+        };
+        return DispatchStep::Terminate(format!(
+            "strict timing completion SLO exceeded for {timing_label} at action {}: completion was {}us late",
+            view.batch_source_action_index, completion_error_us
+        ));
+    }
+    if saturation_abort {
+        let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
+            "note-off"
+        } else {
+            "note-on"
+        };
+        return DispatchStep::Terminate(format!(
+            "strict timing SLO exceeded: {timing_label} lead saturated with positive residual for {} consecutive dispatches",
+            STRICT_SATURATION_ABORT_STREAK
+        ));
+    }
+    DispatchStep::Dispatched
 }

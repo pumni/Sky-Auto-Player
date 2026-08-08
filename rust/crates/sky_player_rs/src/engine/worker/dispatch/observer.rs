@@ -1,35 +1,33 @@
 use super::super::super::{
     DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SharedMetrics, TRACE_FLAG_ANOMALY,
-    TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
-    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
-    trace_outcome_code, try_publish_metrics,
+    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator,
+    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
+    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
+    TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, trace_outcome_code,
+    try_publish_metrics,
 };
 use super::super::{
-    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerRuntime,
-    WorkerTimingState, release_runtime_outcome,
+    DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
+    WorkerRuntime, WorkerTimingState, observe_dispatch_health, publish_backend_metrics,
+    record_lateness, record_lead_saturation, release_runtime_outcome, signed_delta,
+    update_estimator_after_send_class,
 };
-use super::observer_drain::{
-    DispatchObservation, DownObservation, PendingObservationQueue, UpObservation,
-};
+use super::authored::resolve_slo_terminal_step;
 use super::release::{ReleaseOutcomeFlags, ReleaseReconciliation, ReleaseSend};
-use super::timing::{DownSendTiming, read_qpc_us};
+use super::timing::{
+    DownSendTiming, EstimatorObservationEvidence, is_clean_estimator_observation, read_qpc_us,
+};
 use super::{AuthoredBatchView, DispatchStep};
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
-
-/// Hard-path suffix of the note-on dispatch.  Everything from the coordinator
-/// commit onward must leave the worker thread as fast as possible.  The only
-/// work that stays here is: (1) the mandatory telemetry trace append, (2) the
-/// `dispatch_ready` boundary sample, and (3) enqueueing an allocation-free
-/// `DispatchObservation`.  The estimator update, health windows, lateness
-/// accounting, and metric publication are consumed later by
-/// `drain_down_send_outcome` from the dispatch loop's deferred observer.
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
     runtime: &mut WorkerRuntime,
+    health: &mut WorkerHealthState,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
     telemetry: &mut TelemetryCollector,
@@ -61,7 +59,8 @@ pub(crate) fn publisher_down_send_outcome(
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         completion_error_us,
-        clean_directional_sample,
+        estimator_evidence,
+        recovered_zero_progress,
         recovered_partial_up,
         recovered_retry_late,
         retry_late_abort,
@@ -69,8 +68,6 @@ pub(crate) fn publisher_down_send_outcome(
         saturation_abort,
         ..
     } = *timing_proof;
-    // (1) HARD BOUNDARY: dispatch_ready boundary QPC sample taken immediately
-    // after coordinator/backend commit and BEFORE telemetry trace append or observer work.
     let dispatch_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -92,7 +89,32 @@ pub(crate) fn publisher_down_send_outcome(
             ));
         }
     };
-    // (2) Mandatory trace append — occurs AFTER dispatch_ready_qpc using core_post_send_us.
+    // HARD DISPATCH READY BOUNDARY:
+    // gameplay-critical dispatch ownership ends here.
+    if recovered_retry_late {
+        local_metrics.recovered_zero_progress_but_late = local_metrics
+            .recovered_zero_progress_but_late
+            .saturating_add(1);
+    }
+    if recovered_zero_progress {
+        local_metrics.recovered_zero_progress_retries = local_metrics
+            .recovered_zero_progress_retries
+            .saturating_add(1);
+    }
+    if recovered_partial_up {
+        local_metrics.recovered_partial_up_retries =
+            local_metrics.recovered_partial_up_retries.saturating_add(1);
+    }
+    match view.dispatch_path {
+        DispatchPath::UpOnly { .. } => {
+            health.down_saturation_positive_streak = 0;
+            health.up_saturation_positive_streak = timing_proof.saturation_streak;
+        }
+        DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+            health.up_saturation_positive_streak = 0;
+            health.down_saturation_positive_streak = timing_proof.saturation_streak;
+        }
+    }
     let mut force_dispatch_publish = match record_down_send_telemetry(
         view,
         telemetry,
@@ -125,8 +147,6 @@ pub(crate) fn publisher_down_send_outcome(
         force_dispatch_publish = true;
     }
     runtime.pending_pre_send_spin_us = 0;
-    // (3) Enqueue an allocation-free snapshot for the deferred drain.  Drops
-    // the oldest entry when the fixed queue is full (see queue docs).
     observer.push(
         DispatchObservation::Down(DownObservation {
             path: frozen_budget.path,
@@ -137,7 +157,7 @@ pub(crate) fn publisher_down_send_outcome(
             delivered_count,
             batch_intent_count: view.batch_intent_count,
             completion_error_us,
-            clean_directional_sample,
+            estimator_evidence,
             completed_effective,
             authored_batch_scheduled_us: view.authored_batch_scheduled_us,
             batch_scheduled_us: view.batch_scheduled_us,
@@ -159,61 +179,6 @@ pub(crate) fn publisher_down_send_outcome(
         runtime,
     )
 }
-
-/// Maps the post-send SLO flags to a `DispatchStep` terminal (or repeat)
-/// decision.  Kept separate so the publish function stays under the dispatch
-/// per-function line limit.
-fn resolve_slo_terminal_step(
-    result_chord_integrity_lost: bool,
-    retry_late_abort: bool,
-    strict_completion_late: bool,
-    saturation_abort: bool,
-    completion_error_us: i64,
-    view: &AuthoredBatchView,
-    runtime: &mut WorkerRuntime,
-) -> DispatchStep {
-    if result_chord_integrity_lost {
-        runtime.verified_target = None;
-        return DispatchStep::Terminate(format!(
-            "SendInput split authored chord at action {}",
-            view.batch_source_action_index
-        ));
-    }
-    if retry_late_abort {
-        return DispatchStep::Terminate(format!(
-            "strict timing rejected zero-progress retry at action {}: completion was {}us late",
-            view.batch_source_action_index, completion_error_us
-        ));
-    }
-    if strict_completion_late {
-        let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
-            "note-off"
-        } else {
-            "note-on"
-        };
-        return DispatchStep::Terminate(format!(
-            "strict timing completion SLO exceeded for {timing_label} at action {}: completion was {}us late",
-            view.batch_source_action_index, completion_error_us
-        ));
-    }
-    if saturation_abort {
-        let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
-            "note-off"
-        } else {
-            "note-on"
-        };
-        return DispatchStep::Terminate(format!(
-            "strict timing SLO exceeded: {timing_label} lead saturated with positive residual for {} consecutive dispatches",
-            STRICT_SATURATION_ABORT_STREAK
-        ));
-    }
-    DispatchStep::Dispatched
-}
-
-/// Computes the down_outcome label, the boolean force-publish flag, and the
-/// trace flags; pushes the `RtTraceRecord::dispatched` entry for one note-on
-/// packet.  Returns the outcome label so callers can use it for additional
-/// accounting without recomputing the predicate tree.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_down_send_telemetry(
     view: &AuthoredBatchView,
@@ -308,7 +273,6 @@ pub(super) fn record_down_send_telemetry(
     }
     Ok((down_outcome, force_publish))
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn commit_suppressed_up_request(
     view: &AuthoredBatchView,
@@ -372,7 +336,6 @@ pub(super) fn commit_suppressed_up_request(
     try_publish_metrics(local_metrics, metrics, current_us, !suppressed.is_empty());
     DispatchStep::Dispatched
 }
-
 pub(super) fn record_blocked_unfocused_telemetry(
     telemetry: &mut TelemetryCollector,
     view: &AuthoredBatchView,
@@ -414,9 +377,6 @@ pub(super) fn record_blocked_unfocused_telemetry(
     }
     Ok(())
 }
-
-/// Pushes the `RtTraceRecord::dispatched` entry for one note-off batch using
-/// the reconciliation-derived values; returns the outcome label.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_release_telemetry(
     telemetry: &mut TelemetryCollector,
@@ -486,14 +446,6 @@ pub(super) fn record_release_telemetry(
     }
     Ok(())
 }
-
-/// Note-off hard-path observer: computes the mandatory terminal SLO flags
-/// (`saturation_abort`, `strict_up_completion_late`) and captures the
-/// `dispatch_ready` boundary immediately after the coordinator commit and the
-/// mandatory telemetry trace (`record_release_telemetry`).  The estimator
-/// update, lead-saturation accounting, lateness metric, health-window
-/// observation, and diagnostic metric publication are deferred to the observer
-/// drain (`drain_up_send_outcome`) via the queued `UpObservation`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn observe_release_send_health(
     _qpc_clock: QpcClock,
@@ -522,7 +474,7 @@ pub(super) fn observe_release_send_health(
     let saturation_abort = config.timing.strict_timing
         && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
     let strict_up_completion_late = config.timing.strict_timing
-        && reconciliation.clean_up_sample
+        && is_clean_estimator_observation(reconciliation.estimator_evidence)
         && reconciliation
             .up_completion_lateness_ticks
             .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
@@ -539,11 +491,12 @@ pub(super) fn observe_release_send_health(
             scheduled_us: reconciliation.scheduled_us,
             deferred_by_us: reconciliation.deferred_by_us,
             up_completion_error_us: reconciliation.up_completion_error_us,
-            clean_up_sample: reconciliation.clean_up_sample,
+            estimator_evidence: reconciliation.estimator_evidence,
             core_post_send_us,
             send_warn_us: frozen_budget.send_warn_us,
             core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
-            force_publish: !reconciliation.clean_up_sample || reconciliation.recovery_required,
+            force_publish: !is_clean_estimator_observation(reconciliation.estimator_evidence)
+                || reconciliation.recovery_required,
         }),
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
@@ -552,4 +505,379 @@ pub(super) fn observe_release_send_health(
         strict_up_completion_late,
         saturation_abort,
     })
+}
+pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
+#[derive(Clone, Copy, Debug)]
+pub enum DispatchObservation {
+    Down(DownObservation),
+    Up(UpObservation),
+}
+#[derive(Clone, Copy, Debug)]
+pub struct DownObservation {
+    pub path: DispatchPath,
+    pub latency_class: LatencyClass,
+    pub lead_down_saturated: bool,
+    pub lead_down: u64,
+    pub sender_duration_us: u64,
+    pub delivered_count: usize,
+    pub batch_intent_count: usize,
+    pub completion_error_us: i64,
+    pub estimator_evidence: EstimatorObservationEvidence,
+    pub completed_effective: u64,
+    pub authored_batch_scheduled_us: u64,
+    pub batch_scheduled_us: u64,
+    pub core_post_send_us: u64,
+    pub send_warn_us: u64,
+    pub core_post_send_warn_us: u64,
+    pub force_publish: bool,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct UpObservation {
+    pub latency_class: LatencyClass,
+    pub sender_duration_us: u64,
+    pub sent_count: usize,
+    pub scan_count: usize,
+    pub lead_up: u64,
+    pub lead_up_saturated: bool,
+    pub completed_effective: u64,
+    pub scheduled_us: u64,
+    pub deferred_by_us: u64,
+    pub up_completion_error_us: i64,
+    pub estimator_evidence: EstimatorObservationEvidence,
+    pub core_post_send_us: u64,
+    pub send_warn_us: u64,
+    pub core_post_send_warn_us: u64,
+    pub force_publish: bool,
+}
+#[derive(Debug)]
+pub struct PendingObservationQueue {
+    entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
+    head: usize,
+    len: usize,
+}
+impl Default for PendingObservationQueue {
+    fn default() -> Self {
+        Self {
+            entries: [None; OBSERVATION_QUEUE_CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+}
+impl PendingObservationQueue {
+    pub fn push(
+        &mut self,
+        observation: DispatchObservation,
+        dropped_samples: &mut u64,
+        high_watermark: &mut u64,
+    ) {
+        if self.len == self.entries.len() {
+            self.entries[self.head] = None;
+            self.head = (self.head + 1) % self.entries.len();
+            *dropped_samples = dropped_samples.saturating_add(1);
+        } else {
+            self.len += 1;
+        }
+        let tail = (self.head + self.len - 1) % self.entries.len();
+        self.entries[tail] = Some(observation);
+        *high_watermark = (*high_watermark).max(self.len as u64);
+    }
+    pub fn pop_front(&mut self) -> Option<DispatchObservation> {
+        if self.len == 0 {
+            return None;
+        }
+        let entry = self.entries[self.head].take();
+        self.head = (self.head + 1) % self.entries.len();
+        self.len -= 1;
+        entry
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+pub(crate) fn observer_has_safe_slack(
+    deadline_ticks: Option<TimelineTicks>,
+    effective_now_ticks: TimelineTicks,
+    budget_us: u64,
+    margin_us: u64,
+    qpc_clock: QpcClock,
+) -> bool {
+    let Some(deadline) = deadline_ticks else {
+        return true;
+    };
+    if deadline.as_u64() <= effective_now_ticks.as_u64() {
+        return false;
+    }
+    let slack_ticks = DurationTicks::from_raw(deadline.as_u64() - effective_now_ticks.as_u64());
+    match qpc_clock.duration_to_us(slack_ticks) {
+        Ok(slack_us) => slack_us >= budget_us.saturating_add(margin_us),
+        Err(_) => false,
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_INITIAL_BUDGET_OVERRIDE_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_TEST_HOOK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+#[cfg(any(test, feature = "test-support"))]
+pub struct ObserverTestHookGuard {
+    _lock: parking_lot::MutexGuard<'static, ()>,
+}
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for ObserverTestHookGuard {
+    fn drop(&mut self) {
+        reset_observer_test_hooks();
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
+    let lock = OBSERVER_TEST_HOOK_LOCK.lock();
+    reset_observer_test_hooks();
+    ObserverTestHookGuard { _lock: lock }
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_observer_artificial_cost_us(us: u64) {
+    OBSERVER_ARTIFICIAL_COST_US.store(us, Ordering::SeqCst);
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_observer_initial_budget_override_us(us: u64) {
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.store(us, Ordering::SeqCst);
+}
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn observer_initial_budget_override_us() -> u64 {
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.load(Ordering::SeqCst)
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_observer_test_hooks() {
+    OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.store(0, Ordering::SeqCst);
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drain_down_send_outcome(
+    observation: &DownObservation,
+    config: &WorkerConfig,
+    health: &mut WorkerHealthState,
+    local_metrics: &mut WorkerMetricsLocal,
+    last_published_error: &mut Option<String>,
+    metrics: &SharedMetrics,
+    backend: &mut TrackedKeyState,
+    estimator: &mut SendLatencyEstimator,
+    now_us: u64,
+) {
+    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    match observation.path {
+        DispatchPath::DownOnly { .. } => {
+            local_metrics.send_down_warn_threshold_us = observation.send_warn_us;
+        }
+        DispatchPath::UpOnly { .. } => {
+            local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
+        }
+        DispatchPath::Mixed { .. } => {
+            local_metrics.send_mixed_warn_threshold_us = observation.send_warn_us;
+        }
+    }
+    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+    local_metrics.core_post_send_max_us = local_metrics
+        .core_post_send_max_us
+        .max(observation.core_post_send_us);
+    if config.estimator.enable_adaptive_lead && observation.lead_down_saturated {
+        match observation.path {
+            DispatchPath::UpOnly { .. } => record_lead_saturation(
+                &mut local_metrics.lead_saturation_count_up,
+                &mut local_metrics.positive_residual_at_cap,
+                observation.batch_intent_count,
+                signed_delta(
+                    observation.completed_effective,
+                    observation.batch_scheduled_us,
+                ),
+            ),
+            DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => record_lead_saturation(
+                &mut local_metrics.lead_saturation_count_down,
+                &mut local_metrics.positive_residual_at_cap,
+                observation.batch_intent_count,
+                signed_delta(
+                    observation.completed_effective,
+                    observation.batch_scheduled_us,
+                ),
+            ),
+        }
+    }
+    if config.estimator.enable_adaptive_lead {
+        let send_path = super::super::estimator_path_for_dispatch(observation.path);
+        let _ = update_estimator_after_send_class(
+            estimator,
+            send_path,
+            observation.sender_duration_us,
+            observation.delivered_count,
+            observation.batch_intent_count,
+            observation.lead_down,
+            observation.completion_error_us,
+            is_clean_estimator_observation(observation.estimator_evidence),
+            observation.latency_class,
+        );
+    }
+    record_lateness(
+        signed_delta(
+            observation.completed_effective,
+            observation.authored_batch_scheduled_us,
+        ),
+        false,
+        false,
+        local_metrics,
+    );
+    observe_dispatch_health(
+        DispatchHealthObservation {
+            send_duration_us: observation.sender_duration_us,
+            post_send_duration_us: observation.core_post_send_us,
+            path: observation.path,
+            send_warn_us: observation.send_warn_us,
+            core_post_send_warn_us: observation.core_post_send_warn_us,
+            elapsed_us: observation.completed_effective,
+        },
+        health.options.window_policy(),
+        &mut health.sendinput_window,
+        &mut health.core_post_send_window,
+        local_metrics,
+    );
+    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+    try_publish_metrics(local_metrics, metrics, now_us, observation.force_publish);
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drain_up_send_outcome(
+    observation: &UpObservation,
+    config: &WorkerConfig,
+    health: &mut WorkerHealthState,
+    local_metrics: &mut WorkerMetricsLocal,
+    last_published_error: &mut Option<String>,
+    metrics: &SharedMetrics,
+    backend: &mut TrackedKeyState,
+    estimator: &mut SendLatencyEstimator,
+    now_us: u64,
+) {
+    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
+    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+    local_metrics.core_post_send_max_us = local_metrics
+        .core_post_send_max_us
+        .max(observation.core_post_send_us);
+    if config.estimator.enable_adaptive_lead && observation.lead_up_saturated {
+        record_lead_saturation(
+            &mut local_metrics.lead_saturation_count_up,
+            &mut local_metrics.positive_residual_at_cap,
+            observation.scan_count,
+            signed_delta(observation.completed_effective, observation.scheduled_us),
+        );
+    }
+    if config.estimator.enable_adaptive_lead {
+        let _ = update_estimator_after_send_class(
+            estimator,
+            sky_dispatch_core::estimator::SendPath::UpOnly,
+            observation.sender_duration_us,
+            observation.sent_count,
+            observation.scan_count,
+            observation.lead_up,
+            observation.up_completion_error_us,
+            is_clean_estimator_observation(observation.estimator_evidence),
+            observation.latency_class,
+        );
+    }
+    record_lateness(
+        signed_delta(observation.completed_effective, observation.scheduled_us),
+        true,
+        observation.deferred_by_us > 0,
+        local_metrics,
+    );
+    observe_dispatch_health(
+        DispatchHealthObservation {
+            send_duration_us: observation.sender_duration_us,
+            post_send_duration_us: observation.core_post_send_us,
+            path: DispatchPath::UpOnly {
+                up_count: observation.scan_count,
+            },
+            send_warn_us: observation.send_warn_us,
+            core_post_send_warn_us: observation.core_post_send_warn_us,
+            elapsed_us: observation.completed_effective,
+        },
+        health.options.window_policy(),
+        &mut health.sendinput_window,
+        &mut health.core_post_send_window,
+        local_metrics,
+    );
+    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+    try_publish_metrics(local_metrics, metrics, now_us, observation.force_publish);
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drain_one_observer(
+    pending: &mut PendingObservationQueue,
+    config: &WorkerConfig,
+    health: &mut WorkerHealthState,
+    local_metrics: &mut WorkerMetricsLocal,
+    last_published_error: &mut Option<String>,
+    metrics: &SharedMetrics,
+    backend: &mut TrackedKeyState,
+    estimator: &mut SendLatencyEstimator,
+    qpc_clock: QpcClock,
+    now_us: u64,
+) -> u64 {
+    let Some(observation) = pending.pop_front() else {
+        return 0;
+    };
+    let drain_start = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(_) => return 0,
+    };
+    match &observation {
+        DispatchObservation::Down(down) => drain_down_send_outcome(
+            down,
+            config,
+            health,
+            local_metrics,
+            last_published_error,
+            metrics,
+            backend,
+            estimator,
+            now_us,
+        ),
+        DispatchObservation::Up(up) => drain_up_send_outcome(
+            up,
+            config,
+            health,
+            local_metrics,
+            last_published_error,
+            metrics,
+            backend,
+            estimator,
+            now_us,
+        ),
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
+        if cost_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(cost_us));
+        }
+    }
+    let drain_end = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(_) => return 0,
+    };
+    let drain_us = match drain_end.checked_duration_since(drain_start) {
+        Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
+        Err(_) => 0,
+    };
+    super::super::health::observe_observer_health(
+        drain_us,
+        health.options.observer_warn_us,
+        now_us,
+        health.options.window_policy(),
+        &mut health.observer_window,
+        local_metrics,
+    );
+    drain_us
 }

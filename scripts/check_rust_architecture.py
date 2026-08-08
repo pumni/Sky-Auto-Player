@@ -34,6 +34,13 @@ LEGACY_DISPATCH_PATHS = {
     "rust/crates/sky_player_rs/src/engine/worker/down_outcome.rs",
     "rust/crates/sky_player_rs/src/engine/worker/releases.rs",
 }
+CANONICAL_DISPATCH_FILES = {
+    "authored.rs",
+    "mod.rs",
+    "observer.rs",
+    "release.rs",
+    "timing.rs",
+}
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
 
 ALLOWED_UNSAFE_MODULES = {
@@ -277,6 +284,26 @@ def check_repository(repository_root: Path) -> CheckReport:
     if not workspace_root.exists():
         report.errors.append(Violation("workspace", "rust/crates", "workspace not found"))
         return report
+
+    dispatch_dir = repository_root / "rust/crates/sky_player_rs/src/engine/worker/dispatch"
+    if dispatch_dir.exists():
+        actual_dispatch_files = {path.name for path in dispatch_dir.glob("*.rs")}
+        for unexpected in sorted(actual_dispatch_files - CANONICAL_DISPATCH_FILES):
+            report.errors.append(
+                Violation(
+                    "unexpected_dispatch_module",
+                    f"{dispatch_dir.relative_to(repository_root).as_posix()}/{unexpected}",
+                    "dispatch directory contains a non-canonical module",
+                )
+            )
+        for missing in sorted(CANONICAL_DISPATCH_FILES - actual_dispatch_files):
+            report.errors.append(
+                Violation(
+                    "missing_dispatch_module",
+                    f"{dispatch_dir.relative_to(repository_root).as_posix()}/{missing}",
+                    "dispatch directory is missing a canonical module",
+                )
+            )
 
     for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_player_rs"):
         crate_path = workspace_root / crate / "src"
