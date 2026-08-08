@@ -715,6 +715,7 @@ def _new_session(
             enable_adaptive_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
         )
+    target_hwnd = _real_input_target_hwnd() if backend == "sendinput" else 0
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         list(SKY_15_SCAN_CODES),
@@ -722,10 +723,26 @@ def _new_session(
             game_fps=game_fps,
             min_hold_us=100,
             require_focus=False,
+            target_hwnd=target_hwnd,
             telemetry=True,
             profile="production",
         ),
     )
+
+
+def _real_input_target_hwnd() -> int:
+    raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
+    if raw is None or not raw.strip():
+        raise RuntimeError(
+            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated host"
+        )
+    try:
+        hwnd = int(raw, 0)
+    except ValueError as exc:
+        raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer") from exc
+    if hwnd <= 0 or hwnd > (1 << 63) - 1:
+        raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer in the platform handle range")
+    return hwnd
 
 
 def _run_dispatch(
@@ -1444,6 +1461,24 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
             relative_fraction=relative,
             absolute_floor=floor,
         )
+
+    if comparison_role == TRANSPORT_REFERENCE:
+        # v1/v2 timeline semantics are not comparable. The transport role is
+        # deliberately limited to raw SendInput call duration; command
+        # lifecycle, CPU/RSS/startup, wake, pre-send, and core-tail metrics
+        # belong to SAME_SEMANTICS only.
+        for polyphony in report["benchmark_config"]["polyphony"]:
+            observed_poly = report["by_polyphony"][str(polyphony)]
+            baseline_poly = baseline["by_polyphony"][str(polyphony)]
+            for section, field, relative, floor in nonnegative_metrics:
+                _assert_metric_threshold(
+                    observed_poly,
+                    baseline_poly,
+                    (section, field),
+                    relative_fraction=relative,
+                    absolute_floor=floor,
+                )
+        return
 
     for section, relative, floor in (
         ("command_observation_latency_us", 0.05, 10),

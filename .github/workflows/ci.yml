@@ -229,6 +229,38 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+          # Real qualification runs on the ephemeral Windows host only. The
+          # HWND is used for the production physical-key probe; SendInput is
+          # still delivered to the host foreground window, never to a game
+          # process selected or inspected by this workflow.
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class SkyNativeQualificationWindow {
+              [DllImport("user32.dll")]
+              public static extern IntPtr GetForegroundWindow();
+          }
+          '@
+          $targetHwnd = [SkyNativeQualificationWindow]::GetForegroundWindow().ToInt64()
+          if ($targetHwnd -le 0) {
+            throw 'real SendInput qualification requires a non-zero foreground HWND on the isolated Windows host'
+          }
+          $env:SKY_NATIVE_TARGET_HWND = [string]$targetHwnd
+          $realArtifactRoot = Join-Path $env:RUNNER_TEMP 'sky-native-sendinput-artifacts'
+          New-Item -ItemType Directory -Force -Path $realArtifactRoot | Out-Null
+          $realMatrices = @(
+            @{ Name = 'adaptive-hot-60'; Fps = 60; Gap = 'hot' },
+            @{ Name = 'adaptive-cold-60'; Fps = 60; Gap = 'cold' },
+            @{ Name = 'adaptive-hot-144'; Fps = 144; Gap = 'hot' },
+            @{ Name = 'adaptive-cold-144'; Fps = 144; Gap = 'cold' }
+          )
+          foreach ($matrix in $realMatrices) {
+            $matrixDir = Join-Path $realArtifactRoot $matrix.Name
+            New-Item -ItemType Directory -Force -Path $matrixDir | Out-Null
+            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --backend sendinput --allow-real-input --actions 128 --dispatch-repeats 3 --command-samples 0 --polyphony 1,2,3,5,8,15 --game-fps $matrix.Fps --lead-mode adaptive --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode auto --budget-seconds 300 --output-dir $matrixDir
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Verify native A/B artifact files before upload
         if: always()
         run: |
@@ -253,6 +285,32 @@ jobs:
         with:
           name: native-ab-${{ github.run_id }}
           path: ${{ runner.temp }}/sky-native-ab-artifacts
+          if-no-files-found: error
+
+      - name: Verify real SendInput artifact files before upload
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactRoot = Join-Path $env:RUNNER_TEMP 'sky-native-sendinput-artifacts'
+          if (-not (Test-Path -LiteralPath $artifactRoot -PathType Container)) {
+            throw "Real SendInput artifact directory is missing: $artifactRoot"
+          }
+          $files = @(Get-ChildItem -LiteralPath $artifactRoot -File -Recurse)
+          if ($files.Count -eq 0) {
+            throw 'Real SendInput artifact directory contains no files'
+          }
+          $size = ($files | Measure-Object -Property Length -Sum).Sum
+          if ($size -le 0) {
+            throw 'Real SendInput artifact files have zero total size'
+          }
+          "artifact_files=$($files.Count) artifact_size_bytes=$size"
+
+      - name: Upload real SendInput artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sendinput-${{ github.run_id }}
+          path: ${{ runner.temp }}/sky-native-sendinput-artifacts
           if-no-files-found: error
 
   status:

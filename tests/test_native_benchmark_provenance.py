@@ -65,6 +65,8 @@ def _ab_args(output_dir: Path) -> SimpleNamespace:
         dispatch_repeats=1,
         command_samples=0,
         polyphony="1",
+        backend="mock",
+        allow_real_input=False,
         game_fps=60,
         lead_mode="fixed",
         fixed_lead_us=0,
@@ -74,6 +76,20 @@ def _ab_args(output_dir: Path) -> SimpleNamespace:
         budget_seconds=1.0,
         output_dir=output_dir,
     )
+
+
+def test_benchmark_command_propagates_real_backend_explicitly(tmp_path: Path) -> None:
+    args = _ab_args(tmp_path)
+    args.backend = "sendinput"
+    args.allow_real_input = True
+    args.label = "candidate"
+    command = bench_native_ab._benchmark_command(
+        output=tmp_path / "candidate.json",
+        expected_native_commit="candidate-sha",
+        args=args,
+    )
+    assert command[command.index("--backend") + 1] == "sendinput"
+    assert "--allow-real-input" in command
 
 
 def _run_ab_scenario(

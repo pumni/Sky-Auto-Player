@@ -40,6 +40,21 @@ def test_real_backend_without_mock_options_uses_zero_mock_latency() -> None:
     ) == (0, 0)
 
 
+def test_real_backend_requires_explicit_physical_probe_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SKY_NATIVE_TARGET_HWND", raising=False)
+    with pytest.raises(RuntimeError, match="SKY_NATIVE_TARGET_HWND"):
+        ACCEPTANCE._real_input_target_hwnd()
+
+    monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0x1234")
+    assert ACCEPTANCE._real_input_target_hwnd() == 0x1234
+
+    monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0")
+    with pytest.raises(RuntimeError, match="positive integer"):
+        ACCEPTANCE._real_input_target_hwnd()
+
+
 def test_mock_backend_defaults_preserve_latency_model() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",
@@ -234,6 +249,45 @@ def test_correctness_is_checked_before_percentiles() -> None:
         )
 
 
+def test_transport_reference_compares_only_raw_sendinput_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    report = {
+        "comparison_role": ACCEPTANCE.TRANSPORT_REFERENCE,
+        "benchmark_config": {"polyphony": [1]},
+        "sendinput_call_duration_us": {"p99": 10, "p999": 12},
+        "by_polyphony": {"1": {"sendinput_call_duration_us": {"p99": 10, "p999": 12}}},
+    }
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps({"by_polyphony": {"1": report["by_polyphony"]["1"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ACCEPTANCE, "_assert_baseline_compatible", lambda *_: None)
+    monkeypatch.setattr(ACCEPTANCE, "_assert_report_correctness", lambda *_: None)
+    monkeypatch.setattr(ACCEPTANCE, "_assert_absolute_wake_slo", lambda *_: None)
+    paths: list[tuple[str, ...]] = []
+
+    def record_path(
+        _report: dict[str, Any],
+        _baseline: dict[str, Any],
+        path: tuple[str, ...],
+        **_kwargs: Any,
+    ) -> None:
+        paths.append(path)
+
+    monkeypatch.setattr(ACCEPTANCE, "_assert_metric_threshold", record_path)
+    ACCEPTANCE._assert_baseline(report, baseline_path)
+
+    assert paths == [
+        ("sendinput_call_duration_us", "p99"),
+        ("sendinput_call_duration_us", "p999"),
+        ("sendinput_call_duration_us", "p99"),
+        ("sendinput_call_duration_us", "p999"),
+    ]
+
+
 def test_p999_uses_nearest_rank() -> None:
     assert ACCEPTANCE._percentile([1, 2, 3, 4], 0.999) == 4
 
@@ -378,6 +432,9 @@ def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
     assert "baseline_comparison=unavailable_initial_push" in workflow
     assert "--budget-seconds 600" in workflow
     assert "adaptive-cold" in workflow
+    assert "--backend sendinput --allow-real-input" in workflow
+    assert "SKY_NATIVE_TARGET_HWND" in workflow
+    assert "native-sendinput-${{ github.run_id }}" in workflow
 
 
 @pytest.mark.windows
