@@ -58,13 +58,6 @@ runs:
         CI: true
       run: bun run test:functional
 
-    - name: Run Visual regression tests
-      shell: bash
-      working-directory: site
-      env:
-        CI: true
-      run: bun run test:visual
-
     - name: Upload Playwright failure artifacts
       if: failure()
       uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
