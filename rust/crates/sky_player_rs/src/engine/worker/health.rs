@@ -7,8 +7,9 @@ pub(crate) const HEALTH_WINDOW_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DispatchHealthOptions {
-    pub(crate) send_warn_floor_us: u64,
-    pub(crate) bookkeeping_warn_us: u64,
+    pub(crate) sendinput_warn_floor_us: u64,
+    pub(crate) core_post_send_warn_us: u64,
+    pub(crate) observer_warn_us: u64,
     pub(crate) wait_warn_us: u64,
     pub(crate) window_capacity: usize,
     pub(crate) bad_sample_count: usize,
@@ -19,8 +20,9 @@ pub(crate) struct DispatchHealthOptions {
 impl Default for DispatchHealthOptions {
     fn default() -> Self {
         Self {
-            send_warn_floor_us: 300,
-            bookkeeping_warn_us: 300,
+            sendinput_warn_floor_us: 300,
+            core_post_send_warn_us: 300,
+            observer_warn_us: 5_000,
             wait_warn_us: 300,
             window_capacity: HEALTH_WINDOW_CAPACITY,
             bad_sample_count: 4,
@@ -32,7 +34,7 @@ impl Default for DispatchHealthOptions {
 
 impl DispatchHealthOptions {
     pub(crate) fn send_warn_threshold_us(self, expected_send_us: u64) -> u64 {
-        self.send_warn_floor_us
+        self.sendinput_warn_floor_us
             .max(expected_send_us.saturating_add(SEND_WARNING_MARGIN_US))
     }
 
@@ -107,7 +109,7 @@ pub(crate) struct FrozenDispatchBudget {
     pub(crate) path: DispatchPath,
     pub(crate) observed_polyphony: usize,
     pub(crate) send_warn_us: u64,
-    pub(crate) bookkeeping_warn_us: u64,
+    pub(crate) core_post_send_warn_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,7 +154,7 @@ pub(crate) fn build_dispatch_budget(
         path,
         observed_polyphony: count,
         send_warn_us: options.send_warn_threshold_us(expected_send_us),
-        bookkeeping_warn_us: options.bookkeeping_warn_us,
+        core_post_send_warn_us: options.core_post_send_warn_us,
     }
 }
 
@@ -345,8 +347,8 @@ pub(crate) fn observe_wait_health(
 pub(crate) fn observe_dispatch_health(
     observation: DispatchHealthObservation,
     policy: HealthWindowPolicy,
-    send_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
-    bookkeeping_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    sendinput_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    core_post_send_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
     local_metrics: &mut WorkerMetricsLocal,
 ) {
     let DispatchHealthObservation {
@@ -354,7 +356,7 @@ pub(crate) fn observe_dispatch_health(
         post_send_duration_us,
         path,
         send_warn_us,
-        bookkeeping_warn_us,
+        core_post_send_warn_us,
         elapsed_us,
     } = observation;
     let _ = record_input_path_health(
@@ -362,24 +364,24 @@ pub(crate) fn observe_dispatch_health(
         send_warn_us,
         elapsed_us,
         policy,
-        send_window,
+        sendinput_window,
     );
     let _ = record_input_path_health(
         post_send_duration_us,
-        bookkeeping_warn_us,
+        core_post_send_warn_us,
         elapsed_us,
         policy,
-        bookkeeping_window,
+        core_post_send_window,
     );
-    local_metrics.sendinput_path_degraded = send_window.is_degraded();
-    local_metrics.bookkeeping_degraded = bookkeeping_window.is_degraded();
-    local_metrics.send_window_bad_count = send_window.bad_count() as u64;
-    local_metrics.bookkeeping_window_bad_count = bookkeeping_window.bad_count() as u64;
-    local_metrics.send_window_sample_count = send_window.sample_count() as u64;
-    local_metrics.bookkeeping_window_sample_count = bookkeeping_window.sample_count() as u64;
+    local_metrics.sendinput_path_degraded = sendinput_window.is_degraded();
+    local_metrics.core_post_send_degraded = core_post_send_window.is_degraded();
+    local_metrics.sendinput_window_bad_count = sendinput_window.bad_count() as u64;
+    local_metrics.core_post_send_window_bad_count = core_post_send_window.bad_count() as u64;
+    local_metrics.sendinput_window_sample_count = sendinput_window.sample_count() as u64;
+    local_metrics.core_post_send_window_sample_count = core_post_send_window.sample_count() as u64;
     local_metrics.input_path_degraded =
-        local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
-    local_metrics.post_send_max_us = local_metrics.post_send_max_us.max(post_send_duration_us);
+        local_metrics.sendinput_path_degraded || local_metrics.core_post_send_degraded || local_metrics.wait_path_degraded;
+    local_metrics.core_post_send_max_us = local_metrics.core_post_send_max_us.max(post_send_duration_us);
     local_metrics.dispatch_occupancy_max_us = local_metrics
         .dispatch_occupancy_max_us
         .max(send_duration_us.saturating_add(post_send_duration_us));
@@ -390,13 +392,8 @@ pub(crate) fn observe_dispatch_health(
     );
     record_degraded_sample(
         post_send_duration_us,
-        bookkeeping_warn_us,
-        &mut local_metrics.bookkeeping_degraded_samples,
-    );
-    record_degraded_sample(
-        post_send_duration_us,
-        bookkeeping_warn_us,
-        &mut local_metrics.post_send_degraded_samples,
+        core_post_send_warn_us,
+        &mut local_metrics.core_post_send_degraded_samples,
     );
     if send_duration_us > send_warn_us {
         match path {
@@ -416,13 +413,38 @@ pub(crate) fn observe_dispatch_health(
     }
 }
 
+pub(crate) fn observe_observer_health(
+    observer_duration_us: u64,
+    observer_warn_us: u64,
+    elapsed_us: u64,
+    policy: HealthWindowPolicy,
+    observer_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if observer_warn_us == 0 {
+        observer_window.reset();
+    } else {
+        let over_budget = observer_duration_us > observer_warn_us;
+        let _ = observer_window.observe(over_budget, elapsed_us, policy);
+        if over_budget {
+            local_metrics.observer_degraded_samples =
+                local_metrics.observer_degraded_samples.saturating_add(1);
+        }
+    }
+    local_metrics.observer_degraded = observer_window.is_degraded();
+    local_metrics.observer_window_bad_count = observer_window.bad_count() as u64;
+    local_metrics.observer_window_sample_count = observer_window.sample_count() as u64;
+    local_metrics.observer_duration_max_us =
+        local_metrics.observer_duration_max_us.max(observer_duration_us);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DispatchHealthObservation {
     pub(crate) send_duration_us: u64,
     pub(crate) post_send_duration_us: u64,
     pub(crate) path: DispatchPath,
     pub(crate) send_warn_us: u64,
-    pub(crate) bookkeeping_warn_us: u64,
+    pub(crate) core_post_send_warn_us: u64,
     pub(crate) elapsed_us: u64,
 }
 
@@ -483,7 +505,7 @@ mod tests {
         let options = DispatchHealthOptions::default();
         assert_eq!(
             options.send_warn_threshold_us(0),
-            options.send_warn_floor_us
+            options.sendinput_warn_floor_us
         );
         assert_eq!(
             options.send_warn_threshold_us(900),
@@ -495,7 +517,8 @@ mod tests {
     #[test]
     fn health_paths_have_independent_default_thresholds() {
         let options = DispatchHealthOptions::default();
-        assert_eq!(options.bookkeeping_warn_us, 300);
+        assert_eq!(options.core_post_send_warn_us, 300);
+        assert_eq!(options.observer_warn_us, 5_000);
         assert_eq!(options.wait_warn_us, 300);
         assert_eq!(options.window_capacity, 64);
         assert_eq!(options.bad_sample_count, 4);

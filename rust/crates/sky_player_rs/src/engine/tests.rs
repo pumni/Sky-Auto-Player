@@ -583,7 +583,7 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 wake_ticks: 0,
                 send_started_ticks: 0,
                 send_completed_ticks: 0,
-                bookkeeping_duration_us: 0,
+                core_post_send_duration_us: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: 0,
@@ -1005,7 +1005,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             wake_ticks: TimelineTicks::from_raw(13),
             send_started_ticks: Some(TimelineTicks::from_raw(20)),
             send_completed_ticks: Some(TimelineTicks::from_raw(25)),
-            bookkeeping_duration_us: 4,
+            core_post_send_duration_us: 4,
             completion_error_ticks: 1,
             authored_completion_error_ticks: 2,
             applied_lead_ticks: DurationTicks::from_raw(2),
@@ -1025,7 +1025,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_attempts, 2);
     assert_eq!(record.send_started_ticks, 20);
     assert_eq!(record.send_completed_ticks, 25);
-    assert_eq!(record.bookkeeping_duration_us, 4);
+    assert_eq!(record.core_post_send_duration_us, 4);
 
     let mut summary = super::NativeTelemetrySummary::default();
     summary.observe(&record);
@@ -1051,7 +1051,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            bookkeeping_duration_us: 0,
+            core_post_send_duration_us: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
             applied_lead_ticks: DurationTicks::ZERO,
@@ -1086,7 +1086,7 @@ fn native_summary_ignores_non_backend_trace() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            bookkeeping_duration_us: 0,
+            core_post_send_duration_us: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
             applied_lead_ticks: DurationTicks::ZERO,
@@ -1843,7 +1843,7 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
         post_send_duration_us,
         path: crate::engine::worker::DispatchPath::UpOnly { up_count: 1 },
         send_warn_us: 2000,
-        bookkeeping_warn_us: 1000,
+        core_post_send_warn_us: 1000,
         elapsed_us: send_completed_elapsed_us,
     };
 
@@ -1860,7 +1860,7 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
         &mut local_metrics,
     );
 
-    assert_eq!(local_metrics.bookkeeping_degraded_samples, 0);
+    assert_eq!(local_metrics.core_post_send_degraded_samples, 0);
 }
 
 #[test]

@@ -36,7 +36,7 @@ def _compact_output(
                 "wake_ticks": 10_100,
                 "send_started_ticks": 10_110,
                 "send_completed_ticks": 10_180,
-                "bookkeeping_duration_us": 4,
+                "core_post_send_duration_us": 4,
                 "completion_error_ticks": completion_error_ticks,
                 "authored_completion_error_ticks": authored_completion_error_ticks,
                 "applied_lead_ticks": 1_000,
@@ -62,7 +62,7 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.native_skipped_count == 0
     assert record.wake_error_us == 10
     assert record.sender_completion_error_us == 25
-    assert record.bookkeeping_duration_us == 4
+    assert record.core_post_send_duration_us == 4
     assert record.visible_lateness_us == 25
     assert record.dispatch_lateness_us == 25
     assert record.applied_lead_us == 100
@@ -86,11 +86,11 @@ def test_native_trace_materializer_preserves_zero_relative_send_start() -> None:
     assert record.send_duration_us == 2
 
 
-def test_native_trace_materializer_rejects_missing_bookkeeping_duration() -> None:
+def test_native_trace_materializer_rejects_missing_core_post_send_duration() -> None:
     output = _compact_output()
-    del output["records"][0]["bookkeeping_duration_us"]
+    del output["records"][0]["core_post_send_duration_us"]
 
-    with pytest.raises(ValueError, match="bookkeeping_duration_us"):
+    with pytest.raises(ValueError, match="core_post_send_duration_us"):
         materialize_native_trace(output)
 
 
@@ -113,7 +113,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["authored_completion_error_ticks"] == 250
     assert row["send_operation_duration_us"] == 7
     assert row["sendinput_call_duration_us"] == 7
-    assert row["bookkeeping_duration_us"] == 4
+    assert row["core_post_send_duration_us"] == 4
     assert row["generation_ids"] == ""
     assert row["first_win32_error"] == 1460
     assert row["last_win32_error"] == 1460

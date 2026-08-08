@@ -96,7 +96,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         batch_scheduled_us: 0,
         core_post_send_us: 1,
         send_warn_us: 0,
-        bookkeeping_warn_us: 0,
+        core_post_send_warn_us: 0,
         force_publish: false,
     })
 }
@@ -116,7 +116,7 @@ fn up_observation(n: u64) -> DispatchObservation {
         clean_up_sample: true,
         core_post_send_us: 1,
         send_warn_us: 0,
-        bookkeeping_warn_us: 0,
+        core_post_send_warn_us: 0,
         force_publish: false,
     })
 }

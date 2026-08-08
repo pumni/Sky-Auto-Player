@@ -125,8 +125,9 @@ pub(crate) struct WorkerHealthState {
     pub(super) down_saturation_positive_streak: u8,
     pub(super) up_saturation_positive_streak: u8,
     pub(super) options: DispatchHealthOptions,
-    pub(super) send_pure_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
-    pub(super) bookkeeping_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    pub(super) sendinput_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    pub(super) core_post_send_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    pub(super) observer_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
     pub(super) wait_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
 }
 

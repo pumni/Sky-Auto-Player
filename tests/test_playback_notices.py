@@ -54,9 +54,9 @@ def test_latency_signals_are_distinct_from_backend_rejection() -> None:
     wait = PlaybackNoticeLedger().update(wait_path_degraded=True)
     assert [notice.code for notice in wait.runtime_notices] == ["scheduler-wake-slow"]
 
-    bookkeeping = PlaybackNoticeLedger().update(bookkeeping_degraded=True)
-    assert [notice.code for notice in bookkeeping.runtime_notices] == [
-        "native-bookkeeping-slow"
+    core_post_send = PlaybackNoticeLedger().update(core_post_send_degraded=True)
+    assert [notice.code for notice in core_post_send.runtime_notices] == [
+        "native-core-post-send-slow"
     ]
 
     rejected = PlaybackNoticeLedger().update(

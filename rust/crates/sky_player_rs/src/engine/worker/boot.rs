@@ -328,12 +328,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         down_saturation_positive_streak: 0,
         up_saturation_positive_streak: 0,
         options: health_options,
-        send_pure_window: HealthWindow::default(),
-        bookkeeping_window: HealthWindow::default(),
+        sendinput_window: HealthWindow::default(),
+        core_post_send_window: HealthWindow::default(),
+        observer_window: HealthWindow::default(),
         wait_window: HealthWindow::default(),
     });
-    core.metrics.send_warn_threshold_us = health_options.send_warn_floor_us;
-    core.metrics.bookkeeping_warn_threshold_us = health_options.bookkeeping_warn_us;
+    core.metrics.sendinput_warn_threshold_us = health_options.sendinput_warn_floor_us;
+    core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
+    core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
     let startup_class = LatencyClass::Cold;
     let startup_lead_us = startup_lead_for_first_packet(

@@ -62,7 +62,7 @@ class PlaybackNoticeLedger:
         *,
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
-        bookkeeping_degraded: bool = False,
+        core_post_send_degraded: bool = False,
         wait_path_degraded: bool = False,
         keys_dropped: int = 0,
         chord_split_events: int = 0,
@@ -172,11 +172,11 @@ class PlaybackNoticeLedger:
                     source="runtime",
                 )
             )
-        if bookkeeping_degraded:
+        if core_post_send_degraded:
             runtime.append(
                 PlaybackNotice(
-                    code="native-bookkeeping-slow",
-                    message="Native post-send processing is elevated; the next dispatch may start late.",
+                    code="native-core-post-send-slow",
+                    message="Native dispatch commit latency is elevated after SendInput; the next deadline has less scheduling slack.",
                     severity="warning",
                     source="runtime",
                 )

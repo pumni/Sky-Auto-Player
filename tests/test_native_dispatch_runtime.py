@@ -47,7 +47,7 @@ def _live(status: str, *, finished: bool) -> SimpleNamespace:
         is_paused=False,
         input_path_degraded=False,
         sendinput_path_degraded=False,
-        bookkeeping_degraded=False,
+        core_post_send_degraded=False,
         wait_path_degraded=False,
         status=status,
         backend_health=health,

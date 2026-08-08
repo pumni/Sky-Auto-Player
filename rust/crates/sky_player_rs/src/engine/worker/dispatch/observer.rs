@@ -141,7 +141,7 @@ pub(super) fn publisher_down_send_outcome(
             batch_scheduled_us: view.batch_scheduled_us,
             core_post_send_us,
             send_warn_us: frozen_budget.send_warn_us,
-            bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
+            core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
             force_publish: force_dispatch_publish,
         }),
         &mut local_metrics.observer_dropped_samples,
@@ -283,7 +283,7 @@ pub(super) fn record_down_send_telemetry(
                 wake_ticks: effective_now_ticks,
                 send_started_ticks: Some(sender_started_effective_ticks),
                 send_completed_ticks: Some(completed_effective_ticks),
-                bookkeeping_duration_us: bookkeeping_completed_us
+                core_post_send_duration_us: bookkeeping_completed_us
                     .saturating_sub(completed_effective),
                 completion_error_ticks: completion_error_ticks_value,
                 authored_completion_error_ticks: authored_completion_error_ticks_value,
@@ -347,7 +347,7 @@ pub(super) fn commit_suppressed_up_request(
                     wake_ticks: effective_now_ticks,
                     send_started_ticks: None,
                     send_completed_ticks: None,
-                    bookkeeping_duration_us: 0,
+                    core_post_send_duration_us: 0,
                     completion_error_ticks: 0,
                     authored_completion_error_ticks: 0,
                     applied_lead_ticks: lead_down_ticks,
@@ -394,7 +394,7 @@ pub(super) fn record_blocked_unfocused_telemetry(
                 wake_ticks: effective_now_ticks,
                 send_started_ticks: None,
                 send_completed_ticks: None,
-                bookkeeping_duration_us: 0,
+                core_post_send_duration_us: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: lead_down_ticks,
@@ -461,7 +461,7 @@ pub(super) fn record_release_telemetry(
                 wake_ticks: send.actual_ticks,
                 send_started_ticks: send.sender_started_effective_ticks,
                 send_completed_ticks: Some(send.completed_effective_ticks),
-                bookkeeping_duration_us: reconciliation
+                core_post_send_duration_us: reconciliation
                     .bookkeeping_completed_us
                     .saturating_sub(send.completed_effective_us),
                 completion_error_ticks: reconciliation.up_completion_error_ticks,
@@ -560,7 +560,7 @@ pub(super) fn observe_release_send_health(
             clean_up_sample: reconciliation.clean_up_sample,
             core_post_send_us,
             send_warn_us: frozen_budget.send_warn_us,
-            bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
+            core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
             force_publish: !reconciliation.clean_up_sample || reconciliation.recovery_required,
         }),
         &mut local_metrics.observer_dropped_samples,

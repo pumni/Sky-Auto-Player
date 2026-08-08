@@ -86,7 +86,8 @@ def build_report(runs: list[tuple[float, Path]]) -> dict[str, Any]:
                     name: bool(snapshot.get(name, False))
                     for name in (
                         "sendinput_path_degraded",
-                        "bookkeeping_degraded",
+                        "core_post_send_degraded",
+                        "observer_degraded",
                         "wait_path_degraded",
                     )
                 },

@@ -94,7 +94,7 @@ STATUS_LABELS: Mapping[PlaybackStatus, str] = {
     PlaybackStatus.PANIC: "Panic Release",
     PlaybackStatus.DONE: "Done",
 }
-RUST_DISPATCH_SCHEMA_VERSION = 3
+RUST_DISPATCH_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)

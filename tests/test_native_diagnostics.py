@@ -13,7 +13,7 @@ def test_diagnostics_keep_latency_without_rejection() -> None:
     assert diagnose_native_playback({"wait_path_degraded": True}).category == (
         "scheduler_wake_degraded"
     )
-    assert diagnose_native_playback({"bookkeeping_degraded": True}).category == (
+    assert diagnose_native_playback({"core_post_send_degraded": True}).category == (
         "post_send_degraded"
     )
 

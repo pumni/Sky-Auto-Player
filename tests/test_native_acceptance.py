@@ -152,7 +152,7 @@ def _trace_fixture(**overrides: object) -> SimpleNamespace:
         "sender_started_us": 110,
         "sender_completed_us": 130,
         "sendinput_call_duration_us": 20,
-        "bookkeeping_duration_us": 4,
+        "core_post_send_duration_us": 4,
         "sender_completion_error_us": 3,
         "native_polyphony": 1,
     }

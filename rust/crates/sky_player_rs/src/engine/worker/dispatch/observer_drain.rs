@@ -55,7 +55,7 @@ pub struct DownObservation {
     /// Replaces the old `iteration_ready_us - completed_effective` subtraction.
     pub core_post_send_us: u64,
     pub send_warn_us: u64,
-    pub bookkeeping_warn_us: u64,
+    pub core_post_send_warn_us: u64,
     pub force_publish: bool,
 }
 
@@ -76,7 +76,7 @@ pub struct UpObservation {
     /// §8.6 typed `dispatch_ready_q - sender_completed_q`, in microseconds.
     pub core_post_send_us: u64,
     pub send_warn_us: u64,
-    pub bookkeeping_warn_us: u64,
+    pub core_post_send_warn_us: u64,
     pub force_publish: bool,
 }
 
@@ -215,8 +215,8 @@ pub(crate) fn drain_down_send_outcome(
     estimator: &mut SendLatencyEstimator,
     now_us: u64,
 ) {
-    local_metrics.send_warn_threshold_us = observation.send_warn_us;
-    local_metrics.bookkeeping_warn_threshold_us = observation.bookkeeping_warn_us;
+    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
     match observation.path {
         DispatchPath::DownOnly { .. } => {
             local_metrics.send_down_warn_threshold_us = observation.send_warn_us;
@@ -283,12 +283,12 @@ pub(crate) fn drain_down_send_outcome(
             post_send_duration_us: observation.core_post_send_us,
             path: observation.path,
             send_warn_us: observation.send_warn_us,
-            bookkeeping_warn_us: observation.bookkeeping_warn_us,
+            core_post_send_warn_us: observation.core_post_send_warn_us,
             elapsed_us: observation.completed_effective,
         },
         health.options.window_policy(),
-        &mut health.send_pure_window,
-        &mut health.bookkeeping_window,
+        &mut health.sendinput_window,
+        &mut health.core_post_send_window,
         local_metrics,
     );
     publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
@@ -311,8 +311,8 @@ pub(crate) fn drain_up_send_outcome(
     estimator: &mut SendLatencyEstimator,
     now_us: u64,
 ) {
-    local_metrics.send_warn_threshold_us = observation.send_warn_us;
-    local_metrics.bookkeeping_warn_threshold_us = observation.bookkeeping_warn_us;
+    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
     local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
     local_metrics.core_post_send_max_us = local_metrics
@@ -353,12 +353,12 @@ pub(crate) fn drain_up_send_outcome(
                 up_count: observation.scan_count,
             },
             send_warn_us: observation.send_warn_us,
-            bookkeeping_warn_us: observation.bookkeeping_warn_us,
+            core_post_send_warn_us: observation.core_post_send_warn_us,
             elapsed_us: observation.completed_effective,
         },
         health.options.window_policy(),
-        &mut health.send_pure_window,
-        &mut health.bookkeeping_window,
+        &mut health.sendinput_window,
+        &mut health.core_post_send_window,
         local_metrics,
     );
     publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
@@ -426,10 +426,19 @@ pub(crate) fn drain_one_observer(
         Ok(ticks) => ticks,
         Err(_) => return 0,
     };
-    match drain_end.checked_duration_since(drain_start) {
+    let drain_us = match drain_end.checked_duration_since(drain_start) {
         Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
         Err(_) => 0,
-    }
+    };
+    super::super::health::observe_observer_health(
+        drain_us,
+        health.options.observer_warn_us,
+        now_us,
+        health.options.window_policy(),
+        &mut health.observer_window,
+        local_metrics,
+    );
+    drain_us
 }
 
 #[cfg(test)]
@@ -453,7 +462,7 @@ mod tests {
             batch_scheduled_us: 0,
             core_post_send_us: 1,
             send_warn_us: 0,
-            bookkeeping_warn_us: 0,
+            core_post_send_warn_us: 0,
             force_publish: false,
         })
     }

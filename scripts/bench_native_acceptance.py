@@ -482,8 +482,8 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
         rows["sendinput_call_duration_us"].append(
             (kind, _required_int(record.sendinput_call_duration_us, "sendinput_call_duration_us"))
         )
-        rows["bookkeeping_duration_us"].append(
-            (kind, _required_int(record.bookkeeping_duration_us, "bookkeeping_duration_us"))
+        rows["core_post_send_duration_us"].append(
+            (kind, _required_int(record.core_post_send_duration_us, "core_post_send_duration_us"))
         )
         rows["sender_completion_error_us"].append(
             (
@@ -742,18 +742,18 @@ def _run_dispatch(
                 snapshot.get("sendinput_zero_progress_failures", 0)
             ),
             "sendinput_path_degraded": bool(snapshot.get("sendinput_path_degraded", False)),
-            "bookkeeping_degraded": bool(snapshot.get("bookkeeping_degraded", False)),
+            "core_post_send_degraded": bool(snapshot.get("core_post_send_degraded", False)),
             "wait_path_degraded": bool(snapshot.get("wait_path_degraded", False)),
-            "send_warn_threshold_us": int(snapshot.get("send_warn_threshold_us", 0)),
-            "bookkeeping_warn_threshold_us": int(
-                snapshot.get("bookkeeping_warn_threshold_us", 0)
+            "sendinput_warn_threshold_us": int(snapshot.get("sendinput_warn_threshold_us", 0)),
+            "core_post_send_warn_threshold_us": int(
+                snapshot.get("core_post_send_warn_threshold_us", 0)
             ),
             "wait_warn_threshold_us": int(snapshot.get("wait_warn_threshold_us", 0)),
             "sendinput_degraded_samples": int(
                 snapshot.get("sendinput_degraded_samples", 0)
             ),
-            "bookkeeping_degraded_samples": int(
-                snapshot.get("bookkeeping_degraded_samples", 0)
+            "core_post_send_degraded_samples": int(
+                snapshot.get("core_post_send_degraded_samples", 0)
             ),
             "wait_degraded_samples": int(snapshot.get("wait_degraded_samples", 0)),
             "lead_saturation_count_down": list(
@@ -1172,8 +1172,8 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         ("pre_send_software_latency_us", "p999", 0.10, 10),
         ("sendinput_call_duration_us", "p99", 0.05, 5),
         ("sendinput_call_duration_us", "p999", 0.10, 10),
-        ("bookkeeping_duration_us", "p99", 0.05, 5),
-        ("bookkeeping_duration_us", "p999", 0.10, 10),
+        ("core_post_send_duration_us", "p99", 0.05, 5),
+        ("core_post_send_duration_us", "p999", 0.10, 10),
     )
     for section, dimension, field, relative, floor in signed_metrics:
         _assert_metric_threshold(
@@ -1534,7 +1534,7 @@ def main() -> int:
             "sendinput_call_duration_us": _aggregate_metric(
                 runs, "sendinput_call_duration_us"
             ),
-            "bookkeeping_duration_us": _aggregate_metric(runs, "bookkeeping_duration_us"),
+            "core_post_send_duration_us": _aggregate_metric(runs, "core_post_send_duration_us"),
             "sender_completion_error_us": _aggregate_metric(
                 runs, "sender_completion_error_us"
             ),
@@ -1563,13 +1563,13 @@ def main() -> int:
                 run["sendinput_zero_progress_failures"] for run in runs
             ),
             "sendinput_path_degraded": any(run["sendinput_path_degraded"] for run in runs),
-            "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in runs),
+            "core_post_send_degraded": any(run["core_post_send_degraded"] for run in runs),
             "wait_path_degraded": any(run["wait_path_degraded"] for run in runs),
-            "send_warn_threshold_us": _stats(
-                [run["send_warn_threshold_us"] for run in runs]
+            "sendinput_warn_threshold_us": _stats(
+                [run["sendinput_warn_threshold_us"] for run in runs]
             ),
-            "bookkeeping_warn_threshold_us": _stats(
-                [run["bookkeeping_warn_threshold_us"] for run in runs]
+            "core_post_send_warn_threshold_us": _stats(
+                [run["core_post_send_warn_threshold_us"] for run in runs]
             ),
             "wait_warn_threshold_us": _stats(
                 [run["wait_warn_threshold_us"] for run in runs]
@@ -1577,8 +1577,8 @@ def main() -> int:
             "sendinput_degraded_samples": sum(
                 run["sendinput_degraded_samples"] for run in runs
             ),
-            "bookkeeping_degraded_samples": sum(
-                run["bookkeeping_degraded_samples"] for run in runs
+            "core_post_send_degraded_samples": sum(
+                run["core_post_send_degraded_samples"] for run in runs
             ),
             "wait_degraded_samples": sum(run["wait_degraded_samples"] for run in runs),
             "positive_residual_at_cap": sum(
@@ -1628,8 +1628,8 @@ def main() -> int:
         "sendinput_call_duration_us": _aggregate_metric(
             dispatch_runs, "sendinput_call_duration_us"
         ),
-        "bookkeeping_duration_us": _aggregate_metric(
-            dispatch_runs, "bookkeeping_duration_us"
+        "core_post_send_duration_us": _aggregate_metric(
+            dispatch_runs, "core_post_send_duration_us"
         ),
         "sender_completion_error_us": _aggregate_metric(
             dispatch_runs, "sender_completion_error_us"
@@ -1676,13 +1676,13 @@ def main() -> int:
         "sendinput_path_degraded": any(
             run["sendinput_path_degraded"] for run in dispatch_runs
         ),
-        "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in dispatch_runs),
+        "core_post_send_degraded": any(run["core_post_send_degraded"] for run in dispatch_runs),
         "wait_path_degraded": any(run["wait_path_degraded"] for run in dispatch_runs),
-        "send_warn_threshold_us": _stats(
-            [run["send_warn_threshold_us"] for run in dispatch_runs]
+        "sendinput_warn_threshold_us": _stats(
+            [run["sendinput_warn_threshold_us"] for run in dispatch_runs]
         ),
-        "bookkeeping_warn_threshold_us": _stats(
-            [run["bookkeeping_warn_threshold_us"] for run in dispatch_runs]
+        "core_post_send_warn_threshold_us": _stats(
+            [run["core_post_send_warn_threshold_us"] for run in dispatch_runs]
         ),
         "wait_warn_threshold_us": _stats(
             [run["wait_warn_threshold_us"] for run in dispatch_runs]
@@ -1690,8 +1690,8 @@ def main() -> int:
         "sendinput_degraded_samples": sum(
             run["sendinput_degraded_samples"] for run in dispatch_runs
         ),
-        "bookkeeping_degraded_samples": sum(
-            run["bookkeeping_degraded_samples"] for run in dispatch_runs
+        "core_post_send_degraded_samples": sum(
+            run["core_post_send_degraded_samples"] for run in dispatch_runs
         ),
         "wait_degraded_samples": sum(
             run["wait_degraded_samples"] for run in dispatch_runs
