@@ -64,7 +64,7 @@ BENCHMARK_HOLD_GUARD_US = 2_500
 def _normalize_historical_native_trace(
     output: dict[str, Any], *, native_build_commit: str
 ) -> dict[str, Any]:
-    """Project the known schema-7 baseline field into the canonical metric.
+    """Project the known schema-8 baseline field into the canonical metric.
 
     The same-semantics reference predates the ``core_post_send`` name but has
     the same authored timeline semantics. Keep this compatibility projection
@@ -74,7 +74,7 @@ def _normalize_historical_native_trace(
 
     if (
         native_build_commit != SAME_SEMANTICS_REFERENCE_SHA
-        or output.get("schema_version") != 7
+        or output.get("schema_version") != 8
     ):
         return output
     records = output.get("records")

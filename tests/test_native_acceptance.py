@@ -48,9 +48,9 @@ def test_mock_backend_defaults_preserve_latency_model() -> None:
     ) == (80, 40)
 
 
-def test_known_schema_seven_baseline_projects_legacy_post_send_field() -> None:
+def test_known_schema_eight_baseline_projects_legacy_post_send_field() -> None:
     output: dict[str, Any] = {
-        "schema_version": 7,
+        "schema_version": 8,
         "records": [{"bookkeeping_duration_us": 4}],
     }
 
@@ -63,9 +63,9 @@ def test_known_schema_seven_baseline_projects_legacy_post_send_field() -> None:
     assert "core_post_send_duration_us" not in output["records"][0]
 
 
-def test_unknown_schema_seven_does_not_project_legacy_post_send_field() -> None:
+def test_unknown_schema_eight_does_not_project_legacy_post_send_field() -> None:
     output: dict[str, Any] = {
-        "schema_version": 7,
+        "schema_version": 8,
         "records": [{"bookkeeping_duration_us": 4}],
     }
 
