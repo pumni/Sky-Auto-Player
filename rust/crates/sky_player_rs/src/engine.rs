@@ -36,6 +36,41 @@ pub(crate) use test_support::{CommandTimingCleanup, CommandTimingState, PauseTim
 pub use test_support::{FaultInjectionScript, InjectedSendOutcome};
 #[cfg(test)]
 pub(crate) use worker::*;
+#[cfg(feature = "test-support")]
+pub mod dispatch_primitives {
+    //! Queue primitive types exported for the §8.11 no-alloc integration test only.
+    //! Do not use in production code.
+    pub use super::worker::dispatch::observer_drain::{
+        DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
+        UpObservation,
+    };
+    pub use super::worker::health::DispatchPath;
+}
+
+/// Test-only hooks for §8.12 slow-observer regression scenarios.
+///
+/// Functions are hand-written wrappers (not `pub use` re-exports) so the
+/// public path via `sky_player_rs::engine::observer_test_hooks::*` is stable
+/// for both crate-internal unit tests and the external `tests/` integration
+/// test binary, without leaking the crate-internal `worker::dispatch` module
+/// into the public API (E0364).
+#[cfg(any(test, feature = "test-support"))]
+pub mod observer_test_hooks {
+    /// Force every observer drain to sleep this many microseconds.
+    pub fn set_observer_artificial_cost_us(us: u64) {
+        super::worker::dispatch::observer_drain::set_observer_artificial_cost_us(us);
+    }
+
+    /// Override the worker's initial observer budget in microseconds (0 disables).
+    pub fn set_observer_initial_budget_override_us(us: u64) {
+        super::worker::dispatch::observer_drain::set_observer_initial_budget_override_us(us);
+    }
+
+    /// Clear artificial cost and budget override after a scenario.
+    pub fn reset_observer_test_hooks() {
+        super::worker::dispatch::observer_drain::reset_observer_test_hooks();
+    }
+}
 
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;

@@ -2,10 +2,19 @@ mod admission;
 mod boot;
 mod cleanup;
 mod control;
+#[cfg(not(any(test, feature = "test-support")))]
 mod dispatch;
+// `pub(crate)` under test / test-support so engine.rs can re-export the
+// observer queue primitives (§8.11) and slow-observer hooks (§8.12) to the
+// public API without a private-module path.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod dispatch;
 mod dispatch_loop;
 mod estimator;
+#[cfg(not(any(test, feature = "test-support")))]
 mod health;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod health;
 mod orchestration;
 mod planning;
 mod startup;
@@ -30,8 +39,9 @@ use control::{
 };
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases, drain_one_observer,
+    dispatch_due_pending_releases, drain_one_observer, observer_has_safe_slack,
 };
+
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
@@ -73,7 +83,7 @@ use sky_dispatch_core::model::RuntimeSchedule;
 /// backend, coordinator, and telemetry can still be finalized after an
 /// injected or unexpected panic.
 #[derive(Default)]
-pub(super) struct WorkerRuntime {
+pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
     startup_gate: Option<(TimelineTicks, DurationTicks)>,
     focus_restore_started_ticks: Option<QpcTicks>,
@@ -93,7 +103,7 @@ pub(super) struct WorkerErrorState {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct WorkerTimingState {
+pub(crate) struct WorkerTimingState {
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
     pub(super) retry_late_threshold_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
@@ -111,7 +121,7 @@ pub(super) struct WorkerTimingState {
     pub(super) last_cpu_metrics_sample_us: u64,
 }
 
-pub(super) struct WorkerHealthState {
+pub(crate) struct WorkerHealthState {
     pub(super) down_saturation_positive_streak: u8,
     pub(super) up_saturation_positive_streak: u8,
     pub(super) options: DispatchHealthOptions,
@@ -120,7 +130,7 @@ pub(super) struct WorkerHealthState {
     pub(super) wait_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
 }
 
-pub(super) struct WorkerResources {
+pub(crate) struct WorkerResources {
     pub(super) clock: QpcClock,
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
@@ -155,20 +165,31 @@ impl Default for WorkerObserverState {
     fn default() -> Self {
         Self {
             pending: dispatch::PendingObservationQueue::default(),
-            budget_us: OBSERVER_INITIAL_BUDGET_US,
+            budget_us: observer_initial_budget_us(),
         }
     }
 }
 
-/// Initial deferred-observer execution budget, in microseconds.
-const OBSERVER_INITIAL_BUDGET_US: u64 = 5_000;
+/// Initial deferred-observer execution budget, in microseconds (§8.8).
+pub(super) const OBSERVER_INITIAL_BUDGET_US: u64 = 5_000;
 /// Margin kept in addition to the observer budget before a drain is allowed,
-/// in microseconds.
-const OBSERVER_MARGIN_US: u64 = 500;
-/// Lower bound for adaptive observer budget adaptation.
-const OBSERVER_BUDGET_FLOOR_US: u64 = 5_000;
-/// Upper bound for adaptive observer budget adaptation.
-const OBSERVER_BUDGET_CAP_US: u64 = 20_000;
+/// in microseconds (§8.8).
+pub(super) const OBSERVER_MARGIN_US: u64 = 500;
+/// Lower bound for adaptive observer budget adaptation (§8.9).
+pub(super) const OBSERVER_BUDGET_FLOOR_US: u64 = 5_000;
+/// Upper bound for adaptive observer budget adaptation (§8.9).
+pub(super) const OBSERVER_BUDGET_CAP_US: u64 = 20_000;
+
+fn observer_initial_budget_us() -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        let override_us = dispatch::observer_initial_budget_override_us();
+        if override_us > 0 {
+            return override_us;
+        }
+    }
+    OBSERVER_INITIAL_BUDGET_US
+}
 
 pub(super) struct Worker<'a> {
     schedule: Option<RuntimeSchedule>,

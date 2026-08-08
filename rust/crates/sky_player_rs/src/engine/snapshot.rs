@@ -88,6 +88,14 @@ pub struct EngineSnapshot {
     pub send_mixed_warn_threshold_us: u64,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    /// Typed `dispatch_ready - sender_completed` peak (§8.13).
+    pub core_post_send_max_us: u64,
+    /// Peak deferred-observer drain duration (§8.13).
+    pub observer_duration_max_us: u64,
+    /// Observations dropped by the fixed queue's drop-oldest policy (§8.13).
+    pub observer_dropped_samples: u64,
+    /// High-watermark of the fixed observer queue (§8.13).
+    pub observer_queue_high_watermark: u64,
     pub terminal_error: Option<String>,
     pub secondary_errors: Vec<String>,
     pub generation_count: u64,

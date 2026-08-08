@@ -587,6 +587,10 @@ impl NativeDispatchSession {
             send_mixed_warn_threshold_us: local.send_mixed_warn_threshold_us,
             wait_target_error_us: local.wait_target_error_us,
             idle_wake_count: local.idle_wake_count,
+            core_post_send_max_us: local.core_post_send_max_us,
+            observer_duration_max_us: local.observer_duration_max_us,
+            observer_dropped_samples: local.observer_dropped_samples,
+            observer_queue_high_watermark: local.observer_queue_high_watermark,
             terminal_error: self
                 .shared
                 .publication

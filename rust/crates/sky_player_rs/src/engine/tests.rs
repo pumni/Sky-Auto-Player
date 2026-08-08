@@ -1363,6 +1363,7 @@ fn module_line_limits_strictly_respected() {
         ("worker/dispatch/mod.rs", 250),
         ("worker/dispatch/authored.rs", 700),
         ("worker/dispatch/observer.rs", 700),
+        ("worker/dispatch/observer_drain.rs", 700),
         ("worker/dispatch/release.rs", 700),
         ("worker/dispatch/timing.rs", 700),
     ];
@@ -1376,6 +1377,19 @@ fn module_line_limits_strictly_respected() {
         assert!(
             line_count <= hard_limit,
             "{relative} has {line_count} lines (dispatch hard limit {hard_limit})"
+        );
+    }
+    for legacy in [
+        "worker/downs.rs",
+        "worker/releases.rs",
+        "worker/down_outcome.rs",
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/engine")
+            .join(legacy);
+        assert!(
+            !path.exists(),
+            "legacy dispatch module must not exist: {legacy}"
         );
     }
 }
@@ -2297,4 +2311,230 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
         .unwrap()
         .unwrap();
     assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
+}
+
+/// §8.12 — slow observer must not shift the next authored dispatch when slack
+/// is insufficient.  A 10 ms A→B gap with a 15 ms observer budget (+0.5 ms
+/// margin) defers the drain; artificial 20 ms observer cost therefore cannot
+/// push B's physical send by ~20 ms, cannot rewrite B's authored timestamp,
+/// and must not trigger a WorkerLate timeline rebase.
+#[test]
+fn slow_observer_defers_when_slack_is_insufficient() {
+    use crate::engine::observer_test_hooks::{
+        reset_observer_test_hooks, set_observer_artificial_cost_us,
+        set_observer_initial_budget_override_us,
+    };
+
+    set_observer_artificial_cost_us(20_000);
+    // Force budget so 10 ms slack < budget + margin (15_000 + 500).
+    set_observer_initial_budget_override_us(15_000);
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 105_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 110_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 115_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-up".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("slow-observer schedule");
+
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    options.telemetry.capacity = 16;
+
+    let session = NativeDispatchSession::new(options).expect("session");
+    session.start().expect("start");
+    while !session.snapshot().is_finished {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+    reset_observer_test_hooks();
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
+    assert_eq!(
+        snapshot.timeline_rebase_count, 0,
+        "WorkerLate rebase must be 0"
+    );
+    assert_eq!(
+        snapshot.timeline_rebase_last_reason, None,
+        "no timeline rebase reason expected"
+    );
+
+    // With insufficient slack the 20 ms artificial cost must not dominate the
+    // observer duration metric (drain is deferred until later idle/end).
+    // Authored B target stays at 110 ms via telemetry.
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records");
+    let b_down = records
+        .iter()
+        .find(|r| r["event_index"].as_u64() == Some(2))
+        .expect("B-down record");
+    let authored = b_down["authored_ticks"].as_u64().expect("authored");
+    let started = b_down["send_started_ticks"].as_u64().expect("started");
+    let clock = QpcClock::initialize().expect("QPC");
+    let expected_authored = clock
+        .duration_from_us(110_000)
+        .expect("110ms ticks")
+        .as_u64();
+    assert_eq!(
+        authored, expected_authored,
+        "B authored timestamp must not change"
+    );
+    // Physical start must not be shifted by the full artificial 20 ms observer cost.
+    let start_error_ticks = started.saturating_sub(authored);
+    let start_error_us = clock
+        .duration_to_us(DurationTicks::from_raw(start_error_ticks))
+        .unwrap_or(0);
+    assert!(
+        start_error_us < 12_000,
+        "B physical start slipped {start_error_us}us; observer must not add ~20ms"
+    );
+}
+
+/// §8.12 — when gap slack is ample, the observer may drain and the worker
+/// must rebuild the plan from a fresh QPC sample without shifting authored
+/// timestamps or rebasing the timeline.
+#[test]
+fn slow_observer_drains_in_ample_slack_without_rebase() {
+    use crate::engine::observer_test_hooks::{
+        reset_observer_test_hooks, set_observer_artificial_cost_us,
+        set_observer_initial_budget_override_us,
+    };
+
+    // 2 ms artificial cost with default 5 ms budget; 50 ms gap is ample.
+    set_observer_artificial_cost_us(2_000);
+    set_observer_initial_budget_override_us(0);
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 105_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 150_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 155_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-up".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("ample-slack schedule");
+
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    options.telemetry.capacity = 16;
+
+    let session = NativeDispatchSession::new(options).expect("session");
+    session.start().expect("start");
+    while !session.snapshot().is_finished {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+    reset_observer_test_hooks();
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
+    assert_eq!(snapshot.timeline_rebase_count, 0);
+    // Observer did run (ample slack); duration should be observed.
+    assert!(
+        snapshot.observer_duration_max_us >= 1_000,
+        "expected observer drain under ample slack, got observer_duration_max_us={}",
+        snapshot.observer_duration_max_us
+    );
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records");
+    let b_down = records
+        .iter()
+        .find(|r| r["event_index"].as_u64() == Some(2))
+        .expect("B-down record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let expected_authored = clock
+        .duration_from_us(150_000)
+        .expect("150ms ticks")
+        .as_u64();
+    assert_eq!(
+        b_down["authored_ticks"].as_u64().expect("authored"),
+        expected_authored,
+        "B authored timestamp must stay at 150ms"
+    );
 }

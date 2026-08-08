@@ -18,7 +18,13 @@
 
 mod authored;
 mod observer;
+#[cfg(not(any(test, feature = "test-support")))]
 mod observer_drain;
+// `pub(crate)` under test/test-support so engine.rs's public §8.11/§8.12
+// bridge can reach the queue primitives and hooks through a crate-visible
+// path (still no crate-wide module leak in production).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod observer_drain;
 mod release;
 mod timing;
 
@@ -66,8 +72,17 @@ pub(super) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
-pub(crate) use observer_drain::{PendingObservationQueue, drain_one_observer};
+pub(crate) use observer_drain::{
+    PendingObservationQueue, drain_one_observer, observer_has_safe_slack,
+};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
+
+// `observer_initial_budget_override_us` is reached crate-internally via
+// `dispatch::observer_initial_budget_override_us` (worker.rs). The remaining
+// queue primitives + §8.12 hooks are re-exported at crate root under
+// `engine::dispatch_primitives` / `engine::observer_test_hooks` instead.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) use observer_drain::observer_initial_budget_override_us;
 
 use super::super::{ActionKind, LatencyClass, QpcTicks, TimelineTicks};
 pub(super) use super::publish_backend_metrics;

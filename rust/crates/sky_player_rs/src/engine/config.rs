@@ -53,7 +53,7 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) estimator: EstimatorOptions,
 }
 
-pub(super) struct WorkerConfig {
+pub(crate) struct WorkerConfig {
     pub(super) backend: BackendConfig,
     pub(super) allowed_count: usize,
     pub(super) timing: TimingOptions,

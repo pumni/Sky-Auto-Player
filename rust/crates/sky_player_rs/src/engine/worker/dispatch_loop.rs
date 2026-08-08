@@ -484,7 +484,7 @@ pub(super) fn dispatch(
                 now_ticks = qpc_ticks_or_terminal!();
             }
 
-            let effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
+            let mut effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
                 && now_ticks < resources.playback.epoch
             {
                 TimelineTicks::ZERO
@@ -503,9 +503,9 @@ pub(super) fn dispatch(
                     }
                 }
             };
-            let effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
+            let mut effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
             core.metrics.elapsed_us = effective_now_us;
-            let latency_class = match classify_latency_class(
+            let mut latency_class = match classify_latency_class(
                 core.runtime.last_send_qpc_ticks,
                 now_ticks,
                 timing.cold_threshold_ticks,
@@ -518,7 +518,10 @@ pub(super) fn dispatch(
                 }
             };
 
-            let dispatch_plan = match plan_next_dispatch(
+            // §8.7: fresh QPC → immutable plan → inspect slack → maybe drain
+            // one observation → if drained, discard plan and rebuild from a
+            // fresh QPC sample before any admit/dispatch/wait.
+            let mut dispatch_plan = match plan_next_dispatch(
                 &resources.coordinator,
                 &resources.estimator,
                 qpc_clock,
@@ -533,6 +536,89 @@ pub(super) fn dispatch(
                     break;
                 }
             };
+            if !core.observer.pending.is_empty()
+                && super::observer_has_safe_slack(
+                    dispatch_plan.deadline_ticks,
+                    effective_now_ticks,
+                    core.observer.budget_us,
+                    super::OBSERVER_MARGIN_US,
+                    qpc_clock,
+                )
+            {
+                let drain_us = super::drain_one_observer(
+                    &mut core.observer.pending,
+                    config,
+                    core.health.as_mut().unwrap(),
+                    &mut core.metrics,
+                    &mut core.errors.last_published,
+                    metrics,
+                    &mut resources.backend,
+                    &mut resources.estimator,
+                    qpc_clock,
+                    effective_now_us,
+                );
+                if drain_us > 0 {
+                    core.metrics.observer_duration_max_us =
+                        core.metrics.observer_duration_max_us.max(drain_us);
+                    // §8.9 adaptive budget: clamp(2 * observed, FLOOR..CAP).
+                    core.observer.budget_us = drain_us.saturating_mul(2).clamp(
+                        super::OBSERVER_BUDGET_FLOOR_US,
+                        super::OBSERVER_BUDGET_CAP_US,
+                    );
+                    // Observer work invalidates the plan. Rebuild from fresh QPC.
+                    now_ticks = qpc_ticks_or_terminal!();
+                    effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
+                        && now_ticks < resources.playback.epoch
+                    {
+                        TimelineTicks::ZERO
+                    } else {
+                        core.runtime.allow_pre_epoch_startup_dispatch = false;
+                        match resources.playback.get_elapsed_allow_pre_epoch(
+                            now_ticks,
+                            core.runtime.allow_pre_epoch_startup_dispatch,
+                        ) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                core.runtime.force_full_cleanup = true;
+                                core.runtime.terminal_error =
+                                    Some(format!("playback clock failure: {error}"));
+                                break;
+                            }
+                        }
+                    };
+                    effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
+                    core.metrics.elapsed_us = effective_now_us;
+                    latency_class = match classify_latency_class(
+                        core.runtime.last_send_qpc_ticks,
+                        now_ticks,
+                        timing.cold_threshold_ticks,
+                    ) {
+                        Ok(class) => class,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("QPC ordering failure: {error}"));
+                            break;
+                        }
+                    };
+                    dispatch_plan = match plan_next_dispatch(
+                        &resources.coordinator,
+                        &resources.estimator,
+                        qpc_clock,
+                        latency_class,
+                        &config.timing,
+                        config.estimator.enable_adaptive_lead,
+                    ) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("planning failure: {error}"));
+                            break;
+                        }
+                    };
+                }
+            }
             let pending_plan = dispatch_plan.pending;
 
             let lead_up_ticks = match pending_plan.as_ref() {
@@ -620,36 +706,7 @@ pub(super) fn dispatch(
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
-                super::DispatchStep::NoWork => {
-                    // Deferred dispatch-observer slack: drain at most one
-                    // enqueued note-on observation per idle iteration when
-                    // enough budget/margin remains.
-                    let drain_us = if core.observer.budget_us > super::OBSERVER_MARGIN_US {
-                        super::drain_one_observer(
-                            &mut core.observer.pending,
-                            config,
-                            core.health.as_mut().unwrap(),
-                            &mut core.metrics,
-                            &mut core.errors.last_published,
-                            metrics,
-                            &mut resources.backend,
-                            &mut resources.estimator,
-                            qpc_clock,
-                            loop_start_us,
-                        )
-                    } else {
-                        0
-                    };
-                    if drain_us > 0 {
-                        core.metrics.observer_duration_max_us =
-                            core.metrics.observer_duration_max_us.max(drain_us);
-                        // §8.9 adaptive budget: clamp(2 * observed, FLOOR..CAP).
-                        core.observer.budget_us = drain_us.saturating_mul(2).clamp(
-                            super::OBSERVER_BUDGET_FLOOR_US,
-                            super::OBSERVER_BUDGET_CAP_US,
-                        );
-                    }
-                }
+                super::DispatchStep::NoWork => {}
                 super::DispatchStep::Terminate(err) => {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(err);

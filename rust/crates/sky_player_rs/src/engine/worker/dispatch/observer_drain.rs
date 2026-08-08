@@ -9,19 +9,21 @@
 //! a note-on observation.
 
 use super::super::super::{
-    ActionKind, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics, TrackedKeyState,
-    try_publish_metrics,
+    ActionKind, DurationTicks, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics,
+    TimelineTicks, TrackedKeyState, try_publish_metrics,
 };
 use super::super::{
     DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     observe_dispatch_health, publish_backend_metrics, record_lateness, record_lead_saturation,
     signed_delta, update_estimator_after_send_class,
 };
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Fixed capacity of the worker thread's deferred dispatch-observation queue.
 /// Owner: the single worker thread.  Drops the oldest sample when full so the
 /// estimator and health windows prefer the most recent evidence.
-pub(crate) const OBSERVATION_QUEUE_CAPACITY: usize = 64;
+pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 
 /// One complete, allocation-free snapshot of a dispatched send, captured at the
 /// `dispatch_ready` boundary (after the coordinator commit and the mandatory
@@ -29,14 +31,14 @@ pub(crate) const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 /// health windows, lateness, diagnostic metric publication).  All fields are
 /// plain `Copy` scalars or `Copy` enums.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum DispatchObservation {
+pub enum DispatchObservation {
     Down(DownObservation),
     Up(UpObservation),
 }
 
 /// Note-on portion of a dispatched-send snapshot.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct DownObservation {
+pub struct DownObservation {
     pub path: DispatchPath,
     pub latency_class: LatencyClass,
     pub estimator_kind: Option<ActionKind>,
@@ -60,7 +62,7 @@ pub(crate) struct DownObservation {
 
 /// Note-off portion of a dispatched-send snapshot.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct UpObservation {
+pub struct UpObservation {
     pub latency_class: LatencyClass,
     pub sender_duration_us: u64,
     pub sent_count: usize,
@@ -84,7 +86,7 @@ pub(crate) struct UpObservation {
 /// the observer-dropped counter in the caller and updating the queue
 /// high-watermark.  Never blocks and never resizes.
 #[derive(Debug)]
-pub(crate) struct PendingObservationQueue {
+pub struct PendingObservationQueue {
     entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
     head: usize,
     len: usize,
@@ -101,7 +103,7 @@ impl Default for PendingObservationQueue {
 }
 
 impl PendingObservationQueue {
-    pub(crate) fn push(
+    pub fn push(
         &mut self,
         observation: DispatchObservation,
         dropped_samples: &mut u64,
@@ -120,7 +122,7 @@ impl PendingObservationQueue {
         *high_watermark = (*high_watermark).max(self.len as u64);
     }
 
-    pub(crate) fn pop_front(&mut self) -> Option<DispatchObservation> {
+    pub fn pop_front(&mut self) -> Option<DispatchObservation> {
         if self.len == 0 {
             return None;
         }
@@ -129,6 +131,71 @@ impl PendingObservationQueue {
         self.len -= 1;
         entry
     }
+
+    /// Returns the number of observations currently in the queue.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when the queue contains no observations.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// §8.8 observer slack rule.
+///
+/// Drain is allowed only when there is no remaining authored/release deadline,
+/// or when the next deadline's slack is at least `budget_us + margin_us`.
+/// Already-due deadlines never yield to the observer.
+pub(crate) fn observer_has_safe_slack(
+    deadline_ticks: Option<TimelineTicks>,
+    effective_now_ticks: TimelineTicks,
+    budget_us: u64,
+    margin_us: u64,
+    qpc_clock: QpcClock,
+) -> bool {
+    let Some(deadline) = deadline_ticks else {
+        return true;
+    };
+    if deadline.as_u64() <= effective_now_ticks.as_u64() {
+        return false;
+    }
+    let slack_ticks = DurationTicks::from_raw(deadline.as_u64() - effective_now_ticks.as_u64());
+    match qpc_clock.duration_to_us(slack_ticks) {
+        Ok(slack_us) => slack_us >= budget_us.saturating_add(margin_us),
+        Err(_) => false,
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_INITIAL_BUDGET_OVERRIDE_US: AtomicU64 = AtomicU64::new(0);
+
+/// Test-only: force every observer drain to sleep this many microseconds so
+/// §8.12 can prove a slow observer cannot shift authored dispatch.
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_observer_artificial_cost_us(us: u64) {
+    OBSERVER_ARTIFICIAL_COST_US.store(us, Ordering::SeqCst);
+}
+
+/// Test-only: override the worker's initial observer budget (0 disables).
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_observer_initial_budget_override_us(us: u64) {
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.store(us, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn observer_initial_budget_override_us() -> u64 {
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.load(Ordering::SeqCst)
+}
+
+/// Test-only: clear artificial cost and budget override after a scenario.
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_observer_test_hooks() {
+    OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
+    OBSERVER_INITIAL_BUDGET_OVERRIDE_US.store(0, Ordering::SeqCst);
 }
 
 /// Deferred observer consumed by the dispatch loop's slack budget.  Applies
@@ -351,6 +418,15 @@ pub(crate) fn drain_one_observer(
             now_us,
         ),
     }
+    // §8.12 test hook: artificial cost is included in the measured drain
+    // duration so adaptive budget (§8.9) learns the inflated cost.
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
+        if cost_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(cost_us));
+        }
+    }
     let drain_end = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(_) => return 0,
@@ -428,5 +504,49 @@ mod tests {
         assert_eq!(queue.pop_front().map(lead_of), Some(10));
         assert_eq!(queue.pop_front().map(lead_of), Some(20));
         assert_eq!(queue.pop_front().map(lead_of), None);
+    }
+
+    #[test]
+    fn observer_slack_defers_when_deadline_is_close() {
+        let clock = QpcClock::initialize().expect("QPC");
+        let now =
+            TimelineTicks::from_raw(clock.duration_from_us(100_000).expect("now ticks").as_u64());
+        // 10 ms slack with budget 15 ms + margin 0.5 ms must defer.
+        let deadline = TimelineTicks::from_raw(
+            clock
+                .duration_from_us(110_000)
+                .expect("deadline ticks")
+                .as_u64(),
+        );
+        assert!(!observer_has_safe_slack(
+            Some(deadline),
+            now,
+            15_000,
+            500,
+            clock,
+        ));
+    }
+
+    #[test]
+    fn observer_slack_allows_wide_gap_and_no_deadline() {
+        let clock = QpcClock::initialize().expect("QPC");
+        let now =
+            TimelineTicks::from_raw(clock.duration_from_us(100_000).expect("now ticks").as_u64());
+        let deadline = TimelineTicks::from_raw(
+            clock
+                .duration_from_us(150_000)
+                .expect("deadline ticks")
+                .as_u64(),
+        );
+        assert!(observer_has_safe_slack(
+            Some(deadline),
+            now,
+            5_000,
+            500,
+            clock,
+        ));
+        assert!(observer_has_safe_slack(None, now, 5_000, 500, clock));
+        // Already-due deadline never yields to the observer.
+        assert!(!observer_has_safe_slack(Some(now), now, 5_000, 500, clock,));
     }
 }

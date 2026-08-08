@@ -73,7 +73,7 @@ pub(crate) struct HealthWindowPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DispatchPath {
+pub enum DispatchPath {
     DownOnly { down_count: usize },
     UpOnly { up_count: usize },
     Mixed { up_count: usize, down_count: usize },

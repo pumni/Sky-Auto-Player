@@ -38,7 +38,7 @@ choice, and the terminal transition.
   mutates the coordinator, allocates, or formats strings on the success path.
   The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
   the wait deadline, so prepare and wait cannot disagree on lead selection.
-- `dispatch.rs` owns the pending-release and authored-packet backend
+- `dispatch/` owns the pending-release and authored-packet backend
   transactions, transaction-outcome interpretation, coordinator commit, and the
   dispatch telemetry record.  Both the note-on and note-off observers are
   two-phase: the mandatory telemetry trace, the coordinator commit, the
@@ -46,11 +46,16 @@ choice, and the terminal transition.
   QPC sample stay on the hard scheduler path; the estimator update,
   health-window observation, lateness accounting, and diagnostic metric
   publication are enqueued as an allocation-free `DispatchObservation`
-  (tagged `Down`/`Up`) and consumed later by
-  `observer_drain::drain_one_observer` during the dispatch loop's idle slack.
-  The observer work is droppable and never terminal.  It returns a closed
-  four-variant `DispatchStep` (`NoWork`, `Dispatched`, `Continue`, `Terminate`)
-  instead of scalar tuples.
+  (tagged `Down`/`Up`) into a fixed-capacity (64) worker-owned ring and
+  consumed later by `observer_drain::drain_one_observer`.
+  The dispatch loop applies the §8.7/§8.8 slack rule before admit/dispatch:
+  fresh QPC → immutable `NextDispatchPlan` → drain at most one observation
+  only when next-deadline slack ≥ `budget_us + margin_us` (or no deadline
+  remains) → if drained, discard the plan and rebuild from a fresh QPC
+  sample before wait/admit/dispatch.  Adaptive budget (§8.9) is
+  `clamp(2 × observed_us, 5_000..20_000)`.  Observer work is droppable and
+  never terminal.  It returns a closed four-variant `DispatchStep`
+  (`NoWork`, `Dispatched`, `Continue`, `Terminate`) instead of scalar tuples.
 - `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
   terminal-error aggregation.
 - `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
