@@ -15,6 +15,29 @@ audit details, and disclosure contacts. `CLAUDE.md` is a thin `@AGENTS.md` shim.
 
 </SECURITY_MANDATES>
 
+## Public Release Model (normative)
+
+The public Windows distribution is intentionally unsigned and portable:
+
+- Public packages contain the app and native calibration binary only. They do
+  not contain `Sky-Auto-Player-Updater.exe`, BAT/PowerShell updater scripts, or
+  a system installer.
+- Authenticode is `N/A — intentionally unsigned` for public binaries. No PFX,
+  certificate secret, signing step, or verified-publisher claim is required.
+- Updates are manual. Python checks release metadata, shows the update notice,
+  and opens only the fixed official GitHub Releases page:
+  `https://github.com/pumni/Sky-Auto-Player/releases`.
+- Python never downloads, extracts, replaces, deletes, restarts for, or
+  launches an update installer. The public UI exposes no automatic install
+  command.
+- `rust/crates/sky_updater/` is a separately tested, source-only security
+  component. It is not shipped or reachable from the production UI and must
+  remain fail-closed, including its configured Authenticode verification. Do
+  not add a signature bypass to make it accept unsigned payloads.
+- Public release integrity/provenance evidence remains the canonical ZIP,
+  SHA256 sidecar, exact `MANIFEST.json`, clean-worktree/native provenance, and
+  GitHub build attestation.
+
 ## Priority Stack
 
 If instructions conflict, follow the lower priority number. P3 cannot override P0–P2.
@@ -61,7 +84,7 @@ compaction or resume**, since this app touches anti-cheat-adjacent surfaces.
 - `src/build_app.py` — PyInstaller build driver; runs the smoke-test gate itself.
 - `src/sky_music/domain/` — pure domain models (schedules, profiles, timing frames). Must stay Windows- and I/O-free.
 - `src/sky_music/orchestration/` — scheduler/coordinator logic; must remain pure and unit-testable (no wall-clock, no `SendInput`).
-- `src/sky_music/infrastructure/` — bridging code between orchestration and platform (focus tracking, hotkey listeners, update launcher, real-time sleeper, MMCSS registration, wait strategy). The in-app update checker is **not** in this layer — it lives under `domain/update_checker.py` (pure version logic) and `orchestration/update_service.py` (glue); `infrastructure/update_launcher.py` only stages and launches the bundled native updater. May import `platform/` but must not be imported by `domain/`.
+- `src/sky_music/infrastructure/` — bridging code between orchestration and platform (focus tracking, hotkey listeners, retired update-launch guard, real-time sleeper, MMCSS registration, wait strategy). The in-app update checker is **not** in this layer — it lives under `domain/update_checker.py` (pure version logic) and `orchestration/update_service.py` (glue); `infrastructure/update_launcher.py` is a fail-closed compatibility guard and does not stage or launch a public updater. May import `platform/` but must not be imported by `domain/`.
 - `src/sky_music/platform/` — Windows backend behind an interface (`SendInput`, waitable timer, MMCSS, focus). The only place Win32 ctypes may live.
 - `src/sky_music/ui/` — Textual TUI (picker, HUD, command palette, update modals).
 - `src/sky_music/cli/` — argparse/CLI plumbing, validators.
@@ -69,9 +92,9 @@ compaction or resume**, since this app touches anti-cheat-adjacent surfaces.
 - `tests/` — pytest; markers in `pyproject.toml` (`scheduler`, `windows`, `golden`, `slow`). Golden schedules live in `tests/golden_schedules/`.
 - `scripts/` — security audit, free-threaded wheel audit, build, telemetry/bench scripts. Most are standalone utilities.
 - `docs/` — see Priority Stack P2 for the normative subset. `docs/INDEX.md` is the documentation map and hierarchy of truth.
-- `rust/crates/sky_updater/` — native out-of-process updater; security-sensitive: HTTPS host allow-list, SHA256-verify-before-mutate, transactional rollback, preserve-list (`config.json`, `.env`, `songs/`, `logs/`).
+- `rust/crates/sky_updater/` — source-only security component; security-sensitive: HTTPS host allow-list, SHA256-verify-before-mutate, Authenticode verification, transactional rollback, preserve-list (`config.json`, `.env`, `songs/`, `logs/`). It is not shipped in public packages.
 - `manifests/` — packaging manifests (winget community channel).
-- `.github/workflows/release.yml` — tag-triggered release pipeline; runs free-threaded + security audits, builds/signs before generating the manifest, attests, and uploads `Sky-Auto-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`.
+- `.github/workflows/release.yml` — tag-triggered unsigned release pipeline; runs free-threaded + security audits, builds the app with a matching source bootloader, hashes exact unsigned bytes, attests, and uploads `Sky-Auto-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`.
 - `Sky-Auto-Player.spec` — PyInstaller `onedir` spec; see Build Environment step 3.
 - `songs/`, `config.json`, `.env`, `.env.example` — runtime data, not source.
 
@@ -86,9 +109,9 @@ Read the matching row **before** touching the area.
 | Windows backend (`src/sky_music/platform/`) | `docs/rt-dispatch-architecture.md`, `SECURITY.md` | Only place `ctypes`/`SendInput` may live. Validate inputs strictly. |
 | Hold-frame timing model | `docs/hold-frame-model.md`, `docs/timing-principles.md` | Explicit selections: `1.0`, `1.25`, and `1.5` frames; default `1.0` at user-selected FPS. |
 | Overall architecture / layering | `docs/architecture.md` | 4-layer DDD; do not leak platform into domain. |
-| Distribution / updater | `docs/distribution-and-update.md` | Native updater must not touch `config.json`, `.env`, `songs/`, or `logs/`. |
-| Native updater (`rust/crates/sky_updater/`) | `docs/distribution-and-update.md`, crate tests | Security-sensitive: HTTPS allow-list, SHA256-verify-before-mutate, preserve-list, signatures, transaction recovery. Verify changes directly. |
-| PyInstaller build | `Sky-Auto-Player.spec`, `src/build_app.py`, `scripts/build_pyinstaller_bootloader.ps1` | Do not extend `excludes` without grepping `src/` for transitive use. Release build uses a matching source-built bootloader, signs project-owned PE files, then runs `--manifest-only`. |
+| Distribution / updater | `docs/distribution-and-update.md` | Public updates are manual; the source-only updater must not weaken its fail-closed security policy or touch `config.json`, `.env`, `songs/`, or `logs/`. |
+| Native updater (`rust/crates/sky_updater/`) | `docs/distribution-and-update.md`, crate tests | Source-only security component: HTTPS allow-list, SHA256-verify-before-mutate, preserve-list, Authenticode verification, transaction recovery. Verify changes directly. |
+| PyInstaller build | `Sky-Auto-Player.spec`, `src/build_app.py`, `scripts/build_pyinstaller_bootloader.ps1` | Do not extend `excludes` without grepping `src/` for transitive use. Release build uses a matching source-built bootloader, packages unsigned bytes, then runs `--manifest-only`. |
 | `pyproject.toml` / `.python-version` | Both must stay in sync (see Architecture Invariants). | |
 | Security-sensitive surfaces | `SECURITY.md`, `scripts/audit_security_mandates.py` | Verify directly — do not delegate to a subagent summary. |
 | A new `docs/*-plan.md` | `docs/INDEX.md` | Mark as proposal; normative docs win. |
@@ -102,8 +125,8 @@ Read the matching row **before** touching the area.
 - **SendInput is the only input mechanism.** No `python-keyboard`, `pynput`, `SetWindowsHookEx`, or hooks on any process. Enforced by `scripts/audit_security_mandates.py` in CI. Canonical: `SECURITY.md`.
 - **Migrations of `Sky-Auto-Player.spec` `excludes` are guarded.** Do not add to the `excludes` list without first grepping `src/` for transitive use of the stdlib module. Canonical: `Sky-Auto-Player.spec`.
 - **Committed `docs/*-plan.md` and `perf-baselines/*` are history.** They record what was tried, not what is currently enforced. Normative docs (P2) win. Canonical: `docs/INDEX.md` §0 Hierarchy of Truth.
-- **The native updater never touches `config.json`, `.env`, `songs/`, or `logs/`.** Python's check path may patch only `update.last_check_ts` and `update.last_notified_version` in its own config state. Canonical: `docs/distribution-and-update.md`.
-- **Updates use a native out-of-process apply path.** Python only checks releases, stops playback safely, copies `Sky-Auto-Player-Updater.exe` to a per-run `%LOCALAPPDATA%` directory, launches it, and exits. The Rust updater independently fetches the exact tag, enforces the HTTPS host allow-list (`api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), verifies SHA256/archive/manifest/Authenticode before mutation, preserves user state, and performs a durable transaction with rollback. Canonical: `docs/distribution-and-update.md`, `rust/crates/sky_updater/`.
+- **Public updates are manual-only.** Python checks release metadata, patches only its own update-notification state (`update.last_check_ts` and `update.last_notified_version`), and opens the fixed official GitHub Releases page. It never downloads, extracts, replaces, deletes, or restarts for an application update. Canonical: `docs/distribution-and-update.md`.
+- **The Rust updater is source-only and fail-closed.** It is not packaged or reachable from the public UI. Its source and tests retain the HTTPS host allow-list (`api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), SHA256/archive/manifest/Authenticode verification, preserve-list, and durable transaction/rollback policy. Never add a bypass for unsigned public packages. Canonical: `docs/distribution-and-update.md`, `rust/crates/sky_updater/`.
 - **Release artifacts are a triple.** Every tag-triggered release produces `Sky-Auto-Player-v<ver>.zip` + `Sky-Auto-Player-v<ver>.zip.sha256` + `MANIFEST.json`. The git tag version must equal `pyproject.toml` `[project].version` (without the leading `v`); `build_app --manifest` emits the manifest and `release.yml` enforces the lock. Canonical: `docs/distribution-and-update.md`, `.github/workflows/release.yml`.
 
 ## Coding Rules
@@ -143,8 +166,8 @@ The release pipeline chains every step below; each gate must pass before the nex
 
 1. **`uv` cache lives on the same volume as the workspace.** Copy `.env.example` to `.env` (gitignored). `UV_CACHE_DIR=.uv-cache` pins cache inside the repo so Windows hardlinks do not cross-volume and trigger `uv`'s "failed to hardlink, falling back to full copy" warning. The default cache location (`%LOCALAPPDATA%\uv`) sits on `C:` while this project lives on `V:` — leave the env var in place.
 2. **Free-threaded interpreter is mandatory.** `.python-version` is `3.14+freethreaded`. Before building, run `uv run --env-file .env python scripts/audit_free_threaded_wheels.py` — it verifies the interpreter has the GIL disabled at runtime, that each runtime dep satisfies its PEP 440 specifier (mirrored from `pyproject.toml`), and (for native deps) still imports under no-GIL (which implies a true `cp314t` wheel).
-3. **Build app** with `uv run --env-file .env python -m build_app`. PyInstaller uses `Sky-Auto-Player.spec` (`onedir` COLLECT strategy) and the build copies the native updater. The spec strips a few unused stdlib modules from the bundle (`xmlrpc`, `pydoc`) — do not extend the `excludes` list without first grepping `src/` for transitive use. Release builds sign project-owned PE files first, then run `uv run --env-file .env python -m build_app --manifest-only --release-dir <dir>` so `MANIFEST.json` hashes signed bytes; `.github/workflows/release.yml` enforces this and the tag↔`pyproject.toml` version lock.
-4. **Smoke test is gate, not extra.** `build_app` runs the frozen app selftests and `Sky-Auto-Player-Updater.exe --help` before declaring success. A green build implies a green smoke test; if you bypass with `--skip-test`, you accept responsibility for runtime breakage.
+3. **Build app** with `uv run --env-file .env python -m build_app`. PyInstaller uses `Sky-Auto-Player.spec` (`onedir` COLLECT strategy) and the public build does not copy a native updater. The spec strips a few unused stdlib modules from the bundle (`xmlrpc`, `pydoc`) — do not extend the `excludes` list without first grepping `src/` for transitive use. Release builds package exact unsigned PE bytes, then run `uv run --env-file .env python -m build_app --manifest-only --release-dir <dir>` so `MANIFEST.json` hashes the bytes that are actually shipped; `.github/workflows/release.yml` enforces this and the tag↔`pyproject.toml` version lock.
+4. **Smoke test is gate, not extra.** `build_app` runs the frozen app selftests and native calibration smoke test before declaring success. A green build implies a green smoke test; if you bypass with `--skip-test`, you accept responsibility for runtime breakage.
 
 ## Validation (altitude table)
 

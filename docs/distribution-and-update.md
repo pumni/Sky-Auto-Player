@@ -59,14 +59,19 @@ When the user selects **Open GitHub Releases**:
 ## 3. Release selection and network
 
 Python remains the user-facing selector. Stable excludes prereleases; beta may
-include them. The checker requests release metadata from:
+include them. The checker requests release metadata using the channel policy
+in `src/sky_music/domain/update_policy.py`:
 
 ```text
-https://api.github.com/repos/pumni/Sky-Auto-Player/releases/tags/v<target>
+stable: https://api.github.com/repos/pumni/Sky-Auto-Player/releases/latest
+beta:   https://api.github.com/repos/pumni/Sky-Auto-Player/releases?per_page=10
 ```
 
-It requires an exact tag, a non-draft release, a policy-compatible prerelease
-flag, and exactly these assets:
+The stable endpoint returns the latest non-prerelease release. The beta
+endpoint returns a bounded list; the checker selects the highest eligible
+non-draft release according to the configured channel policy. In both cases it
+requires a matching release tag, a non-draft release, a policy-compatible
+prerelease flag, and exactly these assets:
 
 ```text
 Sky-Auto-Player-v<target>.zip

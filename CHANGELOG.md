@@ -6,30 +6,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Adopted an unsigned portable/manual-update release model for the upcoming
-  v3.2.1 line. The app checks versions and opens the official GitHub Releases
-  page; it never installs or replaces application files.
-- Public release artifacts retain SHA256, exact MANIFEST.json, clean-worktree
-  and native provenance checks, and GitHub build attestation.
-- Authenticode status for public binaries is **N/A — intentionally unsigned**.
+The following changes are prepared for the `v3.2.1` release line. They are
+not part of the immutable `v3.2.0` tag, which was aborted before a public
+release was created.
 
-## [3.2.0] - 2026-08-09
+### Added
+
+- Added unsigned portable/manual-update packaging. The app checks versions
+  and opens the official GitHub Releases page; it never installs or replaces
+  application files.
+
+### Changed
+
+- Changed distribution to a single clean canonical release triple:
+  `Sky-Auto-Player-v<version>.zip`, its `.sha256` sidecar, and `MANIFEST.json`.
+- Changed update ownership so Python checks versions and opens the official
+  Releases page; public builds never perform automatic installation.
+- Changed release packaging so no certificate or signing secret is required;
+  `MANIFEST.json` hashes the exact unsigned bytes that are packaged.
+- Retained clean-worktree/native provenance checks and GitHub build attestation
+  for the unsigned public artifacts.
+
+### Security
+
+- Recorded Authenticode for public binaries as **N/A — intentionally unsigned**.
+- Kept the source-only Rust updater fail-closed and out of the public package;
+  it must not gain a signature-verification bypass.
+
+### Removed
+
+- Removed the public BAT/PowerShell/native-updater installation path and its
+  production package artifacts.
+
+## [3.2.0] - 2026-08-09 — Aborted / not published
+
+The immutable `v3.2.0` tag and its RC tags are retained for history. The
+release workflow failed before a public stable release was created, so the
+unsigned/manual behavior above must not be read as shipped `v3.2.0` behavior.
 
 ### Added
 
 - Added the source-only Rust updater security component and its fail-closed
   verification tests; it is not included in the public package.
 - Added Windows `RegisterHotKey` / `WM_HOTKEY` playback controls with pre-playback registration and fail-safe listener error propagation.
-- Added unsigned release packaging where MANIFEST.json hashes the exact bytes
-  that are packaged, with SHA256 and build provenance retained.
 
 ### Changed
 
-- Changed distribution to a single clean canonical release triple: `Sky-Auto-Player-v<version>.zip`, its `.sha256` sidecar, and `MANIFEST.json`.
-- Changed update ownership so Python checks versions and opens the official
-  Releases page; public builds never perform automatic installation.
 - Changed startup focus behavior to discovery-only; foreground refocus now occurs only after an explicit user action.
-- Changed release packaging so no certificate or signing secret is required.
 - Changed PyInstaller release builds to use the pinned matching source-built bootloader and narrower explicit collection instead of broad package collection.
 
 ### Fixed
@@ -49,20 +72,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean-worktree/native provenance checks, and GitHub build attestation.
 - Preserved `config.json`, `.env`, `songs/**`, and `logs/**` from overwrite and orphan deletion; arbitrary unmanifested user files are not deleted.
 - Kept the updater isolated from the real-time playback dispatcher and from all game-memory, injection, hook, debugger, and game-file modification surfaces.
-- Recorded Authenticode as **N/A — intentionally unsigned** for public binaries.
 
 ### Removed
 
-- Removed the BAT/PowerShell updater path and `ExecutionPolicy Bypass` launch chain.
 - Removed legacy `Sky-Player.exe` updater compatibility, dual-name resolution, legacy bridge packages, and old updater tests/actions from the active architecture.
 - Removed continuous playback-hotkey polling in favor of OS-registered hotkeys.
 
 ### Compatibility
 
 - Supported packaged platform remains Windows 10/11 x64.
-- Users upgrading from v3.1.0 or older may need one manual download/extract migration because the legacy updater is intentionally unsupported.
-- The v3.2.0 release was aborted; the v3.2.1 line uses manual migration and
-  preserves `config.json`, `.env`, `songs/`, and `logs/` by user action.
+- This tag is historical only; the replacement unsigned/manual release line is
+  `v3.2.1`.
 
 ## [3.1.0] - 2026-08-08
 
