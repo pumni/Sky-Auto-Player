@@ -110,12 +110,17 @@ def test_is_newer_strict() -> None:
 
 
 def _make_release(tag: str, *, assets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    version = tag.removeprefix("v")
     return {
         "tag_name": tag,
         "html_url": f"https://github.com/pumni/Sky-Auto-Player/releases/tag/{tag}",
         "published_at": "2024-01-01T00:00:00Z",
         "body": "Release notes body",
-        "assets": assets or [],
+        "assets": assets if assets is not None else [
+            {"name": f"Sky-Auto-Player-v{version}.zip", "browser_download_url": "https://api.github.com/zip"},
+            {"name": f"Sky-Auto-Player-v{version}.zip.sha256", "browser_download_url": "https://api.github.com/sha"},
+            {"name": "MANIFEST.json", "browser_download_url": "https://api.github.com/manifest"},
+        ],
     }
 
 
@@ -125,6 +130,7 @@ def test_parse_release_payload_newer_version_pick_zip() -> None:
         assets=[
             {"name": "Sky-Auto-Player-v2.4.0.zip", "browser_download_url": "https://x/y.zip"},
             {"name": "Sky-Auto-Player-v2.4.0.zip.sha256", "browser_download_url": "https://x/y.zip.sha256"},
+            {"name": "MANIFEST.json", "browser_download_url": "https://x/MANIFEST.json"},
         ],
     )
     result = parse_release_payload(payload, current_version="2.3.0")
@@ -255,31 +261,30 @@ def test_parse_release_payload_missing_tag_name_is_error() -> None:
     assert result.error == "missing tag_name"
 
 
-def test_parse_release_payload_no_zip_falls_back_to_first_asset() -> None:
+def test_parse_release_payload_rejects_noncanonical_assets() -> None:
     payload = _make_release(
         "v2.4.0",
         assets=[{"name": "Sky-Auto-Player-v2.4.0.tar.gz", "browser_download_url": "https://x/y.tar.gz"}],
     )
     result = parse_release_payload(payload, current_version="2.3.0")
-    assert result.update is not None
-    assert result.update.download_url == "https://x/y.tar.gz"
-    assert result.update.sha256_url == ""
+    assert result.update is None
+    assert result.error is not None
 
 
-def test_parse_release_payload_no_assets_empty_urls() -> None:
+def test_parse_release_payload_rejects_missing_assets() -> None:
     payload = _make_release("v2.4.0", assets=[])
     result = parse_release_payload(payload, current_version="2.3.0")
-    assert result.update is not None
-    assert result.update.download_url == ""
-    assert result.update.sha256_url == ""
+    assert result.update is None
+    assert result.error is not None
 
 
-def test_parse_release_payload_asset_predicate_overrides_zip_heuristic() -> None:
+def test_parse_release_payload_asset_predicate_cannot_select_noncanonical_zip() -> None:
     payload = _make_release(
         "v2.4.0",
         assets=[
             {"name": "Sky-Auto-Player-v2.4.0.zip", "browser_download_url": "https://x/zip"},
-            {"name": "Sky-Auto-Player-v2.4.0-x64.zip", "browser_download_url": "https://x/zip-x64"},
+            {"name": "Sky-Auto-Player-v2.4.0.zip.sha256", "browser_download_url": "https://x/sha"},
+            {"name": "MANIFEST.json", "browser_download_url": "https://x/manifest"},
         ],
     )
 
@@ -287,8 +292,8 @@ def test_parse_release_payload_asset_predicate_overrides_zip_heuristic() -> None
         return "x64" in str(asset.get("name", ""))
 
     result = parse_release_payload(payload, current_version="2.3.0", asset_predicate=is_x64)
-    assert result.update is not None
-    assert result.update.download_url == "https://x/zip-x64"
+    assert result.update is None
+    assert result.error is not None
 
 
 def test_parse_release_payload_strips_leading_v() -> None:
@@ -312,7 +317,11 @@ def test_parse_release_payload_tag_wihtout_v_prefix() -> None:
 def test_fetch_latest_release_uses_injected_opener() -> None:
     payload = _make_release(
         "v2.4.0",
-        assets=[{"name": "z.zip", "browser_download_url": "https://x/z.zip"}],
+        assets=[
+            {"name": "Sky-Auto-Player-v2.4.0.zip", "browser_download_url": "https://x/z.zip"},
+            {"name": "Sky-Auto-Player-v2.4.0.zip.sha256", "browser_download_url": "https://x/z.zip.sha256"},
+            {"name": "MANIFEST.json", "browser_download_url": "https://x/MANIFEST.json"},
+        ],
     )
     result = fetch_latest_release(
         current_version="2.3.0",

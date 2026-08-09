@@ -355,7 +355,7 @@ class UpdateModal(PickerModal[str | None]):
         # Keep YYYY-MM-DD part of "2025-11-02T..Z" — displayed alongside version.
         self.published_at = (published_at or "").split("T", 1)[0]
         self.options = [
-            PickerOption("github", "Download from GitHub"),
+            PickerOption("install", "Update now"),
             PickerOption("remind", "Remind me later"),
             PickerOption("skip", "Skip this version"),
         ]
@@ -374,7 +374,7 @@ class UpdateModal(PickerModal[str | None]):
         yield RichLog(id="update-notes", highlight=True, markup=True, wrap=True, auto_scroll=False)
         yield OptionList(*(o.label for o in self.options), id="modal-options")
         yield Static(
-            "If interrupted, re-download manually from GitHub.",
+            "The app will stop playback, verify the signed release, and restart after updating.",
             id="update-caution",
         )
 
@@ -629,7 +629,7 @@ class UpdateBannerModal(PickerModal[str | None]):
             theme_name=theme_name,
         )
         self.options = [
-            PickerOption("github", "Open Releases"),
+            PickerOption("install", "Update now"),
             PickerOption("skip", "Skip this version"),
             PickerOption("close", "Dismiss"),
         ]

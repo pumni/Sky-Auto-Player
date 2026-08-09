@@ -30,8 +30,8 @@ evidence:
     label: Lớp platform Windows — nơi duy nhất SendInput được phép tồn tại
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
   - category: distribution
-    label: Updater — xác minh SHA256, preserve-list, HTTPS allow-list
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/installer/updater.ps1
+    label: Native updater — xác minh SHA256, preserve-list, HTTPS allow-list
+    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
 ---
 
 ## Ba mandate bảo mật
@@ -102,14 +102,15 @@ Xác minh archive trước khi giải nén:
 
 ## Bảo mật updater
 
-Updater bên ngoài (`updater.bat` → `installer/updater.ps1`) đảm bảo:
+Native updater (`Sky-Auto-Player-Updater.exe`) đảm bảo:
 
 - Chỉ kết nối HTTPS, đến danh sách cho phép tường minh các host GitHub
 - Xác minh SHA256 của archive tải về trước khi ghi đè bất kỳ file nào
+- Xác minh asset canonical, archive, manifest và chữ ký Authenticode
 - Copy có giao dịch với rollback nếu bất kỳ bước nào thất bại
 - Process guard từ chối chạy khi `Sky-Auto-Player.exe` đang bị khóa
 
-Updater không bao giờ thay thế `config.json` hay thư mục `songs/`.
+Updater không bao giờ thay thế `config.json`, `.env`, `songs/` hay `logs/`.
 
 ## Thông báo Điều khoản Dịch vụ
 

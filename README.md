@@ -80,19 +80,19 @@ system Python, no installer, no admin rights, no registry entries.
 
 ## Updating
 
-Sky Auto Player checks GitHub for new releases and shows a banner when one is available. **It never
-self-updates while running** — applying an update is one explicit step:
+Sky Auto Player checks GitHub for new releases and shows a banner when one is available. Selecting
+**Update now** performs one explicit hand-off:
 
-1. Close Sky Auto Player.
-2. Run `updater.bat` in the install folder.
-3. Reopen `Sky-Auto-Player.exe`.
+1. Playback stops and releases its keys.
+2. The bundled native updater is copied to a per-run directory and the app exits.
+3. The updater verifies the canonical release triple, applies a transactional update, and restarts the app.
 
 > [!NOTE]
-> **Pre-2.4.2 Migration (historical):** The legacy bridge update (`Sky-Player-v<ver>.zip`) was available from v2.4.2 through v2.4.4 so pre-rename `Sky-Player` installs could run their existing `updater.bat` once to migrate. The bridge was **retired in v2.4.5**. If you are still on v2.4.1 or earlier and never ran the bridge, download the canonical `Sky-Auto-Player-v<ver>.zip` manually, extract it next to the old install, and copy across your `config.json`, `.env`, `songs/`, and `logs/`.
+> **Pre-cutover installs (historical):** Releases from before the native updater may require one manual download and extraction of the canonical `Sky-Auto-Player-v<ver>.zip`. Copy across your `config.json`, `.env`, `songs/`, and `logs/`; from the first native-updater release onward, **Update now** is the supported path.
 
-The updater verifies SHA256 before touching any file, rolls back failed copies transactionally,
-and never replaces your `config.json` or `songs/` folder. Pre-release builds:
-`updater.bat -Channel beta`.
+The updater verifies SHA256, archive safety, the exact manifest, and Authenticode before touching
+managed files. It rolls back failed copies transactionally and never replaces your `config.json`,
+`.env`, `songs/`, or `logs/` folders. Beta builds are selected through Update settings.
 
 ---
 

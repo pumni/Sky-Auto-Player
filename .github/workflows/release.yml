@@ -57,12 +57,6 @@ jobs:
       - name: Tests — full
         run: uv run pytest
 
-      - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
-        uses: ./.github/actions/updater-ps51-gate
-
-      - name: Pester — installer tests
-        uses: ./.github/actions/run-pester
-
       - name: Assert tag version equals pyproject.toml
         id: verlock
         run: |
@@ -92,8 +86,73 @@ jobs:
           # v2.4.0 release run (29657111725) at this step.
           "is_prerelease=$isPre"  | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
-      - name: Build + manifest + smoke test
-        run: uv run --env-file .env python -m build_app --manifest
+      - name: Verify production signing configuration
+        env:
+          AUTHENTICODE_CERT_THUMBPRINT: ${{ secrets.AUTHENTICODE_CERT_THUMBPRINT }}
+          EXPECTED_PUBLISHER_SUBJECT: ${{ secrets.EXPECTED_PUBLISHER_SUBJECT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AUTHENTICODE_CERT_THUMBPRINT) -or
+              [string]::IsNullOrWhiteSpace($env:EXPECTED_PUBLISHER_SUBJECT)) {
+            throw "Production release is blocked: Authenticode thumbprint and publisher subject are required."
+          }
+
+      - name: Build matching PyInstaller bootloader from source
+        run: |
+          $bootloader = Join-Path $env:RUNNER_TEMP "sky-auto-player-pyinstaller-bootloader"
+          pwsh -NoProfile -File scripts/build_pyinstaller_bootloader.ps1 -OutputDirectory $bootloader
+          "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+          "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
+      - name: Build native app, updater, and smoke tests
+        env:
+          SKY_PUBLISHER_SUBJECT: ${{ secrets.EXPECTED_PUBLISHER_SUBJECT }}
+        run: uv run --env-file .env python -m build_app
+
+      - name: Sign project-owned PE files
+        env:
+          AUTHENTICODE_CERT_THUMBPRINT: ${{ secrets.AUTHENTICODE_CERT_THUMBPRINT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AUTHENTICODE_CERT_THUMBPRINT)) {
+            throw "Production release is blocked: AUTHENTICODE_CERT_THUMBPRINT is not configured."
+          }
+          $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          if ($null -eq $signtool) { throw "Production release is blocked: signtool.exe is unavailable." }
+          $ver = "${{ steps.verlock.outputs.version }}"
+          $rel = (Resolve-Path "dist\Sky-Auto-Player-v$ver").Path
+          $targets = @(
+            (Join-Path $rel "Sky-Auto-Player.exe"),
+            (Join-Path $rel "Sky-Auto-Player-Updater.exe"),
+            (Join-Path $rel "native_calibration.exe")
+          )
+          $pyds = @(Get-ChildItem (Join-Path $rel "_internal") -Recurse -Filter "sky_player_rs*.pyd" -File | ForEach-Object { $_.FullName })
+          if ($pyds.Count -eq 0) { throw "Missing project-owned sky_player_rs*.pyd signing target." }
+          $targets += $pyds
+          foreach ($target in $targets) {
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "Missing signing target: $target" }
+            & $signtool.Source sign /sha1 $env:AUTHENTICODE_CERT_THUMBPRINT /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $target
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed." }
+          }
+
+      - name: Verify project-owned PE signatures
+        env:
+          EXPECTED_PUBLISHER_SUBJECT: ${{ secrets.EXPECTED_PUBLISHER_SUBJECT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_PUBLISHER_SUBJECT)) {
+            throw "Production release is blocked: EXPECTED_PUBLISHER_SUBJECT is not configured."
+          }
+          $ver = "${{ steps.verlock.outputs.version }}"
+          pwsh -NoProfile -File scripts/verify_release_signatures.ps1 `
+            -ReleaseDirectory "dist\Sky-Auto-Player-v$ver" `
+            -ExpectedPublisherSubject $env:EXPECTED_PUBLISHER_SUBJECT
+
+      - name: Generate post-sign manifest
+        run: uv run --env-file .env python -m build_app --manifest-only
+
+      - name: Verify exact release tree and manifest
+        run: |
+          $ver = "${{ steps.verlock.outputs.version }}"
+          uv run --env-file .env python scripts/verify_release_manifest.py `
+            --release-dir "dist\Sky-Auto-Player-v$ver" --version $ver
 
       - name: Stage release assets
         id: stage

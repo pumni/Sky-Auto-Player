@@ -68,7 +68,7 @@ jobs:
             case "$path" in
               # manifests/* intentionally omitted: winget channel is deferred
               # and has no CI gate yet (placeholder SHA only).
-              src/*|tests/*|scripts/*|installer/*|rust/*|.github/workflows/*|.github/actions/*)
+              src/*|tests/*|scripts/*|rust/*|.github/workflows/*|.github/actions/*)
                 relevant=true
                 break
                 ;;
@@ -76,7 +76,7 @@ jobs:
                 relevant=true
                 break
                 ;;
-              windows_version_info.txt|updater.bat|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json)
+              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json)
                 relevant=true
                 break
                 ;;
@@ -141,9 +141,6 @@ jobs:
         with:
           run-runtime-audit: "true"
 
-      - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
-        uses: ./.github/actions/updater-ps51-gate
-
       - name: Rust — format
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 
@@ -160,10 +157,6 @@ jobs:
         env:
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
-
-
-      - name: Pester — installer tests
-        uses: ./.github/actions/run-pester
 
       - name: Tests — unit (skip slow benchmarks)
         # Run windows-marked tests when present; skip only wall-clock `slow`.

@@ -47,7 +47,7 @@ Cả ba dùng cùng cấu trúc dữ liệu — phần mở rộng xác định 
 ```
 Sky-Auto-Player/
 ├── Sky-Auto-Player.exe
-├── updater.bat
+├── Sky-Auto-Player-Updater.exe
 ├── config.json
 └── songs/
     ├── bai-hat.json

@@ -506,6 +506,7 @@ impl PendingObservationQueue {
         self.len == 0
     }
 }
+#[rustfmt::skip]
 pub(crate) fn observer_has_safe_slack(
     deadline_ticks: Option<TimelineTicks>,
     effective_now_ticks: TimelineTicks,

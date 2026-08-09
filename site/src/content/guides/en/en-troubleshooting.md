@@ -115,10 +115,9 @@ or the download was interrupted.
 **Fix**:
 
 1. Check your internet connection.
-2. Run `updater.bat -Channel stable` again — the updater will retry the download.
-3. If the updater continues to fail, download the ZIP manually from the releases page
-   and extract it next to your existing installation (your `config.json` and `songs/`
-   folder will not be overwritten by the updater).
+2. Choose **Update now** again — the native updater will retry the exact target release.
+3. If the updater continues to fail, download the canonical ZIP manually from the releases
+   page and preserve your `config.json`, `.env`, `songs/`, and `logs/` folders.
 
 ## The HUD shows high timing jitter
 

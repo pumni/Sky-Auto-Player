@@ -4,6 +4,7 @@ members = [
     "crates/sky_dispatch_core",
     "crates/sky_dispatch_win32",
     "crates/sky_player_rs",
+    "crates/sky_updater",
 ]
 
 [workspace.package]

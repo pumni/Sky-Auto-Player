@@ -48,7 +48,7 @@ Does it still happen with `--hold-frames` and `--fps` at defaults, and with the 
 - [ ] Focus or hotkey (refocus, pause, panic, key steal)
 - [ ] HUD / TUI / theme rendering
 - [ ] Song decode / calibration / estimator
-- [ ] Update path (notify, `updater.bat`, version compare)
+- [ ] Update path (notify, **Update now**, version compare)
 - [ ] CLI / config / packaging
 
 **Additional context**

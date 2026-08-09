@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -32,7 +33,8 @@ BUILD_DIR = PROJECT_ROOT / "build"
 APP_NAME = "Sky-Auto-Player"
 NATIVE_CALIBRATION_BINARY = "native_calibration.exe"
 REQUIRED_ASSETS = ("config.json", "songs")
-REQUIRED_UPDATER_ASSETS = ("updater.bat", "installer")
+UPDATER_BINARY = "sky_updater.exe"
+UPDATER_RELEASE_NAME = "Sky-Auto-Player-Updater.exe"
 OPTIONAL_ASSETS = ("README.md",)
 
 VERSION_PY = PROJECT_ROOT / "src" / "sky_music" / "_version.py"
@@ -199,11 +201,8 @@ def copy_asset(
             dst.unlink()
 
     if src.is_dir():
-        # `ignore` is a callable returned by shutil.ignore_patterns(...). We
-        # use it to exclude the installer/Tests/ subtree and stale
-        # TestResults.xml from releases — those are dev-only artifacts and
-        # bloat the zip (the Tests/ subtree also leaks machine name / user /
-        # OS via the committed TestResults.xml).
+        # Keep the helper generic for directory assets; release contents are
+        # asserted separately by verify_release_manifest.py.
         shutil.copytree(src, dst, ignore=ignore)
     else:
         shutil.copy2(src, dst)
@@ -280,6 +279,72 @@ def run_native_calibration_smoke_test(binary_path: Path) -> bool:
     return True
 
 
+def run_updater_smoke_test(binary_path: Path) -> bool:
+    """Verify the native updater exposes only its bounded CLI surface."""
+    for flag in ("--help", "--version"):
+        try:
+            result = subprocess.run(
+                [str(binary_path), flag],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"[!] Native updater {flag} smoke test failed: {exc}")
+            return False
+        if result.returncode != 0 or not result.stdout.strip():
+            print(f"[!] Native updater {flag} smoke test returned {result.returncode}: {result.stderr.strip()}")
+            return False
+    return True
+
+
+@contextlib.contextmanager
+def _source_bootloader_override():
+    """Temporarily make PyInstaller use the verified source-built bootloader."""
+
+    source_dir_value = os.environ.get("SKY_SOURCE_BOOTLOADER_DIR", "")
+    required = os.environ.get("SKY_REQUIRE_SOURCE_BOOTLOADER") == "1"
+    if not source_dir_value:
+        if required:
+            raise RuntimeError(
+                "release build requires SKY_SOURCE_BOOTLOADER_DIR from the source-build gate"
+            )
+        yield
+        return
+    source_dir = Path(source_dir_value).resolve()
+    source = source_dir / "run.exe"
+    metadata_path = source_dir / "metadata.json"
+    if not source.is_file() or not metadata_path.is_file():
+        raise RuntimeError(f"source-built PyInstaller bootloader is incomplete: {source_dir}")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("source-built PyInstaller bootloader metadata is invalid") from exc
+    if not isinstance(metadata, dict) or metadata.get("sha256") != _hash_file(source):
+        raise RuntimeError("source-built PyInstaller bootloader metadata hash mismatch")
+
+    import PyInstaller
+
+    if metadata.get("pyinstaller_version") != PyInstaller.__version__:
+        raise RuntimeError("source-built bootloader version does not match PyInstaller")
+
+    installed = (
+        Path(PyInstaller.__file__).resolve().parent
+        / "bootloader"
+        / PyInstaller.PLATFORM
+        / "run.exe"
+    )
+    if not installed.is_file():
+        raise RuntimeError(f"installed PyInstaller bootloader is missing: {installed}")
+    backup = installed.read_bytes()
+    shutil.copy2(source, installed)
+    try:
+        yield
+    finally:
+        installed.write_bytes(backup)
+
+
 def _hash_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -307,7 +372,7 @@ def write_release_manifest(
     if not executable.is_file():
         raise RuntimeError(f"Release executable is missing: {executable}")
 
-    exclude = {exe_name, "MANIFEST.json"}
+    exclude = {"MANIFEST.json"}
     files: list[dict[str, str | int]] = []
     for path in sorted(release_dir.rglob("*")):
         if not path.is_file():
@@ -322,22 +387,11 @@ def write_release_manifest(
             raise RuntimeError(f"Failed to hash release asset: {path}") from exc
         files.append({"path": relative, "size": size, "sha256": sha256})
 
-    try:
-        executable_sha256 = _hash_file(executable)
-    except OSError as exc:
-        raise RuntimeError(f"Failed to hash release executable: {executable}") from exc
-
     manifest = {
+        "schema_version": 2,
         "app": APP_NAME,
         "version": version,
         "executable": exe_name,
-        "executable_sha256": executable_sha256,
-        "interpreter": {
-            "implementation": sys.implementation.name,
-            "version": sys.version.split()[0],
-            "freethreaded": not sys._is_gil_enabled(),
-        },
-        "platform": sys.platform,
         "git_head": git_head,
         "dirty_worktree": dirty_worktree,
         "native_build_commit": git_head if native_build_commit is None else native_build_commit,
@@ -348,34 +402,6 @@ def write_release_manifest(
     out = release_dir / "MANIFEST.json"
     out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"[+] Manifest: {release_dir.name}/{out.name}")
-
-
-def kill_hanging_selftest(release_dir: Path) -> None:
-    """Attempt to force kill any lingering smoke test processes from our specific release dir."""
-    if not release_dir.exists():
-        return
-
-    release_root = str(release_dir.resolve()).replace("'", "''")
-    ps = f"""
-    Get-CimInstance Win32_Process |
-      Where-Object {{
-        $_.Name -eq '{APP_NAME}.exe' -and
-        $_.ExecutablePath -like '{release_root}\\*'
-      }} |
-      ForEach-Object {{
-        Stop-Process -Id $_.ProcessId -Force
-      }}
-    """
-    try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            capture_output=True,
-            text=True,
-        )
-        import time
-        time.sleep(1) # Give OS time to release file handles
-    except Exception:
-        pass
 
 
 @_restore_native_build_metadata_after_build
@@ -397,10 +423,40 @@ def main() -> None:
         help="Generate MANIFEST.json with SHA256 hashes for every "
              "file in the release directory.",
     )
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="Hash an already-built, already-signed release directory without rebuilding.",
+    )
+    parser.add_argument(
+        "--release-dir",
+        type=Path,
+        help="Existing release directory for --manifest-only (defaults to dist/<name>-v<version>).",
+    )
     args = parser.parse_args()
 
     version = get_project_version()
     print(f"=== Sky Auto Player Build Pipeline v{version} ===")
+
+    if args.manifest_only:
+        release_dir = (
+            args.release_dir.resolve()
+            if args.release_dir is not None
+            else DIST_DIR / f"{APP_NAME}-v{version}"
+        )
+        if not release_dir.is_dir():
+            raise RuntimeError(f"release directory is missing: {release_dir}")
+        git_head = get_git_head()
+        write_release_manifest(
+            release_dir,
+            version,
+            f"{APP_NAME}.exe",
+            git_head,
+            dirty_worktree=False,
+            native_build_commit=git_head,
+        )
+        print(f"[v] Manifest-only DONE: {release_dir.resolve()}")
+        return
 
     git_head = get_git_head()
     generate_version_py(version)
@@ -408,8 +464,6 @@ def main() -> None:
     generate_version_info(version)
 
     release_dir = DIST_DIR / f"{APP_NAME}-v{version}"
-    kill_hanging_selftest(release_dir)
-
     if not args.no_clean and BUILD_DIR.exists():
         try:
             shutil.rmtree(BUILD_DIR)
@@ -458,14 +512,30 @@ def main() -> None:
             cwd=str(PROJECT_ROOT),
             env=native_build_env,
         )
+        print("[+] Building the process-isolated native updater...")
+        subprocess.run(
+            [
+                "cargo",
+                "build",
+                "--manifest-path",
+                str(rust_dir / "Cargo.toml"),
+                "--bin",
+                "sky_updater",
+                "--release",
+            ],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+            env=native_build_env,
+        )
 
     print("[+] Starting PyInstaller...")
     clean_flag = [] if args.no_clean else ["--clean"]
-    subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--noconfirm", *clean_flag, str(SPEC_FILE)],
-        check=True,
-        cwd=str(PROJECT_ROOT),
-    )
+    with _source_bootloader_override():
+        subprocess.run(
+            [sys.executable, "-m", "PyInstaller", "--noconfirm", *clean_flag, str(SPEC_FILE)],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+        )
 
     raw_dist = DIST_DIR / APP_NAME
 
@@ -496,18 +566,13 @@ def main() -> None:
         if src.exists():
             copy_asset(src, release_dir / asset)
 
-    print("[+] Copying updater assets...")
-    # Exclude dev-only artifacts from the installer/ tree shipped with the
-    # release: the Pester Tests/ subtree and stale TestResults.xml bloat the
-    # zip and leak the previous build's machine/user identifiers. Embedded
-    # updater.ps1 + its #Requires manifest are still copied.
-    installer_ignore = shutil.ignore_patterns("Tests", "TestResults.xml", "__pycache__")
-    for asset in REQUIRED_UPDATER_ASSETS:
-        src = PROJECT_ROOT / asset
-        if not src.exists():
-            raise FileNotFoundError(f"Required updater asset missing: {src}")
-        ignore = installer_ignore if asset == "installer" else None
-        copy_asset(src, release_dir / asset, ignore=ignore)
+    print("[+] Copying native updater...")
+    updater_binary = rust_dir / "target" / "release" / UPDATER_BINARY
+    if not updater_binary.is_file():
+        raise FileNotFoundError(f"Native updater binary is missing: {updater_binary}")
+    copy_asset(updater_binary, release_dir / UPDATER_RELEASE_NAME)
+    if not run_updater_smoke_test(release_dir / UPDATER_RELEASE_NAME):
+        raise RuntimeError("Native updater smoke test failed")
 
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)

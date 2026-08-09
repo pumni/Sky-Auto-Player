@@ -79,15 +79,15 @@ for any unsigned executable downloaded from the internet.
 ## Updating
 
 Sky Auto Player checks GitHub for new releases when it starts and shows a banner when one
-is available. To apply an update:
+is available. Select **Update now** to apply it:
 
-1. Close Sky Auto Player.
-2. Run `updater.bat` in the installation folder.
-3. Reopen `Sky-Auto-Player.exe`.
+1. Playback stops and releases its keys.
+2. The app hands off to the bundled native updater and exits.
+3. The updater verifies, installs transactionally, and restarts the app.
 
-The updater verifies the SHA256 checksum of the downloaded archive before touching any file.
-If verification fails, it rolls back and leaves your installation unchanged. It never
-replaces `config.json` or your `songs/` folder.
+The updater verifies the canonical ZIP, SHA256 sidecar, manifest, and Authenticode signatures
+before touching managed files. If verification fails, it rolls back and leaves your installation
+unchanged. It never replaces `config.json`, `.env`, `songs/`, or `logs/`.
 
 ## Uninstalling
 

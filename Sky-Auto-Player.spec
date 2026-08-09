@@ -1,12 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from importlib.util import find_spec
-from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve()
 
 # --- Configuration ---
-package_name = 'sky_music'
 app_name = 'Sky-Auto-Player'
 entry_point = str(ROOT / 'src' / 'main.py')
 
@@ -15,46 +13,43 @@ datas = []
 binaries = []
 hiddenimports = [
     "sky_music.platform.win32",
+    "sky_music._native_build",
+    "sky_music._version",
     "sky_music.orchestration.native_admission",
     "sky_music.orchestration.engine",
     "sky_music.orchestration.calibration",
     "sky_music.orchestration.telemetry",
     "sky_music.infrastructure.background",
     "sky_music.infrastructure.hotkeys",
+    "sky_music.infrastructure.update_launcher",
+    "sky_music.infrastructure.update_runtime",
     "sky_music.infrastructure.doctor",
     "sky_music.infrastructure.focus",
     "sky_music.infrastructure.realtime",
     "sky_music.infrastructure.timing",
+    "sky_music.platform.win32.global_hotkeys",
+    "textual.drivers.windows_driver",
+    "rich.markdown",
 ]
 
-# Collect all from main package and key dependencies
-tmp_ret = collect_all(package_name)
-datas += tmp_ret[0]
-binaries += tmp_ret[1]
-hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('textual')
-datas += tmp_ret[0]
-binaries += tmp_ret[1]
-hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('rich')
-datas += tmp_ret[0]
-binaries += tmp_ret[1]
-hiddenimports += tmp_ret[2]
+# Only the stylesheet is a runtime data file owned by the application. All
+# Python modules are discovered from the entry point and explicit dynamic
+# imports above; broad collection would copy the entire source tree as data.
+stylesheet = ROOT / 'src' / 'sky_music' / 'ui' / 'textual_app' / 'styles' / 'base.tcss'
+if not stylesheet.is_file():
+    raise RuntimeError(f'required Textual stylesheet is missing: {stylesheet}')
+datas.append((str(stylesheet), 'sky_music/ui/textual_app/styles'))
 
 # The Rust dispatcher is the sole production release artifact. Collection must
 # fail closed if its wheel was not
 # built by scripts/build_rust_wheel.py.
-if find_spec('sky_player_rs') is None:
+native_module = find_spec('sky_player_rs.sky_player_rs')
+if native_module is None or native_module.origin is None:
     raise RuntimeError(
         'sky_player_rs is required; run scripts/build_rust_wheel.py before packaging'
     )
-tmp_ret = collect_all('sky_player_rs')
-datas += tmp_ret[0]
-binaries += tmp_ret[1]
-hiddenimports += tmp_ret[2]
-hiddenimports.append('sky_player_rs')
+binaries.append((native_module.origin, 'sky_player_rs'))
+hiddenimports.extend(['sky_player_rs', 'sky_player_rs.sky_player_rs'])
 
 block_cipher = None
 

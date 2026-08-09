@@ -62,6 +62,10 @@ def _make_release_payload(
                 "name": "Sky-Auto-Player-v2.4.0.zip.sha256",
                 "browser_download_url": "https://example.com/x.zip.sha256",
             },
+            {
+                "name": "MANIFEST.json",
+                "browser_download_url": "https://example.com/MANIFEST.json",
+            },
         ],
     }
 
