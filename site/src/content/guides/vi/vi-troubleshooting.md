@@ -113,9 +113,9 @@ tải xuống bị gián đoạn.
 **Sửa**:
 
 1. Kiểm tra kết nối internet.
-2. Chạy lại `updater.bat -Channel stable` — updater sẽ thử lại tải về.
-3. Nếu updater vẫn thất bại, tải ZIP thủ công từ trang releases và giải nén cạnh cài đặt
-   hiện tại (thư mục `config.json` và `songs/` sẽ không bị updater ghi đè).
+2. Chọn lại **Update now** — native updater sẽ thử lại đúng release target.
+3. Nếu updater vẫn thất bại, tải ZIP canonical thủ công từ trang releases và giữ nguyên
+   `config.json`, `.env`, `songs/` và `logs/`.
 
 ## HUD hiển thị jitter timing cao
 

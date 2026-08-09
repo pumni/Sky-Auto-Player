@@ -33,10 +33,6 @@ else:
     kernel32 = _MockDll()
 
 SW_RESTORE = 9
-SWP_NOMOVE = 0x0002
-SWP_NOSIZE = 0x0001
-SWP_SHOWWINDOW = 0x0040
-HWND_TOP = 0
 PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
 
 user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
@@ -62,24 +58,6 @@ user32.EnumWindows.argtypes = (
 user32.EnumWindows.restype = wintypes.BOOL
 user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
 user32.SetForegroundWindow.restype = wintypes.BOOL
-user32.BringWindowToTop.argtypes = (wintypes.HWND,)
-user32.BringWindowToTop.restype = wintypes.BOOL
-user32.SetActiveWindow.argtypes = (wintypes.HWND,)
-user32.SetActiveWindow.restype = wintypes.HWND
-user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
-user32.AttachThreadInput.restype = wintypes.BOOL
-user32.SetWindowPos.argtypes = (
-    wintypes.HWND,
-    wintypes.HWND,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    wintypes.UINT,
-)
-user32.SetWindowPos.restype = wintypes.BOOL
-kernel32.GetCurrentThreadId.argtypes = ()
-kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
@@ -209,31 +187,16 @@ def is_sky_window_valid() -> bool:
 
 
 def focus_window() -> bool:
+    """Attempt the minimal explicit user-requested focus operation.
+
+    Windows may refuse foreground activation due to its foreground-lock
+    policy. We report that refusal and let the UI ask the user to click Sky;
+    we do not attach input queues, raise z-order, or force an active window.
+    """
     if not is_sky_window_valid() or _target_hwnd is None:
         return False
-    foreground_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
-    current_thread = kernel32.GetCurrentThreadId()
-    attached = bool(foreground_thread and foreground_thread != current_thread)
-    if attached:
-        user32.AttachThreadInput(current_thread, foreground_thread, True)
-    try:
-        user32.ShowWindow(_target_hwnd, SW_RESTORE)
-        user32.SetWindowPos(
-            _target_hwnd,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        )
-        user32.BringWindowToTop(_target_hwnd)
-        success = bool(user32.SetForegroundWindow(_target_hwnd))
-        user32.SetActiveWindow(_target_hwnd)
-        return success
-    finally:
-        if attached:
-            user32.AttachThreadInput(current_thread, foreground_thread, False)
+    user32.ShowWindow(_target_hwnd, SW_RESTORE)
+    return bool(user32.SetForegroundWindow(_target_hwnd))
 
 
 def is_sky_active() -> bool:

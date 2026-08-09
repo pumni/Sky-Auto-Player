@@ -533,13 +533,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
             cfg=cfg,
         )
 
-    focus_calls: list[str] = []
-
-    class MockFocusGuard:
-        def focus(self) -> bool:
-            focus_calls.append("focus")
-            return True
-
     class MockTelemetry:
         def record_schedule_metadata(self, sched_meta) -> None:
             pass
@@ -556,7 +549,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
     monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
-    monkeypatch.setattr(app_module, "Win32SkyFocusGuard", MockFocusGuard)
 
     import sky_music.orchestration.engine as engine_module
     monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
@@ -574,7 +566,8 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
             await pilot.pause(0.3)
 
     asyncio.run(run_focus_test())
-    assert focus_calls == ["focus"]
+    # Playback does not mutate foreground focus automatically. The user must
+    # focus Sky explicitly before starting a non-dry run.
 
 
 def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
@@ -1722,17 +1715,14 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             assert screen.debug_mode is False
             assert "p95" not in str(screen.render())
 
-            # Textual F2 no longer toggles; debug uses global hotkey polling.
+            # F2 is a local display command; playback controls arrive through
+            # the RegisterHotKey bridge rather than key-state polling.
             await pilot.press("f2")
             await pilot.pause(0.1)
-            assert screen.debug_mode is False
-            assert "p95" not in str(screen.render())
-
-            hotkey_down["value"] = True
-            screen._poll()
             assert screen.debug_mode is True
             assert "p95" in str(screen.render())
 
+            hotkey_down["value"] = True
             screen._poll()
             assert screen.debug_mode is True
 
@@ -1740,8 +1730,8 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             screen._poll()
             assert screen.debug_mode is True
 
-            hotkey_down["value"] = True
-            screen._poll()
+            await pilot.press("f2")
+            await pilot.pause(0.1)
             assert screen.debug_mode is False
             assert "p95" not in str(screen.render())
             

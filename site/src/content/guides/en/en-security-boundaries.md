@@ -30,8 +30,8 @@ evidence:
     label: Windows platform layer — only place SendInput lives
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
   - category: distribution
-    label: Updater — SHA256 verify, preserve-list, HTTPS allow-list
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/installer/updater.ps1
+    label: Native updater — SHA256 verify, preserve-list, HTTPS allow-list
+    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
 ---
 
 ## Three security mandates
@@ -103,14 +103,16 @@ Verify the archive before extracting:
 
 ## Updater security
 
-The external updater (`updater.bat` → `installer/updater.ps1`) enforces:
+The bundled native updater (`Sky-Auto-Player-Updater.exe`) enforces:
 
 - HTTPS connections only, to an explicit allow-list of GitHub hosts
 - SHA256 verification of the downloaded archive before any file is overwritten
+- exact canonical assets, archive safety, and staged manifest hashes
+- Authenticode verification for project-owned PE files
 - Transactional copy with rollback if any step fails
 - A process guard that refuses to run while `Sky-Auto-Player.exe` is locked
 
-The updater never replaces `config.json` or the `songs/` folder.
+The updater never replaces `config.json`, `.env`, `songs/`, or `logs/`.
 
 ## Terms of Service notice
 

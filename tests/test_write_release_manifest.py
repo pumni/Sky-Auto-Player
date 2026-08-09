@@ -1,4 +1,3 @@
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -21,11 +20,13 @@ def test_write_release_manifest_covers_exact_file_set(tmp_path: Path) -> None:
     write_release_manifest(release_dir, "2.4.4", exe.name, "deadbeef")
 
     manifest = json.loads((release_dir / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["executable_sha256"] == hashlib.sha256(b"exe").hexdigest()
+    assert "executable_sha256" not in manifest
+    assert manifest["schema_version"] == 2
     assert manifest["git_head"] == "deadbeef"
     assert manifest["dirty_worktree"] is False
     assert manifest["native_build_commit"] == "deadbeef"
     assert {entry["path"] for entry in manifest["files"]} == {
+        "Sky-Auto-Player.exe",
         "nested/MANIFEST.json",
         "nested/data.bin",
     }

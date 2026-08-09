@@ -1,0 +1,11 @@
+{
+  "project": "pumni/Sky-Auto-Player",
+  "baseline_branch": "main",
+  "baseline_commit": "c2f0f573e5087684f4c641a5f2ba4abb478e897c",
+  "baseline_version": "3.1.0",
+  "plan": "clean-native-self-update-defender-hardening",
+  "canonical_distribution_count": 1,
+  "legacy_support": false,
+  "script_updater": false,
+  "native_updater": "Rust"
+}

@@ -18,6 +18,11 @@ fallback, or low-level Python/Rust input adapter.
    injection itself is implemented only by the Rust Win32 crate through
    Windows `SendInput`.
 
+Update checking remains pure Python domain/orchestration logic. Applying an
+update is a separate Rust `sky_updater` process; it does not depend on
+`sky_player_rs`, the playback scheduler, or `SendInput`. Python may only stage
+and launch that process, never replace installed application files.
+
 ## Production playback
 
 ```text

@@ -289,6 +289,10 @@ class RustDispatchRuntime:
         report: dict[str, Any] | None = None
         next_render_at = 0.0
         try:
+            if self._controls is not None:
+                start_controls = getattr(self._controls, "start", None)
+                if callable(start_controls):
+                    start_controls()
             self._set_initial_target()
             self._publish_focus()
             self._session.start()
@@ -425,3 +429,8 @@ class RustDispatchRuntime:
                     self._session.quit()
                 with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._join_owned()
+            if self._controls is not None:
+                close_controls = getattr(self._controls, "close", None)
+                if callable(close_controls):
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
+                        close_controls()

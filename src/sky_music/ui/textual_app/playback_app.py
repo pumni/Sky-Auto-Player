@@ -16,7 +16,8 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from sky_music.config import load_config, resolve_game_fps
-from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
+from sky_music.infrastructure.hotkeys import is_hotkey_down as _diagnostic_hotkey_down
+from sky_music.infrastructure.hotkeys import parse_hotkey
 from sky_music.ui.hud import format_duration
 from sky_music.ui.picker_theme import get_theme_preset
 from sky_music.ui.playback_notices import PlaybackNoticeLedger
@@ -29,6 +30,10 @@ from sky_music.ui.text_render import (
     visible_width,
 )
 from sky_music.ui.textual_app.theme_css import TEXTUAL_THEME_TOKENS, TextualThemeTokens
+
+# Kept as a monkeypatchable diagnostic seam for existing UI tests. Playback
+# commands themselves arrive through WM_HOTKEY and never call this helper.
+is_hotkey_down = _diagnostic_hotkey_down
 
 PLAYBACK_ERROR_PREFIX = "error:"
 
@@ -45,7 +50,7 @@ if TYPE_CHECKING:
     from sky_music.orchestration.native_models import BackendHealth
 
 class PlaybackCommandBridge:
-    """Merges global hotkey polling with UI-originated playback commands."""
+    """Merges queued global hotkey actions with UI-originated commands."""
 
     def __init__(self, base_controls: Any | None) -> None:
         self._base_controls = base_controls
@@ -302,7 +307,6 @@ class PlaybackCard(Static):
         self._timer: Any | None = None
         self._poll_timer: Any | None = None
         self._debug_hotkey: HotkeyBinding | None = None
-        self._debug_was_down = False
         self._exited = False
         self.engine: PlaybackEngine | None = None
         self.command_bridge: PlaybackCommandBridge | None = None
@@ -321,9 +325,13 @@ class PlaybackCard(Static):
                 "f8": "pause",
                 "f9": "skip",
                 "f10": "quit",
+                "f2": "toggle_debug",
             }.get(event.key)
             if command is not None:
-                self._request_playback_command(command)
+                if command == "toggle_debug":
+                    self.toggle_debug()
+                else:
+                    self._request_playback_command(command)
                 event.stop()
                 return
         handler = getattr(self.app, "handle_playback_card_key", None)
@@ -489,7 +497,6 @@ class PlaybackCard(Static):
         self.debug_mode = debug_mode
         controls = getattr(self.app, "controls", None)
         self._debug_hotkey = getattr(controls, "toggle_debug", None) or parse_hotkey("f2")
-        self._debug_was_down = False
         self._playback_result_callback = result_callback
         self._exited = False
         self._mode = "playing"
@@ -543,22 +550,12 @@ class PlaybackCard(Static):
             bridge.request(command)
 
     def _poll(self) -> None:
-        self._poll_debug_hotkey()
         if self.renderer is None:
             return
         snap = self.renderer.get_snapshot()
         if snap is not None:
             self._snapshot = snap
             self._rerender()
-
-    def _poll_debug_hotkey(self) -> None:
-        hotkey = self._debug_hotkey
-        if hotkey is None:
-            return
-        is_down = is_hotkey_down(hotkey)
-        if is_down and not self._debug_was_down:
-            self.toggle_debug()
-        self._debug_was_down = is_down
 
     def toggle_debug(self) -> None:
         self.debug_mode = not self.debug_mode

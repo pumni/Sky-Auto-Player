@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import sys
@@ -202,9 +203,8 @@ def _mini_preflight(is_dry_run: bool, hold_label: str = "hold 1.00f", tempo: flo
             else:
                 return False
 
-    _window_target.focus_window()
-    time.sleep(0.25)
-
+    # Startup preflight is read-only: the user must focus Sky manually. An
+    # explicit retry is the only path allowed to request refocus.
     focus_ok = _window_target.is_sky_active()
     if not focus_ok:
         while True:
@@ -551,6 +551,15 @@ def play_selected_song(
     # Preflight check and window readiness
     if not _mini_preflight(is_dry_run, hold_label=current_hold_label, tempo=current_tempo, controls=controls):
         return PLAYBACK_QUIT
+
+    if not is_dry_run and controls is not None:
+        try:
+            controls.start()
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                controls.close()
+            _console.print(f"[red]Playback aborted: global hotkeys could not be registered: {exc}[/red]")
+            return PLAYBACK_QUIT
 
     # Check window/readiness only if we are NOT running dry-run mode
     if not is_dry_run:

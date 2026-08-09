@@ -6,6 +6,10 @@
     {"path":"rust/crates/sky_dispatch_win32/src/input.rs","rule":"facade_lines","reason":"isolate raw sender and transactions in Phase 7","expires_phase":"Phase 7"},
     {"path":"rust/crates/sky_dispatch_win32/src/wait.rs","rule":"facade_lines","reason":"isolate wait responsibilities in Phase 7","expires_phase":"Phase 7"},
     {"path":"rust/crates/sky_player_rs/src/engine/tests.rs","rule":"regular_module_lines","reason":"centralized regression matrix; colocate tests in Phase 10","expires_phase":"Phase 10"},
+    {"path":"rust/crates/sky_player_rs/src/engine/worker/dispatch/release.rs","rule":"dispatch_function_lines","reason":"pre-existing release helper exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
+    {"path":"rust/crates/sky_player_rs/src/engine/worker/dispatch_loop.rs","rule":"regular_module_lines","reason":"pre-existing worker loop exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
+    {"path":"rust/crates/sky_player_rs/src/engine/worker/planning.rs","rule":"regular_module_lines","reason":"pre-existing planning module exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
+    {"path":"rust/crates/sky_player_rs/src/engine/worker/wait.rs","rule":"facade_lines","reason":"pre-existing worker wait facade exceeds the hard line budget; split platform seams in Phase 13","expires_phase":"Phase 13"},
 
     {"path":"rust/crates/sky_dispatch_win32/src/calibration.rs","rule":"unsafe_boundary","reason":"existing calibration Win32 seam; review allowlist directly in Phase 12","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/clock.rs","rule":"unsafe_boundary","reason":"existing QPC Win32 seam; retain only in platform crate","expires_phase":"Phase 12"},

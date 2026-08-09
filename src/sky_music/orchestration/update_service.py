@@ -1,9 +1,9 @@
 """Update notifier orchestrator.
 
 Glue layer that ties together the pure version-check domain logic
-(:mod:`sky_music.domain.update_checker`), the persistence layer
-(:mod:`sky_music.config` for skip-version / last-check timestamps), and the
-Windows-side installer (``updater.ps1``).
+(:mod:`sky_music.domain.update_checker`) and the persistence layer
+(:mod:`sky_music.config` for skip-version / last-check timestamps). Applying
+an update is delegated to the bundled native updater by the UI launcher.
 
 The UI only needs to:
   1. Call :func:`should_auto_check` before launching the background check.
@@ -138,7 +138,7 @@ def format_update_banner(update: UpdateInfo, current_version: str) -> str:
     lines = [
         f"Sky Auto Player v{latest} is now available.",
         f"You are running v{current_version}.",
-        "To update: close Sky Auto Player, run updater.bat, reopen.",
+        "Choose Update now to verify and install the signed release.",
         ""
     ]
     

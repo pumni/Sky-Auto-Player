@@ -1,0 +1,12 @@
+[
+  {"left": "1.0", "right": "1.0.0", "ordering": 0},
+  {"left": "1.0", "right": "1.0.post0", "ordering": -1},
+  {"left": "1.0.dev0", "right": "1.0a0", "ordering": -1},
+  {"left": "1.0a1", "right": "1.0b1", "ordering": -1},
+  {"left": "1.0rc1", "right": "1.0", "ordering": -1},
+  {"left": "1.0.post1.dev0", "right": "1.0.post1", "ordering": -1},
+  {"left": "1.0+abc", "right": "1.0+def", "ordering": -1},
+  {"left": "1.0+abc", "right": "1.0", "ordering": 1},
+  {"left": "1!0.0", "right": "0!999.9", "ordering": 1},
+  {"left": "1.0+abc", "right": "1.0+abc.1", "ordering": -1}
+]

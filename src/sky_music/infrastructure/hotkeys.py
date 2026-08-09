@@ -1,7 +1,16 @@
+"""Validated playback bindings backed by the native RegisterHotKey seam."""
+
+from __future__ import annotations
+
+import threading
 from dataclasses import dataclass, field
 
 from sky_music.layouts import SKY_15_KEY_MAP as key_maps
 from sky_music.layouts import VK_CODES
+from sky_music.platform.win32.global_hotkeys import (
+    GlobalHotkeyError,
+    GlobalHotkeyListener,
+)
 from sky_music.platform.win32.window_target import is_virtual_key_down
 
 VK_CONTROL = 0x11
@@ -31,6 +40,7 @@ VK_CODE_BY_KEY_NAME = {
     "/": 0xBF,
 }
 
+
 @dataclass(frozen=True, slots=True)
 class HotkeyBinding:
     name: str
@@ -38,6 +48,10 @@ class HotkeyBinding:
     ctrl: bool = False
     alt: bool = False
     shift: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name or type(self.key_code) is not int or not 1 <= self.key_code <= 0xFF:
+            raise ValueError("hotkey binding has an invalid key")
 
     @property
     def display(self) -> str:
@@ -55,6 +69,7 @@ class HotkeyBinding:
     def has_modifier(self) -> bool:
         return self.ctrl or self.alt or self.shift
 
+
 @dataclass(slots=True)
 class PlaybackControls:
     pause: HotkeyBinding
@@ -63,7 +78,9 @@ class PlaybackControls:
     refocus: HotkeyBinding
     panic: HotkeyBinding
     enabled: bool = True
-    _was_down: dict[str, bool] = field(default_factory=dict)
+    toggle_debug: HotkeyBinding | None = None
+    _listener: GlobalHotkeyListener | None = field(default=None, init=False, repr=False)
+    _lifecycle_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def hint(self) -> str:
         if not self.enabled:
@@ -76,51 +93,67 @@ class PlaybackControls:
             f"{self.panic.display} panic release"
         )
 
+    def _bindings(self) -> dict[str, HotkeyBinding]:
+        bindings = {
+            "pause": self.pause,
+            "skip": self.skip,
+            "quit": self.quit,
+            "refocus": self.refocus,
+            "panic": self.panic,
+        }
+        if self.toggle_debug is not None:
+            bindings["toggle_debug"] = self.toggle_debug
+        return bindings
+
+    def start(self) -> None:
+        """Atomically register all configured actions for this session."""
+        if not self.enabled:
+            return
+        with self._lifecycle_lock:
+            if self._listener is None:
+                listener = GlobalHotkeyListener.from_bindings(self._bindings())
+                listener.start()
+                self._listener = listener
+
+    def close(self) -> None:
+        """Idempotently unregister all global actions."""
+        with self._lifecycle_lock:
+            listener = self._listener
+            self._listener = None
+        if listener is not None:
+            listener.close()
+
     def poll(self) -> str | None:
+        """Consume one queued ``WM_HOTKEY`` action without polling key state."""
         if not self.enabled:
             return None
+        listener = self._listener
+        if listener is None:
+            raise GlobalHotkeyError("playback hotkeys were not registered before playback")
+        return listener.poll()
 
-        # Snapshot the three modifier virtual-key states ONCE per poll tick instead of
-        # once per hotkey. Review of main@7c548527 §1.5: every ``is_hotkey_down`` call
-        # re-queried Ctrl/Alt/Shift via ``GetAsyncKeyState``, so a 5-hotkey poll issued up
-        # to 20 Win32 calls/tick (≈ 2 000 calls/s during playback at the 10 ms cadence).
-        # The snapshotted modifiers are passed into ``_eval_hotkey_with_modifiers`` for
-        # each binding, leaving exactly 3 + 5 = 8 calls/tick — a 60 % syscall reduction at
-        # no behavioural or safety-policy cost (the modifier flags are READ-ONLY state and
-        # cannot change between bindings within a single GetAsyncKeyState-coherent tick).
-        ctrl_down = is_virtual_key_down(VK_CONTROL)
-        alt_down = is_virtual_key_down(VK_MENU)
-        shift_down = is_virtual_key_down(VK_SHIFT)
 
-        for action, hotkey in (
-            ("quit", self.quit),
-            ("skip", self.skip),
-            ("pause", self.pause),
-            ("refocus", self.refocus),
-            ("panic", self.panic),
-        ):
-            is_down = _eval_hotkey_with_modifiers(
-                hotkey, ctrl_down=ctrl_down, alt_down=alt_down, shift_down=shift_down
-            )
+def is_hotkey_down(hotkey: HotkeyBinding) -> bool:
+    """Bounded diagnostic helper; playback never uses this as a poller."""
+    ctrl_down = is_virtual_key_down(VK_CONTROL)
+    alt_down = is_virtual_key_down(VK_MENU)
+    shift_down = is_virtual_key_down(VK_SHIFT)
+    return _eval_hotkey_with_modifiers(
+        hotkey,
+        ctrl_down=ctrl_down,
+        alt_down=alt_down,
+        shift_down=shift_down,
+    )
 
-            if is_down and not self._was_down.get(action, False):
-                self._was_down[action] = True
-                return action
-
-            self._was_down[action] = is_down
-
-        return None
 
 def _eval_hotkey_with_modifiers(
-    hotkey: HotkeyBinding, *, ctrl_down: bool, alt_down: bool, shift_down: bool
+    hotkey: HotkeyBinding,
+    *,
+    ctrl_down: bool,
+    alt_down: bool,
+    shift_down: bool,
 ) -> bool:
-    """Evaluate a hotkey against caller-snapshotted modifier states.
-
-    Same gating policy as ``is_hotkey_down``:
-      * Required modifiers must be held.
-      * For plain (no-modifier) hotkeys, ALL modifier flags must be clear — prevents
-        Ctrl+F8 from accidentally firing a plain-F8 binding.
-    """
+    """Evaluate one diagnostic binding against a caller-owned state snapshot."""
     if hotkey.ctrl and not ctrl_down:
         return False
     if hotkey.alt and not alt_down:
@@ -131,28 +164,10 @@ def _eval_hotkey_with_modifiers(
         return False
     return is_virtual_key_down(hotkey.key_code)
 
-def is_hotkey_down(hotkey: HotkeyBinding) -> bool:
-    """Check if a hotkey is currently pressed.
-
-    Required modifiers must be held; extra modifiers are ignored unless
-    the hotkey itself has no modifiers (to avoid false positives with
-    Ctrl+something accidentally triggering plain-key hotkeys).
-
-    Single-call entry point for one-shot callers (e.g. the debug-toggle poll in
-    ``playback_app``). The per-tick ``PlaybackControls.poll`` path snapshots every
-    modifier once and routes through ``_eval_hotkey_with_modifiers`` instead of this
-    function (review of main@7c548527 §1.5: removes ~ 60 % of redundant GetAsyncKeyState
-    syscalls during playback). Out-of-loop callers who evaluate multiple hotkeys should
-    prefer snapshotting + ``_eval_hotkey_with_modifiers`` themselves.
-    """
-    ctrl_down = is_virtual_key_down(VK_CONTROL)
-    alt_down = is_virtual_key_down(VK_MENU)
-    shift_down = is_virtual_key_down(VK_SHIFT)
-    return _eval_hotkey_with_modifiers(
-        hotkey, ctrl_down=ctrl_down, alt_down=alt_down, shift_down=shift_down
-    )
 
 def parse_hotkey(value: str) -> HotkeyBinding:
+    if not isinstance(value, str):
+        raise ValueError("hotkey must be a string")
     raw = value.strip()
     if not raw:
         raise ValueError("hotkey cannot be empty")
@@ -165,10 +180,16 @@ def parse_hotkey(value: str) -> HotkeyBinding:
 
     for token in tokens:
         if token in {"ctrl", "control", "ctl"}:
+            if ctrl:
+                raise ValueError(f"invalid hotkey {value!r}: duplicate ctrl modifier")
             ctrl = True
         elif token == "alt":
+            if alt:
+                raise ValueError(f"invalid hotkey {value!r}: duplicate alt modifier")
             alt = True
         elif token == "shift":
+            if shift:
+                raise ValueError(f"invalid hotkey {value!r}: duplicate shift modifier")
             shift = True
         else:
             if key_token is not None:
@@ -196,6 +217,7 @@ def parse_hotkey(value: str) -> HotkeyBinding:
             return HotkeyBinding(key_token, key_code, ctrl=ctrl, alt=alt, shift=shift)
 
     raise ValueError(f"unsupported hotkey: {value!r}")
+
 
 def hotkey_conflicts_with_note_keys(hotkey: HotkeyBinding) -> bool:
     if hotkey.has_modifier:

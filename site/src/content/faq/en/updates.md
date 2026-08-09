@@ -6,6 +6,10 @@ category: 'General'
 question: 'How does Sky Auto Player update itself?'
 ---
 
-The running app only notifies you about a release. Close the app and run `updater.bat` to apply an update. The updater verifies the downloaded ZIP’s SHA256 sidecar before touching installed files, stages and validates the release, copies binaries transactionally with rollback, and preserves `config.json`, `.env`, `songs/` and `logs/`.
+Choose **Update now** in the running app. It stops playback, copies the bundled native updater to
+a per-run directory, exits, and lets the updater independently fetch the exact target tag. The
+updater verifies the canonical ZIP’s SHA256 sidecar, archive, manifest, and Authenticode signatures
+before applying a transactional copy with rollback. It preserves `config.json`, `.env`, `songs/`
+and `logs/`.
 
 Only the update notification fields in `config.json` may be patched after a successful binary update.

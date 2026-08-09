@@ -78,15 +78,15 @@ báo này cho bất kỳ tệp unsigned nào tải từ internet.
 ## Cập nhật
 
 Sky Auto Player kiểm tra GitHub để tìm bản phát hành mới khi khởi động và hiển thị banner
-khi có bản mới. Để cập nhật:
+khi có bản mới. Chọn **Update now** để cập nhật:
 
-1. Đóng Sky Auto Player.
-2. Chạy `updater.bat` trong thư mục cài đặt.
-3. Mở lại `Sky-Auto-Player.exe`.
+1. Playback dừng và giải phóng các phím.
+2. App bàn giao cho native updater rồi thoát.
+3. Updater xác minh, cập nhật transaction và mở lại app.
 
-Updater xác minh checksum SHA256 của archive tải về trước khi chạm vào bất kỳ file nào.
-Nếu xác minh thất bại, nó rollback và giữ nguyên cài đặt của bạn. Không bao giờ thay thế
-`config.json` hay thư mục `songs/`.
+Updater xác minh ZIP canonical, sidecar SHA256, manifest và chữ ký Authenticode trước khi chạm
+vào file managed. Nếu xác minh thất bại, nó rollback và giữ nguyên cài đặt. Không bao giờ thay
+thế `config.json`, `.env`, `songs/` hay `logs/`.
 
 ## Gỡ cài đặt
 

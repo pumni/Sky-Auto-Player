@@ -87,6 +87,17 @@ ALLOWED_WINDOWS_SYS_MODULES: frozenset[str] = frozenset(
         "Win32::System::Threading",
         "Win32::UI::Input::KeyboardAndMouse",
         "Win32::UI::WindowsAndMessaging",
+        # The out-of-process updater uses WinHTTP for the explicit GitHub
+        # HTTPS allow-list and MoveFileExW for atomic JSON replacement. These
+        # modules are not input or process-tampering surfaces.
+        "Win32::Networking::WinHttp",
+        # Authenticode certificate extraction is used only to enforce the
+        # configured project publisher subject after WinVerifyTrust succeeds.
+        "Win32::Security::Cryptography",
+        # WinVerifyTrust is the typed Authenticode trust-policy entry point;
+        # it does not inspect or modify another process.
+        "Win32::Security::WinTrust",
+        "Win32::Storage::FileSystem",
     }
 )
 
