@@ -31,8 +31,8 @@ use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
-    PacketRetryReason, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TrackedKeyState,
+    PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PlatformSendResult, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
 use smallvec::SmallVec;
@@ -90,9 +90,7 @@ impl ProductionDispatchTestHarness {
 
     pub fn new_down_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
         assert!((1..=15).contains(&key_count), "key count must be 1..=15");
-        let scan_codes: Vec<u16> = (0..key_count)
-            .map(|index| 0x15u16.saturating_add(index as u16))
-            .collect();
+        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
         Self::create_harness(&[
             KeyActionInput {
                 source_action_index: 0,
@@ -150,9 +148,7 @@ impl ProductionDispatchTestHarness {
             "mixed event count must be an even value in 2..=30"
         );
         let key_count = event_count / 2;
-        let scan_codes: Vec<u16> = (0..key_count)
-            .map(|index| 0x15u16.saturating_add(index as u16))
-            .collect();
+        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
         let mut actions = Vec::with_capacity(1 + event_count);
         actions.push(KeyActionInput {
             source_action_index: 0,
@@ -194,9 +190,7 @@ impl ProductionDispatchTestHarness {
 
     pub fn new_uponly_release_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
         assert!((1..=15).contains(&key_count), "key count must be 1..=15");
-        let scan_codes: Vec<u16> = (0..key_count)
-            .map(|index| 0x15u16.saturating_add(index as u16))
-            .collect();
+        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
         let mut harness = Self::create_harness(&[
             KeyActionInput {
                 source_action_index: 0,
@@ -810,5 +804,9 @@ impl ProductionDispatchTestHarness {
         &mut self,
     ) -> Option<super::super::worker::dispatch::DispatchObservation> {
         self.observer.pop_front()
+    }
+
+    pub fn pending_observation_count(&self) -> usize {
+        self.observer.len()
     }
 }

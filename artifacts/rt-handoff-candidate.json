@@ -1,0 +1,477 @@
+{
+  "benchmark": "rt_handoff_bench",
+  "deadline_us": 10000,
+  "elapsed_ms": 376117,
+  "iterations": 2000,
+  "scenarios": {
+    "down_only_15_cold": {
+      "completion_error_us": {
+        "max_abs": 20523,
+        "p01": 58,
+        "p50": 360,
+        "p95": 654,
+        "p99": 1995,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 3632,
+        "p50": 8,
+        "p95": 15,
+        "p99": 61,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "down_only_15_hot": {
+      "completion_error_us": {
+        "max_abs": 14528,
+        "p01": 46,
+        "p50": 357,
+        "p95": 667,
+        "p99": 1451,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 418,
+        "p50": 7,
+        "p95": 16,
+        "p99": 32,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "down_only_1_cold": {
+      "completion_error_us": {
+        "max_abs": 12714,
+        "p01": 56,
+        "p50": 339,
+        "p95": 639,
+        "p99": 1588,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 950,
+        "p50": 8,
+        "p95": 14,
+        "p99": 30,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "down_only_1_hot": {
+      "completion_error_us": {
+        "max_abs": 18663,
+        "p01": 41,
+        "p50": 302,
+        "p95": 540,
+        "p99": 733,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 940,
+        "p50": 6,
+        "p95": 11,
+        "p99": 22,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "down_only_5_cold": {
+      "completion_error_us": {
+        "max_abs": 11579,
+        "p01": 53,
+        "p50": 352,
+        "p95": 616,
+        "p99": 1076,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 364,
+        "p50": 8,
+        "p95": 13,
+        "p99": 25,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "down_only_5_hot": {
+      "completion_error_us": {
+        "max_abs": 20099,
+        "p01": 44,
+        "p50": 326,
+        "p95": 566,
+        "p99": 801,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 133,
+        "p50": 7,
+        "p95": 12,
+        "p99": 24,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_10_cold": {
+      "completion_error_us": {
+        "max_abs": 5621,
+        "p01": 60,
+        "p50": 355,
+        "p95": 625,
+        "p99": 1754,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 1005,
+        "p50": 7,
+        "p95": 17,
+        "p99": 58,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_10_hot": {
+      "completion_error_us": {
+        "max_abs": 8292,
+        "p01": 56,
+        "p50": 347,
+        "p95": 762,
+        "p99": 2340,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 2343,
+        "p50": 8,
+        "p95": 23,
+        "p99": 63,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_2_cold": {
+      "completion_error_us": {
+        "max_abs": 5087,
+        "p01": 55,
+        "p50": 352,
+        "p95": 670,
+        "p99": 1885,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 1256,
+        "p50": 7,
+        "p95": 21,
+        "p99": 49,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_2_hot": {
+      "completion_error_us": {
+        "max_abs": 21670,
+        "p01": 54,
+        "p50": 349,
+        "p95": 623,
+        "p99": 1081,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 4662,
+        "p50": 7,
+        "p95": 13,
+        "p99": 36,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 1,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_30_cold": {
+      "completion_error_us": {
+        "max_abs": 8992,
+        "p01": 55,
+        "p50": 351,
+        "p95": 629,
+        "p99": 1078,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 8531,
+        "p50": 7,
+        "p95": 14,
+        "p99": 34,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "mixed_30_hot": {
+      "completion_error_us": {
+        "max_abs": 8943,
+        "p01": 52,
+        "p50": 356,
+        "p95": 725,
+        "p99": 2254,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 3181,
+        "p50": 8,
+        "p95": 23,
+        "p99": 63,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_15_cold": {
+      "completion_error_us": {
+        "max_abs": 3477,
+        "p01": 52,
+        "p50": 364,
+        "p95": 614,
+        "p99": 953,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 288,
+        "p50": 7,
+        "p95": 14,
+        "p99": 27,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 8,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_15_hot": {
+      "completion_error_us": {
+        "max_abs": 1294,
+        "p01": 56,
+        "p50": 360,
+        "p95": 605,
+        "p99": 838,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 76,
+        "p50": 7,
+        "p95": 11,
+        "p99": 17,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_1_cold": {
+      "completion_error_us": {
+        "max_abs": 15230,
+        "p01": 55,
+        "p50": 340,
+        "p95": 655,
+        "p99": 1330,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 499,
+        "p50": 7,
+        "p95": 14,
+        "p99": 42,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_1_hot": {
+      "completion_error_us": {
+        "max_abs": 12543,
+        "p01": 55,
+        "p50": 350,
+        "p95": 613,
+        "p99": 1743,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 12393,
+        "p50": 7,
+        "p95": 17,
+        "p99": 47,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_5_cold": {
+      "completion_error_us": {
+        "max_abs": 3204,
+        "p01": 44,
+        "p50": 356,
+        "p95": 626,
+        "p99": 945,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 110,
+        "p50": 7,
+        "p95": 14,
+        "p99": 31,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "cold",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    },
+    "up_only_5_hot": {
+      "completion_error_us": {
+        "max_abs": 1788,
+        "p01": 48,
+        "p50": 335,
+        "p95": 587,
+        "p99": 829,
+        "samples": 2000
+      },
+      "deadline_wake_to_send_start_us": {
+        "max": 75,
+        "p50": 7,
+        "p95": 12,
+        "p99": 24,
+        "samples": 2000
+      },
+      "physical_dispatches": 2000,
+      "planned_class": "hot",
+      "sendinput_duration_us": {
+        "max": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "samples": 2000
+      }
+    }
+  },
+  "transport": "deterministic_mock"
+}

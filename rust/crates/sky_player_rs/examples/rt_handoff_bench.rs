@@ -11,7 +11,7 @@
 use serde_json::json;
 use sky_dispatch_core::estimator::LatencyClass;
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchStep, ProductionDispatchTestHarness,
+    DispatchObservation, DispatchPath, DispatchStep, ProductionDispatchTestHarness,
 };
 use std::time::Instant;
 
@@ -38,22 +38,36 @@ fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usiz
 fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
     match observation {
         DispatchObservation::Down(value) => {
-            if let Some(wake_to_send_start_us) = value.wake_to_send_start_us {
-                samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            }
+            let wake_to_send_start_us = value.wake_to_send_start_us.unwrap_or_else(|| {
+                panic!(
+                    "missing Down wake sample: wake={:?}, sender_started={:?}, sender_completed={:?}",
+                    value.trace.wake_ticks,
+                    value.trace.sender_started_ticks,
+                    value.trace.sender_completed_ticks
+                )
+            });
+            samples.wake_to_send_start_us.push(wake_to_send_start_us);
             samples.sendinput_duration_us.push(value.sender_duration_us);
             samples.completion_error_us.push(value.completion_error_us);
         }
         DispatchObservation::Up(value) => {
-            if let Some(wake_to_send_start_us) = value.wake_to_send_start_us {
-                samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            }
+            let wake_to_send_start_us = value.wake_to_send_start_us.unwrap_or_else(|| {
+                panic!(
+                    "missing Up wake sample: wake={:?}, sender_started={:?}, sender_completed={:?}",
+                    value.trace.wake_ticks,
+                    value.trace.sender_started_ticks,
+                    value.trace.sender_completed_ticks
+                )
+            });
+            samples.wake_to_send_start_us.push(wake_to_send_start_us);
             samples.sendinput_duration_us.push(value.sender_duration_us);
             samples
                 .completion_error_us
                 .push(value.up_completion_error_us);
         }
-        DispatchObservation::Wait(_) => {}
+        DispatchObservation::Wait(wait) => {
+            panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")
+        }
     }
 }
 
@@ -86,6 +100,11 @@ fn run_down(key_count: usize, latency_class: LatencyClass) -> Result<Samples, St
             matches!(step, DispatchStep::Dispatched),
             "down step: {step:?}"
         );
+        assert_eq!(
+            harness.pending_observation_count(),
+            1,
+            "down dispatch did not enqueue one raw observation"
+        );
         samples.physical_dispatches += 1;
         while let Some(observation) = harness.pop_observation() {
             add_observation(&mut samples, observation);
@@ -100,6 +119,13 @@ fn run_up(key_count: usize, latency_class: LatencyClass) -> Result<Samples, Stri
         let mut harness =
             ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, DUE_US);
         while harness.pop_observation().is_some() {}
+        assert_eq!(
+            harness.current_authored_path(),
+            Some(DispatchPath::UpOnly {
+                up_count: key_count
+            }),
+            "authored benchmark setup did not leave the requested physical UpOnly packet"
+        );
         let plan = plan_projected(&mut harness, latency_class);
         let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
@@ -231,16 +257,17 @@ fn main() {
             );
         }
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "benchmark": "rt_handoff_bench",
-            "iterations": ITERATIONS,
-            "deadline_us": DUE_US,
-            "transport": "deterministic_mock",
-            "scenarios": scenarios,
-            "elapsed_ms": started.elapsed().as_millis(),
-        }))
-        .expect("serialize benchmark output")
-    );
+    let output = serde_json::to_string_pretty(&json!({
+        "benchmark": "rt_handoff_bench",
+        "iterations": ITERATIONS,
+        "deadline_us": DUE_US,
+        "transport": "deterministic_mock",
+        "scenarios": scenarios,
+        "elapsed_ms": started.elapsed().as_millis(),
+    }))
+    .expect("serialize benchmark output");
+    if let Some(path) = std::env::args_os().nth(1) {
+        std::fs::write(path, &output).expect("write benchmark output");
+    }
+    println!("{output}");
 }
