@@ -190,6 +190,8 @@ jobs:
           "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
       - name: Build packaged app and native updater
+        env:
+          SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python -m build_app --manifest
 
       - name: Verify packaged release tree
