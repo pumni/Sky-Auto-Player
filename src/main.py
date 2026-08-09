@@ -556,7 +556,6 @@ def _run_rust_selftest() -> int:
 
         session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             [],
-            [0x15],
             config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
                 game_fps=60,
                 min_hold_us=0,

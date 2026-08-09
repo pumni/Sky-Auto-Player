@@ -77,6 +77,7 @@ pub(super) fn strict_scan_codes(
     Ok(result)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
     strict_scan_codes(
         value,
@@ -86,7 +87,11 @@ pub(super) fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec
     .map(|v| v.into_vec())
 }
 
-pub(super) fn parse_actions(
+pub(super) fn parse_actions(value: &Bound<'_, PyAny>) -> PyResult<Vec<KeyActionInput>> {
+    parse_actions_with_allowlist(value, &PHYSICAL_INSTRUMENT_SCAN_CODES)
+}
+
+fn parse_actions_with_allowlist(
     value: &Bound<'_, PyAny>,
     allowed_scan_codes: &[u16],
 ) -> PyResult<Vec<KeyActionInput>> {
@@ -167,12 +172,23 @@ pub(super) fn parse_actions(
     Ok(actions)
 }
 
-pub(super) fn parse_schedule(
+pub(super) fn parse_schedule(py_actions: &Bound<'_, PyAny>) -> PyResult<RuntimeSchedule> {
+    let actions = parse_actions(py_actions)?;
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &actions,
+        &PHYSICAL_INSTRUMENT_SCAN_CODES,
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok(schedule)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn parse_schedule_with_allowlist(
     py_actions: &Bound<'_, PyAny>,
     allowed_scan_codes: &Bound<'_, PyAny>,
 ) -> PyResult<(RuntimeSchedule, Vec<u16>)> {
     let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
-    let actions = parse_actions(py_actions, &allowed_scan_codes)?;
+    let actions = parse_actions_with_allowlist(py_actions, &allowed_scan_codes)?;
     let schedule =
         sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;

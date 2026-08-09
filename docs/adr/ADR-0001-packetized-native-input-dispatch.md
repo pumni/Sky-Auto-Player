@@ -1,6 +1,6 @@
 # ADR-0001: Packetized Native Input Dispatch
 
-Status: accepted for phased implementation
+Status: accepted and implemented
 
 ## Decision
 
@@ -10,9 +10,9 @@ packet sender accepts validated instrument masks and builds one bounded
 `SendInput` array of at most 30 events. A partial activation or mixed result is
 not interpreted as a known prefix.
 
-The existing authored `CompiledBatch` table remains during migration for source
-metadata and compatibility. The packet table is additive until the worker
-transaction is migrated and its acceptance tests pass.
+The compiled authored schedule remains the source of metadata and generation
+identity, while every physical dispatch uses the immutable packet view. There
+is no production single-batch scan-code transport compatibility path.
 
 ## Implementation status
 
@@ -30,8 +30,8 @@ transaction is migrated and its acceptance tests pass.
   for zero progress and Up-only recovery.
 - PR-4: multi-batch same-timestamp packets use one worker sender transaction;
   full success commits the packet once, while partial/zero activation fails
-  closed through the existing cleanup path. Single-batch compatibility remains
-  for migration coverage. Mixed-packet partial fault injection now verifies
+  closed through the existing cleanup path. Single-batch compatibility was
+  removed after the packet-only transport migration. Mixed-packet partial fault injection verifies
   that the retrigger is not committed and uncertain physical state is cleaned.
 - PR-5: resolved `game_fps` is validated at the native boundary; the worker
   applies a frame-safe physical hold floor and rebases late timelines without

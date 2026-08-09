@@ -11,9 +11,10 @@ use super::super::{
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
-use super::observer::{PendingObservationQueue, take_wake_to_send_start_us};
+use super::observer::{PendingObservationQueue, take_deadline_wake_qpc};
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
+use sky_dispatch_win32::input::PhysicalPacket;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -37,14 +38,13 @@ pub(crate) struct PendingReleaseContext<'a> {
 pub(super) struct ReleaseSend {
     pub(super) actual_ticks: TimelineTicks,
     pub(super) completed_effective_ticks: TimelineTicks,
-    pub(super) completed_effective_us: u64,
     /// §8.6 typed QPC completion boundary used by the deferred observer to
     /// derive `core_post_send_us`.  Replaces the old mixed us/QPC subtraction.
     pub(super) sender_started_qpc: QpcTicks,
     pub(super) sender_completed_qpc: QpcTicks,
     pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
     pub(super) last_win32_error: Option<u32>,
-    pub(super) sender_duration_us: u64,
+    pub(super) sender_duration_ticks: DurationTicks,
     pub(super) sent_count: usize,
     pub(super) skipped_count: usize,
     pub(super) attempts: u8,
@@ -131,12 +131,10 @@ pub(super) struct ReleaseReconciliation {
     pub(super) first_index: usize,
     pub(super) effective_deadline_ticks: TimelineTicks,
     pub(super) scheduled_ticks: TimelineTicks,
-    pub(super) scheduled_us: u64,
-    pub(super) deferred_by_us: u64,
+    pub(super) deferred_ticks: DurationTicks,
     pub(super) up_completion_lateness_ticks: Option<DurationTicks>,
     pub(super) up_completion_error_ticks: i64,
     pub(super) up_authored_completion_error_ticks: i64,
-    pub(super) up_completion_error_us: i64,
     pub(super) estimator_evidence: EstimatorObservationEvidence,
 }
 
@@ -249,14 +247,16 @@ pub(crate) fn dispatch_due_pending_releases(
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
-    let scan_codes: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
-    let scan_count = scan_codes.len();
+    let release_mask = due_pending
+        .iter()
+        .fold(0u16, |mask, pending| mask | (1u16 << pending.key_slot));
+    let scan_count = release_mask.count_ones() as usize;
     let send = match prepare_release_send(
         qpc_clock,
         backend,
         clock_state,
         runtime,
-        &scan_codes,
+        release_mask,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -311,7 +311,7 @@ pub(crate) fn dispatch_due_pending_releases(
     // Positive-at-cap policy uses the effective completion error.
     let (lead_up_saturated, saturated_positive) = up_saturation_evidence(
         pending_plan.is_some_and(|plan| plan.lead_saturated),
-        reconciliation.up_completion_error_us,
+        reconciliation.up_completion_error_ticks,
     );
     health.up_saturation_positive_streak = if saturated_positive {
         health.up_saturation_positive_streak.saturating_add(1)
@@ -327,8 +327,7 @@ pub(crate) fn dispatch_due_pending_releases(
                 .up_completion_lateness_ticks
                 .is_some_and(|late| late > timing.strict_up_completion_late_ticks),
     };
-    runtime.pending_pre_send_spin_us = 0;
-    let worker_ready_qpc = match qpc_clock.now() {
+    let dispatch_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
             return DispatchStep::Terminate(format!(
@@ -336,27 +335,27 @@ pub(crate) fn dispatch_due_pending_releases(
             ));
         }
     };
-    let wake_to_send_start_us =
-        take_wake_to_send_start_us(runtime, qpc_clock, send.sender_started_qpc);
+    let wake_qpc = take_deadline_wake_qpc(runtime, send.sender_started_qpc);
     // HARD DISPATCH READY BOUNDARY:
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
     let observation = UpObservation {
         latency_class,
-        sender_duration_us: send.sender_duration_us,
-        wake_to_send_start_us,
+        sender_started_qpc: send.sender_started_qpc,
+        sender_completed_qpc: send.sender_completed_qpc,
+        dispatch_ready_qpc,
+        sender_duration_ticks: send.sender_duration_ticks,
+        wake_qpc,
         sent_count: send.sent_count,
         scan_count,
         lead_up_ticks,
         lead_up_saturated,
-        completed_effective: send.completed_effective_us,
-        scheduled_us: reconciliation.scheduled_us,
-        deferred_by_us: reconciliation.deferred_by_us,
-        up_completion_error_us: reconciliation.up_completion_error_us,
+        completed_effective_ticks: send.completed_effective_ticks,
+        scheduled_ticks: reconciliation.scheduled_ticks,
+        deferred_ticks: reconciliation.deferred_ticks,
+        up_completion_error_ticks: reconciliation.up_completion_error_ticks,
         estimator_evidence: reconciliation.estimator_evidence,
-        sender_completed_qpc: send.sender_completed_qpc,
-        worker_ready_qpc,
         send_warn_us: frozen_budget.send_warn_us,
         core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
         recovery_pause_ticks: reconciliation.recovery_pause_ticks,
@@ -376,7 +375,7 @@ pub(crate) fn dispatch_due_pending_releases(
             completion_error_ticks: reconciliation.up_completion_error_ticks,
             authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
             applied_lead_ticks: lead_up_ticks,
-            deferred_by_us: reconciliation.deferred_by_us,
+            deferred_ticks: reconciliation.deferred_ticks,
             recovery_required: reconciliation.recovery_required,
         },
     };
@@ -392,7 +391,8 @@ pub(crate) fn dispatch_due_pending_releases(
         recovery_outcome,
         flags,
         due_pending[reconciliation.first_index].source_action_index,
-        reconciliation.up_completion_error_us,
+        qpc_clock,
+        reconciliation.up_completion_error_ticks,
     )
 }
 
@@ -400,12 +400,21 @@ fn release_terminal_step(
     recovery_outcome: Option<ReleaseRecoveryOutcome>,
     flags: ReleaseOutcomeFlags,
     first_action_index: u32,
-    completion_error_us: i64,
+    qpc_clock: QpcClock,
+    completion_error_ticks: i64,
 ) -> DispatchStep {
     if let Some(outcome) = recovery_outcome {
         return DispatchStep::Terminate(outcome.terminal_error);
     }
     if flags.strict_up_completion_late {
+        let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks) {
+            Ok(value) => value,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-off terminal timing conversion failure: {error}"
+                ));
+            }
+        };
         return DispatchStep::Terminate(format!(
             "strict timing completion SLO exceeded for note-off at action {first_action_index}: completion was {completion_error_us}us late"
         ));
@@ -426,7 +435,7 @@ fn prepare_release_send(
     backend: &mut TrackedKeyState,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
-    scan_codes: &SmallVec<[u16; 15]>,
+    release_mask: u16,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -466,7 +475,7 @@ fn prepare_release_send(
             )));
         }
     };
-    let result = backend.key_up(scan_codes);
+    let result = backend.send_physical_packet(PhysicalPacket::new(release_mask, 0));
     if let Some(error) = backend.timing_error.take() {
         return Err(DispatchStep::Terminate(format!(
             "QPC failure after note-off: {error:?}"
@@ -504,19 +513,6 @@ fn prepare_release_send(
         },
         None => None,
     };
-    let completed_effective_us = match qpc_clock.duration_to_us(
-        match completed_effective_ticks.checked_duration_since(TimelineTicks::ZERO) {
-            Ok(dur) => dur,
-            Err(_) => DurationTicks::ZERO,
-        },
-    ) {
-        Ok(us) => us,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "playback clock conversion failure: {error:?}"
-            )));
-        }
-    };
     let sender_duration_ticks = match result.evidence.duration_ticks() {
         Ok(dur) => dur,
         Err(_) => match completed_qpc_ticks.checked_duration_since(started_ticks) {
@@ -528,17 +524,9 @@ fn prepare_release_send(
             }
         },
     };
-    let sender_duration_us = match qpc_clock.duration_to_us(sender_duration_ticks) {
-        Ok(us) => us,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-off duration conversion failure: {error:?}"
-            )));
-        }
-    };
     runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
-    let sent_count = result.sent_scan_codes().len();
-    let skipped_count = result.skipped_duplicates().len();
+    let sent_count = result.evidence.confirmed_mask.count_ones() as usize;
+    let skipped_count = result.evidence.skipped_mask.count_ones() as usize;
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
     let retry_reason = result.evidence.retry_reason;
@@ -550,12 +538,11 @@ fn prepare_release_send(
     Ok(ReleaseSend {
         actual_ticks,
         completed_effective_ticks,
-        completed_effective_us,
         sender_completed_qpc: completed_qpc_ticks,
         sender_started_qpc: result.evidence.started_ticks.unwrap_or(QpcTicks::ZERO),
         sender_started_effective_ticks,
         last_win32_error,
-        sender_duration_us,
+        sender_duration_ticks,
         sent_count,
         skipped_count,
         attempts,
@@ -567,7 +554,7 @@ fn prepare_release_send(
 #[allow(clippy::too_many_arguments)]
 fn reconcile_release_recovery(
     coordinator: &mut RuntimeDispatchCoordinator,
-    qpc_clock: QpcClock,
+    _qpc_clock: QpcClock,
     clock_state: &mut PlaybackClockState,
     timing: &WorkerTimingState,
     due_pending: &SmallVec<[PendingRelease; 15]>,
@@ -613,7 +600,7 @@ fn reconcile_release_recovery(
         }
     }
     reconcile_release_outcome(
-        qpc_clock,
+        _qpc_clock,
         clock_state,
         due_pending,
         send,
@@ -625,7 +612,7 @@ fn reconcile_release_recovery(
 
 #[allow(clippy::too_many_arguments)]
 fn reconcile_release_outcome(
-    qpc_clock: QpcClock,
+    _qpc_clock: QpcClock,
     _clock_state: &mut PlaybackClockState,
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
@@ -686,20 +673,12 @@ fn reconcile_release_outcome(
             "pending release batch has no scheduled timestamp".to_string(),
         ));
     };
-    let scheduled_us = match qpc_clock.timeline_to_us(scheduled_ticks) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "pending release telemetry conversion error: {error:?}"
-            )));
-        }
-    };
-    let mut deferred_by_us = 0u64;
+    let mut deferred_ticks = DurationTicks::ZERO;
     for pending in due_pending {
         let ready_ticks = pending
             .release_not_before_ticks
             .max(pending.next_retry_ticks);
-        let deferred_ticks = match ready_ticks
+        let pending_deferred_ticks = match ready_ticks
             .checked_duration_since(pending.scheduled_release_ticks)
         {
             Ok(value) => value,
@@ -710,15 +689,7 @@ fn reconcile_release_outcome(
                 )));
             }
         };
-        let deferred_us = match qpc_clock.duration_to_us(deferred_ticks) {
-            Ok(value) => value,
-            Err(error) => {
-                return Err(DispatchStep::Terminate(format!(
-                    "pending deferral conversion failure: {error:?}"
-                )));
-            }
-        };
-        deferred_by_us = deferred_by_us.max(deferred_us);
+        deferred_ticks = deferred_ticks.max(pending_deferred_ticks);
     }
     let up_completion_lateness_ticks = send
         .completed_effective_ticks
@@ -743,14 +714,6 @@ fn reconcile_release_outcome(
                 )));
             }
         };
-    let up_completion_error_us = match signed_ticks_to_us(qpc_clock, up_completion_error_ticks) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-off timing conversion failure: {error}"
-            )));
-        }
-    };
     let estimator_evidence = EstimatorObservationEvidence {
         status: send.transport.status,
         attempts: send.attempts,
@@ -761,7 +724,7 @@ fn reconcile_release_outcome(
         timing_valid: true,
         transport_anomaly: send.last_win32_error.is_some()
             || send.transport.status != sky_dispatch_win32::input::SendTransactionStatus::Complete,
-        recovery_used: recovery_required || deferred_by_us > 0,
+        recovery_used: recovery_required || deferred_ticks > DurationTicks::ZERO,
         chord_integrity_lost: false,
     };
     Ok(ReleaseReconciliation {
@@ -770,12 +733,10 @@ fn reconcile_release_outcome(
         first_index,
         effective_deadline_ticks,
         scheduled_ticks,
-        scheduled_us,
-        deferred_by_us,
+        deferred_ticks,
         up_completion_lateness_ticks,
         up_completion_error_ticks,
         up_authored_completion_error_ticks,
-        up_completion_error_us,
         estimator_evidence,
     })
 }
@@ -819,10 +780,10 @@ fn finalize_release_recovery(
     }
 }
 
-fn up_saturation_evidence(lead_up_saturated: bool, completion_error_us: i64) -> (bool, bool) {
+fn up_saturation_evidence(lead_up_saturated: bool, completion_error_ticks: i64) -> (bool, bool) {
     (
         lead_up_saturated,
-        lead_up_saturated && completion_error_us > 0,
+        lead_up_saturated && completion_error_ticks > 0,
     )
 }
 

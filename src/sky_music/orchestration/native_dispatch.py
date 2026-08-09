@@ -13,7 +13,6 @@ from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
 from sky_music.domain.scheduler_types import KeyAction
-from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.orchestration.estimator_cache import load_estimator_state
 from sky_music.orchestration.native_models import (
     LIVE_NATIVE_STATUSES,
@@ -146,7 +145,6 @@ class RustDispatchRuntime:
         session_config_type = cast(Any, sky_player_rs.SessionConfig)  # type: ignore[attr-defined]
         self._session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             native_actions,
-            list(SKY_15_SCAN_CODES),
             config=session_config_type(
                 game_fps=int(game_fps),
                 min_hold_us=min_hold_us,

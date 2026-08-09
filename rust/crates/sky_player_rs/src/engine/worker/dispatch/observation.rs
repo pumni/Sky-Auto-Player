@@ -1,7 +1,12 @@
+use super::super::super::{
+    QpcClock, RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
+    TRACE_FLAG_SENT_FULL, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
+    trace_outcome_code,
+};
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchPath, DispatchStep, LatencyClass, WorkerHealthState, observe_wait_health,
-    wake_lateness_ticks,
+    release_runtime_outcome, wake_lateness_ticks,
 };
 use super::timing::EstimatorObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
@@ -53,19 +58,16 @@ pub struct DownObservation {
     pub timeline_rebase_total_ticks: DurationTicks,
     pub timeline_rebase_max_ticks: DurationTicks,
     pub timeline_rebase_last_reason: u8,
-    pub sender_duration_us: u64,
-    /// QPC duration from a blocking deadline wake to SendInput call entry.
-    /// `None` means this dispatch did not follow a blocking deadline wait.
-    pub wake_to_send_start_us: Option<u64>,
+    pub sender_started_qpc: QpcTicks,
+    pub sender_completed_qpc: QpcTicks,
+    pub dispatch_ready_qpc: QpcTicks,
+    pub sender_duration_ticks: DurationTicks,
+    /// Raw QPC wake sample; derivation is deferred to the observer drain.
+    pub wake_qpc: Option<QpcTicks>,
     pub delivered_count: usize,
     pub batch_intent_count: usize,
-    pub completion_error_us: i64,
+    pub completed_effective_ticks: TimelineTicks,
     pub estimator_evidence: EstimatorObservationEvidence,
-    pub completed_effective: u64,
-    pub authored_batch_scheduled_us: u64,
-    pub batch_scheduled_us: u64,
-    pub sender_completed_qpc: QpcTicks,
-    pub worker_ready_qpc: QpcTicks,
     pub send_warn_us: u64,
     pub core_post_send_warn_us: u64,
     pub trace: DownTraceObservation,
@@ -88,30 +90,172 @@ pub struct UpTraceObservation {
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
     pub applied_lead_ticks: DurationTicks,
-    pub deferred_by_us: u64,
+    pub deferred_ticks: DurationTicks,
     pub recovery_required: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
     pub latency_class: LatencyClass,
-    pub sender_duration_us: u64,
-    pub wake_to_send_start_us: Option<u64>,
+    pub sender_started_qpc: QpcTicks,
+    pub sender_completed_qpc: QpcTicks,
+    pub dispatch_ready_qpc: QpcTicks,
+    pub sender_duration_ticks: DurationTicks,
+    pub wake_qpc: Option<QpcTicks>,
     pub sent_count: usize,
     pub scan_count: usize,
     pub lead_up_ticks: DurationTicks,
     pub lead_up_saturated: bool,
-    pub completed_effective: u64,
-    pub scheduled_us: u64,
-    pub deferred_by_us: u64,
-    pub up_completion_error_us: i64,
+    pub completed_effective_ticks: TimelineTicks,
+    pub scheduled_ticks: TimelineTicks,
+    pub deferred_ticks: DurationTicks,
+    pub up_completion_error_ticks: i64,
     pub estimator_evidence: EstimatorObservationEvidence,
-    pub sender_completed_qpc: QpcTicks,
-    pub worker_ready_qpc: QpcTicks,
     pub send_warn_us: u64,
     pub core_post_send_warn_us: u64,
     pub trace: UpTraceObservation,
     pub recovery_pause_ticks: Option<DurationTicks>,
+}
+
+pub(super) fn record_down_send_telemetry(
+    observation: &DownObservation,
+    telemetry: &mut TelemetryCollector,
+    core_post_send_us: u64,
+) -> Result<(&'static str, bool), DispatchStep> {
+    let trace = observation.trace;
+    let down_outcome = if trace.recovered_retry_late {
+        "recovered_zero_progress_but_late"
+    } else if trace.recovered_partial_up {
+        "recovered_partial_up_retry"
+    } else if trace.strict_completion_late {
+        "strict_completion_slo_exceeded"
+    } else if trace.chord_integrity_lost {
+        "chord_integrity_lost"
+    } else if trace.result_success && trace.sent_count == trace.requested_count {
+        "sent"
+    } else {
+        "partial_note_on"
+    };
+    let force_publish = !trace.result_success
+        || !matches!(trace.retry_reason, PacketRetryReason::None)
+        || trace.chord_integrity_lost;
+    let mut trace_flags = 0u8;
+    if trace.result_success && trace.sent_count == trace.requested_count {
+        trace_flags |= TRACE_FLAG_SENT_FULL;
+    }
+    if trace.recovered_retry_late || trace.chord_integrity_lost {
+        trace_flags |= TRACE_FLAG_RECOVERY;
+    }
+    if down_outcome != "sent" {
+        trace_flags |= TRACE_FLAG_ANOMALY;
+    }
+    if let Err(error) = telemetry.try_push(|| {
+        RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: trace.event_index,
+                kind: trace.trace_kind,
+                outcome: trace_outcome_code(down_outcome),
+                polyphony: observation.batch_intent_count,
+                flags: trace_flags,
+                win32_error: trace.last_win32_error,
+            },
+            TraceTiming {
+                authored_ticks: trace.authored_ticks,
+                effective_deadline_ticks: trace.effective_deadline_ticks,
+                wake_ticks: trace.wake_ticks,
+                send_started_ticks: trace.sender_started_ticks,
+                send_completed_ticks: trace.sender_completed_ticks,
+                core_post_send_duration_us: core_post_send_us,
+                completion_error_ticks: trace.completion_error_ticks,
+                authored_completion_error_ticks: trace.authored_completion_error_ticks,
+                applied_lead_ticks: trace.applied_lead_ticks,
+            },
+            TraceDelivery {
+                requested: trace.requested_count,
+                sent: trace.sent_count,
+                skipped: trace.skipped_count,
+                send_attempts: usize::from(trace.send_attempts),
+            },
+        )
+    }) {
+        return Err(DispatchStep::Terminate(format!(
+            "native telemetry record overflow: {error}"
+        )));
+    }
+    Ok((down_outcome, force_publish))
+}
+
+pub(super) fn record_release_telemetry(
+    telemetry: &mut TelemetryCollector,
+    observation: &UpObservation,
+    qpc_clock: QpcClock,
+    core_post_send_us: u64,
+) -> Result<(), DispatchStep> {
+    let trace = observation.trace;
+    #[cfg(any(test, feature = "test-support"))]
+    if super::release::take_release_telemetry_failure(trace.recovery_required) {
+        return Err(DispatchStep::Terminate(
+            "injected release telemetry failure".to_string(),
+        ));
+    }
+    let deferred_by_us = qpc_clock
+        .duration_to_us(trace.deferred_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off deferral conversion failure: {error:?}"))
+        })?;
+    let release_outcome = release_runtime_outcome(
+        deferred_by_us,
+        trace.sent_count,
+        trace.scan_count,
+        trace.recovery_required,
+    );
+    let mut trace_flags = 0u8;
+    if trace.sent_count == trace.scan_count {
+        trace_flags |= TRACE_FLAG_SENT_FULL;
+    }
+    if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
+        trace_flags |= TRACE_FLAG_RECOVERY;
+    }
+    if deferred_by_us > 0 {
+        trace_flags |= TRACE_FLAG_DEFERRED;
+    }
+    if release_outcome != "sent" {
+        trace_flags |= TRACE_FLAG_ANOMALY;
+    }
+    if let Err(error) = telemetry.try_push(|| {
+        RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: trace.event_index,
+                kind: trace.trace_kind,
+                outcome: trace_outcome_code(release_outcome),
+                polyphony: trace.scan_count,
+                flags: trace_flags,
+                win32_error: trace.last_win32_error,
+            },
+            TraceTiming {
+                authored_ticks: trace.authored_ticks,
+                effective_deadline_ticks: trace.effective_deadline_ticks,
+                wake_ticks: trace.wake_ticks,
+                send_started_ticks: trace.sender_started_ticks,
+                send_completed_ticks: trace.sender_completed_ticks,
+                core_post_send_duration_us: core_post_send_us,
+                completion_error_ticks: trace.completion_error_ticks,
+                authored_completion_error_ticks: trace.authored_completion_error_ticks,
+                applied_lead_ticks: trace.applied_lead_ticks,
+            },
+            TraceDelivery {
+                requested: trace.scan_count,
+                sent: trace.sent_count,
+                skipped: trace.skipped_count,
+                send_attempts: usize::from(trace.send_attempts),
+            },
+        )
+    }) {
+        return Err(DispatchStep::Terminate(format!(
+            "native telemetry record overflow: {error}"
+        )));
+    }
+    Ok(())
 }
 
 /// Drain-side wait conversion. Raw wait evidence stays on the worker-owned

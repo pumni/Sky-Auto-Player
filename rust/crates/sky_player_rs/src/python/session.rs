@@ -40,12 +40,8 @@ impl EffectiveSessionConfig {
 #[pymethods]
 impl NativeDispatchSessionPy {
     #[new]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, config = None))]
-    fn new(
-        py_actions: &Bound<'_, PyAny>,
-        allowed_scan_codes: &Bound<'_, PyAny>,
-        config: Option<NativeSessionConfigPy>,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (py_actions, config = None))]
+    fn new(py_actions: &Bound<'_, PyAny>, config: Option<NativeSessionConfigPy>) -> PyResult<Self> {
         let config = config.unwrap_or_default();
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
@@ -83,12 +79,11 @@ impl NativeDispatchSessionPy {
         if max_lead_us > 10_000 {
             return Err(PyValueError::new_err("max_lead_us must be at most 10000"));
         }
-        let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
+        let schedule = parse_schedule(py_actions)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Production,
-            allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {
                 game_fps,
                 min_hold_us,
@@ -573,7 +568,8 @@ impl TestDispatchSessionPy {
             }
         };
         let max_lead_us = 2_000;
-        let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
+        let (schedule, _allowed_scan_codes) =
+            parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
@@ -582,7 +578,6 @@ impl TestDispatchSessionPy {
                 latency_per_key_us: mock_latency_per_key_us,
                 fault_script,
             },
-            allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {
                 game_fps,
                 min_hold_us,

@@ -75,12 +75,7 @@ pub mod observer_test_hooks {
         super::worker::dispatch::observer::set_observer_artificial_cost_us(us);
     }
 
-    /// Override the worker's initial observer budget in microseconds (0 disables).
-    pub fn set_observer_initial_budget_override_us(us: u64) {
-        super::worker::dispatch::observer::set_observer_initial_budget_override_us(us);
-    }
-
-    /// Clear artificial cost and budget override after a scenario.
+    /// Clear the artificial observer cost after a scenario.
     pub fn reset_observer_test_hooks() {
         super::worker::dispatch::observer::reset_observer_test_hooks();
     }

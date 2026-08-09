@@ -79,10 +79,14 @@ def test_dispatch_constructor_does_not_accept_legacy_backend_knobs() -> None:
         assert retired not in signature
 
 
+def test_dispatch_constructor_rejects_the_removed_external_allowlist() -> None:
+    with pytest.raises(TypeError):
+        sky_player_rs.DispatchSession([], list(SKY_15_SCAN_CODES))  # type: ignore[attr-defined]
+
+
 def test_session_reports_lite_progress_then_one_final_report() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [],
-        [21],
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=60,
             min_hold_us=100,

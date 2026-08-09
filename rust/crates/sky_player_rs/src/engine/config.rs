@@ -44,7 +44,6 @@ pub(crate) enum BackendConfig {
 pub(crate) struct NativeSessionOptions {
     pub(crate) schedule: RuntimeSchedule,
     pub(crate) backend: BackendConfig,
-    pub(crate) allowed_count: usize,
     pub(crate) timing: TimingOptions,
     pub(crate) focus: FocusOptions,
     pub(crate) wait: WaitOptions,
@@ -55,7 +54,6 @@ pub(crate) struct NativeSessionOptions {
 
 pub(crate) struct WorkerConfig {
     pub(super) backend: BackendConfig,
-    pub(super) allowed_count: usize,
     pub(super) timing: TimingOptions,
     pub(super) focus: FocusOptions,
     pub(super) wait: WaitOptions,
@@ -69,7 +67,6 @@ impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             backend: BackendConfig::Production,
-            allowed_count: 15,
             timing: TimingOptions {
                 game_fps: 60,
                 min_hold_us: 10_000,

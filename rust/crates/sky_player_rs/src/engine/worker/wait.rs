@@ -45,7 +45,6 @@ pub(crate) struct WaitSignals<'a> {
 
 pub(crate) struct WaitMutable<'a> {
     pub(crate) local_metrics: &'a mut WorkerMetricsLocal,
-    pub(crate) pending_pre_send_spin_us: &'a mut u64,
     pub(crate) force_full_cleanup: &'a mut bool,
     pub(crate) terminal_error: &'a mut Option<String>,
 }
@@ -86,7 +85,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     } = signals;
     let WaitMutable {
         local_metrics,
-        pending_pre_send_spin_us,
         force_full_cleanup,
         terminal_error,
     } = mutable;
@@ -172,13 +170,11 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 return WaitBoundary::Exit;
             }
             std::thread::sleep(Duration::from_micros(500));
-            *pending_pre_send_spin_us = 0;
             WaitBoundary::Replan { wait_result }
         }
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);
-            *pending_pre_send_spin_us = 0;
             WaitBoundary::Replan { wait_result }
         }
     }
@@ -226,7 +222,6 @@ mod tests {
         let waiter = HybridWaiter::new();
         let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
         let mut local_metrics = WorkerMetricsLocal::default();
-        let mut pending_pre_send_spin_us = 0;
         let mut force_full_cleanup = false;
         let mut terminal_error = None;
 
@@ -249,7 +244,6 @@ mod tests {
             },
             mutable: WaitMutable {
                 local_metrics: &mut local_metrics,
-                pending_pre_send_spin_us: &mut pending_pre_send_spin_us,
                 force_full_cleanup: &mut force_full_cleanup,
                 terminal_error: &mut terminal_error,
             },

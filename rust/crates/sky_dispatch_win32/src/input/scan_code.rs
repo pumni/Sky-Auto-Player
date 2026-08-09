@@ -52,3 +52,21 @@ pub fn scan_codes_from_mask(mask: u16) -> SmallVec<[u16; 15]> {
         .filter_map(|(slot, &scan_code)| (mask & (1u16 << slot) != 0).then_some(scan_code))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask};
+
+    #[test]
+    fn canonical_fifteen_key_registry_has_stable_slots() {
+        assert_eq!(PHYSICAL_INSTRUMENT_SCAN_CODES.len(), 15);
+        assert_eq!(key_mask(0x15), Some(1 << 0)); // Y
+        assert_eq!(key_mask(0x16), Some(1 << 1)); // U
+        assert_eq!(key_mask(0x35), Some(1 << 14)); // /
+        assert_eq!(
+            key_mask(0x15).unwrap() | key_mask(0x35).unwrap(),
+            (1 << 0) | (1 << 14)
+        );
+        assert_eq!(FULL_INSTRUMENT_MASK, 0x7fff);
+    }
+}

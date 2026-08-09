@@ -9,9 +9,9 @@ use super::super::{
     qpc_frequency_checked,
 };
 use super::{
-    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
-    WorkerResources, WorkerTimingState, derive_spin_threshold_us, describe_release_outcome,
-    initialize_startup, publish_wake_error_stats, release_state_verified,
+    DispatchHealthOptions, HealthWindow, OBSERVER_GUARD_US, StartupResources, Worker,
+    WorkerHealthState, WorkerResources, WorkerTimingState, derive_spin_threshold_us,
+    describe_release_outcome, initialize_startup, publish_wake_error_stats, release_state_verified,
     startup_lead_for_first_packet, wait_failure_message,
 };
 use std::sync::atomic::Ordering;
@@ -89,8 +89,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     );
     core.metrics.power_throttling_disabled = power_throttling_disabled;
     let config = &worker.config;
+    let estimator_key_count = schedule.key_registry.len();
     let mut estimator =
-        match SendLatencyEstimator::try_new(0.2, config.timing.max_lead_us, config.allowed_count) {
+        match SendLatencyEstimator::try_new(0.2, config.timing.max_lead_us, estimator_key_count) {
             Ok(estimator) => estimator,
             Err(error) => {
                 return admission_failure(
@@ -266,7 +267,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
     if config.wait.enable_adaptive_spin
-        && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 10)
+        && let Some(stats) =
+            waiter.probe_wake_error_stats(qpc_clock, interrupt, super::ADAPTIVE_SPIN_PROBE_SAMPLES)
     {
         publish_wake_error_stats(stats, &mut core.metrics);
         effective_spin_threshold_us =
@@ -308,6 +310,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let health_options = DispatchHealthOptions {
         wait_warn_us: config.timing.input_path_warn_us,
         ..DispatchHealthOptions::default()
+    };
+    let observer_guard_ticks = match qpc_clock.duration_from_us(OBSERVER_GUARD_US) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("observer guard conversion failed: {error:?}"),
+            );
+        }
     };
     core.health = Some(WorkerHealthState {
         down_saturation_positive_streak: 0,
@@ -402,6 +414,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         lease_timeout_ticks,
         retry_backoff_ticks,
         effective_spin_threshold_ticks,
+        observer_guard_ticks,
         start_wall_time_us,
         start_thread_cpu_us,
         start_process_cpu_us,

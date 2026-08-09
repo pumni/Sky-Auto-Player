@@ -56,9 +56,10 @@ completion while cleanup residue remains.
 
 The production extension exposes `SessionConfig` with only user/session
 fields: minimum hold, focus requirement, target HWND, telemetry enablement, and
-the native profile. `DispatchSession` accepts authored actions and the allowed
-scan-code registry. It exposes only lifecycle commands, `set_target_hwnd`, a
-small `snapshot_lite`, and one final `session_report`.
+the native profile. `DispatchSession` accepts authored actions and validates
+them against the native canonical 15-key registry; callers cannot inject an
+external scan-code allowlist. It exposes only lifecycle commands,
+`set_target_hwnd`, a small `snapshot_lite`, and one final `session_report`.
 
 `snapshot_lite` returns a frozen typed `ProgressSnapshot` with a nested frozen
 `BackendHealthSnapshot`. It contains state, elapsed/total time, completion

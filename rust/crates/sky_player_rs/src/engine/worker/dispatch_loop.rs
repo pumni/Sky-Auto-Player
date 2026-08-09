@@ -203,20 +203,6 @@ pub(super) fn dispatch(
         }};
     }
 
-    macro_rules! qpc_ticks_to_us_or_terminal {
-        ($ticks:expr) => {{
-            match qpc_clock.duration_to_us(DurationTicks::from_raw($ticks.as_u64())) {
-                Ok(value) => value,
-                Err(error) => {
-                    core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error =
-                        Some(format!("QPC conversion failure: {error:?}"));
-                    break;
-                }
-            }
-        }};
-    }
-
     catch_unwind(AssertUnwindSafe(|| {
         if core.runtime.terminal_error.is_some() {
             return;
@@ -621,8 +607,6 @@ pub(super) fn dispatch(
                     }
                 }
             };
-            let mut effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
-            core.metrics.elapsed_us = effective_now_us;
             // §8.7: fresh QPC → immutable plan → inspect slack → maybe drain
             // one observation → if drained, discard plan and rebuild from a
             // fresh QPC sample before any admit/dispatch/wait.
@@ -664,9 +648,7 @@ pub(super) fn dispatch(
                 && super::observer_has_safe_slack(
                     dispatch_plan.deadline_ticks,
                     effective_now_ticks,
-                    core.observer.budget_us,
-                    super::OBSERVER_MARGIN_US,
-                    qpc_clock,
+                    timing.observer_guard_ticks,
                 )
             {
                 let drain_us = match super::drain_one_observer(
@@ -680,7 +662,7 @@ pub(super) fn dispatch(
                     &mut resources.estimator,
                     &mut resources.telemetry,
                     qpc_clock,
-                    effective_now_us,
+                    now_ticks,
                     &mut timing,
                 ) {
                     Ok(value) => value,
@@ -694,11 +676,6 @@ pub(super) fn dispatch(
                 if drain_us > 0 {
                     core.metrics.observer_duration_max_us =
                         core.metrics.observer_duration_max_us.max(drain_us);
-                    // §8.9 adaptive budget: clamp(2 * observed, FLOOR..CAP).
-                    core.observer.budget_us = drain_us.saturating_mul(2).clamp(
-                        super::OBSERVER_BUDGET_FLOOR_US,
-                        super::OBSERVER_BUDGET_CAP_US,
-                    );
                     // Observer work invalidates the plan. Rebuild from fresh QPC.
                     now_ticks = qpc_ticks_or_terminal!();
                     effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
@@ -720,8 +697,6 @@ pub(super) fn dispatch(
                             }
                         }
                     };
-                    effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
-                    core.metrics.elapsed_us = effective_now_us;
                     dispatch_plan = match plan_next_dispatch_projected(ProjectedPlanningInput {
                         coordinator: &resources.coordinator,
                         estimator: &resources.estimator,
@@ -803,7 +778,6 @@ pub(super) fn dispatch(
                 },
                 mutable: WaitMutable {
                     local_metrics: &mut core.metrics,
-                    pending_pre_send_spin_us: &mut core.runtime.pending_pre_send_spin_us,
                     force_full_cleanup: &mut core.runtime.force_full_cleanup,
                     terminal_error: &mut core.runtime.terminal_error,
                 },
@@ -917,19 +891,8 @@ pub(super) fn dispatch(
         // finalization so deferred telemetry is not lost, while keeping this
         // work outside the normal dispatch critical section.
         while !core.observer.pending.is_empty() {
-            let now_us = match qpc_clock.now() {
-                Ok(ticks) => {
-                    match qpc_clock.duration_to_us(DurationTicks::from_raw(ticks.as_u64())) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error = Some(format!(
-                                "observer finalization QPC conversion failure: {error:?}"
-                            ));
-                            break;
-                        }
-                    }
-                }
+            let now_ticks = match qpc_clock.now() {
+                Ok(ticks) => ticks,
                 Err(error) => {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error =
@@ -948,7 +911,7 @@ pub(super) fn dispatch(
                 &mut resources.estimator,
                 &mut resources.telemetry,
                 qpc_clock,
-                now_us,
+                now_ticks,
                 &mut timing,
             ) {
                 Ok(value) => value,

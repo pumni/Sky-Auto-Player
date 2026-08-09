@@ -49,20 +49,20 @@ choice, and the terminal transition.
   transactions, transaction-outcome interpretation, coordinator commit, and the
   dispatch telemetry record. Both note-on and note-off paths first finish
   physical/coordinator correctness, required recovery, the mandatory terminal
-  SLO decision, and a `worker_ready_qpc` sample. They then enqueue one
-  allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) into a
-  fixed-capacity (64) worker-owned ring and return. Worker-ready duration
-  conversion, trace-record materialization, estimator update, health-window
-  observation, lateness accounting, and diagnostic metric publication are
-  deferred to `observer::drain_one_observer`. If the ring is full, the oldest raw record is
-  materialized before the new record is admitted, preserving telemetry order
-  without blocking the normal queue path.
-  The dispatch loop applies the §8.7/§8.8 slack rule before admit/dispatch:
-  fresh QPC → immutable `NextDispatchPlan` → drain at most one observation
-  only when next-deadline slack ≥ `budget_us + margin_us` (or no deadline
-  remains) → if drained, discard the plan and rebuild from a fresh QPC
-  sample before wait/admit/dispatch.  Adaptive budget (§8.9) is
-  `clamp(2 × observed_us, 5_000..20_000)`. Observer work never rolls back
+  SLO decision, and a raw `dispatch_ready_qpc` sample. They then enqueue one
+  allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) containing
+  QPC/timeline ticks and physical masks/counts into a fixed-capacity (64)
+  worker-owned ring and return. Tick-to-microsecond conversion, wake/send/ready
+  deltas, completion errors, trace-record materialization, estimator update,
+  health-window observation, lateness accounting, and diagnostic metric
+  publication are deferred to `observer::drain_one_observer`. If the ring is
+  full, the oldest raw record is dropped in O(1) and the new record is admitted;
+  no observer work runs synchronously to relieve queue pressure.
+  The dispatch loop applies a fixed 5,500 µs-equivalent QPC guard before
+  observer work: fresh QPC → immutable `NextDispatchPlan` → drain at most one
+  observation only when next-deadline slack is at least `observer_guard_ticks`
+  (or no deadline remains) → if drained, discard the plan and rebuild from a
+  fresh QPC sample before wait/admit/dispatch. Observer work never rolls back
   physical ownership; a deferred observer failure may still terminate the
   session after that ownership is safe. It returns a closed four-variant
   `DispatchStep`
@@ -140,7 +140,7 @@ The native final snapshot also reports `post_send_max_us`,
 `dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
 wait failure counters, and timeline-rebase count/duration/reason.  The
 deferred dispatch observer additionally reports
-`core_post_send_max_us` (a typed `worker_ready_qpc - sender_completed` QPC
+`core_post_send_max_us` (a typed `dispatch_ready_qpc - sender_completed` QPC
 sample), `observer_duration_max_us`, `observer_dropped_samples`, and
 `observer_queue_high_watermark`.  Authored
 lateness is measured before any recovery rebase. These fields are diagnostic
@@ -178,7 +178,7 @@ health; observer and wait-path degradation remain separate signals.
 - Partial `SendInput` is not success; zero progress and recovery are handled
   by Rust and remain visible in the final report.
 - Normal authored Down/Mixed packets and pending release sends use one
-  low-level `SendInput` attempt. A partial Down/Mixed insertion is terminal
+  immutable physical packet and one low-level `SendInput` attempt. A partial Down/Mixed insertion is terminal
   chord uncertainty and is never replayed; zero progress is returned as
   explicit transport evidence rather than immediately retrying the packet.
   Pending-release retry belongs to the coordinator-owned recovery state
@@ -270,6 +270,12 @@ on a bounded 100 ms interval with a final worker sample, while healthy shared
 metrics publication is rate-limited and anomaly/terminal transitions publish
 immediately. When telemetry is disabled, trace-record construction is not
 performed.
+
+When adaptive spin is enabled, startup probes exactly 32 wake samples and
+derives the session threshold with the existing safety margin, 700 µs floor,
+and 3,000 µs cap. The production priority policy remains the `Auto` MMCSS
+Games → `THREAD_PRIORITY_HIGHEST` fallback ladder; diagnostic priority modes
+are not production policy.
 
 The waiter returns raw `wake_qpc` and `spin_ticks` evidence. The regular worker
 loop stores at most one fixed raw wait observation and hands it to the same

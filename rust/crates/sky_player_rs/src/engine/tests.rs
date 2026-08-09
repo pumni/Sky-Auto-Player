@@ -31,13 +31,12 @@ use std::time::Duration;
 
 fn test_session_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
-    allowed_count: usize,
+    _allowed_count: usize,
     backend: BackendConfig,
 ) -> NativeSessionOptions {
     NativeSessionOptions {
         schedule,
         backend,
-        allowed_count,
         timing: TimingOptions {
             game_fps: 60,
             min_hold_us: 0,
@@ -2716,13 +2715,10 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
 fn slow_observer_defers_when_slack_is_insufficient() {
     use crate::engine::observer_test_hooks::{
         observer_test_hook_guard, set_observer_artificial_cost_us,
-        set_observer_initial_budget_override_us,
     };
 
     let _observer_hooks = observer_test_hook_guard();
     set_observer_artificial_cost_us(20_000);
-    // Force budget so 10 ms slack < budget + margin (15_000 + 500).
-    set_observer_initial_budget_override_us(15_000);
 
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(
         &[
@@ -2835,13 +2831,11 @@ fn slow_observer_defers_when_slack_is_insufficient() {
 fn slow_observer_drains_in_ample_slack_without_rebase() {
     use crate::engine::observer_test_hooks::{
         observer_test_hook_guard, set_observer_artificial_cost_us,
-        set_observer_initial_budget_override_us,
     };
 
     let _observer_hooks = observer_test_hook_guard();
     // 2 ms artificial cost with default 5 ms budget; 50 ms gap is ample.
     set_observer_artificial_cost_us(2_000);
-    set_observer_initial_budget_override_us(0);
 
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(
         &[
@@ -2995,10 +2989,9 @@ fn test_qpc_ordering_failure_is_terminal() {
     use crate::engine::worker::health::{DispatchPath, FrozenDispatchBudget};
     use sky_dispatch_core::coordinator::PreparedBatch;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-    use sky_dispatch_core::model::{ActionKind, ScanCodeBatch};
+    use sky_dispatch_core::model::ActionKind;
     use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
     use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus, TrackedKeyState};
-    use smallvec::SmallVec;
 
     let qpc_clock = QpcClock::initialize().expect("QPC");
     let mut runtime = WorkerRuntime::default();
@@ -3032,14 +3025,10 @@ fn test_qpc_ordering_failure_is_terminal() {
         batch_intent_count: 1,
         batch_kind: ActionKind::Down,
         batch_scheduled_ticks: TimelineTicks::ZERO,
-        batch_scheduled_us: 0,
         authored_batch_scheduled_ticks: TimelineTicks::ZERO,
-        authored_batch_scheduled_us: 0,
         conflict_mask: 0,
         dispatch_path: DispatchPath::DownOnly { down_count: 1 },
-        packet_mode: false,
         packet_masks: None,
-        scan_batch: ScanCodeBatch::new_empty(),
     };
 
     // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)
@@ -3049,13 +3038,11 @@ fn test_qpc_ordering_failure_is_terminal() {
         sender_completed_qpc: QpcTicks::from_raw(u64::MAX),
         sender_started_effective_ticks: TimelineTicks::ZERO,
         completed_effective_ticks: TimelineTicks::ZERO,
-        completed_effective: 0,
-        sender_duration_us: 0,
+        sender_duration_ticks: DurationTicks::ZERO,
         requested_count: 1,
         delivered_count: 1,
         completion_error_ticks_value: 0,
         authored_completion_error_ticks_value: 0,
-        completion_error_us: 0,
         estimator_evidence: EstimatorObservationEvidence {
             status: SendTransactionStatus::Complete,
             attempts: 1,
@@ -3091,8 +3078,8 @@ fn test_qpc_ordering_failure_is_terminal() {
         &frozen_budget,
         1,
         true,
-        &SmallVec::new(),
-        &SmallVec::new(),
+        0,
+        0,
         1,
         PacketRetryReason::None,
         false,
@@ -3118,7 +3105,7 @@ fn test_qpc_ordering_failure_is_terminal() {
         &mut estimator,
         &mut telemetry,
         qpc_clock,
-        0,
+        QpcTicks::ZERO,
         &mut timing,
     );
     match step {

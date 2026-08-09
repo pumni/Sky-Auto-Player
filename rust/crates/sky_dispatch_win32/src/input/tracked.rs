@@ -462,7 +462,10 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
+    /// Send one validated physical packet. The packet builder is the sole
+    /// authored/release transport: it emits all Up events before all Down
+    /// events in one `SendInput` call.
+    pub fn send_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -516,6 +519,7 @@ impl TrackedKeyState {
             }
         };
 
+        let confirmed_mask = outcome.evidence.confirmed_mask;
         match outcome.status {
             SendTransactionStatus::Complete => {
                 let union = packet.up_mask | packet.down_mask;
@@ -570,7 +574,18 @@ impl TrackedKeyState {
                 ));
             }
         }
+        if packet.up_mask != 0 && !outcome.is_success() {
+            self.active_mask &= !confirmed_mask;
+            self.possibly_active_mask &= !confirmed_mask;
+            self.failed_release_mask &= !confirmed_mask;
+            self.failed_release_mask |= packet.up_mask & !confirmed_mask;
+        }
         outcome
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
+        self.send_physical_packet(packet)
     }
 
     pub fn key_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {

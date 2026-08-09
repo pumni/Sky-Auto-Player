@@ -395,12 +395,13 @@ impl ProductionDispatchTestHarness {
     /// helper-only assertion.
     pub fn configure_persistent_release_failure(&mut self, calls: Arc<AtomicU64>) {
         let clock = self.resources.clock;
+        let emitter_calls = Arc::clone(&calls);
         self.resources
             .backend
             .set_emitter(move |scan_codes, key_up| {
                 let now = clock.now().expect("test QPC");
                 if key_up {
-                    calls.fetch_add(1, Ordering::SeqCst);
+                    emitter_calls.fetch_add(1, Ordering::SeqCst);
                     PlatformSendResult {
                         requested: scan_codes.len() as u8,
                         inserted: 0,
@@ -420,6 +421,50 @@ impl ProductionDispatchTestHarness {
                     }
                 }
             });
+        let packet_clock = self.resources.clock;
+        let packet_calls = Arc::clone(&calls);
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let now = packet_clock.now().expect("test QPC");
+            let requested_mask = packet.up_mask | packet.down_mask;
+            if packet.up_mask != 0 {
+                packet_calls.fetch_add(1, Ordering::SeqCst);
+                SendTransactionOutcome {
+                    status: SendTransactionStatus::ZeroProgress,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: 1,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::ZeroProgress,
+                        first_win32_error: Some(1460),
+                        last_win32_error: Some(1460),
+                        started_ticks: Some(now),
+                        completed_ticks: Some(now),
+                        timing_error: None,
+                    },
+                }
+            } else {
+                SendTransactionOutcome {
+                    status: SendTransactionStatus::Complete,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: requested_mask,
+                        skipped_mask: 0,
+                        first_inserted: packet.event_count(),
+                        attempts: 1,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: Some(now),
+                        completed_ticks: Some(now),
+                        timing_error: None,
+                    },
+                }
+            }
+        });
     }
 
     pub fn configure_send_counter(&mut self) -> Arc<AtomicU64> {
@@ -590,7 +635,6 @@ impl ProductionDispatchTestHarness {
             },
             mutable: WaitMutable {
                 local_metrics: &mut self.local_metrics,
-                pending_pre_send_spin_us: &mut self.runtime.pending_pre_send_spin_us,
                 force_full_cleanup: &mut self.runtime.force_full_cleanup,
                 terminal_error: &mut self.runtime.terminal_error,
             },
@@ -795,7 +839,7 @@ impl ProductionDispatchTestHarness {
             &mut self.resources.estimator,
             &mut self.resources.telemetry,
             self.resources.clock,
-            0,
+            sky_dispatch_win32::clock::QpcTicks::ZERO,
             &mut self.timing,
         )
     }

@@ -3382,19 +3382,8 @@ impl RuntimeDispatchCoordinator {
     /// Check Down identities in a packet after accounting for the packet's
     /// canonical Up phase. A same-key retrigger is valid because its old
     /// generation is released by this very transaction before the new Down.
-    pub fn check_packet_down_conflicts(&self, up_mask: u16, down_intents: &[CompactIntent]) -> u16 {
-        let blocked_mask = self.blocked_mask & !up_mask;
-        if blocked_mask == 0 {
-            return 0;
-        }
-        let mut conflict_mask = 0u16;
-        for compact in down_intents {
-            let bit = Self::bit_for_slot(compact.key_slot());
-            if blocked_mask & bit != 0 {
-                conflict_mask |= bit;
-            }
-        }
-        conflict_mask
+    pub fn check_packet_down_conflicts(&self, up_mask: u16, down_mask: u16) -> u16 {
+        (self.blocked_mask & !up_mask) & down_mask
     }
 
     /// Terminalize the generations associated with every slot set in

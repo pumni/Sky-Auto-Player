@@ -9,7 +9,8 @@
 #![cfg(feature = "test-support")]
 
 use serde_json::json;
-use sky_dispatch_core::estimator::LatencyClass;
+use sky_dispatch_core::{estimator::LatencyClass, time::DurationTicks};
+use sky_dispatch_win32::clock::QpcClock;
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, ProductionDispatchTestHarness,
 };
@@ -36,9 +37,16 @@ fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usiz
 }
 
 fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
+    let qpc_clock = QpcClock::initialize().expect("QPC");
     match observation {
         DispatchObservation::Down(value) => {
-            let wake_to_send_start_us = value.wake_to_send_start_us.unwrap_or_else(|| {
+            let wake_to_send_start_us = value.wake_qpc.and_then(|wake| {
+                value
+                    .sender_started_qpc
+                    .checked_duration_since(wake)
+                    .ok()
+                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
+            }).unwrap_or_else(|| {
                 panic!(
                     "missing Down wake sample: wake={:?}, sender_started={:?}, sender_completed={:?}",
                     value.trace.wake_ticks,
@@ -47,11 +55,28 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 )
             });
             samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            samples.sendinput_duration_us.push(value.sender_duration_us);
-            samples.completion_error_us.push(value.completion_error_us);
+            samples.sendinput_duration_us.push(
+                qpc_clock
+                    .duration_to_us(value.sender_duration_ticks)
+                    .expect("duration"),
+            );
+            samples.completion_error_us.push(
+                qpc_clock
+                    .duration_to_us(DurationTicks::from_raw(
+                        value.trace.completion_error_ticks.unsigned_abs(),
+                    ))
+                    .expect("error") as i64
+                    * value.trace.completion_error_ticks.signum(),
+            );
         }
         DispatchObservation::Up(value) => {
-            let wake_to_send_start_us = value.wake_to_send_start_us.unwrap_or_else(|| {
+            let wake_to_send_start_us = value.wake_qpc.and_then(|wake| {
+                value
+                    .sender_started_qpc
+                    .checked_duration_since(wake)
+                    .ok()
+                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
+            }).unwrap_or_else(|| {
                 panic!(
                     "missing Up wake sample: wake={:?}, sender_started={:?}, sender_completed={:?}",
                     value.trace.wake_ticks,
@@ -60,10 +85,19 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 )
             });
             samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            samples.sendinput_duration_us.push(value.sender_duration_us);
-            samples
-                .completion_error_us
-                .push(value.up_completion_error_us);
+            samples.sendinput_duration_us.push(
+                qpc_clock
+                    .duration_to_us(value.sender_duration_ticks)
+                    .expect("duration"),
+            );
+            samples.completion_error_us.push(
+                qpc_clock
+                    .duration_to_us(DurationTicks::from_raw(
+                        value.up_completion_error_ticks.unsigned_abs(),
+                    ))
+                    .expect("error") as i64
+                    * value.up_completion_error_ticks.signum(),
+            );
         }
         DispatchObservation::Wait(wait) => {
             panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")

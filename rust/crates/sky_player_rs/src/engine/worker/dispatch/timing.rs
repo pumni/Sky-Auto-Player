@@ -14,7 +14,7 @@ use super::super::super::{
 use super::super::health::{DispatchLeadEstimate, estimate_dispatch_path_lead};
 use super::super::{
     DispatchPath, WorkerConfig, WorkerHealthState, WorkerRuntime, WorkerTimingState,
-    signed_ticks_to_us, signed_timeline_delta_ticks,
+    signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
 use crate::engine::config::TimingOptions;
@@ -22,7 +22,6 @@ use sky_dispatch_core::coordinator::{PreparedBatch, physical_packet_kind};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
-use smallvec::SmallVec;
 
 /// Snapshot of the next authored packet's dispatch path and lead.
 ///
@@ -173,27 +172,20 @@ pub fn is_clean_estimator_observation(evidence: EstimatorObservationEvidence) ->
 /// (D1 — one immutable dispatch plan per epoch).
 pub(crate) fn prepare_authored_batch_view(
     coordinator: &mut RuntimeDispatchCoordinator,
-    qpc_clock: QpcClock,
     prepared_batch: PreparedBatch,
 ) -> BatchViewResult {
     let batch_index = prepared_batch.index;
     let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
-    let packet_mode = match prepared_batch.packet_kind {
-        Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly)
-            if prepared_batch.packet_batch_count == 1 =>
-        {
-            false
-        }
-        Some(_) => true,
-        None => false,
-    };
+    // Every physical authored packet, including a single Down, uses the same
+    // immutable Up-before-Down transport.  `None` is reserved for a stale Up
+    // request whose physical packet was suppressed by the coordinator.
+    let packet_mode = prepared_batch.packet_kind.is_some();
     let (
         batch_kind,
         dispatch_path,
         batch_source_action_index,
         batch_intent_count,
         conflict_mask,
-        scan_batch,
         packet_masks,
     ) = if packet_mode {
         let packet_view = match coordinator
@@ -207,8 +199,8 @@ pub(crate) fn prepare_authored_batch_view(
                 )));
             }
         };
-        let conflict_mask = coordinator
-            .check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_intents);
+        let conflict_mask =
+            coordinator.check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_mask());
         let up_count = packet_view.up_mask().count_ones() as usize;
         let down_count = packet_view.down_mask().count_ones() as usize;
         let dispatch_path = match prepared_batch.packet_kind {
@@ -244,7 +236,6 @@ pub(crate) fn prepare_authored_batch_view(
                 .unwrap_or(0),
             up_count + down_count,
             conflict_mask,
-            packet_view.down_scan_code_batch(),
             Some(sky_dispatch_win32::input::PhysicalPacket::new(
                 packet_view.up_mask(),
                 packet_view.down_mask(),
@@ -276,42 +267,20 @@ pub(crate) fn prepare_authored_batch_view(
             batch_view.source_action_index(),
             batch_view.intents.len(),
             conflict_mask,
-            batch_view.scan_code_batch_excluding_mask(conflict_mask),
             None,
         )
     };
-    let batch_scheduled_us = match qpc_clock.timeline_to_us(batch_scheduled_ticks) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "schedule telemetry conversion failure: {error:?}"
-            )));
-        }
-    };
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
-    let authored_batch_scheduled_us = match qpc_clock.timeline_to_us(authored_batch_scheduled_ticks)
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "authored schedule telemetry conversion failure: {error:?}"
-            )));
-        }
-    };
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
         batch_intent_count,
         batch_kind,
         batch_scheduled_ticks,
-        batch_scheduled_us,
         authored_batch_scheduled_ticks,
-        authored_batch_scheduled_us,
         conflict_mask,
         dispatch_path,
-        packet_mode,
         packet_masks,
-        scan_batch,
     }))
 }
 
@@ -323,13 +292,11 @@ pub(crate) struct DownSendTiming {
     pub(crate) sender_completed_qpc: QpcTicks,
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
-    pub(crate) completed_effective: u64,
-    pub(crate) sender_duration_us: u64,
+    pub(crate) sender_duration_ticks: DurationTicks,
     pub(crate) requested_count: usize,
     pub(crate) delivered_count: usize,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
-    pub(crate) completion_error_us: i64,
     pub(crate) estimator_evidence: EstimatorObservationEvidence,
     pub(crate) recovered_zero_progress: bool,
     pub(crate) recovered_partial_up: bool,
@@ -348,17 +315,14 @@ fn resolve_send_boundaries(
     view: &AuthoredBatchView,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
-    qpc_clock: QpcClock,
     coordinator: &mut RuntimeDispatchCoordinator,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
-    result_sent: &SmallVec<[u16; 15]>,
 ) -> Result<
     (
         TimelineTicks,
         TimelineTicks,
-        u64,
-        u64,
+        DurationTicks,
         Option<DurationTicks>,
     ),
     DispatchStep,
@@ -388,14 +352,6 @@ fn resolve_send_boundaries(
                 )));
             }
         };
-    let sender_duration_us = match qpc_clock.duration_to_us(sender_duration_ticks) {
-        Ok(duration) => duration,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-on sender duration conversion failure: {error:?}"
-            )));
-        }
-    };
     let sender_started_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
         sender_started_ticks,
         runtime.allow_pre_epoch_startup_dispatch,
@@ -418,34 +374,12 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let completed_effective = match qpc_clock.duration_to_us(
-        match completed_effective_ticks.checked_duration_since(TimelineTicks::ZERO) {
-            Ok(dur) => dur,
-            Err(_) => DurationTicks::ZERO,
-        },
-    ) {
-        Ok(us) => us,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "playback clock conversion failure: {error:?}"
-            )));
-        }
-    };
     runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
-    let commit_result = if view.packet_mode {
-        coordinator.commit_packet_success(
-            view.prepared_batch,
-            sender_started_effective_ticks,
-            completed_effective_ticks,
-        )
-    } else {
-        coordinator.commit_down_success(
-            view.prepared_batch,
-            result_sent,
-            sender_started_effective_ticks,
-            completed_effective_ticks,
-        )
-    };
+    let commit_result = coordinator.commit_packet_success(
+        view.prepared_batch,
+        sender_started_effective_ticks,
+        completed_effective_ticks,
+    );
     if let Err(error) = commit_result {
         return Err(DispatchStep::Terminate(format!(
             "coordinator activation failure: {error}"
@@ -457,8 +391,7 @@ fn resolve_send_boundaries(
     Ok((
         sender_started_effective_ticks,
         completed_effective_ticks,
-        completed_effective,
-        sender_duration_us,
+        sender_duration_ticks,
         completion_lateness_ticks,
     ))
 }
@@ -473,7 +406,7 @@ pub(crate) fn interpret_down_send_timing(
     config: &WorkerConfig,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
-    qpc_clock: QpcClock,
+    _qpc_clock: QpcClock,
     coordinator: &mut RuntimeDispatchCoordinator,
     health: &WorkerHealthState,
     timing: &WorkerTimingState,
@@ -481,8 +414,8 @@ pub(crate) fn interpret_down_send_timing(
     result_status: SendTransactionStatus,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
-    result_sent: &SmallVec<[u16; 15]>,
-    result_skipped_duplicates: &SmallVec<[u16; 15]>,
+    result_confirmed_mask: u16,
+    result_skipped_mask: u16,
     result_send_attempts: u8,
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
@@ -492,18 +425,15 @@ pub(crate) fn interpret_down_send_timing(
     let (
         sender_started_effective_ticks,
         completed_effective_ticks,
-        completed_effective,
-        sender_duration_us,
+        sender_duration_ticks,
         completion_lateness_ticks,
     ) = resolve_send_boundaries(
         view,
         clock_state,
         runtime,
-        qpc_clock,
         coordinator,
         result_started_ticks,
         result_completed_ticks,
-        result_sent,
     )?;
     // Expose the raw QPC sender-completion boundary for the deferred observer.
     // Guaranteed `Some` here: a missing boundary already terminated inside
@@ -530,20 +460,8 @@ pub(crate) fn interpret_down_send_timing(
             )));
         }
     };
-    let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks_value) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-on timing conversion failure: {error}"
-            )));
-        }
-    };
     let requested_count = view.dispatch_path.event_count();
-    let delivered_count = if view.packet_mode {
-        usize::from(result_success) * requested_count
-    } else {
-        result_sent.len()
-    };
+    let delivered_count = result_confirmed_mask.count_ones() as usize;
     let recovered_zero_progress = matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
     let recovered_partial_up = matches!(
         (view.dispatch_path, result_retry_reason),
@@ -562,7 +480,7 @@ pub(crate) fn interpret_down_send_timing(
         retry_reason: result_retry_reason,
         requested_count,
         confirmed_count: delivered_count,
-        skipped_count: result_skipped_duplicates.len(),
+        skipped_count: result_skipped_mask.count_ones() as usize,
         timing_valid: true,
         transport_anomaly: result_last_win32_error.is_some(),
         recovery_used: !matches!(result_retry_reason, PacketRetryReason::None),
@@ -603,13 +521,11 @@ pub(crate) fn interpret_down_send_timing(
         sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,
-        completed_effective,
-        sender_duration_us,
+        sender_duration_ticks,
         requested_count,
         delivered_count,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
-        completion_error_us,
         estimator_evidence,
         recovered_zero_progress,
         recovered_partial_up,

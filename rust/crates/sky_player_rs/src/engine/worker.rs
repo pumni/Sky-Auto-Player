@@ -107,7 +107,6 @@ pub(crate) struct WorkerRuntime {
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
     allow_pre_epoch_startup_dispatch: bool,
-    pub(crate) pending_pre_send_spin_us: u64,
     pending_wait_observation: Option<wait::WaitObservation>,
     chord_integrity_lost: u64,
 }
@@ -157,6 +156,7 @@ pub(crate) struct WorkerTimingState {
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
+    pub(super) observer_guard_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
@@ -182,6 +182,7 @@ impl WorkerTimingState {
             lease_timeout_ticks: DurationTicks::ZERO,
             retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,
+            observer_guard_ticks: DurationTicks::ZERO,
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
             start_process_cpu_us: 0,
@@ -189,6 +190,10 @@ impl WorkerTimingState {
         }
     }
 }
+
+/// Fixed observer guard converted to QPC ticks during worker admission.
+pub(super) const OBSERVER_GUARD_US: u64 = 5_500;
+pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
 
 pub(crate) struct WorkerHealthState {
     pub(super) down_saturation_positive_streak: u8,
@@ -238,32 +243,11 @@ pub(super) struct WorkerCore {
 }
 
 /// Deferred dispatch-observer state owned exclusively by the worker thread.
-/// `pending` holds the fixed observation queue; `budget_us` is the adaptive
-/// execution budget a drain step is allowed to consume before a dispatch
-/// deadline arrives.  Never placed into shared state.
+/// `pending` holds the fixed observation queue. Never placed into shared state.
+#[derive(Default)]
 pub(super) struct WorkerObserverState {
     pub(super) pending: dispatch::PendingObservationQueue,
-    pub(super) budget_us: u64,
 }
-
-impl Default for WorkerObserverState {
-    fn default() -> Self {
-        Self {
-            pending: dispatch::PendingObservationQueue::default(),
-            budget_us: observer_initial_budget_us(),
-        }
-    }
-}
-
-/// Initial deferred-observer execution budget, in microseconds (§8.8).
-pub(super) const OBSERVER_INITIAL_BUDGET_US: u64 = 5_000;
-/// Margin kept in addition to the observer budget before a drain is allowed,
-/// in microseconds (§8.8).
-pub(super) const OBSERVER_MARGIN_US: u64 = 500;
-/// Lower bound for adaptive observer budget adaptation (§8.9).
-pub(super) const OBSERVER_BUDGET_FLOOR_US: u64 = 5_000;
-/// Upper bound for adaptive observer budget adaptation (§8.9).
-pub(super) const OBSERVER_BUDGET_CAP_US: u64 = 20_000;
 
 pub(super) fn update_deferred_worker_metrics(
     local_metrics: &mut WorkerMetricsLocal,
@@ -289,17 +273,6 @@ pub(super) fn update_deferred_worker_metrics(
     }
 }
 
-fn observer_initial_budget_us() -> u64 {
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        let override_us = dispatch::observer_initial_budget_override_us();
-        if override_us > 0 {
-            return override_us;
-        }
-    }
-    OBSERVER_INITIAL_BUDGET_US
-}
-
 pub(super) struct Worker<'a> {
     schedule: Option<RuntimeSchedule>,
     config: WorkerConfig,
@@ -312,7 +285,6 @@ impl<'a> Worker<'a> {
         let NativeSessionOptions {
             schedule,
             backend,
-            allowed_count,
             timing,
             focus,
             wait,
@@ -324,7 +296,6 @@ impl<'a> Worker<'a> {
             schedule: Some(schedule),
             config: WorkerConfig {
                 backend,
-                allowed_count,
                 timing,
                 focus,
                 wait,

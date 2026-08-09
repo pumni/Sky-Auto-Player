@@ -17,7 +17,6 @@ use super::observer::{
 use super::timing::{interpret_down_send_timing, prepare_authored_batch_view, read_qpc_us};
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::telemetry::TRACE_KIND_MIXED;
-use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 #[allow(clippy::too_many_arguments)]
@@ -93,7 +92,7 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::NoWork;
     };
 
-    let view = match prepare_authored_batch_view(coordinator, qpc_clock, prepared_batch) {
+    let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
         Ok(Some(view)) => view,
         Ok(None) => return DispatchStep::NoWork,
         Err(step) => return step,
@@ -294,7 +293,7 @@ fn admit_authored_down(
         .packet_masks
         .is_some_and(|packet| packet.down_mask != 0)
         || view.batch_kind == ActionKind::Down;
-    let has_physical_packet = view.packet_masks.is_some() || !view.scan_batch.is_empty();
+    let has_physical_packet = view.packet_masks.is_some();
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
@@ -482,19 +481,20 @@ fn record_down_send_outcome(
     else {
         return DispatchStep::Continue;
     };
-    let result = if let Some(packet) = view.packet_masks {
-        backend.key_down_physical_packet(packet)
-    } else {
-        backend.key_down(view.scan_batch.as_slice())
+    let Some(packet) = view.packet_masks else {
+        return DispatchStep::Terminate(
+            "authored physical dispatch has no canonical packet".to_string(),
+        );
     };
+    let result = backend.send_physical_packet(packet);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
     let result_success = result.is_success();
     let result_started_ticks = result.evidence.started_ticks;
     let result_completed_ticks = result.evidence.completed_ticks;
-    let result_sent = result.sent_scan_codes();
-    let result_skipped_duplicates = result.skipped_duplicates();
+    let result_confirmed_mask = result.evidence.confirmed_mask;
+    let result_skipped_mask = result.evidence.skipped_mask;
     let result_send_attempts = result.evidence.attempts;
     let result_retry_reason = result.evidence.retry_reason;
     let result_chord_integrity_lost = matches!(
@@ -534,8 +534,8 @@ fn record_down_send_outcome(
         result.status,
         result_started_ticks,
         result_completed_ticks,
-        &result_sent,
-        &result_skipped_duplicates,
+        result_confirmed_mask,
+        result_skipped_mask,
         result_send_attempts,
         result_retry_reason,
         result_chord_integrity_lost,
@@ -566,8 +566,8 @@ fn finalize_down_send_outcome(
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
-    result_sent: &SmallVec<[u16; 15]>,
-    result_skipped_duplicates: &SmallVec<[u16; 15]>,
+    result_confirmed_mask: u16,
+    result_skipped_mask: u16,
     result_send_attempts: u8,
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
@@ -587,8 +587,8 @@ fn finalize_down_send_outcome(
         result_status,
         result_started_ticks,
         result_completed_ticks,
-        result_sent,
-        result_skipped_duplicates,
+        result_confirmed_mask,
+        result_skipped_mask,
         result_send_attempts,
         result_retry_reason,
         result_chord_integrity_lost,
@@ -612,8 +612,8 @@ fn finalize_down_send_outcome(
         frozen_budget,
         trace_kind,
         result_success,
-        result_sent,
-        result_skipped_duplicates,
+        result_confirmed_mask,
+        result_skipped_mask,
         result_send_attempts,
         result_retry_reason,
         result_chord_integrity_lost,

@@ -718,7 +718,6 @@ def _new_session(
     target_hwnd = _real_input_target_hwnd() if backend == "sendinput" else 0
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
-        list(SKY_15_SCAN_CODES),
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=game_fps,
             min_hold_us=100,

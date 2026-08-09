@@ -54,14 +54,10 @@ pub(super) struct AuthoredBatchView {
     pub(super) batch_intent_count: usize,
     pub(super) batch_kind: ActionKind,
     pub(super) batch_scheduled_ticks: TimelineTicks,
-    pub(super) batch_scheduled_us: u64,
     pub(super) authored_batch_scheduled_ticks: TimelineTicks,
-    pub(super) authored_batch_scheduled_us: u64,
     pub(super) conflict_mask: u16,
     pub(super) dispatch_path: DispatchPath,
-    pub(super) packet_mode: bool,
     pub(super) packet_masks: Option<PhysicalPacket>,
-    pub(super) scan_batch: ScanCodeBatch,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -71,14 +67,10 @@ pub(crate) struct AuthoredBatchView {
     pub(crate) batch_intent_count: usize,
     pub(crate) batch_kind: ActionKind,
     pub(crate) batch_scheduled_ticks: TimelineTicks,
-    pub(crate) batch_scheduled_us: u64,
     pub(crate) authored_batch_scheduled_ticks: TimelineTicks,
-    pub(crate) authored_batch_scheduled_us: u64,
     pub(crate) conflict_mask: u16,
     pub(crate) dispatch_path: DispatchPath,
-    pub(crate) packet_mode: bool,
     pub(crate) packet_masks: Option<PhysicalPacket>,
-    pub(crate) scan_batch: ScanCodeBatch,
 }
 
 /// `Err(None)` indicates an unrecoverable terminal step; `Ok(None)` means the
@@ -96,17 +88,9 @@ pub(crate) use release::{
     set_release_telemetry_failure_on_recovery,
 };
 
-// `observer_initial_budget_override_us` is reached crate-internally via
-// `dispatch::observer_initial_budget_override_us` (worker.rs). The remaining
-// queue primitives + §8.12 hooks are re-exported at crate root under
-// `engine::dispatch_primitives` / `engine::observer_test_hooks` instead.
-#[cfg(any(test, feature = "test-support"))]
-pub(super) use observer::observer_initial_budget_override_us;
-
 use super::super::{ActionKind, DurationTicks, LatencyClass, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 pub(super) use super::publish_backend_metrics;
 use sky_dispatch_core::coordinator::PreparedBatch;
-use sky_dispatch_core::model::ScanCodeBatch;
 use sky_dispatch_win32::input::PhysicalPacket;
