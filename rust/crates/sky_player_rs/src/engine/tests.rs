@@ -909,6 +909,46 @@ fn authored_up_only_does_not_send_after_lease_expiry() {
 }
 
 #[test]
+fn authored_up_only_is_not_blocked_by_focus_loss() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    harness.config.focus.require_focus = true;
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.focus_active.store(false, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "focus loss must not block UpOnly cleanup: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn authored_up_only_is_not_blocked_by_target_change() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.target_generation.store(1, Ordering::Release);
+    harness.target_hwnd.store(99, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "target changes must not block UpOnly cleanup: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn pending_release_uses_final_control_and_lease_admission() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -957,6 +997,23 @@ fn pending_release_uses_final_control_and_lease_admission() {
     );
     assert!(matches!(step, super::worker::DispatchStep::Continue));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    harness.config.focus.require_focus = true;
+    harness.focus_active.store(false, Ordering::Release);
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(10_000);
+    harness.seed_pending_release_for_test();
+    let plan = harness.plan_current_dispatch();
+    let pending_plan = plan.pending().expect("pending release plan");
+    let due_pending = harness.pop_due_pending_for_plan(harness.current_effective_time(), &plan);
+    let step = harness.dispatch_pending_release_with_plan(
+        due_pending,
+        Some(pending_plan),
+        LatencyClass::Hot,
+    );
+    assert!(matches!(step, super::worker::DispatchStep::Dispatched));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -1010,6 +1067,16 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
     ));
     assert_eq!(pending_calls.load(Ordering::SeqCst), 1);
 
+    let mut invalid_pending_plan = pending_plan.clone();
+    invalid_pending_plan.pending_budget = None;
+    assert!(!super::worker::plan_structure_is_valid(
+        &invalid_pending_plan
+    ));
+    assert!(matches!(
+        pending.dispatch_due_from_plan_for_test(&invalid_pending_plan),
+        super::worker::DispatchStep::Terminate(_)
+    ));
+
     let mut both = ProductionDispatchTestHarness::new_mixed();
     let initial_plan = both.plan_current_dispatch();
     assert!(matches!(
@@ -1027,6 +1094,38 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(both_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn frozen_plan_pending_future_allows_authored_due_dispatch() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_pending_future_with_authored_due();
+    let initial_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_authored_with_plan(&initial_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    harness.advance_playback_time_us(1_000);
+    harness.resources.coordinator.min_hold_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(10_000)
+        .expect("minimum hold conversion");
+    harness.seed_pending_release_for_test();
+    let plan = harness.plan_current_dispatch();
+    assert!(plan.pending.is_some());
+    assert!(plan.authored.is_some());
+    harness.advance_playback_time_us(1_000);
+    let calls = harness.configure_send_counter();
+
+    let step = harness.dispatch_due_from_plan_for_test(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "pending-future authored-due step: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

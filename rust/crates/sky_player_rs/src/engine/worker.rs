@@ -173,7 +173,12 @@ impl WorkerTimingState {
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
             paused_poll_ticks: DurationTicks::ZERO,
-            cold_threshold_ticks: DurationTicks::ZERO,
+            cold_threshold_ticks: DurationTicks::from_raw(
+                sky_dispatch_win32::clock::qpc_us_to_ticks(
+                    sky_dispatch_core::time::SEND_COLD_THRESHOLD_US,
+                )
+                .expect("production cold threshold conversion"),
+            ),
             lease_timeout_ticks: DurationTicks::ZERO,
             retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,

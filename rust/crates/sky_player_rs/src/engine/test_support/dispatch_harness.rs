@@ -189,19 +189,27 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn new_uponly_release_with_gap(gap_us: u64) -> Self {
+        Self::new_uponly_release_chord_with_gap(1, gap_us)
+    }
+
+    pub fn new_uponly_release_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
+        assert!((1..=15).contains(&key_count), "key count must be 1..=15");
+        let scan_codes: Vec<u16> = (0..key_count)
+            .map(|index| 0x15u16.saturating_add(index as u16))
+            .collect();
         let mut harness = Self::create_harness(&[
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
+                scan_codes: scan_codes.clone().into(),
                 reason: "down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: gap_us,
-                scan_codes: vec![0x15].into(),
+                scan_codes: scan_codes.into(),
                 reason: "up".into(),
             },
         ]);
@@ -212,6 +220,39 @@ impl ProductionDispatchTestHarness {
             DispatchStep::Dispatched
         ));
         harness
+    }
+
+    pub fn new_pending_future_with_authored_due() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "pending-seed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "pending-release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x16].into(),
+                reason: "authored-due".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: vec![0x16].into(),
+                reason: "authored-cleanup".into(),
+            },
+        ])
     }
 
     fn create_harness(actions: &[KeyActionInput]) -> Self {
@@ -478,13 +519,11 @@ impl ProductionDispatchTestHarness {
         .expect("plan_next_dispatch")
     }
 
-    /// Configure the projected-class threshold used by the production planner.
-    pub fn set_cold_threshold_us(&mut self, threshold_us: u64) {
-        self.timing.cold_threshold_ticks = self
-            .resources
+    pub fn cold_threshold_us(&self) -> u64 {
+        self.resources
             .clock
-            .duration_from_us(threshold_us)
-            .expect("cold threshold conversion");
+            .duration_to_us(self.timing.cold_threshold_ticks)
+            .expect("production cold threshold conversion")
     }
 
     /// Seed the previous completion evidence for a projected benchmark class.
