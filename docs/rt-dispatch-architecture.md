@@ -85,6 +85,14 @@ directly to the backend transport. Estimator, health-window, telemetry
 materialization, and observer work remain deferred after the fixed raw
 observation enqueue.
 
+Every physical send uses the shared control-and-lease gate with a fresh QPC
+sample. Down-bearing authored traffic then applies the target-generation and
+foreground/focus gate; UpOnly authored traffic and pending releases are
+cleanup traffic and do not require focus or target stability. The control
+atomics are the authoritative last-mile command state. The event's monotonic
+generation is only a spin interruption hint, and an event handle is consumed
+only after a replan outside the precision boundary.
+
 `SendInput` completion is sender-side evidence. It is not proof that the game
 consumed the event. Any receiver/probe window used for acceptance is an
 app-owned delivery proxy and must not be described as game receipt.
@@ -252,9 +260,10 @@ does not establish game receipt.
 
 The final wait spin observes an event signal generation and QPC ticks only; it
 does not convert ticks to microseconds or issue a zero-time Win32 event wait on
-each spin iteration. The event handle remains authoritative for long waits and
-command interruption, with at most one final zero-time handoff probe before a
-deadline is reported. Estimator
+each spin iteration. A successful deadline handoff does not consume the event
+handle at all; it revalidates the authoritative command atomics immediately
+before transport. The event handle remains the blocking-wait primitive for
+long waits and is drained only on the non-precision replan path. Estimator
 lead-cache refreshes update the preallocated cache in place, and one clean
 observation refreshes the affected cache once. CPU-time telemetry is sampled
 on a bounded 100 ms interval with a final worker sample, while healthy shared

@@ -161,6 +161,13 @@ cannot flip merely because time passed during that wait. The logical playback
 clock remains paused during focus/manual recovery and is not used to infer
 CPU/input-path warmth or game-observed timing.
 
+At a normal timer deadline, the worker keeps the immutable plan and enters the
+physical path directly. The last-mile order is fresh command/lease admission,
+optional Down target/focus admission, `SendInput`, ownership reconciliation,
+and fixed raw observation enqueue. UpOnly and pending-release traffic uses
+control plus lease admission but never a focus gate. Interrupts and lease-only
+wakes replan instead of dispatching the stale plan.
+
 The production controller has one target: `SendInput` completion at the
 effective scheduled timestamp. Its correction is bounded integral feedback
 over clean sender-side completion error. Raw Input calibration remains an
