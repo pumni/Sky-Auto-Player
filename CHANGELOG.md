@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-08-09
+
 ### Added
 
 - Added a native out-of-process Rust updater for the in-app **Update now** flow, including exact-tag release fetch, bounded downloads, SHA256 verification, archive validation, manifest verification, transactional install, rollback, structured result reporting, and verified-app restart.
