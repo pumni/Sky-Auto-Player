@@ -6,9 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The following changes are prepared for the `v3.2.1` release line. They are
-not part of the immutable `v3.2.0` tag, which was aborted before a public
-release was created.
+No unreleased changes.
+
+## [3.2.1] - 2026-08-10
+
+The `v3.2.1` release line follows the accepted `v3.2.1rc1` candidate and is
+distributed as an intentionally unsigned portable package with manual updates.
 
 ### Added
 
