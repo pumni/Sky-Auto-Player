@@ -54,6 +54,9 @@ pub struct DownObservation {
     pub timeline_rebase_max_ticks: DurationTicks,
     pub timeline_rebase_last_reason: u8,
     pub sender_duration_us: u64,
+    /// QPC duration from a blocking deadline wake to SendInput call entry.
+    /// `None` means this dispatch did not follow a blocking deadline wait.
+    pub wake_to_send_start_us: Option<u64>,
     pub delivered_count: usize,
     pub batch_intent_count: usize,
     pub completion_error_us: i64,
@@ -93,6 +96,7 @@ pub struct UpTraceObservation {
 pub struct UpObservation {
     pub latency_class: LatencyClass,
     pub sender_duration_us: u64,
+    pub wake_to_send_start_us: Option<u64>,
     pub sent_count: usize,
     pub scan_count: usize,
     pub lead_up_ticks: DurationTicks,

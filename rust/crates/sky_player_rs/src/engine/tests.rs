@@ -4,18 +4,19 @@ use super::test_support::command_timing::{
 };
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchPath, DownAdmission,
-    EstimatorOptions, FaultInjectionScript, FocusOptions, HealthWindow, HealthWindowPolicy,
-    InjectedSendOutcome, NativeDispatchSession, NativeSessionOptions, PlatformSendResult,
-    PriorityOptions, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL,
-    TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions,
-    TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions,
-    WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
-    anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
-    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    estimator_path_for_dispatch, exact_sender_durations, final_down_admission, focus_gate_matches,
-    focus_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
-    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-    target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    EstimatorOptions, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
+    FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
+    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
+    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
+    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
+    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+    classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
+    derive_spin_threshold_us, ensure_preflight_for_target, estimator_path_for_dispatch,
+    exact_sender_durations, final_control_admission_with_lease, final_down_target_admission,
+    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
+    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
@@ -47,7 +48,6 @@ fn test_session_options(
             strict_up_completion_late_us: 2_000,
             input_path_warn_us: 300,
             spin_threshold_us: 150,
-            core_warmup_budget_us: 0,
             spin_floor_us: 700,
         },
         focus: FocusOptions {
@@ -730,21 +730,13 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
         hwnd: 123,
         generation: 1,
     };
-    let quit_requested = AtomicBool::new(false);
-    let skip_requested = AtomicBool::new(false);
-    let panic_requested = AtomicBool::new(false);
-    let desired_pause = AtomicBool::new(false);
-    let _ = final_down_admission(
+    let _ = final_down_target_admission(FinalTargetSignals {
         expected,
-        true,
-        &focus_active,
-        &target,
-        &generation,
-        &quit_requested,
-        &skip_requested,
-        &panic_requested,
-        &desired_pause,
-    );
+        require_focus: true,
+        focus_active: &focus_active,
+        target_hwnd: &target,
+        target_generation: &generation,
+    });
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 }
 
@@ -753,101 +745,393 @@ fn final_down_admission_rejects_target_change_before_send() {
     let target = AtomicIsize::new(456);
     let generation = AtomicU64::new(2);
     let focus_active = AtomicBool::new(false);
-    let quit_requested = AtomicBool::new(false);
-    let skip_requested = AtomicBool::new(false);
-    let panic_requested = AtomicBool::new(false);
-    let desired_pause = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
         generation: 1,
     };
 
     assert_eq!(
-        final_down_admission(
+        final_down_target_admission(FinalTargetSignals {
             expected,
-            false,
-            &focus_active,
-            &target,
-            &generation,
-            &quit_requested,
-            &skip_requested,
-            &panic_requested,
-            &desired_pause,
-        ),
+            require_focus: false,
+            focus_active: &focus_active,
+            target_hwnd: &target,
+            target_generation: &generation,
+        }),
         DownAdmission::TargetChanged
     );
 }
 
 #[test]
-fn final_down_admission_checks_expected_focus_before_target() {
-    let target = AtomicIsize::new(456);
-    let generation = AtomicU64::new(2);
-    let focus_active = AtomicBool::new(false);
-    let quit_requested = AtomicBool::new(false);
-    let skip_requested = AtomicBool::new(false);
-    let panic_requested = AtomicBool::new(false);
-    let desired_pause = AtomicBool::new(false);
-    let expected = TargetStamp {
-        hwnd: 0,
-        generation: 1,
-    };
-
-    assert_eq!(
-        final_down_admission(
-            expected,
-            true,
-            &focus_active,
-            &target,
-            &generation,
-            &quit_requested,
-            &skip_requested,
-            &panic_requested,
-            &desired_pause,
-        ),
-        DownAdmission::FocusLost
-    );
-}
-
-#[test]
-fn final_down_admission_rejects_each_command_state() {
+fn final_down_target_admission_checks_target_before_focus() {
     let target = AtomicIsize::new(123);
     let generation = AtomicU64::new(1);
     let focus_active = AtomicBool::new(false);
-    let quit_requested = AtomicBool::new(false);
-    let skip_requested = AtomicBool::new(false);
-    let panic_requested = AtomicBool::new(false);
-    let desired_pause = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
         generation: 1,
     };
 
-    let admission = || {
-        final_down_admission(
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
             expected,
-            false,
-            &focus_active,
-            &target,
-            &generation,
-            &quit_requested,
-            &skip_requested,
-            &panic_requested,
-            &desired_pause,
+            require_focus: true,
+            focus_active: &focus_active,
+            target_hwnd: &target,
+            target_generation: &generation,
+        }),
+        DownAdmission::FocusLost
+    );
+}
+
+#[test]
+fn final_control_admission_rejects_each_command_state_in_priority_order() {
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(true);
+    let desired_pause = AtomicBool::new(false);
+    let heartbeat = AtomicU64::new(1);
+
+    let admission = || {
+        final_control_admission_with_lease(
+            qpc_clock,
+            DurationTicks::ZERO,
+            FinalControlSignals {
+                quit_requested: &quit_requested,
+                skip_requested: &skip_requested,
+                panic_requested: &panic_requested,
+                desired_pause: &desired_pause,
+                supervisor_heartbeat_ticks: &heartbeat,
+            },
         )
+        .expect("control gate")
+        .0
     };
 
-    assert_eq!(admission(), DownAdmission::Allowed);
+    assert_eq!(admission(), FinalControlAdmission::PanicRequested);
+    panic_requested.store(false, Ordering::Release);
     quit_requested.store(true, Ordering::Release);
-    assert_eq!(admission(), DownAdmission::QuitRequested);
+    assert_eq!(admission(), FinalControlAdmission::QuitRequested);
     quit_requested.store(false, Ordering::Release);
     skip_requested.store(true, Ordering::Release);
-    assert_eq!(admission(), DownAdmission::SkipRequested);
+    assert_eq!(admission(), FinalControlAdmission::SkipRequested);
     skip_requested.store(false, Ordering::Release);
-    panic_requested.store(true, Ordering::Release);
-    assert_eq!(admission(), DownAdmission::PanicRequested);
-    panic_requested.store(false, Ordering::Release);
     desired_pause.store(true, Ordering::Release);
-    assert_eq!(admission(), DownAdmission::PauseRequested);
+    assert_eq!(admission(), FinalControlAdmission::PauseRequested);
+}
+
+#[test]
+fn authoritative_final_control_gate_uses_fresh_qpc_for_lease() {
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let quit_requested = AtomicBool::new(true);
+    let skip_requested = AtomicBool::new(true);
+    let panic_requested = AtomicBool::new(true);
+    let desired_pause = AtomicBool::new(true);
+    let heartbeat = AtomicU64::new(1);
+    let signals = || FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        supervisor_heartbeat_ticks: &heartbeat,
+    };
+
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
+            .expect("gate query")
+            .0,
+        FinalControlAdmission::PanicRequested
+    );
+
+    panic_requested.store(false, Ordering::Release);
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
+            .expect("gate query")
+            .0,
+        FinalControlAdmission::QuitRequested
+    );
+
+    quit_requested.store(false, Ordering::Release);
+    skip_requested.store(false, Ordering::Release);
+    desired_pause.store(false, Ordering::Release);
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
+            .expect("gate query")
+            .0,
+        FinalControlAdmission::LeaseExpired
+    );
+}
+
+#[test]
+fn authored_up_only_does_not_send_after_final_control_rejection() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for command in ["pause", "quit", "skip", "panic"] {
+        let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+        let calls = harness.configure_send_counter();
+        harness.advance_playback_time_us(100_000);
+        let plan = harness.plan_current_dispatch();
+        match command {
+            "pause" => harness.desired_pause.store(true, Ordering::Release),
+            "quit" => harness.quit_requested.store(true, Ordering::Release),
+            "skip" => harness.skip_requested.store(true, Ordering::Release),
+            "panic" => harness.panic_requested.store(true, Ordering::Release),
+            _ => unreachable!("test command table"),
+        }
+        let step = harness.dispatch_authored_with_plan(&plan);
+        assert!(
+            matches!(step, super::worker::DispatchStep::Continue),
+            "{command} must reject UpOnly before transport: {step:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{command} sent physically");
+    }
+}
+
+#[test]
+fn authored_up_only_does_not_send_after_lease_expiry() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness
+        .supervisor_heartbeat_ticks
+        .store(1, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan_and_lease(&plan, DurationTicks::from_raw(1));
+    assert!(
+        matches!(step, super::worker::DispatchStep::Continue),
+        "lease must reject UpOnly before transport: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn authored_up_only_is_not_blocked_by_focus_loss() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    harness.config.focus.require_focus = true;
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.focus_active.store(false, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "focus loss must not block UpOnly cleanup: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn authored_up_only_is_not_blocked_by_target_change() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.target_generation.store(1, Ordering::Release);
+    harness.target_hwnd.store(99, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "target changes must not block UpOnly cleanup: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn pending_release_uses_final_control_and_lease_admission() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for command in ["pause", "quit", "skip", "panic"] {
+        let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+        let calls = harness.configure_send_counter();
+        harness.advance_playback_time_us(10_000);
+        harness.seed_pending_release_for_test();
+        let plan = harness.plan_current_dispatch();
+        let pending_plan = plan.pending().expect("pending release plan");
+        let due_pending = harness.pop_due_pending_for_plan(harness.current_effective_time(), &plan);
+        match command {
+            "pause" => harness.desired_pause.store(true, Ordering::Release),
+            "quit" => harness.quit_requested.store(true, Ordering::Release),
+            "skip" => harness.skip_requested.store(true, Ordering::Release),
+            "panic" => harness.panic_requested.store(true, Ordering::Release),
+            _ => unreachable!("test command table"),
+        }
+        let step = harness.dispatch_pending_release_with_plan(
+            due_pending,
+            Some(pending_plan),
+            LatencyClass::Hot,
+        );
+        assert!(
+            matches!(step, super::worker::DispatchStep::Continue),
+            "{command} must reject pending release before transport: {step:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{command} sent physically");
+    }
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(10_000);
+    harness.seed_pending_release_for_test();
+    let plan = harness.plan_current_dispatch();
+    let pending_plan = plan.pending().expect("pending release plan");
+    let due_pending = harness.pop_due_pending_for_plan(harness.current_effective_time(), &plan);
+    harness
+        .supervisor_heartbeat_ticks
+        .store(1, Ordering::Release);
+    let step = harness.dispatch_pending_release_with_plan_and_lease(
+        due_pending,
+        Some(pending_plan),
+        LatencyClass::Hot,
+        DurationTicks::from_raw(1),
+    );
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    harness.config.focus.require_focus = true;
+    harness.focus_active.store(false, Ordering::Release);
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(10_000);
+    harness.seed_pending_release_for_test();
+    let plan = harness.plan_current_dispatch();
+    let pending_plan = plan.pending().expect("pending release plan");
+    let due_pending = harness.pop_due_pending_for_plan(harness.current_effective_time(), &plan);
+    let step = harness.dispatch_pending_release_with_plan(
+        due_pending,
+        Some(pending_plan),
+        LatencyClass::Hot,
+    );
+    assert!(matches!(step, super::worker::DispatchStep::Dispatched));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut empty = ProductionDispatchTestHarness::new_uponly_release();
+    let empty_plan = super::worker::NextDispatchPlan::default();
+    assert!(matches!(
+        empty.dispatch_due_from_plan_for_test(&empty_plan),
+        super::worker::DispatchStep::NoWork
+    ));
+
+    let mut authored = ProductionDispatchTestHarness::new_uponly_release();
+    let authored_calls = authored.configure_send_counter();
+    authored.advance_playback_time_us(100_000);
+    let authored_plan = authored.plan_current_dispatch();
+    assert!(matches!(
+        authored.dispatch_due_from_plan_for_test(&authored_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(authored_calls.load(Ordering::SeqCst), 1);
+
+    let mut invalid_plan = authored_plan.clone();
+    invalid_plan.authored_budget = None;
+    assert!(!super::worker::plan_structure_is_valid(&invalid_plan));
+    assert!(matches!(
+        authored.dispatch_due_from_plan_for_test(&invalid_plan),
+        super::worker::DispatchStep::Terminate(_)
+    ));
+
+    let mut pending_future = ProductionDispatchTestHarness::new_uponly_release();
+    pending_future.advance_playback_time_us(10_000);
+    pending_future.seed_pending_release_for_test();
+    let pending_future_plan = pending_future.plan_current_dispatch();
+    pending_future.set_effective_time_for_test(TimelineTicks::ZERO);
+    assert!(matches!(
+        pending_future.dispatch_due_from_plan_for_test(&pending_future_plan),
+        super::worker::DispatchStep::NoWork
+    ));
+
+    let mut pending = ProductionDispatchTestHarness::new_uponly_release();
+    let pending_calls = pending.configure_send_counter();
+    pending.advance_playback_time_us(10_000);
+    pending.seed_pending_release_for_test();
+    let pending_plan = pending.plan_current_dispatch();
+    assert!(pending_plan.authored.is_none());
+    assert!(matches!(
+        pending.dispatch_due_from_plan_for_test(&pending_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(pending_calls.load(Ordering::SeqCst), 1);
+
+    let mut invalid_pending_plan = pending_plan.clone();
+    invalid_pending_plan.pending_budget = None;
+    assert!(!super::worker::plan_structure_is_valid(
+        &invalid_pending_plan
+    ));
+    assert!(matches!(
+        pending.dispatch_due_from_plan_for_test(&invalid_pending_plan),
+        super::worker::DispatchStep::Terminate(_)
+    ));
+
+    let mut both = ProductionDispatchTestHarness::new_pending_future_with_authored_due();
+    let initial_plan = both.plan_current_dispatch();
+    assert!(matches!(
+        both.dispatch_authored_with_plan(&initial_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    both.advance_playback_time_us(1_000);
+    both.resources.coordinator.min_hold_ticks = both
+        .resources
+        .clock
+        .duration_from_us(10_000)
+        .expect("minimum hold conversion");
+    both.seed_pending_release_for_test();
+    let both_plan = both.plan_current_dispatch();
+    let both_calls = both.configure_send_counter();
+    assert!(both_plan.pending.is_some());
+    assert!(both_plan.authored.is_some());
+    both.advance_playback_time_us(10_000);
+    assert!(matches!(
+        both.dispatch_due_from_plan_for_test(&both_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(both_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn frozen_plan_pending_future_allows_authored_due_dispatch() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_pending_future_with_authored_due();
+    let initial_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_authored_with_plan(&initial_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    harness.advance_playback_time_us(1_000);
+    harness.resources.coordinator.min_hold_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(10_000)
+        .expect("minimum hold conversion");
+    harness.seed_pending_release_for_test();
+    let plan = harness.plan_current_dispatch();
+    assert!(plan.pending.is_some());
+    assert!(plan.authored.is_some());
+    harness.advance_playback_time_us(1_000);
+    let calls = harness.configure_send_counter();
+
+    let step = harness.dispatch_due_from_plan_for_test(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "pending-future authored-due step: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -1308,7 +1592,7 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 }
 
 #[test]
-fn failed_send_does_not_seed_estimator_or_residual() {
+fn failed_send_does_not_seed_estimator_or_correction() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
     update_estimator_after_send(
@@ -1318,17 +1602,28 @@ fn failed_send_does_not_seed_estimator_or_residual() {
         0,
         3,
         500,
+        false,
         120,
         false,
     );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
-    assert_eq!(state.residuals[0].count, 0);
+    assert_eq!(state.completion_corrections[0], 0.0);
 
-    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 0, 120, false);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        1,
+        3,
+        0,
+        false,
+        120,
+        false,
+    );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
-    assert_eq!(state.residuals[0].count, 0);
+    assert_eq!(state.completion_corrections[0], 0.0);
 
     update_estimator_after_send(
         &mut estimator,
@@ -1337,19 +1632,30 @@ fn failed_send_does_not_seed_estimator_or_residual() {
         1,
         3,
         500,
+        false,
         120,
         true,
     );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
-    assert_eq!(estimator.export_state().residuals[0].count, 1);
+    assert_ne!(estimator.export_state().completion_corrections[0], 0.0);
 }
 
 #[test]
 fn directional_estimator_training_is_not_cross_contaminated() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::UpOnly,
+        900,
+        2,
+        2,
+        500,
+        false,
+        120,
+        true,
+    );
     let after_up = estimator.export_state();
     assert_eq!(after_up.hist_up[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(after_up.hist_down[2].hot_pairs, Vec::<[u64; 2]>::new());
@@ -1359,7 +1665,7 @@ fn directional_estimator_training_is_not_cross_contaminated() {
         up_count: 2,
         down_count: 2,
     });
-    update_estimator_after_send(&mut estimator, send_path, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, send_path, 900, 2, 2, 500, false, 120, true);
     let after_mixed = estimator.export_state();
     assert_eq!(after_mixed.hist_mixed[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(
@@ -1377,7 +1683,17 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
     let before = estimator.export_state();
 
-    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::UpOnly,
+        900,
+        2,
+        2,
+        500,
+        false,
+        120,
+        true,
+    );
     let after_up = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_up.hist_up).unwrap(),
@@ -1395,6 +1711,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
         2,
         2,
         500,
+        false,
         120,
         true,
     );
@@ -1406,7 +1723,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
 }
 
 #[test]
-fn estimator_v9_predicts_path_specific_leads() {
+fn estimator_v10_predicts_path_specific_leads() {
     let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
     let down_lead = estimator.estimate_lead(SendPath::DownOnly, 2).applied_us;
     let up_lead = estimator.estimate_lead(SendPath::UpOnly, 2).applied_us;
@@ -1940,6 +2257,7 @@ fn up_estimator_receives_exact_syscall_duration_sample() {
         1,
         1,
         500,
+        false,
         100,
         EstimatorObservationEvidence {
             status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
@@ -2639,26 +2957,18 @@ fn invariant_mismatch_prevents_sender_invocation() {
     let target = AtomicIsize::new(456);
     let generation = AtomicU64::new(2);
     let focus_active = AtomicBool::new(false);
-    let quit_requested = AtomicBool::new(false);
-    let skip_requested = AtomicBool::new(false);
-    let panic_requested = AtomicBool::new(false);
-    let desired_pause = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
         generation: 1,
     };
 
-    let admission = final_down_admission(
+    let admission = final_down_target_admission(FinalTargetSignals {
         expected,
-        false,
-        &focus_active,
-        &target,
-        &generation,
-        &quit_requested,
-        &skip_requested,
-        &panic_requested,
-        &desired_pause,
-    );
+        require_focus: false,
+        focus_active: &focus_active,
+        target_hwnd: &target,
+        target_generation: &generation,
+    });
 
     assert_eq!(admission, DownAdmission::TargetChanged);
     assert_eq!(
@@ -2735,6 +3045,7 @@ fn test_qpc_ordering_failure_is_terminal() {
     // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)
     // so dispatch_ready_qpc < sender_completed_qpc ordering fails inside publisher_down_send_outcome.
     let timing_proof = DownSendTiming {
+        sender_started_qpc: QpcTicks::ZERO,
         sender_completed_qpc: QpcTicks::from_raw(u64::MAX),
         sender_started_effective_ticks: TimelineTicks::ZERO,
         completed_effective_ticks: TimelineTicks::ZERO,

@@ -1,14 +1,15 @@
 use super::super::super::{
     ActionKind, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass, PlaybackClockState,
-    QpcClock, QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK,
-    SendLatencyEstimator, SharedMetrics, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector,
-    TimelineTicks, TrackedKeyState, try_publish_metrics,
+    QpcClock, QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SharedMetrics,
+    TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TrackedKeyState,
+    try_publish_metrics,
 };
 use super::super::{
-    DispatchPath, DownAdmission, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerResources, WorkerRuntime, WorkerTimingState, build_dispatch_budget,
-    ensure_preflight_for_target, final_down_admission, focus_matches, load_target_stamp,
-    suspend_live_input, target_stamp_still_current,
+    DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
+    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
+    WorkerTimingState, ensure_preflight_for_target, final_control_admission_with_lease,
+    final_down_target_admission, focus_matches, load_target_stamp, suspend_live_input,
+    target_stamp_still_current,
 };
 use super::observer::{
     commit_suppressed_up_request, publisher_down_send_outcome, record_blocked_unfocused_telemetry,
@@ -45,6 +46,8 @@ pub(crate) fn dispatch_authored_packet(
         now_ticks,
         latency_class,
         focus_loss_fault,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
     } = ctx;
 
     let WorkerResources {
@@ -52,7 +55,6 @@ pub(crate) fn dispatch_authored_packet(
         backend,
         coordinator,
         playback: clock_state,
-        estimator,
         telemetry,
         ..
     } = resources;
@@ -65,6 +67,9 @@ pub(crate) fn dispatch_authored_packet(
             authored.lead_ticks,
         ),
         None => (0, false, DurationTicks::ZERO),
+    };
+    let Some(frozen_budget) = dispatch_plan.authored_budget.as_ref() else {
+        return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
     let prepared_batch =
@@ -116,7 +121,6 @@ pub(crate) fn dispatch_authored_packet(
             backend,
             coordinator,
             clock_state,
-            estimator,
             telemetry,
             effective_now_ticks,
             now_ticks,
@@ -125,6 +129,9 @@ pub(crate) fn dispatch_authored_packet(
             lead_down_ticks,
             latency_class,
             focus_loss_fault,
+            frozen_budget,
+            supervisor_heartbeat_ticks,
+            lease_timeout_ticks,
             observer,
         );
     }
@@ -167,7 +174,6 @@ fn commit_down_send_outcome(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    estimator: &mut SendLatencyEstimator,
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
@@ -176,6 +182,9 @@ fn commit_down_send_outcome(
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
     focus_loss_fault: bool,
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
     observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
@@ -204,9 +213,9 @@ fn commit_down_send_outcome(
         timing,
         has_conflicts,
         focus_loss_fault,
-        latency_class,
-        estimator,
-        health,
+        frozen_budget,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
     ) {
         Ok(admission) => admission,
         Err(step) => return step,
@@ -243,6 +252,7 @@ enum AdmissionOutcome {
     BlockedUnfocused,
     FocusLost,
     TargetChanged,
+    ControlRejected,
     ConflictReject,
 }
 
@@ -275,15 +285,17 @@ fn admit_authored_down(
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
-    latency_class: LatencyClass,
-    estimator: &SendLatencyEstimator,
-    health: &mut WorkerHealthState,
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
 ) -> Result<AdmissionOutcome, DispatchStep> {
-    if !view
+    let trace_kind = trace_kind_for_view(view);
+    let has_down_events = view
         .packet_masks
-        .is_some_and(|packet| packet.down_mask == 0)
-        && !focus_matches(config.focus.require_focus, focus_active)
-    {
+        .is_some_and(|packet| packet.down_mask != 0)
+        || view.batch_kind == ActionKind::Down;
+    let has_physical_packet = view.packet_masks.is_some() || !view.scan_batch.is_empty();
+    if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         {
@@ -303,29 +315,26 @@ fn admit_authored_down(
         try_publish_metrics(local_metrics, metrics, current_us, true);
         return Ok(AdmissionOutcome::BlockedUnfocused);
     }
-    if !view
-        .packet_masks
-        .is_some_and(|packet| packet.down_mask == 0)
-        && focus_loss_fault
-        && !runtime.focus_loss_fault_injected
-    {
+    if has_down_events && focus_loss_fault && !runtime.focus_loss_fault_injected {
         runtime.focus_loss_fault_injected = true;
         return Err(DispatchStep::Terminate(
             "focus lost after due check before SendInput boundary".to_string(),
         ));
     }
     let preflight_target = load_target_stamp(target_hwnd, target_generation);
-    if let Err(error) =
-        ensure_preflight_for_target(backend, preflight_target, &mut runtime.verified_target)
-    {
-        runtime.verified_target = None;
-        return Err(DispatchStep::Terminate(format!(
-            "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
-        )));
-    }
-    if !target_stamp_still_current(target_hwnd, target_generation, preflight_target) {
-        runtime.verified_target = None;
-        return Ok(AdmissionOutcome::TargetChanged);
+    if has_down_events {
+        if let Err(error) =
+            ensure_preflight_for_target(backend, preflight_target, &mut runtime.verified_target)
+        {
+            runtime.verified_target = None;
+            return Err(DispatchStep::Terminate(format!(
+                "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
+            )));
+        }
+        if !target_stamp_still_current(target_hwnd, target_generation, preflight_target) {
+            runtime.verified_target = None;
+            return Ok(AdmissionOutcome::TargetChanged);
+        }
     }
     if config.timing.strict_timing
         && effective_now_ticks
@@ -350,74 +359,76 @@ fn admit_authored_down(
             view.batch_source_action_index
         )));
     }
-    if view.packet_masks.is_some() || !view.scan_batch.is_empty() {
-        let admission = if view
-            .packet_masks
-            .is_some_and(|packet| packet.down_mask == 0)
-        {
-            DownAdmission::Allowed
-        } else {
-            final_down_admission(
-                preflight_target,
-                config.focus.require_focus,
-                focus_active,
-                target_hwnd,
-                target_generation,
+    if has_physical_packet {
+        let (control_admission, _) = final_control_admission_with_lease(
+            qpc_clock,
+            lease_timeout_ticks,
+            FinalControlSignals {
                 quit_requested,
                 skip_requested,
                 panic_requested,
                 desired_pause,
-            )
-        };
-        match admission {
-            DownAdmission::Allowed => {}
-            DownAdmission::FocusLost => {
-                runtime.verified_target = None;
-                let focus_ticks = match qpc_clock.now() {
-                    Ok(ticks) => ticks,
-                    Err(error) => {
-                        return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}")));
+                supervisor_heartbeat_ticks,
+            },
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+        })?;
+        if !matches!(control_admission, FinalControlAdmission::Allowed) {
+            runtime.verified_target = None;
+            return Ok(AdmissionOutcome::ControlRejected);
+        }
+
+        if has_down_events {
+            let admission = final_down_target_admission(FinalTargetSignals {
+                expected: preflight_target,
+                require_focus: config.focus.require_focus,
+                focus_active,
+                target_hwnd,
+                target_generation,
+            });
+            match admission {
+                DownAdmission::Allowed => {}
+                DownAdmission::FocusLost => {
+                    runtime.verified_target = None;
+                    let focus_ticks = match qpc_clock.now() {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}")));
+                        }
+                    };
+                    if let Err(error) = suspend_live_input(
+                        backend,
+                        coordinator,
+                        target_hwnd.load(Ordering::Acquire),
+                    ) {
+                        return Err(DispatchStep::Terminate(format!(
+                            "focus suspension failed: {error}"
+                        )));
                     }
-                };
-                if let Err(error) =
-                    suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
-                {
-                    return Err(DispatchStep::Terminate(format!(
-                        "focus suspension failed: {error}"
-                    )));
+                    if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
+                        return Err(DispatchStep::Terminate(format!(
+                            "playback clock failure after final focus check: {error}"
+                        )));
+                    }
+                    runtime.focus_restore_started_ticks = None;
+                    super::publish_backend_metrics(
+                        backend,
+                        local_metrics,
+                        metrics,
+                        last_published_error,
+                    );
+                    let current_us = read_qpc_us(qpc_clock, clock_state)?;
+                    try_publish_metrics(local_metrics, metrics, current_us, true);
+                    return Ok(AdmissionOutcome::FocusLost);
                 }
-                if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
-                    return Err(DispatchStep::Terminate(format!(
-                        "playback clock failure after final focus check: {error}"
-                    )));
+                DownAdmission::TargetChanged => {
+                    runtime.verified_target = None;
+                    return Ok(AdmissionOutcome::TargetChanged);
                 }
-                runtime.focus_restore_started_ticks = None;
-                super::publish_backend_metrics(
-                    backend,
-                    local_metrics,
-                    metrics,
-                    last_published_error,
-                );
-                let current_us = read_qpc_us(qpc_clock, clock_state)?;
-                try_publish_metrics(local_metrics, metrics, current_us, true);
-                return Ok(AdmissionOutcome::FocusLost);
-            }
-            DownAdmission::TargetChanged
-            | DownAdmission::PauseRequested
-            | DownAdmission::QuitRequested
-            | DownAdmission::SkipRequested
-            | DownAdmission::PanicRequested => {
-                runtime.verified_target = None;
-                return Ok(AdmissionOutcome::TargetChanged);
             }
         }
-        return Ok(finalize_allowed_admission(
-            view,
-            config,
-            health,
-            estimator,
-            latency_class,
-        ));
+        return Ok(finalize_allowed_admission(frozen_budget, trace_kind));
     }
     Ok(AdmissionOutcome::ConflictReject)
 }
@@ -425,28 +436,21 @@ fn admit_authored_down(
 /// Contstructs the allowed admission from the frozen dispatch budget and the
 /// packet trace kind.  Extracted to keep `admit_authored_down` under the per
 /// dispatch-function line limit.
-fn finalize_allowed_admission(
-    view: &AuthoredBatchView,
-    config: &WorkerConfig,
-    health: &WorkerHealthState,
-    estimator: &SendLatencyEstimator,
-    latency_class: LatencyClass,
-) -> AdmissionOutcome {
-    let frozen_budget = build_dispatch_budget(
-        estimator,
-        view.dispatch_path,
-        latency_class,
-        health.options,
-        config.timing.strict_timing,
-    );
-    let trace_kind = match view.prepared_batch.packet_kind {
+fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
+    match view.prepared_batch.packet_kind {
         Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => TRACE_KIND_UP,
         Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => TRACE_KIND_DOWN,
         Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed) => TRACE_KIND_MIXED,
         None => TRACE_KIND_DOWN,
-    };
+    }
+}
+
+fn finalize_allowed_admission(
+    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    trace_kind: u8,
+) -> AdmissionOutcome {
     AdmissionOutcome::Allowed {
-        frozen_budget,
+        frozen_budget: *frozen_budget,
         trace_kind,
     }
 }

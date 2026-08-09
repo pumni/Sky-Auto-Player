@@ -37,6 +37,8 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) now_ticks: QpcTicks,
     pub(crate) latency_class: LatencyClass,
     pub(crate) focus_loss_fault: bool,
+    pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
+    pub(crate) lease_timeout_ticks: DurationTicks,
 }
 
 /// Snapshot of the prepared authored batch plus the projection of the
@@ -101,7 +103,7 @@ pub(crate) use release::{
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use observer::observer_initial_budget_override_us;
 
-use super::super::{ActionKind, LatencyClass, QpcTicks, TimelineTicks};
+use super::super::{ActionKind, DurationTicks, LatencyClass, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 pub(super) use super::publish_backend_metrics;

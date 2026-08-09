@@ -36,11 +36,13 @@ wires the modules; `orchestration.rs` is the loop sequencer and owns
 command/focus/pause transitions, plan creation, the pending/authored/wait
 choice, and the terminal transition.
 
-- `planning.rs` owns path classification, lead selection, the pending-release
-  plan, and the next wait deadline. `plan_next_dispatch()` builds exactly one
-  immutable `NextDispatchPlan` per loop epoch from a `RuntimeDispatchCoordinator`
-  snapshot, a `SendLatencyEstimator`, and the `QpcClock`; it never reads QPC,
-  mutates the coordinator, allocates, or formats strings on the success path.
+- `planning.rs` owns projected Hot/Cold classification, lead selection, the
+  pending-release plan, frozen health budgets, and the next wait deadline.
+  `plan_next_dispatch_projected()` builds exactly one immutable
+  `NextDispatchPlan` per loop epoch from the coordinator's next uncompensated
+  physical boundary, the previous SendInput completion, and the estimator. It
+  never samples QPC itself, mutates the coordinator, allocates, or formats
+  strings on the success path.
   The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
   the wait deadline, so prepare and wait cannot disagree on lead selection.
 - `dispatch/` owns the pending-release and authored-packet backend
@@ -70,9 +72,26 @@ choice, and the terminal transition.
 - `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
   own their single named concern.
 
-A plan is valid only for its current loop iteration. After an interrupt,
-command, focus/pause transition, backend call, release-recovery change, or wait
-wake, the worker discards the plan and rebuilds it from fresh QPC samples.
+A plan is invalidated by an interrupt, command, focus/pause transition, backend
+call, or release-recovery change. A normal waitable-timer deadline wake is
+different: it preserves the immutable plan and hands it directly to the
+dispatch helper, so the worker does not restart the full orchestration epoch
+between the deadline and `SendInput`.
+
+The precision boundary is intentionally short. Health thresholds are frozen in
+the plan, the final admission checks panic/quit/skip/pause, supervisor lease,
+target generation, and focus as applicable, and an `Allowed` result proceeds
+directly to the backend transport. Estimator, health-window, telemetry
+materialization, and observer work remain deferred after the fixed raw
+observation enqueue.
+
+Every physical send uses the shared control-and-lease gate with a fresh QPC
+sample. Down-bearing authored traffic then applies the target-generation and
+foreground/focus gate; UpOnly authored traffic and pending releases are
+cleanup traffic and do not require focus or target stability. The control
+atomics are the authoritative last-mile command state. The event's monotonic
+generation is only a spin interruption hint, and an event handle is consumed
+only after a replan outside the precision boundary.
 
 `SendInput` completion is sender-side evidence. It is not proof that the game
 consumed the event. Any receiver/probe window used for acceptance is an
@@ -241,9 +260,10 @@ does not establish game receipt.
 
 The final wait spin observes an event signal generation and QPC ticks only; it
 does not convert ticks to microseconds or issue a zero-time Win32 event wait on
-each spin iteration. The event handle remains authoritative for long waits and
-command interruption, with at most one final zero-time handoff probe before a
-deadline is reported. Estimator
+each spin iteration. A successful deadline handoff does not consume the event
+handle at all; it revalidates the authoritative command atomics immediately
+before transport. The event handle remains the blocking-wait primitive for
+long waits and is drained only on the non-precision replan path. Estimator
 lead-cache refreshes update the preallocated cache in place, and one clean
 observation refreshes the affected cache once. CPU-time telemetry is sampled
 on a bounded 100 ms interval with a final worker sample, while healthy shared

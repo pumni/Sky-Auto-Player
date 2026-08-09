@@ -39,27 +39,54 @@ pub(crate) fn deadline_wait_result(
     event_wait_enabled: bool,
     observed_generation: u64,
 ) -> WaitResult {
-    if event_wait_enabled {
-        match (
-            interrupt.signal_generation() != observed_generation,
-            interrupt.try_take(),
-        ) {
-            (_, true) => {
-                // The one final zero-time consume is allowed at the deadline
-                // handoff, including the SetEvent-to-generation publication
-                // window. There is no event poll in the spin loop itself.
-                return wait_result_with_spin(
-                    WaitOutcome::Interrupted,
-                    started_ticks,
-                    completed_ticks,
-                );
-            }
-            (true, false) => {
-                // A changed generation without an owned event means another
-                // consumer won the auto-reset event; the deadline is safe.
-            }
-            (false, false) => {}
-        }
+    if event_wait_enabled && interrupt.signal_generation() != observed_generation {
+        // The command atomics are the authoritative final admission state.
+        // The auto-reset event is intentionally not consumed here: doing so
+        // would put WaitForSingleObject(..., 0) back in the precision path.
+        return wait_result_with_spin(WaitOutcome::Interrupted, started_ticks, completed_ticks);
     }
     wait_result_with_spin(WaitOutcome::Deadline, started_ticks, completed_ticks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deadline_wait_result;
+    use crate::event::OwnedEvent;
+    use crate::wait::WaitOutcome;
+
+    #[test]
+    fn successful_deadline_handoff_does_not_consume_the_event() {
+        let event = OwnedEvent::new_auto_reset().expect("event");
+        assert!(event.signal());
+        let observed_generation = event.signal_generation();
+
+        let result = deadline_wait_result(
+            None,
+            crate::clock::QpcTicks::ZERO,
+            &event,
+            true,
+            observed_generation,
+        );
+
+        assert_eq!(result.outcome, WaitOutcome::Deadline);
+        assert_eq!(event.take_count(), 0);
+    }
+
+    #[test]
+    fn generation_change_replans_without_consuming_the_event() {
+        let event = OwnedEvent::new_auto_reset().expect("event");
+        let observed_generation = event.signal_generation();
+        assert!(event.signal());
+
+        let result = deadline_wait_result(
+            None,
+            crate::clock::QpcTicks::ZERO,
+            &event,
+            true,
+            observed_generation,
+        );
+
+        assert_eq!(result.outcome, WaitOutcome::Interrupted);
+        assert_eq!(event.take_count(), 0);
+    }
 }

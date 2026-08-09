@@ -1,12 +1,12 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
 use super::super::{
-    BackendConfig, CORE_WARMUP_SPIN_MAX_US, CoordinatorError, DurationTicks,
-    HARD_LATE_ABORT_THRESHOLD_US, LatencyClass, PAUSED_POLL_US, PlaybackClockState, QpcClock,
-    QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US, RuntimeDispatchCoordinator,
-    SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
-    SendLatencyEstimator, SharedMetrics, TelemetryCollector, TrackedKeyState,
-    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
+    BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass,
+    PAUSED_POLL_US, PlaybackClockState, QpcClock, QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US,
+    RuntimeDispatchCoordinator, SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US,
+    STRICT_RETRY_LATE_THRESHOLD_US, SendLatencyEstimator, SharedMetrics, TelemetryCollector,
+    TrackedKeyState, current_process_cpu_time_us, current_thread_cpu_time_us,
+    qpc_frequency_checked,
 };
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
@@ -193,21 +193,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let core_warmup_ticks = match qpc_clock.duration_from_us(
-        config
-            .timing
-            .core_warmup_budget_us
-            .min(CORE_WARMUP_SPIN_MAX_US),
-    ) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("core warmup conversion failed: {error:?}"),
-            );
-        }
-    };
     let lease_timeout_ticks =
         match qpc_clock.duration_from_us(config.wait.supervisor_lease_timeout_us) {
             Ok(ticks) => ticks,
@@ -355,16 +340,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let startup_guard_ticks = (|| {
+    let startup_guard_ticks: Result<DurationTicks, String> = (|| {
         let wake_guard = qpc_clock
             .duration_from_us(STARTUP_WAKE_GUARD_US)
             .map_err(|error| format!("{error:?}"))?;
         let with_spin = wake_guard
             .checked_add(effective_spin_threshold_ticks)
             .map_err(|error| error.to_string())?;
-        with_spin
-            .checked_add(core_warmup_ticks)
-            .map_err(|error| error.to_string())
+        Ok(with_spin)
     })();
     let startup_guard_ticks = match startup_guard_ticks {
         Ok(ticks) => ticks,
@@ -416,7 +399,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         focus_restore_grace_ticks,
         paused_poll_ticks,
         cold_threshold_ticks,
-        core_warmup_ticks,
         lease_timeout_ticks,
         retry_backoff_ticks,
         effective_spin_threshold_ticks,

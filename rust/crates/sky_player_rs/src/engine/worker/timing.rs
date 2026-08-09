@@ -1,4 +1,5 @@
 use crate::engine::telemetry::WorkerMetricsLocal;
+#[cfg(test)]
 use sky_dispatch_core::estimator::LatencyClass;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 #[cfg(test)]
@@ -127,6 +128,7 @@ pub(crate) fn exact_sender_durations(
     Ok((Some(duration), single_call))
 }
 
+#[cfg(test)]
 pub(crate) fn classify_latency_class(
     last_send_qpc_ticks: Option<QpcTicks>,
     now_qpc_ticks: QpcTicks,

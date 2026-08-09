@@ -319,6 +319,7 @@ pub(crate) fn prepare_authored_batch_view(
 /// projections used across telemetry, estimator update, and the terminal
 /// SLO decision.
 pub(crate) struct DownSendTiming {
+    pub(crate) sender_started_qpc: QpcTicks,
     pub(crate) sender_completed_qpc: QpcTicks,
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
@@ -507,6 +508,7 @@ pub(crate) fn interpret_down_send_timing(
     // Expose the raw QPC sender-completion boundary for the deferred observer.
     // Guaranteed `Some` here: a missing boundary already terminated inside
     // `resolve_send_boundaries`.
+    let sender_started_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
     let sender_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
     let completion_error_ticks_value =
         match signed_timeline_delta_ticks(completed_effective_ticks, view.batch_scheduled_ticks) {
@@ -597,6 +599,7 @@ pub(crate) fn interpret_down_send_timing(
     let saturation_abort =
         config.timing.strict_timing && saturation_streak >= STRICT_SATURATION_ABORT_STREAK;
     Ok(DownSendTiming {
+        sender_started_qpc,
         sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,

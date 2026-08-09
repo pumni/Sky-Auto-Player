@@ -3,26 +3,32 @@ use super::super::super::{
     RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
-    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
-    WorkerRuntime, WorkerTimingState, build_dispatch_budget, cancel_coordinator_or_terminal,
-    describe_release_outcome, record_termination_error, release_state_verified, signed_ticks_to_us,
+    FinalControlAdmission, FinalControlSignals, WorkerConfig, WorkerHealthState,
+    WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
+    cancel_coordinator_or_terminal, describe_release_outcome, final_control_admission_with_lease,
+    record_termination_error, release_state_verified, signed_ticks_to_us,
     signed_timeline_delta_ticks,
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
-use super::observer::PendingObservationQueue;
+use super::observer::{PendingObservationQueue, take_wake_to_send_start_us};
 use super::timing::EstimatorObservationEvidence;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
     pub(crate) pending_plan: Option<&'a PendingDispatchPlan>,
     pub(crate) lead_up_ticks: DurationTicks,
     pub(crate) latency_class: LatencyClass,
+    pub(crate) frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
+    pub(crate) quit_requested: &'a AtomicBool,
+    pub(crate) skip_requested: &'a AtomicBool,
+    pub(crate) panic_requested: &'a AtomicBool,
+    pub(crate) desired_pause: &'a AtomicBool,
+    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
+    pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) observer: &'a mut PendingObservationQueue,
 }
 
@@ -34,6 +40,7 @@ pub(super) struct ReleaseSend {
     pub(super) completed_effective_us: u64,
     /// §8.6 typed QPC completion boundary used by the deferred observer to
     /// derive `core_post_send_us`.  Replaces the old mixed us/QPC subtraction.
+    pub(super) sender_started_qpc: QpcTicks,
     pub(super) sender_completed_qpc: QpcTicks,
     pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
     pub(super) last_win32_error: Option<u32>,
@@ -225,6 +232,13 @@ pub(crate) fn dispatch_due_pending_releases(
         pending_plan,
         lead_up_ticks,
         latency_class,
+        frozen_budget,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
         observer,
     } = ctx;
     let WorkerResources {
@@ -232,23 +246,24 @@ pub(crate) fn dispatch_due_pending_releases(
         backend,
         coordinator,
         playback: clock_state,
-        estimator,
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
     let scan_codes: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
     let scan_count = scan_codes.len();
-    let frozen_budget = build_dispatch_budget(
-        estimator,
-        DispatchPath::UpOnly {
-            up_count: scan_count,
-        },
-        latency_class,
-        health.options,
-        config.timing.strict_timing,
-    );
-
-    let send = match prepare_release_send(qpc_clock, backend, clock_state, runtime, &scan_codes) {
+    let send = match prepare_release_send(
+        qpc_clock,
+        backend,
+        clock_state,
+        runtime,
+        &scan_codes,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
+    ) {
         Ok(value) => value,
         Err(step) => return step,
     };
@@ -292,9 +307,13 @@ pub(crate) fn dispatch_due_pending_releases(
         None
     };
 
-    let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
-        && reconciliation.up_completion_lateness_ticks.is_some();
-    health.up_saturation_positive_streak = if up_saturated_positive {
+    // Preserve applied-plan saturation independently of completion sign.
+    // Positive-at-cap policy uses the effective completion error.
+    let (lead_up_saturated, saturated_positive) = up_saturation_evidence(
+        pending_plan.is_some_and(|plan| plan.lead_saturated),
+        reconciliation.up_completion_error_us,
+    );
+    health.up_saturation_positive_streak = if saturated_positive {
         health.up_saturation_positive_streak.saturating_add(1)
     } else {
         0
@@ -317,6 +336,8 @@ pub(crate) fn dispatch_due_pending_releases(
             ));
         }
     };
+    let wake_to_send_start_us =
+        take_wake_to_send_start_us(runtime, qpc_clock, send.sender_started_qpc);
     // HARD DISPATCH READY BOUNDARY:
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
@@ -324,10 +345,11 @@ pub(crate) fn dispatch_due_pending_releases(
     let observation = UpObservation {
         latency_class,
         sender_duration_us: send.sender_duration_us,
+        wake_to_send_start_us,
         sent_count: send.sent_count,
         scan_count,
         lead_up_ticks,
-        lead_up_saturated: up_saturated_positive,
+        lead_up_saturated,
         completed_effective: send.completed_effective_us,
         scheduled_us: reconciliation.scheduled_us,
         deferred_by_us: reconciliation.deferred_by_us,
@@ -405,14 +427,34 @@ fn prepare_release_send(
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     scan_codes: &SmallVec<[u16; 15]>,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    desired_pause: &AtomicBool,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
 ) -> Result<ReleaseSend, DispatchStep> {
-    let started_ticks = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "QPC failure before note-off: {error:?}"
-            )));
-        }
+    let (admission, gate_qpc) = final_control_admission_with_lease(
+        qpc_clock,
+        lease_timeout_ticks,
+        FinalControlSignals {
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            supervisor_heartbeat_ticks,
+        },
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!("release admission QPC failure: {error:?}"))
+    })?;
+    if !matches!(admission, FinalControlAdmission::Allowed) {
+        return Err(DispatchStep::Continue);
+    }
+    let Some(started_ticks) = gate_qpc else {
+        return Err(DispatchStep::Terminate(
+            "allowed release admission has no QPC evidence".to_string(),
+        ));
     };
     let actual_ticks = match clock_state
         .get_elapsed_allow_pre_epoch(started_ticks, runtime.allow_pre_epoch_startup_dispatch)
@@ -510,6 +552,7 @@ fn prepare_release_send(
         completed_effective_ticks,
         completed_effective_us,
         sender_completed_qpc: completed_qpc_ticks,
+        sender_started_qpc: result.evidence.started_ticks.unwrap_or(QpcTicks::ZERO),
         sender_started_effective_ticks,
         last_win32_error,
         sender_duration_us,
@@ -773,5 +816,39 @@ fn finalize_release_recovery(
     mark_release_recovery_complete();
     ReleaseRecoveryOutcome {
         terminal_error: term_err.unwrap_or_else(|| "recovery failure".to_string()),
+    }
+}
+
+fn up_saturation_evidence(lead_up_saturated: bool, completion_error_us: i64) -> (bool, bool) {
+    (
+        lead_up_saturated,
+        lead_up_saturated && completion_error_us > 0,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::up_saturation_evidence;
+
+    #[test]
+    fn applied_up_saturation_uses_effective_completion_error() {
+        let effective_completion_error_us = 100;
+        let authored_completion_error_us = -100;
+        assert!(effective_completion_error_us > 0);
+        assert!(authored_completion_error_us < 0);
+
+        let (lead_up_saturated, saturated_positive) =
+            up_saturation_evidence(true, effective_completion_error_us);
+
+        assert!(lead_up_saturated);
+        assert!(saturated_positive);
+    }
+
+    #[test]
+    fn applied_up_saturation_preserves_negative_unwind_signal() {
+        let (lead_up_saturated, saturated_positive) = up_saturation_evidence(true, -100);
+
+        assert!(lead_up_saturated);
+        assert!(!saturated_positive);
     }
 }
