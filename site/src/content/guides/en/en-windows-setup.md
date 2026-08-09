@@ -79,15 +79,18 @@ for any unsigned executable downloaded from the internet.
 ## Updating
 
 Sky Auto Player checks GitHub for new releases when it starts and shows a banner when one
-is available. Select **Update now** to apply it:
+is available. Select **Open GitHub Releases** to download the update manually:
 
-1. Playback stops and releases its keys.
-2. The app hands off to the bundled native updater and exits.
-3. The updater verifies, installs transactionally, and restarts the app.
+1. Download the matching ZIP, `.zip.sha256`, and `MANIFEST.json` from the official
+   [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+2. Verify the ZIP SHA256 and exact manifest when desired.
+3. Extract the ZIP into a new folder and copy your `config.json`, `.env`, `songs/`, and
+   `logs/` into it.
+4. Start `Sky-Auto-Player.exe` from the new folder.
 
-The updater verifies the canonical ZIP, SHA256 sidecar, manifest, and Authenticode signatures
-before touching managed files. If verification fails, it rolls back and leaves your installation
-unchanged. It never replaces `config.json`, `.env`, `songs/`, or `logs/`.
+Public Windows binaries are currently unsigned and there is no bundled native installer or
+automatic file replacement. Authenticode is **N/A — intentionally unsigned**; Windows
+SmartScreen may show an unrecognized-app warning.
 
 ## Uninstalling
 

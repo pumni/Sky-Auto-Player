@@ -107,17 +107,17 @@ any unsigned executable downloaded from the internet.
 SHA256 checksum of the downloaded ZIP against the `.sha256` file published on the
 [releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 
-## Update fails or rolls back
+## Updating manually
 
-**Cause**: The downloaded archive's SHA256 checksum did not match the published value,
-or the download was interrupted.
+**Cause**: Public Windows releases use an unsigned portable/manual-update model. There is no
+automatic installer or native updater in the public package.
 
 **Fix**:
 
-1. Check your internet connection.
-2. Choose **Update now** again — the native updater will retry the exact target release.
-3. If the updater continues to fail, download the canonical ZIP manually from the releases
-   page and preserve your `config.json`, `.env`, `songs/`, and `logs/` folders.
+1. Open the [official releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+2. Download the canonical ZIP, `.zip.sha256`, and `MANIFEST.json`.
+3. Verify the ZIP SHA256 when desired, extract into a new folder, and copy your
+   `config.json`, `.env`, `songs/`, and `logs/` folders.
 
 ## The HUD shows high timing jitter
 

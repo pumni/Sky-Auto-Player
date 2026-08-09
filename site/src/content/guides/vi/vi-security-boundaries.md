@@ -30,7 +30,7 @@ evidence:
     label: Lớp platform Windows — nơi duy nhất SendInput được phép tồn tại
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
   - category: distribution
-    label: Native updater — xác minh SHA256, preserve-list, HTTPS allow-list
+    label: Hợp đồng phân phối — portable unsigned/cập nhật thủ công
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
 ---
 
@@ -100,17 +100,21 @@ Xác minh archive trước khi giải nén:
 # So sánh với nội dung file .sha256
 ```
 
-## Bảo mật updater
+## Ranh giới cập nhật công khai
 
-Native updater (`Sky-Auto-Player-Updater.exe`) đảm bảo:
+Binary Windows công khai hiện không có chữ ký và gói phát hành không kèm native updater.
+Ứng dụng chỉ kiểm tra phiên bản rồi mở trang GitHub Releases chính thức; không tự tải xuống,
+giải nén, khởi động lại hay thay thế file ứng dụng. Authenticode là **N/A — intentionally unsigned**.
 
-- Chỉ kết nối HTTPS, đến danh sách cho phép tường minh các host GitHub
-- Xác minh SHA256 của archive tải về trước khi ghi đè bất kỳ file nào
-- Xác minh asset canonical, archive, manifest và chữ ký Authenticode
-- Copy có giao dịch với rollback nếu bất kỳ bước nào thất bại
-- Process guard từ chối chạy khi `Sky-Auto-Player.exe` đang bị khóa
+Bằng chứng integrity/provenance của gói vẫn gồm:
 
-Updater không bao giờ thay thế `config.json`, `.env`, `songs/` hay `logs/`.
+- ZIP canonical, `.zip.sha256` và `MANIFEST.json`
+- manifest băm đúng các byte unsigned được đóng gói
+- build provenance/attestation của GitHub
+
+Source Rust `sky_updater` vẫn được giữ như một security component fail-closed và được test riêng.
+Nó không được đóng gói công khai hay gọi từ app, và tiếp tục từ chối payload unsigned thay vì thêm
+bypass chữ ký.
 
 ## Thông báo Điều khoản Dịch vụ
 

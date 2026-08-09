@@ -30,7 +30,7 @@ evidence:
     label: Windows platform layer — only place SendInput lives
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
   - category: distribution
-    label: Native updater — SHA256 verify, preserve-list, HTTPS allow-list
+    label: Distribution contract — unsigned portable/manual updates
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
 ---
 
@@ -101,18 +101,22 @@ Verify the archive before extracting:
 # Compare with the content of the .sha256 file
 ```
 
-## Updater security
+## Public update boundary
 
-The bundled native updater (`Sky-Auto-Player-Updater.exe`) enforces:
+Public Windows binaries are currently unsigned and the package does not include a native
+updater. The application only checks for versions and opens the official GitHub Releases page;
+it never downloads, extracts, restarts, or replaces application files. Authenticode is
+**N/A — intentionally unsigned**.
 
-- HTTPS connections only, to an explicit allow-list of GitHub hosts
-- SHA256 verification of the downloaded archive before any file is overwritten
-- exact canonical assets, archive safety, and staged manifest hashes
-- Authenticode verification for project-owned PE files
-- Transactional copy with rollback if any step fails
-- A process guard that refuses to run while `Sky-Auto-Player.exe` is locked
+The public integrity/provenance evidence remains:
 
-The updater never replaces `config.json`, `.env`, `songs/`, or `logs/`.
+- canonical ZIP, `.zip.sha256`, and `MANIFEST.json`
+- exact unsigned bytes hashed by the manifest
+- GitHub build provenance/attestation
+
+The Rust `sky_updater` source is retained as a separately tested, fail-closed security component.
+It is not shipped in the public package or reachable from the app, and it continues to reject
+unsigned payloads rather than gaining a signature bypass.
 
 ## Terms of Service notice
 

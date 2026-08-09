@@ -652,6 +652,7 @@ def _run_check_update_command(cfg: AppConfig) -> int:
     in scripts that want to alert on a broken update channel.
     """
     from sky_music.orchestration.update_service import (
+        OFFICIAL_RELEASES_URL,
         check_for_update,
         record_successful_check,
     )
@@ -669,10 +670,7 @@ def _run_check_update_command(cfg: AppConfig) -> int:
     print(f"Update available: v{rel.latest_version}")
     if rel.published_at:
         print(f"  published: {rel.published_at[:10]}")
-    if rel.html_url:
-        print(f"  release:   {rel.html_url}")
-    if rel.download_url:
-        print(f"  download:  {rel.download_url}")
+    print(f"  releases:  {OFFICIAL_RELEASES_URL}")
     if rel.sha256_url:
         print(f"  sha256:    {rel.sha256_url}")
     if rel.release_notes:

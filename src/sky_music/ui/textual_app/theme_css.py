@@ -152,16 +152,14 @@ BASE_CSS = """
         height: auto; margin: 1 1 0 1; padding: 0 1;
     }
     /* Toggle rows — switch left, label right, vertically centered. */
-    UpdateSettingsModal #row-auto-check,
-    UpdateSettingsModal #row-auto-apply {
+    UpdateSettingsModal #row-auto-check {
         height: auto; padding: 0 1;
         align-horizontal: left; align-vertical: top;
     }
-    UpdateSettingsModal #row-auto-check Static,
-    UpdateSettingsModal #row-auto-apply Static {
+    UpdateSettingsModal #row-auto-check Static {
         margin-left: 1; width: 1fr;
     }
-    UpdateSettingsModal #row-auto-check Checkbox, UpdateSettingsModal #row-auto-apply Checkbox { width: 3; height: auto; margin: 0; background: transparent; }
+    UpdateSettingsModal #row-auto-check Checkbox { width: 3; height: auto; margin: 0; background: transparent; }
     /* Action buttons row — horizontal layout, wrap on narrow terminals. */
     UpdateSettingsModal #row-actions { height: auto; layout: horizontal; padding: 0 1; }
     UpdateSettingsModal #row-actions Button { margin: 0 1 0 0; }

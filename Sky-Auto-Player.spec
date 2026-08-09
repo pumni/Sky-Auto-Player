@@ -21,8 +21,6 @@ hiddenimports = [
     "sky_music.orchestration.telemetry",
     "sky_music.infrastructure.background",
     "sky_music.infrastructure.hotkeys",
-    "sky_music.infrastructure.update_launcher",
-    "sky_music.infrastructure.update_runtime",
     "sky_music.infrastructure.doctor",
     "sky_music.infrastructure.focus",
     "sky_music.infrastructure.realtime",

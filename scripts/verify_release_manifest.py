@@ -9,8 +9,14 @@ from pathlib import Path
 
 APP_NAME = "Sky-Auto-Player"
 PRIMARY_EXE = f"{APP_NAME}.exe"
-REQUIRED = {PRIMARY_EXE, "Sky-Auto-Player-Updater.exe", "native_calibration.exe", "MANIFEST.json"}
-FORBIDDEN = {"updater.bat", "installer", "updater.ps1"}
+REQUIRED = {PRIMARY_EXE, "native_calibration.exe", "MANIFEST.json"}
+FORBIDDEN = {
+    "Sky-Player.exe",
+    "Sky-Auto-Player-Updater.exe",
+    "updater.bat",
+    "installer",
+    "updater.ps1",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -40,6 +46,7 @@ def verify(release_dir: Path, version: str) -> None:
         for path in actual
         if path in FORBIDDEN
         or path.startswith("installer/")
+        or path.endswith(".bat")
         or path.endswith(".ps1")
         or path.endswith(".Tests.ps1")
         or path.endswith("/TestResults.xml")

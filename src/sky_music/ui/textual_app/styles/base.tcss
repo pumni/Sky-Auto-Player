@@ -103,20 +103,17 @@ UpdateSettingsModal #update-settings-foot {
     color: $text-muted;
 }
 /* Toggle-row layout: switch left, label right, vertically centered. */
-UpdateSettingsModal #row-auto-check,
-UpdateSettingsModal #row-auto-apply {
+UpdateSettingsModal #row-auto-check {
     height: auto;
     padding: 0 1;
     align-horizontal: left;
     align-vertical: top;
 }
-UpdateSettingsModal #row-auto-check Static,
-UpdateSettingsModal #row-auto-apply Static {
+UpdateSettingsModal #row-auto-check Static {
     margin-left: 1;
     width: 1fr;
 }
-UpdateSettingsModal #row-auto-check Checkbox,
-UpdateSettingsModal #row-auto-apply Checkbox {
+UpdateSettingsModal #row-auto-check Checkbox {
     width: 3;
     height: auto;
     margin: 0;

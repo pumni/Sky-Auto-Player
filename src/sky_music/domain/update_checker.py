@@ -25,10 +25,10 @@ AssetPredicate = Callable[[dict[str, Any]], bool]
 class UpdateInfo:
     """Metadata about a newer release available upstream.
 
-    ``download_url`` is the canonical release ZIP URL consumed by the native
-    updater. ``sha256_url`` and ``manifest_url`` identify the matching
-    verification assets; an update is not apply-ready unless all three are
-    present.
+    ``download_url`` is the canonical release ZIP URL shown as metadata for
+    manual verification. ``sha256_url`` and ``manifest_url`` identify the
+    matching verification assets; the checker requires all three before it
+    reports a release as downloadable.
     """
 
     latest_version: str
@@ -85,9 +85,8 @@ def is_prerelease(version: str) -> bool:
     ``packaging.version.Version.is_prerelease`` returns True for any version
     that carries an ``a``/``b``/``rc``/``.dev`` segment. Used by
     :func:`parse_release_payload` to suppress pre-release tags unless the
-    caller opts in via ``include_prerelease`` — auto-check/auto-apply default
-    to stable-channel behaviour, which is the modern best-practice default
-    (Squirrel/Sparkle/VS Code never surface pre-releases to stable users).
+    caller opts in via ``include_prerelease`` — automatic checks default to
+    stable-channel behaviour.
     """
     v = parse_version(version)
     if v is None:
@@ -154,8 +153,8 @@ def parse_release_payload(
     ``include_prerelease`` (default ``False``) gates pre-release tags. When
     ``False``, a tag like ``v2.5.0rc1`` is reported as "no update" so
     stable-channel users never get pushed a release candidate via
-    auto-check/auto-apply. Manual check (UI ``u`` command) may opt in by
-    passing ``True`` — the caller decides whether to surface pre-releases.
+    automatic stable-channel checks. Manual check (UI ``u`` command) may opt in
+    by passing ``True`` — the caller decides whether to surface pre-releases.
     """
     current = current_version or ""
     tag = payload.get("tag_name")

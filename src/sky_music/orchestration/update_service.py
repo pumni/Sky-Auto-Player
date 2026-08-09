@@ -3,14 +3,14 @@
 Glue layer that ties together the pure version-check domain logic
 (:mod:`sky_music.domain.update_checker`) and the persistence layer
 (:mod:`sky_music.config` for skip-version / last-check timestamps). Applying
-an update is delegated to the bundled native updater by the UI launcher.
+Public releases use manual download; this module never installs or mutates an app.
 
 The UI only needs to:
   1. Call :func:`should_auto_check` before launching the background check.
   2. Call :func:`check_for_update` in a background thread / worker.
   3. On completion, inspect the returned :class:`UpdateCheckResult`; if there
-     is a newer version the user has not skipped, surface it via
-     :class:`sky_music.ui.textual_app.modals.UpdateModal`.
+     is a newer version the user has not skipped, surface the official GitHub
+     Releases page via :class:`sky_music.ui.textual_app.modals.UpdateModal`.
 
 This module never blocks the dispatcher or UI thread; callers run network
 operations in their own worker.
@@ -43,6 +43,7 @@ DEFAULT_REPO: str = "Sky-Auto-Player"
 GITHUB_API: str = "https://api.github.com/repos"
 FETCH_TIMEOUT_S: float = 5.0
 USER_AGENT: str = "sky-auto-player-update-checker"
+OFFICIAL_RELEASES_URL: str = "https://github.com/pumni/Sky-Auto-Player/releases"
 
 
 class _Opener(Protocol):
@@ -138,7 +139,7 @@ def format_update_banner(update: UpdateInfo, current_version: str) -> str:
     lines = [
         f"Sky Auto Player v{latest} is now available.",
         f"You are running v{current_version}.",
-        "Choose Update now to verify and install the signed release.",
+        "Choose Open GitHub Releases to download the unsigned ZIP manually.",
         ""
     ]
     
@@ -271,5 +272,4 @@ def record_check_error(cfg: AppConfig, *, now_ts: int | None = None) -> None:
 def record_skip(cfg: AppConfig, version: str) -> None:
     """Persist the skip-version marker; pass empty string to clear it."""
     persist_update_skip_version(cfg, version)
-
 

@@ -872,7 +872,7 @@ class PlaybackApp(App[str]):
     def _check_for_updates_silent(self, cfg: Any) -> None:
         """Background check that toasts a notice if a newer version exists.
 
-        No modal and no auto-apply: playback only persists check timestamps and
+        No modal and no automatic install: playback only persists check timestamps and
         the available version marker. The picker restores the full banner on
         the next launch.
         """

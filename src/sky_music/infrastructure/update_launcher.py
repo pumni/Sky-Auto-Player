@@ -1,8 +1,8 @@
-"""Stage and launch the bundled native updater.
+"""Compatibility guard for the retired native self-update path.
 
-The Python process never downloads, replaces, or deletes the installed
-application. It only copies its bundled updater to a per-run directory and
-starts that copy with a validated, explicit argument set.
+Unsigned public packages use manual updates. The native updater remains a
+separately tested Rust component, but this launcher is deliberately disabled
+so no application code can stage or execute an automatic install.
 """
 
 from __future__ import annotations
@@ -10,10 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
-import sys
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,52 +109,10 @@ def cleanup_stale_update_runs(*, max_age_s: int = 7 * 24 * 60 * 60) -> int:
 
 
 def launch_update(request: UpdateLaunchRequest) -> Path:
-    """Copy the bundled updater and launch it without a shell."""
+    """Reject the retired automatic install path in every build."""
 
-    if sys.platform != "win32":
-        raise UpdateLaunchError("native self-update is supported only on Windows")
-    if not getattr(sys, "frozen", False):
-        raise UpdateLaunchError("self-update requires a frozen release build")
-    _validate_request(request)
-    bundled = _bundled_updater(request.install_root)
-    root = _local_update_root()
-    runs = root / "update-runs"
-    runs.mkdir(parents=True, exist_ok=True)
-    run_dir = runs / f"run-{uuid.uuid4().hex}"
-    run_dir.mkdir()
-    staged_updater = run_dir / UPDATER_NAME
-    temporary = run_dir / f"{UPDATER_NAME}.tmp"
-    try:
-        shutil.copy2(bundled, temporary)
-        if _sha256(temporary) != _sha256(bundled):
-            raise UpdateLaunchError("staged updater hash does not match bundled updater")
-        os.replace(temporary, staged_updater)
-        arguments = [
-            str(staged_updater),
-            "--install-root",
-            str(request.install_root),
-            "--parent-pid",
-            str(os.getpid()),
-            "--current-version",
-            request.current_version,
-            "--target-version",
-            request.target_version,
-            "--channel",
-            request.channel,
-        ]
-        if request.restart:
-            arguments.append("--restart")
-        subprocess.Popen(
-            arguments,
-            cwd=str(run_dir),
-            shell=False,
-            close_fds=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except UpdateLaunchError:
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise UpdateLaunchError(f"could not launch native updater: {exc}") from exc
-    finally:
-        temporary.unlink(missing_ok=True)
-    return run_dir
+    del request
+    raise UpdateLaunchError(
+        "automatic native updates are disabled for unsigned portable releases; "
+        "download the new release manually from GitHub Releases"
+    )

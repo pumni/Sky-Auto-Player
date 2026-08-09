@@ -49,7 +49,6 @@ Place sheet files in the `songs/` folder located next to `Sky-Auto-Player.exe`:
 ```
 Sky-Auto-Player/
 ├── Sky-Auto-Player.exe
-├── Sky-Auto-Player-Updater.exe
 ├── config.json
 └── songs/
     ├── my-song.json

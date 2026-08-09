@@ -6,10 +6,8 @@ category: 'General'
 question: 'How does Sky Auto Player update itself?'
 ---
 
-Choose **Update now** in the running app. It stops playback, copies the bundled native updater to
-a per-run directory, exits, and lets the updater independently fetch the exact target tag. The
-updater verifies the canonical ZIP’s SHA256 sidecar, archive, manifest, and Authenticode signatures
-before applying a transactional copy with rollback. It preserves `config.json`, `.env`, `songs/`
-and `logs/`.
-
-Only the update notification fields in `config.json` may be patched after a successful binary update.
+The app checks for new versions and offers **Open GitHub Releases**. Download the canonical ZIP,
+`.zip.sha256`, and `MANIFEST.json` from the official [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases),
+verify the ZIP SHA256 when desired, extract it into a new folder, and copy your `config.json`,
+`.env`, `songs/`, and `logs/` into the new folder. The public package does not include a native
+updater and never performs automatic extraction or application-file replacement.

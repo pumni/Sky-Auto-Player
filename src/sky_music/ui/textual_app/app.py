@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-import sys
+import webbrowser
 from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from textual import events, work
@@ -148,7 +147,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         self._update_available_version: str | None = None
         self._version_indicator_applied = False
-        self._pending_update_release: Any | None = None
 
     def _init_params(
         self,
@@ -218,18 +216,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_mount(self) -> None:
         self._set_version_indicator()
-        with contextlib.suppress(Exception):
-            from sky_music.infrastructure.update_launcher import (
-                cleanup_stale_update_runs,
-            )
-
-            cleanup_stale_update_runs()
-        with contextlib.suppress(Exception):
-            from sky_music.infrastructure.update_runtime import consume_last_result
-
-            result = consume_last_result()
-            if result is not None:
-                self._show_update_result(result)
         self._restore_pending_update_indicator()
         # Auto-check after a short quiet window so the launch is not
         # immediately sent to the network — improves perceived responsiveness
@@ -242,32 +228,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         """Show current version in the app bar header."""
         with contextlib.suppress(Exception):
             self.query_one("#appbar", GradientHeader).set_version(f"v{VERSION}")
-
-    def _show_update_result(self, result: Any) -> None:
-        status = result.status
-        if status == "success":
-            self.notify(
-                f"Update completed: v{result.target_version}",
-                severity="information",
-                timeout=8,
-            )
-        elif status == "rolled_back":
-            self.notify(
-                f"Update rolled back; v{result.from_version} is still installed.",
-                severity="error",
-                timeout=10,
-            )
-        elif status == "failure":
-            detail = result.message[:240] if result.message else result.error_code
-            self.notify(f"Update failed: {detail}", severity="error", timeout=10)
-        else:
-            self.notify(
-                f"Update dry-run completed for v{result.target_version}",
-                severity="warning",
-                timeout=8,
-            )
-
-
 
     # ── Test-compat delegates → PickerScreen ──────────────────────────
 
@@ -799,14 +759,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
             if result == "quit":
                 self._active_playback_commands = None
                 self._shutting_down_playback = False
-                pending_update = self._pending_update_release
-                self._pending_update_release = None
-                if pending_update is not None:
-                    if picker is not None:
-                        picker.rearm()
-                    self._restore_picker_after_playback()
-                    self.call_after_refresh(self._launch_update, pending_update)
-                    return
                 self.exit(None)
                 return
             playback_error = None
@@ -822,11 +774,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._restore_picker_after_playback()
             if playback_error is not None:
                 self._show_playback_error("Playback Error", playback_error)
-            pending_update = self._pending_update_release
-            self._pending_update_release = None
-            if pending_update is not None:
-                self.call_after_refresh(self._launch_update, pending_update)
-                return
             self.update_session_state_from_plan(
                 plan,
                 is_dry_run=picker_result.action == "dry_run",
@@ -1154,38 +1101,24 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if response == "skip":
             record_skip(self.cfg, release.latest_version)
             self.notify(f"Skipped version {release.latest_version}", timeout=3)
-        elif response == "install":
-            self._launch_update(release)
+        elif response == "download":
+            self._open_manual_update_page()
 
-    def _launch_update(self, release: Any) -> None:
-        """Stop playback cleanly, then hand the update to the native updater."""
-        if self.playback_mode in {PlaybackMode.PLAYING, PlaybackMode.COUNTDOWN}:
-            self._pending_update_release = release
-            self.action_cancel()
-            return
-        from sky_music.infrastructure.update_launcher import (
-            UpdateLaunchError,
-            UpdateLaunchRequest,
-            launch_update,
-        )
+    def _open_manual_update_page(self) -> None:
+        """Open only the project's fixed official Releases page."""
+        from sky_music.orchestration.update_service import OFFICIAL_RELEASES_URL
 
-        install_root = Path(sys.executable).resolve().parent
         try:
-            launch_update(
-                UpdateLaunchRequest(
-                    install_root=install_root,
-                    current_version=VERSION,
-                    target_version=release.latest_version,
-                    channel=self.cfg.update.channel,
-                    restart=True,
-                )
-            )
-        except UpdateLaunchError as exc:
-            self.notify(f"Update could not start: {exc}", severity="error", timeout=8)
+            opened = webbrowser.open(OFFICIAL_RELEASES_URL, new=2)
+        except OSError as exc:
+            self.notify(f"Could not open GitHub Releases: {exc}", severity="error", timeout=8)
             return
-        if self.controls is not None:
-            self.controls.close()
-        self.exit(None)
+        if not opened:
+            self.notify(
+                f"Open this URL manually: {OFFICIAL_RELEASES_URL}",
+                severity="warning",
+                timeout=8,
+            )
 
 
 

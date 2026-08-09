@@ -163,7 +163,7 @@ jobs:
         run: uv run pytest -m "not slow"
 
   packaged:
-    name: Packaged frozen updater/app smoke
+    name: Packaged frozen unsigned app smoke
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: windows-latest
@@ -189,7 +189,7 @@ jobs:
           "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
           "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
-      - name: Build packaged app and native updater
+      - name: Build packaged unsigned app
         env:
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python -m build_app --manifest
@@ -200,10 +200,10 @@ jobs:
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir "dist\Sky-Auto-Player-v$version" --version $version
 
-      - name: Native updater A-to-B and rollback E2E
+      - name: Native updater security E2E (source component only)
         run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features
 
-      - name: Authenticode CryptoAPI signer fixture
+      - name: Source-only updater Authenticode CryptoAPI fixture
         run: |
           $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
           if ($signtool) {
@@ -217,7 +217,8 @@ jobs:
             if (-not $signtoolPath) { throw 'signtool.exe was not found in PATH or the Windows SDK' }
           }
           $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
-          $fixture = (Resolve-Path "dist\Sky-Auto-Player-v$version\Sky-Auto-Player-Updater.exe").Path
+          cargo build --manifest-path rust/Cargo.toml --bin sky_updater --release
+          $fixture = (Resolve-Path "rust\target\release\sky_updater.exe").Path
           $subject = "CN=Sky Auto Player Test Publisher"
           $certificate = $null
           try {

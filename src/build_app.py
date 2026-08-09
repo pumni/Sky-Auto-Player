@@ -33,8 +33,6 @@ BUILD_DIR = PROJECT_ROOT / "build"
 APP_NAME = "Sky-Auto-Player"
 NATIVE_CALIBRATION_BINARY = "native_calibration.exe"
 REQUIRED_ASSETS = ("config.json", "songs")
-UPDATER_BINARY = "sky_updater.exe"
-UPDATER_RELEASE_NAME = "Sky-Auto-Player-Updater.exe"
 OPTIONAL_ASSETS = ("README.md",)
 
 VERSION_PY = PROJECT_ROOT / "src" / "sky_music" / "_version.py"
@@ -279,26 +277,6 @@ def run_native_calibration_smoke_test(binary_path: Path) -> bool:
     return True
 
 
-def run_updater_smoke_test(binary_path: Path) -> bool:
-    """Verify the native updater exposes only its bounded CLI surface."""
-    for flag in ("--help", "--version"):
-        try:
-            result = subprocess.run(
-                [str(binary_path), flag],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            print(f"[!] Native updater {flag} smoke test failed: {exc}")
-            return False
-        if result.returncode != 0 or not result.stdout.strip():
-            print(f"[!] Native updater {flag} smoke test returned {result.returncode}: {result.stderr.strip()}")
-            return False
-    return True
-
-
 @contextlib.contextmanager
 def _source_bootloader_override():
     """Temporarily make PyInstaller use the verified source-built bootloader."""
@@ -426,7 +404,7 @@ def main() -> None:
     parser.add_argument(
         "--manifest-only",
         action="store_true",
-        help="Hash an already-built, already-signed release directory without rebuilding.",
+        help="Hash an already-built unsigned release directory without rebuilding.",
     )
     parser.add_argument(
         "--release-dir",
@@ -512,22 +490,6 @@ def main() -> None:
             cwd=str(PROJECT_ROOT),
             env=native_build_env,
         )
-        print("[+] Building the process-isolated native updater...")
-        subprocess.run(
-            [
-                "cargo",
-                "build",
-                "--manifest-path",
-                str(rust_dir / "Cargo.toml"),
-                "--bin",
-                "sky_updater",
-                "--release",
-            ],
-            check=True,
-            cwd=str(PROJECT_ROOT),
-            env=native_build_env,
-        )
-
     print("[+] Starting PyInstaller...")
     clean_flag = [] if args.no_clean else ["--clean"]
     with _source_bootloader_override():
@@ -565,14 +527,6 @@ def main() -> None:
         src = PROJECT_ROOT / asset
         if src.exists():
             copy_asset(src, release_dir / asset)
-
-    print("[+] Copying native updater...")
-    updater_binary = rust_dir / "target" / "release" / UPDATER_BINARY
-    if not updater_binary.is_file():
-        raise FileNotFoundError(f"Native updater binary is missing: {updater_binary}")
-    copy_asset(updater_binary, release_dir / UPDATER_RELEASE_NAME)
-    if not run_updater_smoke_test(release_dir / UPDATER_RELEASE_NAME):
-        raise RuntimeError("Native updater smoke test failed")
 
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)

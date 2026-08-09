@@ -105,17 +105,17 @@ cho bất kỳ tệp unsigned nào tải từ internet.
 checksum SHA256 của ZIP tải về so với file `.sha256` được công bố trên
 [trang releases](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 
-## Cập nhật thất bại hoặc rollback
+## Cập nhật thủ công
 
-**Nguyên nhân**: Checksum SHA256 của archive tải về không khớp với giá trị công bố, hoặc
-tải xuống bị gián đoạn.
+**Nguyên nhân**: Release Windows công khai dùng mô hình portable unsigned/cập nhật thủ công.
+Gói công khai không có installer tự động hay native updater.
 
 **Sửa**:
 
-1. Kiểm tra kết nối internet.
-2. Chọn lại **Update now** — native updater sẽ thử lại đúng release target.
-3. Nếu updater vẫn thất bại, tải ZIP canonical thủ công từ trang releases và giữ nguyên
-   `config.json`, `.env`, `songs/` và `logs/`.
+1. Mở [trang releases chính thức](https://github.com/pumni/Sky-Auto-Player/releases).
+2. Tải ZIP canonical, `.zip.sha256` và `MANIFEST.json`.
+3. Khi cần, xác minh SHA256 của ZIP, giải nén vào thư mục mới rồi chép các thư mục
+   các tệp `config.json`, `.env` và thư mục `songs/`, `logs/` của bạn.
 
 ## HUD hiển thị jitter timing cao
 

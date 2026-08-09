@@ -52,6 +52,6 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec("reload", "Ctrl+R", "Reload Songs", "Refresh songs directory", "Library"),
     CommandSpec("theme", "y", "Change Theme", "Switch UI color scheme", "Interface"),
     CommandSpec("help", "?", "Help", "Show available picker commands", "System"),
-    CommandSpec("update_settings", "", "Update Settings", "Toggle auto-check and auto-apply", "System"),
+    CommandSpec("update_settings", "", "Update Settings", "Toggle automatic version checks", "System"),
     CommandSpec("update", "", "Check for Update", "Check GitHub for a newer release", "System"),
 ]

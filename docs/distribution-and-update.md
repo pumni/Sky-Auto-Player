@@ -1,8 +1,8 @@
 # Distribution and Update Model
 
-This document is the normative contract for portable distribution and updates.
-It tracks the version in `pyproject.toml` and is independent of the Rust
-real-time playback dispatcher.
+This document is the normative contract for portable distribution and manual
+updates. It tracks the version in `pyproject.toml` and is independent of the
+Rust real-time playback dispatcher.
 
 ## 1. Distribution
 
@@ -14,60 +14,52 @@ Sky-Auto-Player-v<version>.zip.sha256
 MANIFEST.json
 ```
 
-The ZIP contains `Sky-Auto-Player.exe`, `Sky-Auto-Player-Updater.exe`,
-`native_calibration.exe`, `MANIFEST.json`, `README.md`, `config.json`,
-`songs/`, and `_internal/`. No BAT/PowerShell updater, system installer,
-legacy executable name, bridge ZIP, or second bundle is supported.
+The ZIP contains `Sky-Auto-Player.exe`, `native_calibration.exe`,
+`MANIFEST.json`, `README.md`, `config.json`, `songs/`, and
+`_internal/`. It contains no native updater, BAT/PowerShell updater, system
+installer, legacy executable name, bridge ZIP, or second bundle.
 
 The tag version must equal `[project].version`. Release packaging is
-fail-closed when the worktree is dirty, native provenance does not match, or
-the required signing provider is unavailable. The release workflow provisions
-an encrypted PFX identity into the ephemeral runner certificate store from
-`AUTHENTICODE_PFX_BASE64` and `AUTHENTICODE_PFX_PASSWORD`, verifies the exact
-`AUTHENTICODE_CERT_THUMBPRINT` has a private key, signs project-owned PE files,
-and only then generates the manifest. These are CI secrets; the PFX is never
-committed or retained in the workspace.
+fail-closed when the worktree is dirty or native provenance does not match.
+Public Windows binaries are intentionally unsigned: there is currently no
+trusted Authenticode publisher identity and no PFX/certificate secret is
+required. `MANIFEST.json` hashes the exact unsigned bytes that are packaged.
+SHA256, the exact manifest, and GitHub build provenance remain the release
+integrity/provenance evidence.
 
 Prerelease tags (`vX.Y.ZrcN`) are published directly as GitHub prereleases for
 beta-channel validation. Stable tags (`vX.Y.Z`) are created as draft releases;
-they are promoted and published to the stable channel only after exact-artifact
-signature, manifest, provenance, fresh-install, and Defender qualification pass.
+they are promoted and published to the stable channel only after exact-artifact,
+manifest, provenance, fresh-install, and Defender qualification pass.
+Authenticode is recorded as `N/A — intentionally unsigned`, not as a passing
+signature check.
 Published release tags and assets are immutable; fixes require a new version.
 
 ## 2. Runtime ownership
 
 The Python app owns update checking, stable/beta selection, the update modal,
-playback shutdown, and launching the updater. It never extracts an archive or
-replaces its own running files.
+and opening the fixed official GitHub Releases page. It never downloads,
+extracts, replaces, or deletes installed application files.
 
-The Rust `sky_updater` binary owns exact-tag release fetch, bounded download,
-SHA256 verification, archive validation, staging, manifest and Authenticode
-verification, durable transaction, rollback, result reporting, and restart.
-It has no Python, Textual, playback, or `SendInput` dependency.
+The Rust `sky_updater` binary is retained as a separately tested,
+fail-closed security component, but it is not copied into public packages and
+is not reachable from the application UI. It must continue to reject unsigned
+release binaries; this release model does not weaken that boundary.
 
-When the user selects **Update now**:
+When the user selects **Open GitHub Releases**:
 
-1. playback performs normal graceful stop and mandatory key cleanup;
-2. Python copies the bundled updater to
-   `%LOCALAPPDATA%\Sky-Auto-Player\update-runs\<run-id>\`;
-3. Python verifies the copied updater hash and launches it without a shell,
-   passing the install root, parent PID, current/target versions, channel, and
-   restart intent;
-4. the app exits only after launch succeeds;
-5. the updater waits for the parent to exit, then refetches the exact target
-   GitHub tag and applies the transaction;
-6. the updater writes the structured result atomically, then restarts only a
-   verified app (including the verified old app after a successful rollback).
-
-The first native-updater release may require users of older releases to
-download and extract manually once. There is no migration code or compatibility
-promise for the old updater.
+1. no playback shutdown is required;
+2. the app opens only
+   `https://github.com/pumni/Sky-Auto-Player/releases`;
+3. the user downloads the canonical ZIP manually and may verify its SHA256 and
+   `MANIFEST.json`;
+4. the user extracts the new release into a new folder and copies preserved
+   user state as needed.
 
 ## 3. Release selection and network
 
 Python remains the user-facing selector. Stable excludes prereleases; beta may
-include them. The native updater receives only a validated `stable` or `beta`
-channel and independently requests:
+include them. The checker requests release metadata from:
 
 ```text
 https://api.github.com/repos/pumni/Sky-Auto-Player/releases/tags/v<target>
@@ -88,18 +80,16 @@ All requests are HTTPS. Every redirect is checked against this allow-list:
 bases, arbitrary mirrors, shell downloads, and TLS-verification bypasses are
 rejected.
 
-Downloads are bounded streams. The default bounds are 1 MiB for API JSON,
-16 KiB for a SHA sidecar, 4 MiB for an external manifest, 256 MiB compressed
-ZIP, 512 MiB total uncompressed data, 256 MiB per entry, and 20,000 entries.
-
-The sidecar must contain exactly one meaningful record for the expected ZIP
-filename, with exactly 64 hexadecimal characters. The ZIP hash is checked
-before extraction or installation mutation.
+The checker requires the exact canonical ZIP, SHA256 sidecar, and
+`MANIFEST.json` asset names before it reports an update. It does not download
+or install any asset. The manual download target is always the fixed official
+Releases page above, never a URL supplied by release metadata.
 
 ## 4. Archive and manifest safety
 
-Extraction occurs outside the install root only after every archive entry is
-validated. The updater rejects absolute, drive-qualified, UNC, traversal,
+For source-only updater tests, extraction occurs outside the install root only
+after every archive entry is validated. The updater rejects absolute,
+drive-qualified, UNC, traversal,
 alternate-data-stream, symlink, duplicate, case-colliding, file/directory
 collision, reserved-device, and trailing-dot/space paths.
 
@@ -117,15 +107,16 @@ self-reference exception is explicit: the manifest is not hashed in its own
 `files` list. Every listed size and SHA256 must match, and the staged file set
 must equal the manifest set plus `MANIFEST.json`.
 
-Project-owned PE files are, at minimum, the app, updater, calibration binary,
-and `_internal/**/sky_player_rs*.pyd`. Production requires a valid trusted
-Authenticode chain from the configured project publisher. Development builds
-may be unsigned only through a compile-time debug/test path; there is no
-production runtime bypass.
+Project-owned PE files are, at minimum, the app, calibration binary, and
+`_internal/**/sky_player_rs*.pyd`. Public binaries are currently unsigned by
+policy. There is no runtime signature-bypass flag, and the source-only Rust
+updater continues to require its configured trusted publisher when its own
+security tests exercise automatic installation.
 
 ## 5. Managed and preserved files
 
-These paths are never overwritten and never orphan-deleted:
+Automatic update mutation is disabled. These paths are user-owned and must be
+preserved by a manual migration:
 
 ```text
 config.json
@@ -134,12 +125,13 @@ songs/**
 logs/**
 ```
 
-Everything else is managed only when it is present in the old or new manifest.
-The updater never deletes arbitrary unmanifested user files. A missing or
-corrupt installed manifest fails closed for orphan deletion and, once the
-native architecture is established, for automatic update.
+Users should extract a release into a new folder and copy the preserved paths
+as needed. The app does not delete, replace, or orphan-clean anything in the
+old install. The manifest and SHA256 checks are evidence for the downloaded
+package, not permission for the app to mutate an existing installation.
 
-The transaction plan is computed before mutation:
+The source-only updater's transaction plan is computed before mutation; the
+public app never executes it:
 
 ```text
 files_to_replace
@@ -151,7 +143,25 @@ backup_paths
 Preserved-path matching is Windows case-insensitive. A package that places a
 managed file below a preserved directory is rejected.
 
-## 6. Durable transaction and recovery
+## 6. Manual update procedure
+
+1. Open the official
+   `https://github.com/pumni/Sky-Auto-Player/releases` page.
+2. Download the matching `Sky-Auto-Player-v<version>.zip`,
+   `.zip.sha256`, and `MANIFEST.json`.
+3. Verify the ZIP SHA256 and exact manifest when desired.
+4. Extract the ZIP into a new folder.
+5. Copy the preserved user-owned paths listed above.
+6. Start `Sky-Auto-Player.exe` from the new folder.
+
+There is no automatic extraction, application-file replacement, restart
+handoff, transaction journal, rollback, or native `Update now` command in
+the public unsigned package.
+
+## 7. Source-only updater security tests (not public)
+
+The following transaction details belong only to the separately tested Rust
+updater source. The updater is not shipped and is not reachable from the app.
 
 Transaction state is kept at:
 
@@ -185,7 +195,10 @@ with stable statuses such as `success`, `rolled_back`, and `failure`, plus a
 stable error code. Logs must not contain secrets, signed redirect query
 strings, song contents, or arbitrary personal file listings.
 
-## 7. Parent process and dry-run
+## 8. Source-only updater validation (not public)
+
+The parent-process and dry-run contract below is retained for source-level
+security tests only; it is not an application command or public update path.
 
 The updater validates an absolute existing install root, canonical primary
 executable, valid PEP 440 current/target versions, strictly increasing target,
@@ -198,7 +211,7 @@ practical, the parent image path must resolve to the expected installed app.
 transaction, creates a backup, mutates the install root, or restarts. An
 unresolved transaction is reported nonzero.
 
-## 8. Security boundary
+## 9. Security boundary
 
 The updater does not modify game files, read/write game memory, inject DLLs,
 attach debuggers, install hooks, bypass anti-cheat, or send input. The Rust
