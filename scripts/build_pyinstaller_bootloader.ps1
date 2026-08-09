@@ -9,6 +9,11 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\")).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $work = Join-Path $tempRoot ("sky-pyinstaller-bootloader-" + [guid]::NewGuid().ToString("N"))
+# Native uv argument parsing on the Windows 2025 runner can discard
+# backslashes from absolute paths passed through an argument array. Forward
+# slashes are accepted by uv and preserve the project/env-file boundary.
+$uvProjectRoot = $projectRoot -replace '\\', '/'
+$uvEnvFile = (Join-Path $projectRoot ".env") -replace '\\', '/'
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments, [string]$WorkingDirectory) {
     & $Program @Arguments
@@ -18,7 +23,7 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments, [string]$Working
 }
 
 try {
-    $version = (& uv run --project $projectRoot --env-file (Join-Path $projectRoot ".env") python -c "import importlib.metadata; print(importlib.metadata.version('pyinstaller'))").Trim()
+    $version = (& uv run --project $uvProjectRoot "--env-file=$uvEnvFile" python -c "import importlib.metadata; print(importlib.metadata.version('pyinstaller'))").Trim()
     if ($version -notmatch '^\d+\.\d+\.\d+$') {
         throw "Could not resolve an exact PyInstaller version from the locked environment."
     }
@@ -32,14 +37,14 @@ try {
     Push-Location (Join-Path $source "bootloader")
     try {
         Invoke-Checked "uv" @(
-            "run", "--project", $projectRoot, "--env-file", (Join-Path $projectRoot ".env"),
+            "run", "--project", $uvProjectRoot, "--env-file=$uvEnvFile",
             "python", "waf", "all"
         ) (Get-Location).Path
     } finally {
         Pop-Location
     }
 
-    $candidates = @(Get-ChildItem (Join-Path $source "bootloader\build") -Recurse -Filter "run.exe" -File |
+    $candidates = @(Get-ChildItem (Join-Path $source "PyInstaller\bootloader") -Recurse -Filter "run.exe" -File |
         Where-Object { $_.FullName -match "Windows-64bit-intel" })
     if ($candidates.Count -ne 1) {
         throw "Expected exactly one Windows-64bit-intel source-built run.exe; found $($candidates.Count)."
