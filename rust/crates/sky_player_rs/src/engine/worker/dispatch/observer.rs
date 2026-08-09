@@ -756,7 +756,7 @@ pub(crate) fn drain_up_send_outcome(
             &mut local_metrics.lead_saturation_count_up,
             &mut local_metrics.positive_residual_at_cap,
             observation.scan_count,
-            signed_delta(observation.completed_effective, observation.scheduled_us),
+            observation.up_completion_error_us,
         );
     }
     if config.estimator.enable_adaptive_lead {

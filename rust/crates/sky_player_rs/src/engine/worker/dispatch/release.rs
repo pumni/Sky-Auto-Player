@@ -307,9 +307,13 @@ pub(crate) fn dispatch_due_pending_releases(
         None
     };
 
-    let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
-        && reconciliation.up_completion_lateness_ticks.is_some();
-    health.up_saturation_positive_streak = if up_saturated_positive {
+    // Preserve applied-plan saturation independently of completion sign.
+    // Positive-at-cap policy uses the effective completion error.
+    let (lead_up_saturated, saturated_positive) = up_saturation_evidence(
+        pending_plan.is_some_and(|plan| plan.lead_saturated),
+        reconciliation.up_completion_error_us,
+    );
+    health.up_saturation_positive_streak = if saturated_positive {
         health.up_saturation_positive_streak.saturating_add(1)
     } else {
         0
@@ -345,7 +349,7 @@ pub(crate) fn dispatch_due_pending_releases(
         sent_count: send.sent_count,
         scan_count,
         lead_up_ticks,
-        lead_up_saturated: up_saturated_positive,
+        lead_up_saturated,
         completed_effective: send.completed_effective_us,
         scheduled_us: reconciliation.scheduled_us,
         deferred_by_us: reconciliation.deferred_by_us,
@@ -812,5 +816,39 @@ fn finalize_release_recovery(
     mark_release_recovery_complete();
     ReleaseRecoveryOutcome {
         terminal_error: term_err.unwrap_or_else(|| "recovery failure".to_string()),
+    }
+}
+
+fn up_saturation_evidence(lead_up_saturated: bool, completion_error_us: i64) -> (bool, bool) {
+    (
+        lead_up_saturated,
+        lead_up_saturated && completion_error_us > 0,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::up_saturation_evidence;
+
+    #[test]
+    fn applied_up_saturation_uses_effective_completion_error() {
+        let effective_completion_error_us = 100;
+        let authored_completion_error_us = -100;
+        assert!(effective_completion_error_us > 0);
+        assert!(authored_completion_error_us < 0);
+
+        let (lead_up_saturated, saturated_positive) =
+            up_saturation_evidence(true, effective_completion_error_us);
+
+        assert!(lead_up_saturated);
+        assert!(saturated_positive);
+    }
+
+    #[test]
+    fn applied_up_saturation_preserves_negative_unwind_signal() {
+        let (lead_up_saturated, saturated_positive) = up_saturation_evidence(true, -100);
+
+        assert!(lead_up_saturated);
+        assert!(!saturated_positive);
     }
 }

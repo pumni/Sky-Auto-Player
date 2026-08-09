@@ -1659,6 +1659,46 @@ mod tests {
     }
 
     #[test]
+    fn strict_policy_uses_applied_saturation_not_normal_cache() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 1_000, 1);
+        for _ in 0..32 {
+            estimator.update(SendPath::DownOnly, 100, 1).unwrap();
+        }
+        estimator.update(SendPath::DownOnly, 1_800, 1).unwrap();
+        for _ in 0..256 {
+            estimator.update(SendPath::DownOnly, 100, 1).unwrap();
+        }
+
+        let normal = estimator.estimate_lead_with_class_and_policy(
+            SendPath::DownOnly,
+            1,
+            LatencyClass::Hot,
+            false,
+        );
+        let strict = estimator.estimate_lead_with_class_and_policy(
+            SendPath::DownOnly,
+            1,
+            LatencyClass::Hot,
+            true,
+        );
+        assert!(!normal.saturated, "normal lead={normal:?}");
+        assert!(strict.saturated, "strict lead={strict:?}");
+
+        let before = estimator.correction_us();
+        estimator
+            .update_observation(
+                SendPath::DownOnly,
+                LatencyClass::Hot,
+                100,
+                1,
+                Some(500),
+                true,
+            )
+            .unwrap();
+        assert_eq!(estimator.correction_us(), before);
+    }
+
+    #[test]
     fn down_hot_isolated_from_down_cold() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
         for _ in 0..10 {
