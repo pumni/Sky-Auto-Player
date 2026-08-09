@@ -144,6 +144,9 @@ Normal estimator operation uses the rolling p95. Native strict timing uses the c
 upper tail instead, so a recent outlier remains visible; strict sparse buckets also retain the
 global upper-tail guard. Repeated positive residual at the lead cap is a controlled timing error
 rather than an unreported tail.
+For release observations, `lead_up_saturated` records the lead applied by the physical plan;
+`saturated_positive` is derived separately from the effective SendInput completion error, not
+from authored-timestamp lateness.
 
 Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
 boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed
