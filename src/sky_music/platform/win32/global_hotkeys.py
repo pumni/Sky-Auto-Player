@@ -172,10 +172,12 @@ class GlobalHotkeyListener:
     def start(self) -> None:
         with self._lifecycle_lock:
             if self._thread is not None:
-                if self._error is not None:
-                    raise self._error
+                error = self._error
+                if error is not None:
+                    raise error
                 return
             self._closed = False
+            self._error = None
             self._thread = threading.Thread(
                 target=self._run,
                 name="sky-global-hotkeys",
@@ -186,16 +188,23 @@ class GlobalHotkeyListener:
         if not self._ready.is_set():
             self.close()
             raise GlobalHotkeyError("global hotkey thread did not initialize")
-        if self._error is not None:
-            error = self._error
+        error = self._error_snapshot()
+        if error is not None:
             self.close()
             raise error
 
     def poll(self) -> str | None:
+        error = self._error_snapshot()
+        if error is not None:
+            raise error
         try:
             return self._events.get_nowait()
         except queue.Empty:
             return None
+
+    def _error_snapshot(self) -> GlobalHotkeyError | None:
+        with self._lifecycle_lock:
+            return self._error
 
     def close(self) -> None:
         with self._lifecycle_lock:
@@ -249,16 +258,20 @@ class GlobalHotkeyListener:
                         f"GetMessageW failed (Win32 error {ctypes.get_last_error()})"
                     )
                 if result == 0:
+                    if not self._closed:
+                        raise GlobalHotkeyError("global hotkey message loop exited unexpectedly")
                     break
                 if message.message == WM_HOTKEY:
                     action = self._by_id.get(int(message.wParam))
                     if action is not None:
                         self._events.put(action)
         except GlobalHotkeyError as exc:
-            self._error = exc
+            with self._lifecycle_lock:
+                self._error = exc
             self._ready.set()
         except Exception as exc:
-            self._error = GlobalHotkeyError(f"global hotkey loop failed: {exc}")
+            with self._lifecycle_lock:
+                self._error = GlobalHotkeyError(f"global hotkey loop failed: {exc}")
             self._ready.set()
         finally:
             if sys.platform == "win32":

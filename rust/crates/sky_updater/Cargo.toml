@@ -9,6 +9,7 @@ name = "sky_updater"
 path = "src/main.rs"
 
 [dependencies]
+pep440_rs = "0.7.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

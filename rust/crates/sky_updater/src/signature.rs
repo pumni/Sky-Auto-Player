@@ -89,82 +89,52 @@ pub fn verify_project_files(root: &Path, manifest: &Manifest) -> Result<()> {
 
 #[cfg(all(windows, not(debug_assertions)))]
 fn verify_authenticode(path: &Path) -> Result<()> {
-    use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Guid {
-        data1: u32,
-        data2: u16,
-        data3: u16,
-        data4: [u8; 8],
-    }
-    #[repr(C)]
-    struct WinTrustFileInfo {
-        cb_struct: u32,
-        pcwsz_file_path: *const u16,
-        h_file: *mut c_void,
-        pg_known_subject: *const Guid,
-    }
-    #[repr(C)]
-    struct WinTrustData {
-        cb_struct: u32,
-        p_policy_callback_data: *mut c_void,
-        p_sip_client_data: *mut c_void,
-        dw_ui_choice: u32,
-        fdw_revocation_checks: u32,
-        dw_union_choice: u32,
-        p_file: *mut WinTrustFileInfo,
-        dw_state_action: u32,
-        h_wvt_state_data: *mut c_void,
-        pwsz_url_reference: *mut u16,
-        dw_prov_flags: u32,
-        dw_ui_context: u32,
-    }
-    unsafe extern "system" {
-        fn WinVerifyTrust(
-            hwnd: *mut c_void,
-            action_id: *const Guid,
-            data: *mut WinTrustData,
-        ) -> i32;
-    }
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Security::WinTrust::{
+        WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
+        WTD_CHOICE_FILE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY,
+        WTD_UI_NONE, WTD_UICONTEXT_EXECUTE, WinVerifyTrust,
+    };
 
     let path_wide = path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let action = Guid {
-        data1: 0x00AAC56B,
-        data2: 0xCD44,
-        data3: 0x11D0,
-        data4: [0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: path_wide.as_ptr(),
+        ..Default::default()
     };
-    let mut file_info = WinTrustFileInfo {
-        cb_struct: std::mem::size_of::<WinTrustFileInfo>() as u32,
-        pcwsz_file_path: path_wide.as_ptr(),
-        h_file: std::ptr::null_mut(),
-        pg_known_subject: std::ptr::null(),
+    let mut data = WINTRUST_DATA {
+        cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 {
+            pFile: &mut file_info,
+        },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        dwUIContext: WTD_UICONTEXT_EXECUTE,
+        ..Default::default()
     };
-    let mut data = WinTrustData {
-        cb_struct: std::mem::size_of::<WinTrustData>() as u32,
-        p_policy_callback_data: std::ptr::null_mut(),
-        p_sip_client_data: std::ptr::null_mut(),
-        dw_ui_choice: 2,
-        fdw_revocation_checks: 1,
-        dw_union_choice: 1,
-        p_file: &mut file_info,
-        dw_state_action: 1,
-        h_wvt_state_data: std::ptr::null_mut(),
-        pwsz_url_reference: std::ptr::null_mut(),
-        dw_prov_flags: 0,
-        dw_ui_context: 0,
+    let status = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &WINTRUST_ACTION_GENERIC_VERIFY_V2 as *const _ as *mut _,
+            (&mut data as *mut WINTRUST_DATA).cast::<std::ffi::c_void>(),
+        )
     };
-    let status = unsafe { WinVerifyTrust(std::ptr::null_mut(), &action, &mut data) };
-    data.dw_state_action = 2;
-    let _ = unsafe { WinVerifyTrust(std::ptr::null_mut(), &action, &mut data) };
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    let _ = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &WINTRUST_ACTION_GENERIC_VERIFY_V2 as *const _ as *mut _,
+            (&mut data as *mut WINTRUST_DATA).cast::<std::ffi::c_void>(),
+        )
+    };
     if status != ERROR_SUCCESS as i32 {
         return Err(UpdaterError::SignatureInvalid(format!(
             "WinVerifyTrust rejected {}: 0x{status:08x}",
@@ -180,10 +150,12 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::Cryptography::{
-        CERT_NAME_RDN_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED,
-        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_ALL,
-        CERT_QUERY_OBJECT_FILE, CertCloseStore, CertEnumCertificatesInStore,
-        CertFreeCertificateContext, CertGetNameStringW, CryptQueryObject, HCERTSTORE,
+        CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_NAME_RDN_TYPE,
+        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+        CERT_QUERY_FORMAT_FLAG_ALL, CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO,
+        CMSG_SIGNER_INFO_PARAM, CertCloseStore, CertFindCertificateInStore,
+        CertFreeCertificateContext, CertGetNameStringW, CryptMsgClose, CryptMsgGetParam,
+        CryptQueryObject, HCERTSTORE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
     };
 
     let expected = option_env!("SKY_PUBLISHER_SUBJECT").ok_or_else(|| {
@@ -205,8 +177,8 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
     let mut content_type = 0u32;
     let mut format_type = 0u32;
     let mut store: HCERTSTORE = std::ptr::null_mut();
-    let mut message = std::ptr::null_mut();
-    let mut context = std::ptr::null_mut();
+    let mut message: *mut c_void = std::ptr::null_mut();
+    let mut context: *mut c_void = std::ptr::null_mut();
     let content_flags =
         CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED | CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED;
     let queried = unsafe {
@@ -224,19 +196,87 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
             &mut context,
         )
     };
-    if queried == 0 || store.is_null() {
+    if queried == 0 || store.is_null() || message.is_null() {
         return Err(UpdaterError::SignatureInvalid(format!(
             "signed certificate could not be read: {}",
             path.display()
         )));
     }
-    let certificate = unsafe { CertEnumCertificatesInStore(store, std::ptr::null()) };
-    if certificate.is_null() {
-        unsafe { CertCloseStore(store, 0) };
+    let context = context.cast::<windows_sys::Win32::Security::Cryptography::CERT_CONTEXT>();
+
+    let mut signer_size = 0u32;
+    let size_ok = unsafe {
+        CryptMsgGetParam(
+            message,
+            CMSG_SIGNER_INFO_PARAM,
+            0,
+            std::ptr::null_mut(),
+            &mut signer_size,
+        )
+    } != 0;
+    if !size_ok || signer_size as usize != std::mem::size_of::<CMSG_SIGNER_INFO>() {
+        unsafe {
+            if !context.is_null() {
+                CertFreeCertificateContext(context);
+            }
+            CryptMsgClose(message);
+            CertCloseStore(store, 0);
+        }
         return Err(UpdaterError::SignatureInvalid(
-            "signed certificate is missing".into(),
+            "signed message signer information is unavailable".into(),
         ));
     }
+
+    let mut signer_info = std::mem::MaybeUninit::<CMSG_SIGNER_INFO>::zeroed();
+    let mut signer_capacity = signer_size;
+    let signer_ok = unsafe {
+        CryptMsgGetParam(
+            message,
+            CMSG_SIGNER_INFO_PARAM,
+            0,
+            signer_info.as_mut_ptr().cast::<c_void>(),
+            &mut signer_capacity,
+        )
+    } != 0;
+    if !signer_ok {
+        unsafe {
+            if !context.is_null() {
+                CertFreeCertificateContext(context);
+            }
+            CryptMsgClose(message);
+            CertCloseStore(store, 0);
+        }
+        return Err(UpdaterError::SignatureInvalid(
+            "signed message signer information could not be read".into(),
+        ));
+    }
+    let signer_info = unsafe { signer_info.assume_init() };
+    let mut signer_cert_info = CERT_INFO::default();
+    signer_cert_info.Issuer = signer_info.Issuer;
+    signer_cert_info.SerialNumber = signer_info.SerialNumber;
+    let certificate = unsafe {
+        CertFindCertificateInStore(
+            store,
+            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            0,
+            CERT_FIND_SUBJECT_CERT,
+            &signer_cert_info as *const CERT_INFO as *const c_void,
+            std::ptr::null(),
+        )
+    };
+    if certificate.is_null() {
+        unsafe {
+            if !context.is_null() {
+                CertFreeCertificateContext(context);
+            }
+            CryptMsgClose(message);
+            CertCloseStore(store, 0);
+        }
+        return Err(UpdaterError::SignatureInvalid(
+            "actual signed-message signer certificate is missing".into(),
+        ));
+    }
+
     let mut subject = [0u16; 512];
     let length = unsafe {
         CertGetNameStringW(
@@ -255,6 +295,10 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
     };
     unsafe {
         CertFreeCertificateContext(certificate);
+        if !context.is_null() {
+            CertFreeCertificateContext(context);
+        }
+        CryptMsgClose(message);
         CertCloseStore(store, 0);
     }
     if actual != expected {

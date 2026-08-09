@@ -162,11 +162,47 @@ jobs:
         # Run windows-marked tests when present; skip only wall-clock `slow`.
         run: uv run pytest -m "not slow"
 
+  packaged:
+    name: Packaged frozen updater/app smoke
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python environment
+        uses: ./.github/actions/python-environment
+        with:
+          run-runtime-audit: "true"
+
+      - name: Build source PyInstaller bootloader
+        run: |
+          $bootloader = Join-Path $env:RUNNER_TEMP "sky-auto-player-pyinstaller-bootloader"
+          pwsh -NoProfile -File scripts/build_pyinstaller_bootloader.ps1 -OutputDirectory $bootloader
+          "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+          "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
+      - name: Build packaged app and native updater
+        run: uv run --env-file .env python -m build_app --manifest
+
+      - name: Verify packaged release tree
+        run: |
+          $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          uv run --env-file .env python scripts/verify_release_manifest.py `
+            --release-dir "dist\Sky-Auto-Player-v$version" --version $version
+
 
   status:
     name: Sky Auto Player — full altitude gate
     if: always()
-    needs: [changes, static, validate]
+    needs: [changes, static, validate, packaged]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -179,9 +215,11 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           STATIC_RESULT: ${{ needs.static.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
+          PACKAGED_RESULT: ${{ needs.packaged.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
           [[ "$STATIC_RESULT" == "success" || "$STATIC_RESULT" == "skipped" ]]
           [[ "$VALIDATE_RESULT" == "success" || "$VALIDATE_RESULT" == "skipped" ]]
+          [[ "$PACKAGED_RESULT" == "success" || "$PACKAGED_RESULT" == "skipped" ]]
           echo "CI status is green."

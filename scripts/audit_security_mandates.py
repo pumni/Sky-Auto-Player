@@ -94,6 +94,9 @@ ALLOWED_WINDOWS_SYS_MODULES: frozenset[str] = frozenset(
         # Authenticode certificate extraction is used only to enforce the
         # configured project publisher subject after WinVerifyTrust succeeds.
         "Win32::Security::Cryptography",
+        # WinVerifyTrust is the typed Authenticode trust-policy entry point;
+        # it does not inspect or modify another process.
+        "Win32::Security::WinTrust",
         "Win32::Storage::FileSystem",
     }
 )

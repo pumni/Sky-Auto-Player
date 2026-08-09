@@ -21,7 +21,12 @@ legacy executable name, bridge ZIP, or second bundle is supported.
 
 The tag version must equal `[project].version`. Release packaging is
 fail-closed when the worktree is dirty, native provenance does not match, or
-the required signing provider is unavailable.
+the required signing provider is unavailable. The release workflow provisions
+an encrypted PFX identity into the ephemeral runner certificate store from
+`AUTHENTICODE_PFX_BASE64` and `AUTHENTICODE_PFX_PASSWORD`, verifies the exact
+`AUTHENTICODE_CERT_THUMBPRINT` has a private key, signs project-owned PE files,
+and only then generates the manifest. These are CI secrets; the PFX is never
+committed or retained in the workspace.
 
 ## 2. Runtime ownership
 
@@ -45,7 +50,8 @@ When the user selects **Update now**:
 4. the app exits only after launch succeeds;
 5. the updater waits for the parent to exit, then refetches the exact target
    GitHub tag and applies the transaction;
-6. the updater writes a structured result and restarts only a verified app.
+6. the updater writes the structured result atomically, then restarts only a
+   verified app (including the verified old app after a successful rollback).
 
 The first native-updater release may require users of older releases to
 download and extract manually once. There is no migration code or compatibility
@@ -90,6 +96,13 @@ Extraction occurs outside the install root only after every archive entry is
 validated. The updater rejects absolute, drive-qualified, UNC, traversal,
 alternate-data-stream, symlink, duplicate, case-colliding, file/directory
 collision, reserved-device, and trailing-dot/space paths.
+
+ZIP path identity follows Windows case-insensitive semantics. Explicit directory
+entries are valid parents for files; a file used as a parent, duplicate path,
+or case-folded file/directory collision is rejected. Release and updater version
+ordering uses the same PEP 440 semantics as Python `packaging.version`,
+including post-zero, development, prerelease, release-padding, and local
+versions.
 
 `MANIFEST.json` uses schema version `2` and contains the exact app ID,
 target version, canonical executable, clean-worktree/provenance fields, and a
@@ -144,7 +157,9 @@ Transaction state is kept at:
 
 Before the first install mutation the updater creates complete backups for all
 overwritten/deleted files, records new paths that rollback must remove, and
-atomically flushes a `prepared` journal. Only then may it copy or delete
+atomically flushes a `prepared` journal. Rollback first verifies that every
+recorded backup exists and matches its SHA256, and preflights every managed
+target/ancestor for Windows reparse points. Only then may it copy or delete
 managed paths. Installed hashes are checked before writing `committed`.
 
 Any failure after `prepared` removes new managed paths, restores backups, and

@@ -88,12 +88,41 @@ jobs:
 
       - name: Verify production signing configuration
         env:
+          AUTHENTICODE_PFX_BASE64: ${{ secrets.AUTHENTICODE_PFX_BASE64 }}
+          AUTHENTICODE_PFX_PASSWORD: ${{ secrets.AUTHENTICODE_PFX_PASSWORD }}
           AUTHENTICODE_CERT_THUMBPRINT: ${{ secrets.AUTHENTICODE_CERT_THUMBPRINT }}
           EXPECTED_PUBLISHER_SUBJECT: ${{ secrets.EXPECTED_PUBLISHER_SUBJECT }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:AUTHENTICODE_CERT_THUMBPRINT) -or
+          if ([string]::IsNullOrWhiteSpace($env:AUTHENTICODE_PFX_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:AUTHENTICODE_PFX_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:AUTHENTICODE_CERT_THUMBPRINT) -or
               [string]::IsNullOrWhiteSpace($env:EXPECTED_PUBLISHER_SUBJECT)) {
-            throw "Production release is blocked: Authenticode thumbprint and publisher subject are required."
+            throw "Production release is blocked: encrypted PFX, PFX password, certificate thumbprint, and publisher subject are required."
+          }
+
+      - name: Provision production Authenticode identity
+        env:
+          AUTHENTICODE_PFX_BASE64: ${{ secrets.AUTHENTICODE_PFX_BASE64 }}
+          AUTHENTICODE_PFX_PASSWORD: ${{ secrets.AUTHENTICODE_PFX_PASSWORD }}
+          AUTHENTICODE_CERT_THUMBPRINT: ${{ secrets.AUTHENTICODE_CERT_THUMBPRINT }}
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:AUTHENTICODE_PFX_BASE64))
+            $password = ConvertTo-SecureString $env:AUTHENTICODE_PFX_PASSWORD -AsPlainText -Force
+            Import-PfxCertificate `
+              -FilePath $pfxPath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password | Out-Null
+            $thumbprint = ($env:AUTHENTICODE_CERT_THUMBPRINT -replace '\s', '').ToUpperInvariant()
+            $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object Thumbprint -eq $thumbprint
+            if ($null -eq $certificate -or -not $certificate.HasPrivateKey) {
+              throw "Provisioned certificate thumbprint is missing or has no private key."
+            }
+            Write-Host "Production Authenticode identity provisioned in the ephemeral runner store."
+          }
+          finally {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
           }
 
       - name: Build matching PyInstaller bootloader from source

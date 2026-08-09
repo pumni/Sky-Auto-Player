@@ -3,12 +3,13 @@ use std::path::Path;
 
 use crate::archive::validate_zip_file;
 use crate::error::{Result, UpdaterError};
-use crate::manifest::{Manifest, load_installed};
-use crate::transaction::{TransactionPlan, apply, build_plan, prepare_journal};
+use crate::manifest::Manifest;
+use crate::transaction::{TransactionPlan, apply, build_plan, prepare_journal, safe_join};
 use crate::{MANIFEST_NAME, PRIMARY_EXE, UPDATER_EXE};
 
 pub fn read_staged_manifest(staging: &Path, target_version: &str) -> Result<Manifest> {
-    let manifest = Manifest::parse(&fs::read(staging.join(MANIFEST_NAME))?)?;
+    let manifest_path = safe_join(staging, MANIFEST_NAME)?;
+    let manifest = Manifest::parse(&fs::read(manifest_path)?)?;
     manifest.validate(Some(target_version))?;
     manifest.verify_staged(staging)?;
     for required in [PRIMARY_EXE, UPDATER_EXE, "native_calibration.exe"] {
@@ -27,7 +28,10 @@ pub fn inspect_archive(path: &Path) -> Result<()> {
 }
 
 pub fn installed_manifest(root: &Path) -> Result<Manifest> {
-    load_installed(root).map_err(|err| {
+    let manifest_path = safe_join(root, MANIFEST_NAME).map_err(|err| {
+        UpdaterError::ManifestInvalid(format!("installed manifest path is unsafe: {err}"))
+    })?;
+    Manifest::parse(&fs::read(manifest_path)?).map_err(|err| {
         UpdaterError::ManifestInvalid(format!("installed manifest unavailable: {err}"))
     })
 }

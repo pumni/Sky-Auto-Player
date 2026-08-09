@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 
 from sky_music.layouts import SKY_15_KEY_MAP as key_maps
 from sky_music.layouts import VK_CODES
-from sky_music.platform.win32.global_hotkeys import GlobalHotkeyListener
+from sky_music.platform.win32.global_hotkeys import (
+    GlobalHotkeyError,
+    GlobalHotkeyListener,
+)
 from sky_music.platform.win32.window_target import is_virtual_key_down
 
 VK_CONTROL = 0x11
@@ -124,9 +127,10 @@ class PlaybackControls:
         """Consume one queued ``WM_HOTKEY`` action without polling key state."""
         if not self.enabled:
             return None
-        self.start()
         listener = self._listener
-        return listener.poll() if listener is not None else None
+        if listener is None:
+            raise GlobalHotkeyError("playback hotkeys were not registered before playback")
+        return listener.poll()
 
 
 def is_hotkey_down(hotkey: HotkeyBinding) -> bool:

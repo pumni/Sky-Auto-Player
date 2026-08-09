@@ -17,7 +17,7 @@ use sky_updater::recovery::{has_unresolved_transaction, recover_before_update, r
 use sky_updater::restart::restart_verified;
 use sky_updater::result;
 use sky_updater::signature::verify_project_files;
-use sky_updater::transaction::cleanup_committed;
+use sky_updater::transaction::{cleanup_committed, safe_join};
 
 const PARENT_WAIT: Duration = Duration::from_secs(30);
 
@@ -74,22 +74,34 @@ fn run_update(args: &UpdaterArgs) -> Result<()> {
     };
     if let Err(write_error) = result::write_result(&record) {
         eprintln!("could not write updater result: {write_error}");
-        if outcome.is_ok() {
-            return Err(write_error);
-        }
+        return Err(write_error);
     }
     if let Err(log_error) = result::append_log(&record) {
         eprintln!("could not append updater log: {log_error}");
+    }
+    let should_restart = args.restart
+        && !args.dry_run
+        && (outcome.is_ok()
+            || outcome
+                .as_ref()
+                .err()
+                .is_some_and(|failure| failure.rolled_back));
+    if should_restart {
+        // The result is durable before the new process starts. This prevents
+        // the restarted app from racing its own result consumption.
+        if let Err(restart_error) = restart_verified(&args.install_root) {
+            eprintln!("could not restart verified application: {restart_error}");
+            if outcome.is_ok() {
+                return Err(restart_error);
+            }
+        }
     }
     outcome.map_err(|failure| failure.error)
 }
 
 fn execute_update(args: &UpdaterArgs) -> std::result::Result<(), ExecutionFailure> {
-    wait_for_parent(
-        args.parent_pid,
-        PARENT_WAIT,
-        &args.install_root.join(sky_updater::PRIMARY_EXE),
-    )?;
+    let primary_exe = safe_join(&args.install_root, sky_updater::PRIMARY_EXE)?;
+    wait_for_parent(args.parent_pid, PARENT_WAIT, &primary_exe)?;
     if has_unresolved_transaction(&args.install_root) {
         if args.dry_run {
             return Err(UpdaterError::TransactionRecoveryRequired(
@@ -157,9 +169,6 @@ fn execute_update(args: &UpdaterArgs) -> std::result::Result<(), ExecutionFailur
     match execution {
         Ok(()) => {
             cleanup?;
-            if args.restart {
-                restart_verified(&args.install_root)?;
-            }
             Ok(())
         }
         Err(error) => {

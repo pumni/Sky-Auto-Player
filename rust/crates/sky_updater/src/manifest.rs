@@ -37,7 +37,7 @@ pub enum PreserveClass {
 }
 
 pub fn classify_preserved(path: &str) -> PreserveClass {
-    let lower = path.to_ascii_lowercase();
+    let lower = path.to_lowercase();
     if lower == "config.json"
         || lower == ".env"
         || lower == "songs"
@@ -106,7 +106,7 @@ impl Manifest {
                     "invalid SHA256 for {path}"
                 )));
             }
-            if !normalized.insert(path.to_ascii_lowercase()) {
+            if !normalized.insert(path.to_lowercase()) {
                 return Err(UpdaterError::ManifestInvalid(format!(
                     "duplicate manifest path: {path}"
                 )));
@@ -173,8 +173,4 @@ fn collect_files(root: &Path, current: &Path, output: &mut BTreeSet<String>) -> 
         }
     }
     Ok(())
-}
-
-pub fn load_installed(root: &Path) -> Result<Manifest> {
-    Manifest::parse(&fs::read(root.join(MANIFEST_NAME))?)
 }

@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,7 @@ use crate::manifest::{Manifest, PreserveClass, classify_preserved};
 use crate::{MANIFEST_NAME, SCHEMA_VERSION};
 
 pub const TRANSACTION_DIR: &str = ".sky-update-transaction";
+const JOURNAL_FILE_NAME: &str = "journal.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransactionPlan {
@@ -89,15 +90,23 @@ pub fn build_plan(old: Option<&Manifest>, new: &Manifest) -> Result<TransactionP
 fn validate_no_file_directory_collisions<'a>(
     paths: impl Iterator<Item = &'a String>,
 ) -> Result<()> {
-    let path_set = paths.map(String::as_str).collect::<BTreeSet<_>>();
-    for path in &path_set {
+    let mut path_set = HashMap::<String, &str>::new();
+    for path in paths {
+        let key = path.to_lowercase();
+        if path_set.insert(key, path.as_str()).is_some() {
+            return Err(UpdaterError::ManifestInvalid(format!(
+                "duplicate/case-colliding path: {path}"
+            )));
+        }
+    }
+    for path in path_set.values() {
         let mut current = Path::new(path);
         while let Some(parent) = current.parent() {
             if parent == Path::new("") {
                 break;
             }
             let parent_string = parent.to_string_lossy().replace('\\', "/");
-            if path_set.contains(parent_string.as_str()) {
+            if path_set.contains_key(&parent_string.to_lowercase()) {
                 return Err(UpdaterError::ManifestInvalid(format!(
                     "file/directory collision: {path}"
                 )));
@@ -112,12 +121,8 @@ pub fn transaction_root(install_root: &Path) -> PathBuf {
     install_root.join(TRANSACTION_DIR)
 }
 
-pub fn journal_path(install_root: &Path) -> PathBuf {
-    transaction_root(install_root).join("journal.json")
-}
-
 pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Journal> {
-    let root = transaction_root(install_root);
+    let root = safe_join(install_root, TRANSACTION_DIR)?;
     if root.exists() {
         return Err(UpdaterError::TransactionRecoveryRequired(
             "transaction directory already exists".into(),
@@ -127,7 +132,7 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
         .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
     let mut backups = Vec::new();
     for (index, relative) in plan.backup_paths.iter().enumerate() {
-        let source = install_root.join(relative);
+        let source = safe_join(install_root, relative)?;
         if !source.is_file() {
             continue;
         }
@@ -185,7 +190,11 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
         new_paths,
         backups,
     };
-    write_json_atomic(&journal_path(install_root), &journal)?;
+    let journal_file = safe_join(
+        install_root,
+        &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
+    )?;
+    write_json_atomic(&journal_file, &journal)?;
     Ok(journal)
 }
 
@@ -212,7 +221,9 @@ pub fn apply(
         }
     }
     verify_installed_managed(install_root, new_manifest)?;
-    let installed_manifest = Manifest::parse(&fs::read(install_root.join(MANIFEST_NAME))?)
+    let installed_manifest_path = safe_join(install_root, MANIFEST_NAME)
+        .map_err(|error| UpdaterError::PostInstallVerifyFailed(error.to_string()))?;
+    let installed_manifest = Manifest::parse(&fs::read(installed_manifest_path)?)
         .map_err(|error| UpdaterError::PostInstallVerifyFailed(error.to_string()))?;
     if installed_manifest != *new_manifest {
         return Err(UpdaterError::PostInstallVerifyFailed(
@@ -221,7 +232,11 @@ pub fn apply(
     }
     let mut committed = journal;
     committed.state = JournalState::Committed;
-    write_json_atomic(&journal_path(install_root), &committed)?;
+    let journal_file = safe_join(
+        install_root,
+        &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
+    )?;
+    write_json_atomic(&journal_file, &committed)?;
     Ok(())
 }
 
@@ -241,6 +256,7 @@ fn copy_managed_file(install_root: &Path, staging: &Path, relative: &str) -> Res
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
+    let destination = safe_join(install_root, relative)?;
     fs::copy(source, destination)
         .map_err(|err| UpdaterError::InstallCopyFailed(err.to_string()))?;
     Ok(())
@@ -262,7 +278,12 @@ pub fn verify_installed_managed(install_root: &Path, manifest: &Manifest) -> Res
 }
 
 pub fn read_journal(install_root: &Path) -> Result<Journal> {
-    let journal: Journal = serde_json::from_slice(&fs::read(journal_path(install_root))?)?;
+    let journal_file = safe_join(
+        install_root,
+        &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
+    )
+    .map_err(|err| UpdaterError::TransactionRecoveryRequired(err.to_string()))?;
+    let journal: Journal = serde_json::from_slice(&fs::read(journal_file)?)?;
     if journal.schema_version != SCHEMA_VERSION
         || journal.install_root != install_root.to_string_lossy()
     {
@@ -357,11 +378,77 @@ pub fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
             "path escapes root: {relative}"
         )));
     }
+    ensure_no_reparse_components(root, &path)?;
     Ok(path)
 }
 
+fn ensure_no_reparse_components(root: &Path, path: &Path) -> Result<()> {
+    match fs::symlink_metadata(root) {
+        Ok(_) => {
+            if is_reparse_point(root)? {
+                return Err(UpdaterError::InstallRootInvalid(format!(
+                    "install root is a reparse point: {}",
+                    root.display()
+                )));
+            }
+        }
+        Err(error) => return Err(UpdaterError::Io(error)),
+    }
+    let relative = path.strip_prefix(root).map_err(|_| {
+        UpdaterError::InstallRootInvalid(format!("path escapes root: {}", path.display()))
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(UpdaterError::InstallRootInvalid(format!(
+                "non-normal path component: {}",
+                path.display()
+            )));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(_) => {
+                if is_reparse_point(&current)? {
+                    return Err(UpdaterError::InstallRootInvalid(format!(
+                        "reparse point in protected path: {}",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(UpdaterError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    };
+
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(UpdaterError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(path: &Path) -> Result<bool> {
+    Ok(fs::symlink_metadata(path)?.file_type().is_symlink())
+}
+
 pub fn cleanup_committed(install_root: &Path) -> Result<()> {
-    let root = transaction_root(install_root);
+    let root = safe_join(install_root, TRANSACTION_DIR)?;
     if root.exists() {
         let journal = read_journal(install_root)?;
         if journal.state != JournalState::Committed {
@@ -517,5 +604,37 @@ mod tests {
         assert!(!transaction_root(&root).exists());
         std::fs::remove_dir_all(root).expect("remove test root");
         std::fs::remove_dir_all(staging).expect("remove staging root");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn safe_join_rejects_existing_reparse_ancestor() {
+        use std::os::windows::fs::symlink_dir;
+
+        let root = std::env::temp_dir().join(format!(
+            "sky-updater-reparse-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let outside = root.with_file_name(format!(
+            "sky-updater-reparse-outside-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("install root");
+        std::fs::create_dir_all(&outside).expect("outside root");
+        let junction = root.join("managed");
+        if symlink_dir(&outside, &junction).is_err() {
+            std::fs::remove_dir_all(&root).expect("cleanup root");
+            std::fs::remove_dir_all(&outside).expect("cleanup outside");
+            return;
+        }
+
+        assert!(safe_join(&root, "managed/escaped.dll").is_err());
+        std::fs::remove_dir(&junction).expect("remove junction");
+        std::fs::remove_dir_all(&root).expect("cleanup root");
+        std::fs::remove_dir_all(&outside).expect("cleanup outside");
     }
 }

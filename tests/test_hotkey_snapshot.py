@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from sky_music.infrastructure.hotkeys import parse_hotkey
+from sky_music.infrastructure.hotkeys import PlaybackControls, parse_hotkey
 from sky_music.platform.win32.global_hotkeys import (
     HOTKEY_ID_BASE,
     MOD_CONTROL,
     MOD_NOREPEAT,
     GlobalHotkeyConflictError,
+    GlobalHotkeyError,
     GlobalHotkeyListener,
     build_registrations,
 )
@@ -46,3 +47,40 @@ def test_listener_queue_is_consumed_without_key_state_polling() -> None:
 
 def test_registration_conflicts_have_a_specific_error_type() -> None:
     assert issubclass(GlobalHotkeyConflictError, RuntimeError)
+
+
+def _controls() -> PlaybackControls:
+    return PlaybackControls(
+        pause=parse_hotkey("f8"),
+        skip=parse_hotkey("f9"),
+        quit=parse_hotkey("f10"),
+        refocus=parse_hotkey("f11"),
+        panic=parse_hotkey("f12"),
+    )
+
+
+def test_playback_controls_require_registration_before_polling() -> None:
+    controls = _controls()
+    with pytest.raises(GlobalHotkeyError, match="not registered"):
+        controls.poll()
+
+
+def test_registration_conflict_is_a_startup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ConflictListener:
+        @classmethod
+        def from_bindings(cls, _bindings: object) -> ConflictListener:
+            return cls()
+
+        def start(self) -> None:
+            raise GlobalHotkeyConflictError("F8 is already registered")
+
+    monkeypatch.setattr("sky_music.infrastructure.hotkeys.GlobalHotkeyListener", ConflictListener)
+    with pytest.raises(GlobalHotkeyConflictError, match="already registered"):
+        _controls().start()
+
+
+def test_message_loop_failure_is_not_silently_ignored() -> None:
+    listener = GlobalHotkeyListener.from_bindings({"pause": parse_hotkey("f8")})
+    listener._error = GlobalHotkeyError("message loop failed")  # type: ignore[attr-defined]
+    with pytest.raises(GlobalHotkeyError, match="message loop failed"):
+        listener.poll()

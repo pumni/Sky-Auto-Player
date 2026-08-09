@@ -2,10 +2,12 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::error::{Result, UpdaterError};
+use crate::signature::verify_file;
+use crate::transaction::safe_join;
 use crate::{APP_NAME, PRIMARY_EXE};
 
 pub fn restart_verified(install_root: &Path) -> Result<()> {
-    let executable = install_root.join(PRIMARY_EXE);
+    let executable = safe_join(install_root, PRIMARY_EXE)?;
     if !executable.is_file()
         || executable.file_name().and_then(|name| name.to_str()) != Some(PRIMARY_EXE)
     {
@@ -13,6 +15,9 @@ pub fn restart_verified(install_root: &Path) -> Result<()> {
             "canonical app executable is missing".into(),
         ));
     }
+    verify_file(&executable).map_err(|error| {
+        UpdaterError::RestartFailed(format!("canonical app executable is not verified: {error}"))
+    })?;
     Command::new(&executable)
         .current_dir(install_root)
         .spawn()

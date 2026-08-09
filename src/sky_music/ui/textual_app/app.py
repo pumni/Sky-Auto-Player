@@ -868,6 +868,23 @@ class SkyPickerApp(App[SongPickerResult | None]):
                     severity="warning",
                     timeout=8,
                 )
+            try:
+                if self.controls is not None:
+                    self.controls.start()
+            except Exception as exc:
+                if self.controls is not None:
+                    with contextlib.suppress(Exception):
+                        self.controls.close()
+                self._active_playback_commands = None
+                self._shutting_down_playback = False
+                if picker is not None:
+                    picker.rearm()
+                self._restore_picker_after_playback()
+                self._show_playback_error(
+                    "Hotkey Registration Error",
+                    f"Playback was not started because global hotkeys could not be registered: {exc}",
+                )
+                return
         if not is_dry_run and self.countdown_seconds > 0:
             card = self._show_playback_card(PlaybackMode.COUNTDOWN)
             card.start_countdown(self.countdown_seconds, run_playback)

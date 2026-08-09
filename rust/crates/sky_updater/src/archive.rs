@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path};
@@ -168,7 +168,7 @@ fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Resul
         ));
     }
     let mut paths = Vec::new();
-    let mut seen = HashSet::new();
+    let mut entries = HashMap::<String, ZipEntryKind>::new();
     let mut total = 0u64;
     for index in 0..archive.len() {
         let file = archive
@@ -176,6 +176,11 @@ fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Resul
             .map_err(|err| UpdaterError::ArchiveUnsafe(err.to_string()))?;
         let raw = file.name().to_owned();
         let normalized = validate_relative_path(raw.trim_end_matches('/'))?;
+        let kind = if file.is_dir() || raw.ends_with('/') {
+            ZipEntryKind::Directory
+        } else {
+            ZipEntryKind::File
+        };
         if file
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
@@ -193,15 +198,14 @@ fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Resul
                 "archive exceeds uncompressed size bound".into(),
             ));
         }
-        let key = normalized.to_ascii_lowercase();
-        if !seen.insert(key) {
+        let key = windows_path_key(&normalized);
+        if entries.insert(key, kind).is_some() {
             return Err(UpdaterError::ArchiveUnsafe(format!(
                 "duplicate/case-colliding path: {raw}"
             )));
         }
         paths.push(normalized);
     }
-    let path_set = paths.iter().map(String::as_str).collect::<HashSet<_>>();
     for path in &paths {
         let mut current = Path::new(path);
         while let Some(parent) = current.parent() {
@@ -209,7 +213,7 @@ fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Resul
                 break;
             }
             let parent_string = parent.to_string_lossy().replace('\\', "/");
-            if path_set.contains(parent_string.as_str()) {
+            if entries.get(&windows_path_key(&parent_string)) == Some(&ZipEntryKind::File) {
                 return Err(UpdaterError::ArchiveUnsafe(format!(
                     "file/directory collision: {path}"
                 )));
@@ -218,6 +222,16 @@ fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Resul
         }
     }
     Ok(paths)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZipEntryKind {
+    File,
+    Directory,
+}
+
+fn windows_path_key(path: &str) -> String {
+    path.to_lowercase()
 }
 
 pub fn extract_zip(bytes: &[u8], staging: &Path) -> Result<()> {
@@ -284,6 +298,22 @@ pub fn path_is_safe_under(root: &Path, path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn zip_with_entries(entries: &[(&str, bool)]) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut output);
+        let options = zip::write::SimpleFileOptions::default();
+        for (path, directory) in entries {
+            if *directory {
+                writer.add_directory(*path, options).expect("directory");
+            } else {
+                writer.start_file(*path, options).expect("file");
+                writer.write_all(b"payload").expect("payload");
+            }
+        }
+        writer.finish().expect("finish");
+        output.into_inner()
+    }
+
     #[test]
     fn sidecar_requires_one_exact_record() {
         let hash = "A".repeat(64);
@@ -305,5 +335,17 @@ mod tests {
             crate::manifest::classify_preserved("songs-old/file"),
             crate::manifest::PreserveClass::Managed
         );
+    }
+
+    #[test]
+    fn explicit_directory_entries_are_legal_parents() {
+        let archive = zip_with_entries(&[("songs/", true), ("songs/foo.txt", false)]);
+        assert!(validate_zip(&archive).is_ok());
+    }
+
+    #[test]
+    fn file_parent_and_case_folded_collisions_are_rejected() {
+        let archive = zip_with_entries(&[("Foo", false), ("foo/bar", false)]);
+        assert!(validate_zip(&archive).is_err());
     }
 }
