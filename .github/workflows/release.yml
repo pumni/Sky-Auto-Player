@@ -230,7 +230,7 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
           body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
           generate_release_notes: false
-          draft: false
+          draft: ${{ steps.verlock.outputs.is_prerelease != 'true' }}
           prerelease: ${{ steps.verlock.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

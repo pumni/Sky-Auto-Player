@@ -4,6 +4,54 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added a native out-of-process Rust updater for the in-app **Update now** flow, including exact-tag release fetch, bounded downloads, SHA256 verification, archive validation, manifest verification, transactional install, rollback, structured result reporting, and verified-app restart.
+- Added durable update journaling and verified backup recovery for interrupted or failed installs.
+- Added Windows `RegisterHotKey` / `WM_HOTKEY` playback controls with pre-playback registration and fail-safe listener error propagation.
+- Added production Authenticode signing and verification for project-owned PE files, with post-sign manifest generation and build provenance in the release pipeline.
+- Added packaged updater A→B and rollback acceptance coverage plus a real Windows CryptoAPI signer fixture in CI.
+
+### Changed
+
+- Changed distribution to a single clean canonical release triple: `Sky-Auto-Player-v<version>.zip`, its `.sha256` sidecar, and `MANIFEST.json`.
+- Changed update ownership so Python only checks, performs safe playback shutdown, launches the bundled updater from a per-run `%LOCALAPPDATA%` directory, and exits; the Rust updater owns download, verification, mutation, rollback, and restart.
+- Changed startup focus behavior to discovery-only; foreground refocus now occurs only after an explicit user action.
+- Changed release packaging so project-owned binaries are signed before `MANIFEST.json` hashes are generated.
+- Changed PyInstaller release builds to use the pinned matching source-built bootloader and narrower explicit collection instead of broad package collection.
+
+### Fixed
+
+- Fixed rollback ordering so all required backup files and hashes are validated before destructive recovery begins.
+- Fixed Windows update-path containment to reject existing reparse-point/junction escapes before managed file mutation.
+- Fixed ZIP validation for explicit directory entries, file-as-parent conflicts, and Windows case-insensitive path collisions.
+- Fixed release-version ordering so the native updater uses PEP 440 semantics compatible with Python `packaging.version`.
+- Fixed Authenticode publisher verification to resolve the actual signer certificate instead of relying on certificate-store enumeration order.
+- Fixed update-result ordering so the result is written atomically before restart, including restart of a verified old app after successful rollback.
+- Fixed global-hotkey startup conflicts and message-loop failures so playback fails safely instead of silently losing pause/skip/stop controls.
+
+### Security
+
+- Enforced HTTPS-only release download with a strict GitHub host allow-list and redirect revalidation.
+- Enforced exact release assets, bounded downloads, strict SHA sidecars, safe ZIP paths, exact manifest file sets, and trusted Authenticode publisher verification before install mutation.
+- Preserved `config.json`, `.env`, `songs/**`, and `logs/**` from overwrite and orphan deletion; arbitrary unmanifested user files are not deleted.
+- Kept the updater isolated from the real-time playback dispatcher and from all game-memory, injection, hook, debugger, and game-file modification surfaces.
+- Kept release signing fail-closed when the production certificate/private key or required signing target is unavailable.
+
+### Removed
+
+- Removed the BAT/PowerShell updater path and `ExecutionPolicy Bypass` launch chain.
+- Removed legacy `Sky-Player.exe` updater compatibility, dual-name resolution, legacy bridge packages, and old updater tests/actions from the active architecture.
+- Removed continuous playback-hotkey polling in favor of OS-registered hotkeys.
+
+### Compatibility
+
+- Supported packaged platform remains Windows 10/11 x64.
+- Users upgrading from v3.1.0 or older may need one manual download/extract migration because the legacy updater is intentionally unsupported.
+- From v3.2.0 onward, native **Update now** is the supported update path and preserves `config.json`, `.env`, `songs/`, and `logs/`.
+
 ## [3.1.0] - 2026-08-08
 
 ### Added

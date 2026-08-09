@@ -28,6 +28,12 @@ an encrypted PFX identity into the ephemeral runner certificate store from
 and only then generates the manifest. These are CI secrets; the PFX is never
 committed or retained in the workspace.
 
+Prerelease tags (`vX.Y.ZrcN`) are published directly as GitHub prereleases for
+beta-channel validation. Stable tags (`vX.Y.Z`) are created as draft releases;
+they are promoted and published to the stable channel only after exact-artifact
+signature, manifest, provenance, fresh-install, and Defender qualification pass.
+Published release tags and assets are immutable; fixes require a new version.
+
 ## 2. Runtime ownership
 
 The Python app owns update checking, stable/beta selection, the update modal,
