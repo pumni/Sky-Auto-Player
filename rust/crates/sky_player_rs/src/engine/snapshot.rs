@@ -94,6 +94,9 @@ pub struct EngineSnapshot {
     pub idle_wake_count: u64,
     /// Typed `dispatch_ready - sender_completed` peak (§8.13).
     pub core_post_send_max_us: u64,
+    /// Peak QPC duration from a blocking deadline wake to the next
+    /// `SendInput` call entry (§8.13).
+    pub wake_to_send_max_us: u64,
     /// Peak deferred-observer drain duration (§8.13).
     pub observer_duration_max_us: u64,
     /// Observations dropped by the fixed queue's drop-oldest policy (§8.13).
@@ -171,6 +174,7 @@ pub struct EngineProgressSnapshot {
     pub timeline_rebase_total_us: u64,
     pub timeline_rebase_max_us: u64,
     pub core_post_send_max_us: u64,
+    pub wake_to_send_max_us: u64,
     pub observer_duration_max_us: u64,
     pub observer_dropped_samples: u64,
     pub observer_queue_high_watermark: u64,

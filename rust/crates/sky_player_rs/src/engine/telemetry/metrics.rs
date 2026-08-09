@@ -120,6 +120,10 @@ pub struct WorkerMetricsLocal {
     /// Time between `sender_completed` and `dispatch_ready` on the hard
     /// critical path (typed QPC derivation), in microseconds.
     pub core_post_send_max_us: u64,
+    /// Peak QPC duration from a blocking deadline wake to the next
+    /// `SendInput` call entry (us). Only dispatches that followed a blocking
+    /// deadline wait contribute a sample.
+    pub wake_to_send_max_us: u64,
     /// Peak wall-clock duration of a single deferred observer drain step.
     pub observer_duration_max_us: u64,
     /// How many `DispatchObservation` samples were dropped because the fixed

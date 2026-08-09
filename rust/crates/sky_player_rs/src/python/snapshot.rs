@@ -119,6 +119,8 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) core_post_send_max_us: u64,
     #[pyo3(get)]
+    pub(super) wake_to_send_max_us: u64,
+    #[pyo3(get)]
     pub(super) observer_duration_max_us: u64,
     #[pyo3(get)]
     pub(super) observer_dropped_samples: u64,
@@ -190,6 +192,7 @@ impl ProgressSnapshotPy {
             timeline_rebase_total_us: snapshot.timeline_rebase_total_us,
             timeline_rebase_max_us: snapshot.timeline_rebase_max_us,
             core_post_send_max_us: snapshot.core_post_send_max_us,
+            wake_to_send_max_us: snapshot.wake_to_send_max_us,
             observer_duration_max_us: snapshot.observer_duration_max_us,
             observer_dropped_samples: snapshot.observer_dropped_samples,
             observer_queue_high_watermark: snapshot.observer_queue_high_watermark,

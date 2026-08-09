@@ -119,16 +119,14 @@ pub(crate) fn publisher_down_send_outcome(
         local_metrics.recovered_partial_up_retries =
             local_metrics.recovered_partial_up_retries.saturating_add(1);
     }
-    match view.dispatch_path {
-        DispatchPath::UpOnly { .. } => {
-            health.down_saturation_positive_streak = 0;
-            health.up_saturation_positive_streak = timing_proof.saturation_streak;
-        }
+    let (up_streak, down_streak) = match view.dispatch_path {
+        DispatchPath::UpOnly { .. } => (timing_proof.saturation_streak, 0),
         DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
-            health.up_saturation_positive_streak = 0;
-            health.down_saturation_positive_streak = timing_proof.saturation_streak;
+            (0, timing_proof.saturation_streak)
         }
-    }
+    };
+    health.up_saturation_positive_streak = up_streak;
+    health.down_saturation_positive_streak = down_streak;
     runtime.pending_pre_send_spin_us = 0;
     let worker_ready_qpc = match qpc_clock.now() {
         Ok(ticks) => ticks,
@@ -485,8 +483,7 @@ impl PendingObservationQueue {
         } else {
             self.len += 1;
         }
-        let tail = (self.head + self.len - 1) % self.entries.len();
-        self.entries[tail] = Some(observation);
+        self.entries[(self.head + self.len - 1) % self.entries.len()] = Some(observation);
         *high_watermark = (*high_watermark).max(self.len as u64);
     }
     pub fn pop_front(&mut self) -> Option<DispatchObservation> {
@@ -516,12 +513,8 @@ pub(crate) fn observer_has_safe_slack(
     margin_us: u64,
     qpc_clock: QpcClock,
 ) -> bool {
-    let Some(deadline) = deadline_ticks else {
-        return true;
-    };
-    if deadline.as_u64() <= effective_now_ticks.as_u64() {
-        return false;
-    }
+    let Some(deadline) = deadline_ticks else { return true; };
+    if deadline.as_u64() <= effective_now_ticks.as_u64() { return false; }
     let slack_ticks = DurationTicks::from_raw(deadline.as_u64() - effective_now_ticks.as_u64());
     match qpc_clock.duration_to_us(slack_ticks) {
         Ok(slack_us) => slack_us >= budget_us.saturating_add(margin_us),
@@ -633,6 +626,9 @@ pub(crate) fn drain_down_send_outcome(
     let (_, force_publish) = record_down_send_telemetry(observation, telemetry, core_post_send_us)?;
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
+    if let Some(wake_to_send_us) = observation.wake_to_send_start_us {
+        local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
+    }
     if config.estimator.enable_adaptive_lead && observation.lead_down_saturated {
         match observation.path {
             DispatchPath::UpOnly { .. } => record_lead_saturation(
@@ -743,6 +739,9 @@ pub(crate) fn drain_up_send_outcome(
             ))
         })?;
     record_release_telemetry(telemetry, observation, core_post_send_us)?;
+    if let Some(wake_to_send_us) = observation.wake_to_send_start_us {
+        local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
+    }
     if let Some(pause_ticks) = observation.recovery_pause_ticks {
         let recovery_pause_us = qpc_clock.duration_to_us(pause_ticks).map_err(|error| {
             DispatchStep::Terminate(format!("recovery telemetry conversion failure: {error:?}"))

@@ -375,6 +375,7 @@ impl NativeDispatchSessionPy {
             snap.timeline_rebase_last_reason,
         )?;
         dict.set_item("core_post_send_max_us", snap.core_post_send_max_us)?;
+        dict.set_item("wake_to_send_max_us", snap.wake_to_send_max_us)?;
         dict.set_item("observer_duration_max_us", snap.observer_duration_max_us)?;
         dict.set_item("observer_dropped_samples", snap.observer_dropped_samples)?;
         dict.set_item(
