@@ -1077,18 +1077,24 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
         super::worker::DispatchStep::Terminate(_)
     ));
 
-    let mut both = ProductionDispatchTestHarness::new_mixed();
+    let mut both = ProductionDispatchTestHarness::new_pending_future_with_authored_due();
     let initial_plan = both.plan_current_dispatch();
     assert!(matches!(
         both.dispatch_authored_with_plan(&initial_plan),
         super::worker::DispatchStep::Dispatched
     ));
     both.advance_playback_time_us(1_000);
+    both.resources.coordinator.min_hold_ticks = both
+        .resources
+        .clock
+        .duration_from_us(10_000)
+        .expect("minimum hold conversion");
     both.seed_pending_release_for_test();
     let both_plan = both.plan_current_dispatch();
     let both_calls = both.configure_send_counter();
     assert!(both_plan.pending.is_some());
     assert!(both_plan.authored.is_some());
+    both.advance_playback_time_us(10_000);
     assert!(matches!(
         both.dispatch_due_from_plan_for_test(&both_plan),
         super::worker::DispatchStep::Dispatched
