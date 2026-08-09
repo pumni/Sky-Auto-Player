@@ -115,11 +115,11 @@ jobs:
       - name: Types — pyright
         run: uv run pyright
 
-      - name: Rust architecture — enforced boundaries
-        run: uv run python scripts/check_rust_architecture.py --enforce
-
       - name: Security — AGENTS.md P0 audit
         run: uv run --env-file .env python scripts/audit_security_mandates.py
+
+      - name: Rust architecture — enforced boundaries
+        run: uv run python scripts/check_rust_architecture.py --enforce
 
   validate:
     name: Windows compatibility and unit tests
