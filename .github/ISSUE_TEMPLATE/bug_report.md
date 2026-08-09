@@ -1,45 +1,38 @@
+---
 name: Bug report
-about: Something is broken; the dispatch engine, the picker, the build, anything.
-title: "[Bug] "
-labels: ["bug"]
+about: Create a report to help us improve
+title: ''
+labels: ''
+assignees: ''
 
 ---
 
 **Describe the bug**
+A clear and concise description of what the bug is.
 
-A clear and concise description.
+**To Reproduce**
+Steps to reproduce the behavior:
+1. Go to '...'
+2. Click on '....'
+3. Scroll down to '....'
+4. See error
 
-**To reproduce**
+**Expected behavior**
+A clear and concise description of what you expected to happen.
 
-```powershell
-# Steps, commands, song file (if relevant), config snippet
-```
+**Screenshots**
+If applicable, add screenshots to help explain your problem.
 
-**Expected behaviour**
+**Desktop (please complete the following information):**
+ - OS: [e.g. iOS]
+ - Browser [e.g. chrome, safari]
+ - Version [e.g. 22]
 
-What you expected to happen.
+**Smartphone (please complete the following information):**
+ - Device: [e.g. iPhone6]
+ - OS: [e.g. iOS8.1]
+ - Browser [e.g. stock browser, safari]
+ - Version [e.g. 22]
 
-**Screenshots / logs**
-
-If applicable, paste from `logs/` or `git diff` snippets.
-
-**Environment**
-
-- Sky Auto Player version (`--version` or `git describe --tags`):
-- Windows build (`winver`):
-- Terminal (Windows Terminal / cmd / VS Code):
-- Python interpreter (`.python-version`):
-- `uv run --env-file .env python scripts/audit_free_threaded_wheels.py` output:
-
-**Security relevance**
-
-- [ ] No — this is purely functional.
-- [ ] Touches `AGENTS.md` P0 mandates (memory, hooks, anti-cheat, input validation).
-- [ ] Crashes or hangs the dispatch loop.
-
-**Validation already run**
-
-- [ ] `uv run ruff check .`
-- [ ] `uv run pyright`
-- [ ] `uv run pytest`
-- [ ] `scripts/audit_security_mandates.py`
+**Additional context**
+Add any other context about the problem here.
