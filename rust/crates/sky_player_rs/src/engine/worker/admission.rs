@@ -1,5 +1,6 @@
 use super::{TrackedKeyState, focus_gate_matches};
-use sky_dispatch_win32::clock::{QpcError, QpcTicks};
+use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -47,10 +48,15 @@ pub(crate) enum DownAdmission {
     Allowed,
     TargetChanged,
     FocusLost,
-    PauseRequested,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FinalControlAdmission {
+    Allowed,
+    PanicRequested,
     QuitRequested,
     SkipRequested,
-    PanicRequested,
+    PauseRequested,
     LeaseExpired,
 }
 
@@ -68,86 +74,72 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) focus_active: &'a AtomicBool,
     pub(crate) target_hwnd: &'a AtomicIsize,
     pub(crate) target_generation: &'a AtomicU64,
-    pub(crate) now_qpc: QpcTicks,
-    pub(crate) lease_timeout_ticks: sky_dispatch_core::time::DurationTicks,
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) fn final_down_admission(
-    expected: TargetStamp,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
-    quit_requested: &AtomicBool,
-    skip_requested: &AtomicBool,
-    panic_requested: &AtomicBool,
-    desired_pause: &AtomicBool,
-) -> DownAdmission {
-    if !focus_matches_hwnd(require_focus, focus_active, expected.hwnd) {
-        return DownAdmission::FocusLost;
-    }
-    if !target_stamp_still_current(target_hwnd, target_generation, expected) {
-        return DownAdmission::TargetChanged;
-    }
-    if quit_requested.load(Ordering::Acquire) {
-        return DownAdmission::QuitRequested;
-    }
-    if skip_requested.load(Ordering::Acquire) {
-        return DownAdmission::SkipRequested;
-    }
-    if panic_requested.load(Ordering::Acquire) {
-        return DownAdmission::PanicRequested;
-    }
-    if desired_pause.load(Ordering::Acquire) {
-        return DownAdmission::PauseRequested;
-    }
-    DownAdmission::Allowed
-}
-
-/// Authoritative last-mile gate used by production Down-bearing dispatch.
-/// Control state is checked before target/focus state so an explicit command
-/// always wins over a newly-arriving note.  The lease check is deliberately
-/// performed here, immediately before transport admission.
-pub(crate) fn final_down_admission_with_lease(
-    target: FinalTargetSignals<'_>,
+/// Classify control state after the caller has taken its fresh QPC sample.
+/// Command atomics are checked by `final_control_admission_with_lease` before
+/// that sample so an abort path does not perform unnecessary clock work.
+fn classify_final_control(
+    now_qpc: QpcTicks,
+    lease_timeout_ticks: DurationTicks,
     signals: FinalControlSignals<'_>,
-) -> Result<DownAdmission, QpcError> {
-    if signals.panic_requested.load(Ordering::Acquire) {
-        return Ok(DownAdmission::PanicRequested);
-    }
-    if signals.quit_requested.load(Ordering::Acquire) {
-        return Ok(DownAdmission::QuitRequested);
-    }
-    if signals.skip_requested.load(Ordering::Acquire) {
-        return Ok(DownAdmission::SkipRequested);
-    }
-    if signals.desired_pause.load(Ordering::Acquire) {
-        return Ok(DownAdmission::PauseRequested);
-    }
+) -> Result<FinalControlAdmission, QpcError> {
     if super::supervisor_lease_expired(
-        target.now_qpc,
-        target.lease_timeout_ticks,
+        now_qpc,
+        lease_timeout_ticks,
         signals.supervisor_heartbeat_ticks,
     )? {
-        return Ok(DownAdmission::LeaseExpired);
+        return Ok(FinalControlAdmission::LeaseExpired);
     }
+    Ok(FinalControlAdmission::Allowed)
+}
+
+/// Authoritative last-mile control gate used by every physical send.
+/// Command state is checked before the fresh QPC sample; lease state is then
+/// evaluated from that sample immediately before transport admission.  A
+/// command rejection has no timestamp evidence, while non-command outcomes
+/// return the QPC sample for downstream timeline conversion.
+pub(crate) fn final_control_admission_with_lease(
+    qpc_clock: QpcClock,
+    lease_timeout_ticks: DurationTicks,
+    signals: FinalControlSignals<'_>,
+) -> Result<(FinalControlAdmission, Option<QpcTicks>), QpcError> {
+    if signals.panic_requested.load(Ordering::Acquire) {
+        return Ok((FinalControlAdmission::PanicRequested, None));
+    }
+    if signals.quit_requested.load(Ordering::Acquire) {
+        return Ok((FinalControlAdmission::QuitRequested, None));
+    }
+    if signals.skip_requested.load(Ordering::Acquire) {
+        return Ok((FinalControlAdmission::SkipRequested, None));
+    }
+    if signals.desired_pause.load(Ordering::Acquire) {
+        return Ok((FinalControlAdmission::PauseRequested, None));
+    }
+    let now_qpc = qpc_clock.now()?;
+    let admission = classify_final_control(now_qpc, lease_timeout_ticks, signals)?;
+    Ok((admission, Some(now_qpc)))
+}
+
+/// Authoritative target/focus gate for Down-bearing traffic.  Control and
+/// lease decisions are intentionally kept in the shared control gate so an
+/// UpOnly/release send never acquires a focus dependency.
+pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> DownAdmission {
     if !target_stamp_still_current(
         target.target_hwnd,
         target.target_generation,
         target.expected,
     ) {
-        return Ok(DownAdmission::TargetChanged);
+        return DownAdmission::TargetChanged;
     }
     if !focus_matches_hwnd(
         target.require_focus,
         target.focus_active,
         target.expected.hwnd,
     ) {
-        return Ok(DownAdmission::FocusLost);
+        return DownAdmission::FocusLost;
     }
-    Ok(DownAdmission::Allowed)
+    DownAdmission::Allowed
 }
 
 pub(crate) fn ensure_preflight_for_target(

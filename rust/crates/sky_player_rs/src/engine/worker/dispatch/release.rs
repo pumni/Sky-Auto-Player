@@ -3,10 +3,11 @@ use super::super::super::{
     RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
-    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
-    WorkerTimingState, cancel_coordinator_or_terminal, describe_release_outcome,
+    FinalControlAdmission, FinalControlSignals, WorkerConfig, WorkerHealthState,
+    WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
+    cancel_coordinator_or_terminal, describe_release_outcome, final_control_admission_with_lease,
     record_termination_error, release_state_verified, signed_ticks_to_us,
-    signed_timeline_delta_ticks, supervisor_lease_expired,
+    signed_timeline_delta_ticks,
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
@@ -429,13 +430,27 @@ fn prepare_release_send(
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
 ) -> Result<ReleaseSend, DispatchStep> {
-    let started_ticks = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "QPC failure before note-off: {error:?}"
-            )));
-        }
+    let (admission, gate_qpc) = final_control_admission_with_lease(
+        qpc_clock,
+        lease_timeout_ticks,
+        FinalControlSignals {
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            supervisor_heartbeat_ticks,
+        },
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!("release admission QPC failure: {error:?}"))
+    })?;
+    if !matches!(admission, FinalControlAdmission::Allowed) {
+        return Err(DispatchStep::Continue);
+    }
+    let Some(started_ticks) = gate_qpc else {
+        return Err(DispatchStep::Terminate(
+            "allowed release admission has no QPC evidence".to_string(),
+        ));
     };
     let actual_ticks = match clock_state
         .get_elapsed_allow_pre_epoch(started_ticks, runtime.allow_pre_epoch_startup_dispatch)
@@ -447,21 +462,6 @@ fn prepare_release_send(
             )));
         }
     };
-    if panic_requested.load(Ordering::Acquire)
-        || quit_requested.load(Ordering::Acquire)
-        || skip_requested.load(Ordering::Acquire)
-        || desired_pause.load(Ordering::Acquire)
-        || supervisor_lease_expired(
-            started_ticks,
-            lease_timeout_ticks,
-            supervisor_heartbeat_ticks,
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("release admission QPC failure: {error:?}"))
-        })?
-    {
-        return Err(DispatchStep::Continue);
-    }
     let result = backend.key_up(scan_codes);
     if let Some(error) = backend.timing_error.take() {
         return Err(DispatchStep::Terminate(format!(

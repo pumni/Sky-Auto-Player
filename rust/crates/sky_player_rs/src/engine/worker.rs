@@ -21,12 +21,10 @@ mod startup;
 mod timing;
 mod wait;
 
-#[cfg(test)]
-pub(crate) use admission::final_down_admission;
 pub(crate) use admission::{
-    DownAdmission, FinalControlSignals, FinalTargetSignals, TargetStamp,
-    ensure_preflight_for_target, final_down_admission_with_lease, focus_matches,
-    focus_matches_hwnd, load_target_stamp, target_stamp_still_current,
+    DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals, TargetStamp,
+    ensure_preflight_for_target, final_control_admission_with_lease, final_down_target_admission,
+    focus_matches, focus_matches_hwnd, load_target_stamp, target_stamp_still_current,
 };
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
@@ -45,24 +43,30 @@ pub(super) use dispatch::{
     dispatch_authored_packet, dispatch_due_pending_releases, drain_one_observer,
     observer_has_safe_slack,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::dispatch_due_from_plan;
 
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use health::FrozenDispatchBudget;
 #[cfg(test)]
 pub(crate) use health::HealthWindowPolicy;
 #[cfg(test)]
 pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
-    DispatchHealthObservation, DispatchHealthOptions, DispatchPath, FrozenDispatchBudget,
-    HEALTH_WINDOW_CAPACITY, HealthWindow, estimator_path_for_dispatch, focus_gate_matches,
-    observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
+    DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
+    HealthWindow, estimator_path_for_dispatch, focus_gate_matches, observe_dispatch_health,
+    observe_wait_health, publish_backend_metrics, record_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::startup_lead_for_first_packet;
 pub(crate) use planning::{
-    ProjectedPlanningInput, plan_next_dispatch, plan_next_dispatch_projected,
+    ProjectedPlanningInput, plan_next_dispatch_projected, plan_structure_is_valid,
 };
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
@@ -78,7 +82,7 @@ pub(crate) use timing::{
     publish_wake_error_stats, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
-use wait::{
+pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
     wait_for_next_boundary,
 };
@@ -99,11 +103,11 @@ pub(crate) struct WorkerRuntime {
     focus_restore_started_ticks: Option<QpcTicks>,
     last_send_qpc_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
-    force_full_cleanup: bool,
-    terminal_error: Option<String>,
+    pub(crate) force_full_cleanup: bool,
+    pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
     allow_pre_epoch_startup_dispatch: bool,
-    pending_pre_send_spin_us: u64,
+    pub(crate) pending_pre_send_spin_us: u64,
     pending_wait_observation: Option<wait::WaitObservation>,
     chord_integrity_lost: u64,
 }
@@ -119,6 +123,18 @@ impl WorkerRuntime {
 
     pub(crate) fn chord_integrity_lost_count(&self) -> u64 {
         self.chord_integrity_lost
+    }
+
+    pub(crate) fn set_last_send_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
+        self.last_send_qpc_ticks = ticks;
+    }
+
+    pub(crate) fn last_send_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.last_send_qpc_ticks
+    }
+
+    pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
+        self.last_dispatch_deadline_wake_qpc = ticks;
     }
 }
 
@@ -137,10 +153,10 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
     pub(super) paused_poll_ticks: DurationTicks,
-    pub(super) cold_threshold_ticks: DurationTicks,
-    pub(super) lease_timeout_ticks: DurationTicks,
+    pub(crate) cold_threshold_ticks: DurationTicks,
+    pub(crate) lease_timeout_ticks: DurationTicks,
     pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
-    pub(super) effective_spin_threshold_ticks: DurationTicks,
+    pub(crate) effective_spin_threshold_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
