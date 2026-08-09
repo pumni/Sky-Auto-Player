@@ -10,24 +10,23 @@
 
 use serde_json::json;
 use sky_dispatch_core::estimator::LatencyClass;
-use sky_dispatch_win32::clock::QpcClock;
-use sky_dispatch_win32::event::OwnedEvent;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchStep, ProductionDispatchTestHarness,
 };
 use std::time::Instant;
 
-const ITERATIONS: usize = 32;
-const WAIT_US: u64 = 250;
-const SPIN_US: u64 = 150;
+const ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
+const COLD_THRESHOLD_US: u64 = 10_000;
+const HOT_PREVIOUS_GAP_US: u64 = 5_000;
+const COLD_PREVIOUS_GAP_US: u64 = 20_000;
 
 #[derive(Default)]
 struct Samples {
     wake_to_send_start_us: Vec<u64>,
     sendinput_duration_us: Vec<u64>,
     completion_error_us: Vec<i64>,
+    physical_dispatches: usize,
 }
 
 fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usize) -> Option<T> {
@@ -61,119 +60,97 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
     }
 }
 
-fn wait_for_deadline(
-    clock: QpcClock,
-    waiter: &HybridWaiter,
-) -> Option<sky_dispatch_win32::wait::WaitResult> {
-    let interrupt = OwnedEvent::new_auto_reset()?;
-    let now = clock.now().ok()?;
-    let wait_ticks = clock.duration_from_us(WAIT_US).ok()?;
-    let spin_ticks = clock.duration_from_us(SPIN_US).ok()?;
-    let target = now.checked_add_duration(wait_ticks).ok()?;
-    let result = waiter.wait_until_ticks_with_metrics_typed(clock, target, spin_ticks, &interrupt);
-    (result.outcome == WaitOutcome::Deadline).then_some(result)
+fn plan_projected(
+    harness: &mut ProductionDispatchTestHarness,
+    expected_class: LatencyClass,
+) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
+    harness.set_cold_threshold_us(COLD_THRESHOLD_US);
+    harness.set_previous_send_gap_us(match expected_class {
+        LatencyClass::Hot => HOT_PREVIOUS_GAP_US,
+        LatencyClass::Cold => COLD_PREVIOUS_GAP_US,
+    });
+    let plan = harness.plan_current_dispatch_projected();
+    assert_eq!(
+        plan.latency_class(),
+        expected_class,
+        "projected planner classified scenario incorrectly"
+    );
+    plan
 }
 
-fn qpc_delta_us(
-    clock: QpcClock,
-    start: sky_dispatch_win32::clock::QpcTicks,
-    end: sky_dispatch_win32::clock::QpcTicks,
-) -> Option<u64> {
-    let ticks = end.checked_duration_since(start).ok()?;
-    clock.duration_to_us(ticks).ok()
-}
-
-fn run_down(key_count: usize, latency_class: LatencyClass) -> Samples {
+fn run_down(key_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
     let mut samples = Samples::default();
-    let clock = QpcClock::initialize().expect("QPC clock");
-    let waiter = HybridWaiter::new();
     for _ in 0..ITERATIONS {
-        let mut harness = ProductionDispatchTestHarness::new_down_chord(key_count);
-        let plan = harness.plan_current_dispatch_class(latency_class);
-        let Some(wait_result) = wait_for_deadline(clock, &waiter) else {
-            continue;
-        };
-        harness.advance_playback_time_us(DUE_US);
-        let send_start = clock.now().expect("send-start QPC");
-        let step = harness.dispatch_authored_with_plan(&plan);
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, DUE_US);
+        let plan = plan_projected(&mut harness, latency_class);
+        let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "down step: {step:?}"
         );
-        if let Some(wake_qpc) = wait_result.wake_qpc
-            && let Some(delta) = qpc_delta_us(clock, wake_qpc, send_start)
-        {
-            samples.wake_to_send_start_us.push(delta);
-        }
+        samples.physical_dispatches += 1;
         while let Some(observation) = harness.pop_observation() {
             add_observation(&mut samples, observation);
         }
     }
-    samples
+    Ok(samples)
 }
 
-fn run_up(latency_class: LatencyClass) -> Samples {
+fn run_up(latency_class: LatencyClass) -> Result<Samples, String> {
     let mut samples = Samples::default();
-    let clock = QpcClock::initialize().expect("QPC clock");
-    let waiter = HybridWaiter::new();
     for _ in 0..ITERATIONS {
         let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(DUE_US);
         while harness.pop_observation().is_some() {}
-        let plan = harness.plan_current_dispatch_class(latency_class);
-        let Some(wait_result) = wait_for_deadline(clock, &waiter) else {
-            continue;
-        };
-        harness.advance_playback_time_us(DUE_US);
-        let send_start = clock.now().expect("send-start QPC");
-        let step = harness.dispatch_authored_with_plan(&plan);
+        let plan = plan_projected(&mut harness, latency_class);
+        let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "up step: {step:?}"
         );
-        if let Some(wake_qpc) = wait_result.wake_qpc
-            && let Some(delta) = qpc_delta_us(clock, wake_qpc, send_start)
-        {
-            samples.wake_to_send_start_us.push(delta);
-        }
+        samples.physical_dispatches += 1;
         while let Some(observation) = harness.pop_observation() {
             add_observation(&mut samples, observation);
         }
     }
-    samples
+    Ok(samples)
 }
 
-fn run_mixed(event_count: usize, latency_class: LatencyClass) -> Samples {
+fn run_mixed(event_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
     let mut samples = Samples::default();
-    let clock = QpcClock::initialize().expect("QPC clock");
-    let waiter = HybridWaiter::new();
     for _ in 0..ITERATIONS {
-        let mut harness = ProductionDispatchTestHarness::new_mixed_events(event_count);
+        let mut harness =
+            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, DUE_US);
         while harness.pop_observation().is_some() {}
-        let plan = harness.plan_current_dispatch_class(latency_class);
-        let Some(wait_result) = wait_for_deadline(clock, &waiter) else {
-            continue;
-        };
-        harness.advance_playback_time_us(DUE_US);
-        let send_start = clock.now().expect("send-start QPC");
-        let step = harness.dispatch_authored_with_plan(&plan);
+        let plan = plan_projected(&mut harness, latency_class);
+        let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "mixed step: {step:?}"
         );
-        if let Some(wake_qpc) = wait_result.wake_qpc
-            && let Some(delta) = qpc_delta_us(clock, wake_qpc, send_start)
-        {
-            samples.wake_to_send_start_us.push(delta);
-        }
+        samples.physical_dispatches += 1;
         while let Some(observation) = harness.pop_observation() {
             add_observation(&mut samples, observation);
         }
     }
-    samples
+    Ok(samples)
 }
 
-fn summarize(mut samples: Samples) -> serde_json::Value {
+fn summarize(mut samples: Samples, planned_class: LatencyClass) -> serde_json::Value {
+    assert_eq!(
+        samples.wake_to_send_start_us.len(),
+        samples.physical_dispatches,
+        "every successful physical dispatch must have one raw wake-to-send sample"
+    );
+    assert_eq!(
+        samples.wake_to_send_start_us.len(),
+        ITERATIONS,
+        "scenario did not produce the requested number of timing samples"
+    );
     json!({
+        "planned_class": match planned_class {
+            LatencyClass::Hot => "hot",
+            LatencyClass::Cold => "cold",
+        },
         "deadline_wake_to_send_start_us": {
             "p50": quantile(&mut samples.wake_to_send_start_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_send_start_us, 95, 100),
@@ -182,6 +159,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "samples": samples.wake_to_send_start_us.len(),
         },
         "completion_error_us": {
+            "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
             "p95": quantile(&mut samples.completion_error_us, 95, 100),
             "p99": quantile(&mut samples.completion_error_us, 99, 100),
@@ -195,6 +173,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max": samples.sendinput_duration_us.iter().copied().max(),
             "samples": samples.sendinput_duration_us.len(),
         },
+        "physical_dispatches": samples.physical_dispatches,
     })
 }
 
@@ -208,24 +187,39 @@ fn main() {
         };
         scenarios.insert(
             format!("down_only_1_{class_name}"),
-            summarize(run_down(1, latency_class)),
+            summarize(
+                run_down(1, latency_class).unwrap_or_else(|error| panic!("{error}")),
+                latency_class,
+            ),
         );
         scenarios.insert(
             format!("down_only_5_{class_name}"),
-            summarize(run_down(5, latency_class)),
+            summarize(
+                run_down(5, latency_class).unwrap_or_else(|error| panic!("{error}")),
+                latency_class,
+            ),
         );
         scenarios.insert(
             format!("down_only_15_{class_name}"),
-            summarize(run_down(15, latency_class)),
+            summarize(
+                run_down(15, latency_class).unwrap_or_else(|error| panic!("{error}")),
+                latency_class,
+            ),
         );
         scenarios.insert(
             format!("up_only_{class_name}"),
-            summarize(run_up(latency_class)),
+            summarize(
+                run_up(latency_class).unwrap_or_else(|error| panic!("{error}")),
+                latency_class,
+            ),
         );
         for event_count in [2, 10, 30] {
             scenarios.insert(
                 format!("mixed_{event_count}_{class_name}"),
-                summarize(run_mixed(event_count, latency_class)),
+                summarize(
+                    run_mixed(event_count, latency_class).unwrap_or_else(|error| panic!("{error}")),
+                    latency_class,
+                ),
             );
         }
     }
@@ -234,8 +228,8 @@ fn main() {
         serde_json::to_string_pretty(&json!({
             "benchmark": "rt_handoff_bench",
             "iterations": ITERATIONS,
-            "wait_us": WAIT_US,
-            "spin_us": SPIN_US,
+            "deadline_us": DUE_US,
+            "cold_threshold_us": COLD_THRESHOLD_US,
             "transport": "deterministic_mock",
             "scenarios": scenarios,
             "elapsed_ms": started.elapsed().as_millis(),

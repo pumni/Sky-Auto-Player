@@ -529,6 +529,58 @@ fn production_mixed_hard_path_no_alloc() {
     assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
 
+#[test]
+fn production_deadline_handoff_down_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let plan = harness.plan_current_dispatch();
+    harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
+
+    enable_counting();
+    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0);
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_deadline_handoff_mixed_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let initial_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_authored_with_plan(&initial_plan),
+        DispatchStep::Dispatched
+    ));
+    harness.advance_playback_time_us(10_000);
+    let plan = harness.plan_current_dispatch();
+    harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
+
+    enable_counting();
+    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0);
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_deadline_handoff_up_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+    harness.advance_playback_time_us(10_000);
+    let plan = harness.plan_current_dispatch();
+    harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
+
+    enable_counting();
+    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0);
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
 /// Pending-release production dispatch hard-path makes ZERO heap allocations.
 #[test]
 fn production_pending_release_hard_path_no_alloc() {
