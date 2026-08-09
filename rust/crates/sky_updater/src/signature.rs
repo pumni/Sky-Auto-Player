@@ -141,23 +141,6 @@ fn verify_authenticode(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    verify_publisher_subject(path)?;
-    Ok(())
-}
-
-#[cfg(all(windows, not(debug_assertions)))]
-fn verify_publisher_subject(path: &Path) -> Result<()> {
-    use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Security::Cryptography::{
-        CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_NAME_RDN_TYPE,
-        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-        CERT_QUERY_FORMAT_FLAG_ALL, CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO,
-        CMSG_SIGNER_INFO_PARAM, CertCloseStore, CertFindCertificateInStore,
-        CertFreeCertificateContext, CertGetNameStringW, CryptMsgClose, CryptMsgGetParam,
-        CryptQueryObject, HCERTSTORE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
-    };
-
     let expected = option_env!("SKY_PUBLISHER_SUBJECT").ok_or_else(|| {
         UpdaterError::SignatureInvalid(
             "release updater was built without SKY_PUBLISHER_SUBJECT".into(),
@@ -168,6 +151,66 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
             "SKY_PUBLISHER_SUBJECT is empty".into(),
         ));
     }
+    verify_publisher_subject(path, expected)?;
+    Ok(())
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), all(test, windows)))]
+struct SignedMessageResources {
+    store: windows_sys::Win32::Security::Cryptography::HCERTSTORE,
+    message: *mut std::ffi::c_void,
+    context: *const windows_sys::Win32::Security::Cryptography::CERT_CONTEXT,
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), all(test, windows)))]
+impl Drop for SignedMessageResources {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Security::Cryptography::{
+            CertCloseStore, CertFreeCertificateContext, CryptMsgClose,
+        };
+
+        unsafe {
+            if !self.context.is_null() {
+                CertFreeCertificateContext(self.context);
+            }
+            if !self.message.is_null() {
+                CryptMsgClose(self.message);
+            }
+            if !self.store.is_null() {
+                CertCloseStore(self.store, 0);
+            }
+        }
+    }
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), all(test, windows)))]
+struct CertificateResource(*const windows_sys::Win32::Security::Cryptography::CERT_CONTEXT);
+
+#[cfg(any(all(windows, not(debug_assertions)), all(test, windows)))]
+impl Drop for CertificateResource {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::CertFreeCertificateContext(self.0);
+            }
+        }
+    }
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), all(test, windows)))]
+fn verify_publisher_subject(path: &Path, expected: &str) -> Result<()> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Cryptography::{
+        CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_NAME_RDN_TYPE,
+        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+        CERT_QUERY_FORMAT_FLAG_ALL, CERT_QUERY_OBJECT_FILE, CERT_X500_NAME_STR,
+        CMSG_SIGNER_CERT_INFO_PARAM, CertFindCertificateInStore, CertGetNameStringW,
+        CryptMsgGetParam, CryptQueryObject, HCERTSTORE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+    };
+
+    const MAX_SIGNER_CERT_INFO_BYTES: usize = 64 * 1024;
+
     let path_wide = path
         .as_os_str()
         .encode_wide()
@@ -196,67 +239,73 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
             &mut context,
         )
     };
-    if queried == 0 || store.is_null() || message.is_null() {
+    let resources = SignedMessageResources {
+        store,
+        message,
+        context: context.cast(),
+    };
+    if queried == 0 || resources.store.is_null() || resources.message.is_null() {
         return Err(UpdaterError::SignatureInvalid(format!(
             "signed certificate could not be read: {}",
             path.display()
         )));
     }
-    let context = context.cast::<windows_sys::Win32::Security::Cryptography::CERT_CONTEXT>();
 
     let mut signer_size = 0u32;
     let size_ok = unsafe {
         CryptMsgGetParam(
-            message,
-            CMSG_SIGNER_INFO_PARAM,
+            resources.message,
+            CMSG_SIGNER_CERT_INFO_PARAM,
             0,
             std::ptr::null_mut(),
             &mut signer_size,
         )
     } != 0;
-    if !size_ok || signer_size as usize != std::mem::size_of::<CMSG_SIGNER_INFO>() {
-        unsafe {
-            if !context.is_null() {
-                CertFreeCertificateContext(context);
-            }
-            CryptMsgClose(message);
-            CertCloseStore(store, 0);
-        }
+    if !size_ok
+        || signer_size == 0
+        || signer_size as usize > MAX_SIGNER_CERT_INFO_BYTES
+        || (signer_size as usize) < std::mem::size_of::<CERT_INFO>()
+    {
         return Err(UpdaterError::SignatureInvalid(
-            "signed message signer information is unavailable".into(),
+            "signed message signer certificate information is unavailable".into(),
         ));
     }
 
-    let mut signer_info = std::mem::MaybeUninit::<CMSG_SIGNER_INFO>::zeroed();
-    let mut signer_capacity = signer_size;
+    // CMSG_SIGNER_CERT_INFO_PARAM returns a variable-length BYTE buffer that
+    // contains a CERT_INFO. Vec<usize> provides sufficient alignment for the
+    // CERT_INFO view while preserving the exact byte-size contract.
+    let word_size = std::mem::size_of::<usize>();
+    let word_count = (signer_size as usize).div_ceil(word_size);
+    let mut signer_buffer = vec![0usize; word_count];
+    let mut signer_capacity = (signer_buffer.len() * word_size) as u32;
     let signer_ok = unsafe {
         CryptMsgGetParam(
-            message,
-            CMSG_SIGNER_INFO_PARAM,
+            resources.message,
+            CMSG_SIGNER_CERT_INFO_PARAM,
             0,
-            signer_info.as_mut_ptr().cast::<c_void>(),
+            signer_buffer.as_mut_ptr().cast::<c_void>(),
             &mut signer_capacity,
         )
     } != 0;
     if !signer_ok {
-        unsafe {
-            if !context.is_null() {
-                CertFreeCertificateContext(context);
-            }
-            CryptMsgClose(message);
-            CertCloseStore(store, 0);
-        }
         return Err(UpdaterError::SignatureInvalid(
-            "signed message signer information could not be read".into(),
+            "signed message signer certificate information could not be read".into(),
         ));
     }
-    let signer_info = unsafe { signer_info.assume_init() };
-    let mut signer_cert_info = CERT_INFO::default();
-    signer_cert_info.Issuer = signer_info.Issuer;
-    signer_cert_info.SerialNumber = signer_info.SerialNumber;
+    if (signer_capacity as usize) < std::mem::size_of::<CERT_INFO>() {
+        return Err(UpdaterError::SignatureInvalid(
+            "signed message signer certificate information is truncated".into(),
+        ));
+    }
+    let signer_info = unsafe { &*signer_buffer.as_ptr().cast::<CERT_INFO>() };
+    let signer_cert_info = CERT_INFO {
+        Issuer: signer_info.Issuer,
+        SerialNumber: signer_info.SerialNumber,
+        ..Default::default()
+    };
     let certificate = unsafe {
         CertFindCertificateInStore(
-            store,
+            resources.store,
             X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
             0,
             CERT_FIND_SUBJECT_CERT,
@@ -265,46 +314,69 @@ fn verify_publisher_subject(path: &Path) -> Result<()> {
         )
     };
     if certificate.is_null() {
-        unsafe {
-            if !context.is_null() {
-                CertFreeCertificateContext(context);
-            }
-            CryptMsgClose(message);
-            CertCloseStore(store, 0);
-        }
         return Err(UpdaterError::SignatureInvalid(
             "actual signed-message signer certificate is missing".into(),
         ));
     }
+    let _certificate = CertificateResource(certificate);
 
-    let mut subject = [0u16; 512];
-    let length = unsafe {
+    // CERT_NAME_RDN_TYPE requires pvTypePara to point to a DWORD containing
+    // the CertNameToStr format. X500 output is deterministic for the policy
+    // value supplied by SKY_PUBLISHER_SUBJECT.
+    let name_format = CERT_X500_NAME_STR;
+    let name_format_ptr = &name_format as *const _ as *const c_void;
+    let required = unsafe {
         CertGetNameStringW(
-            certificate,
+            _certificate.0,
             CERT_NAME_RDN_TYPE,
             0,
-            std::ptr::null(),
+            name_format_ptr,
+            std::ptr::null_mut(),
+            0,
+        )
+    } as usize;
+    if required == 0 {
+        return Err(UpdaterError::SignatureInvalid(
+            "publisher identity could not be read".into(),
+        ));
+    }
+    let mut subject = vec![0u16; required];
+    let length = unsafe {
+        CertGetNameStringW(
+            _certificate.0,
+            CERT_NAME_RDN_TYPE,
+            0,
+            name_format_ptr,
             subject.as_mut_ptr(),
             subject.len() as u32,
         )
     } as usize;
-    let actual = if length > 0 && length <= subject.len() {
-        String::from_utf16_lossy(&subject[..length.saturating_sub(1)])
-    } else {
-        String::new()
-    };
-    unsafe {
-        CertFreeCertificateContext(certificate);
-        if !context.is_null() {
-            CertFreeCertificateContext(context);
-        }
-        CryptMsgClose(message);
-        CertCloseStore(store, 0);
+    if length == 0 || length > subject.len() {
+        return Err(UpdaterError::SignatureInvalid(
+            "publisher identity could not be decoded".into(),
+        ));
     }
+    let actual = String::from_utf16_lossy(&subject[..length.saturating_sub(1)]);
     if actual != expected {
         return Err(UpdaterError::SignatureInvalid(format!(
             "publisher subject mismatch: expected {expected:?}, got {actual:?}"
         )));
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn publisher_subject_cryptoapi_fixture() {
+        let Ok(path) = std::env::var("SKY_AUTHENTICODE_TEST_PE") else {
+            return;
+        };
+        let expected = std::env::var("SKY_AUTHENTICODE_TEST_PUBLISHER")
+            .expect("SKY_AUTHENTICODE_TEST_PUBLISHER must accompany the fixture");
+        super::verify_publisher_subject(Path::new(&path), &expected)
+            .expect("CryptoAPI should resolve the actual Authenticode signer");
+    }
 }

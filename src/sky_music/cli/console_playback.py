@@ -203,9 +203,8 @@ def _mini_preflight(is_dry_run: bool, hold_label: str = "hold 1.00f", tempo: flo
             else:
                 return False
 
-    _window_target.focus_window()
-    time.sleep(0.25)
-
+    # Startup preflight is read-only: the user must focus Sky manually. An
+    # explicit retry is the only path allowed to request refocus.
     focus_ok = _window_target.is_sky_active()
     if not focus_ok:
         while True:
