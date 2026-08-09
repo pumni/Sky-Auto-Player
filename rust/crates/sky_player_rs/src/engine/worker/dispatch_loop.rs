@@ -8,7 +8,7 @@ use super::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
     anchored_dispatch_target_ticks_typed, ensure_preflight_for_target, focus_matches,
     focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch_projected,
-    process_command_control, publish_backend_metrics, suspend_live_input,
+    plan_structure_is_valid, process_command_control, publish_backend_metrics, suspend_live_input,
     target_stamp_still_current, wait_failure_message, wait_for_next_boundary,
 };
 use smallvec::SmallVec;
@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 /// for both an already-due plan and a successful blocking deadline wake, so a
 /// normal timer wake never re-enters general orchestration before transport.
 #[allow(clippy::too_many_arguments)]
-fn dispatch_due_from_plan(
+pub(crate) fn dispatch_due_from_plan(
     plan: &super::planning::NextDispatchPlan,
     effective_now_ticks: TimelineTicks,
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
@@ -45,6 +45,11 @@ fn dispatch_due_from_plan(
     metrics: &crate::engine::telemetry::SharedMetrics,
     observer: &mut super::dispatch::PendingObservationQueue,
 ) -> super::DispatchStep {
+    if !plan_structure_is_valid(plan) {
+        return super::DispatchStep::Terminate(
+            "dispatch plan has inconsistent physical-work budgets".to_string(),
+        );
+    }
     let pending_plan = plan.pending.as_ref();
     let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |pending| pending.lead_ticks);
     let due_pending = match pending_plan {
@@ -98,6 +103,15 @@ fn dispatch_due_from_plan(
                 return super::DispatchStep::Terminate(error);
             }
         }
+    }
+
+    if plan.authored.is_none() {
+        return super::DispatchStep::NoWork;
+    }
+    if plan.authored_budget.is_none() {
+        return super::DispatchStep::Terminate(
+            "authored dispatch plan has no health budget".to_string(),
+        );
     }
 
     super::dispatch_authored_packet(

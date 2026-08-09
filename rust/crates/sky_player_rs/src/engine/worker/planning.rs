@@ -84,6 +84,11 @@ impl NextDispatchPlan {
     }
 }
 
+pub(crate) fn plan_structure_is_valid(plan: &NextDispatchPlan) -> bool {
+    plan.authored.is_some() == plan.authored_budget.is_some()
+        && plan.pending.is_some() == plan.pending_budget.is_some()
+}
+
 /// Planning failure. Materialized only on the terminal path; success never
 /// formats strings or allocates.
 #[derive(Debug)]
@@ -117,6 +122,7 @@ impl From<CoordinatorError> for PlanningError {
 /// 5. Does not mutate the coordinator.
 /// 6. Does not sample QPC (conversions only).
 /// 7. Does not allocate or format strings on the success path.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn plan_next_dispatch(
     coordinator: &RuntimeDispatchCoordinator,
     estimator: &SendLatencyEstimator,
@@ -275,14 +281,16 @@ fn plan_next_dispatch_with_class(
         )
     });
 
-    Ok(NextDispatchPlan {
+    let plan = NextDispatchPlan {
         latency_class,
         authored,
         authored_budget,
         pending,
         pending_budget,
         deadline_ticks,
-    })
+    };
+    debug_assert!(plan_structure_is_valid(&plan));
+    Ok(plan)
 }
 
 #[cfg(test)]

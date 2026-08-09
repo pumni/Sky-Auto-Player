@@ -8,7 +8,7 @@ use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResul
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
-pub(super) enum WaitBoundary {
+pub(crate) enum WaitBoundary {
     Due { wait_result: Option<WaitResult> },
     Replan { wait_result: WaitResult },
     Exit,
@@ -24,44 +24,44 @@ pub struct WaitObservation {
     pub allow_pre_epoch_startup_dispatch: bool,
 }
 
-pub(super) struct WaitDeadline<'a> {
-    pub(super) deadline_ticks: Option<TimelineTicks>,
-    pub(super) qpc_clock: QpcClock,
-    pub(super) clock_state: &'a mut PlaybackClockState,
-    pub(super) allow_pre_epoch_startup_dispatch: bool,
+pub(crate) struct WaitDeadline<'a> {
+    pub(crate) deadline_ticks: Option<TimelineTicks>,
+    pub(crate) qpc_clock: QpcClock,
+    pub(crate) clock_state: &'a mut PlaybackClockState,
+    pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 
-pub(super) struct WaitTiming<'a> {
-    pub(super) effective_spin_threshold_ticks: DurationTicks,
-    pub(super) lease_timeout_ticks: DurationTicks,
-    pub(super) supervisor_heartbeat_ticks: &'a AtomicU64,
+pub(crate) struct WaitTiming<'a> {
+    pub(crate) effective_spin_threshold_ticks: DurationTicks,
+    pub(crate) lease_timeout_ticks: DurationTicks,
+    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
 
-pub(super) struct WaitSignals<'a> {
-    pub(super) waiter: &'a HybridWaiter,
-    pub(super) interrupt: &'a OwnedEvent,
-    pub(super) strict_timing: bool,
+pub(crate) struct WaitSignals<'a> {
+    pub(crate) waiter: &'a HybridWaiter,
+    pub(crate) interrupt: &'a OwnedEvent,
+    pub(crate) strict_timing: bool,
 }
 
-pub(super) struct WaitMutable<'a> {
-    pub(super) local_metrics: &'a mut WorkerMetricsLocal,
-    pub(super) pending_pre_send_spin_us: &'a mut u64,
-    pub(super) force_full_cleanup: &'a mut bool,
-    pub(super) terminal_error: &'a mut Option<String>,
+pub(crate) struct WaitMutable<'a> {
+    pub(crate) local_metrics: &'a mut WorkerMetricsLocal,
+    pub(crate) pending_pre_send_spin_us: &'a mut u64,
+    pub(crate) force_full_cleanup: &'a mut bool,
+    pub(crate) terminal_error: &'a mut Option<String>,
 }
 
-pub(super) struct WaitBoundaryInput<'a> {
-    pub(super) deadline: WaitDeadline<'a>,
-    pub(super) timing: WaitTiming<'a>,
-    pub(super) signals: WaitSignals<'a>,
-    pub(super) mutable: WaitMutable<'a>,
+pub(crate) struct WaitBoundaryInput<'a> {
+    pub(crate) deadline: WaitDeadline<'a>,
+    pub(crate) timing: WaitTiming<'a>,
+    pub(crate) signals: WaitSignals<'a>,
+    pub(crate) mutable: WaitMutable<'a>,
 }
 
 fn dispatch_deadline_wake_is_due(bounded_target: QpcTicks, target_qpc: QpcTicks) -> bool {
     bounded_target == target_qpc
 }
 
-pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
+pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
     let WaitBoundaryInput {
         deadline,
         timing,
@@ -186,8 +186,17 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
 
 #[cfg(test)]
 mod tests {
-    use super::dispatch_deadline_wake_is_due;
-    use sky_dispatch_win32::clock::QpcTicks;
+    use super::{
+        WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
+        dispatch_deadline_wake_is_due, wait_for_next_boundary,
+    };
+    use crate::engine::telemetry::WorkerMetricsLocal;
+    use sky_dispatch_core::clock::PlaybackClockState;
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+    use sky_dispatch_win32::event::OwnedEvent;
+    use sky_dispatch_win32::wait::HybridWaiter;
+    use std::sync::atomic::AtomicU64;
 
     #[test]
     fn lease_boundary_is_not_a_dispatch_deadline() {
@@ -199,5 +208,59 @@ mod tests {
             QpcTicks::from_raw(1),
             QpcTicks::from_raw(2)
         ));
+    }
+
+    #[test]
+    fn lease_only_timer_wake_replans_instead_of_dispatching() {
+        let qpc_clock = QpcClock::initialize().expect("qpc clock");
+        let epoch = qpc_clock.now().expect("qpc epoch");
+        let deadline = TimelineTicks::from_raw(
+            qpc_clock
+                .duration_from_us(50_000)
+                .expect("deadline conversion")
+                .as_u64(),
+        );
+        let mut clock_state =
+            PlaybackClockState::new(epoch, DurationTicks::ZERO).expect("playback clock");
+        let heartbeat = AtomicU64::new(epoch.as_u64());
+        let waiter = HybridWaiter::new();
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut pending_pre_send_spin_us = 0;
+        let mut force_full_cleanup = false;
+        let mut terminal_error = None;
+
+        let boundary = wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                deadline_ticks: Some(deadline),
+                qpc_clock,
+                clock_state: &mut clock_state,
+                allow_pre_epoch_startup_dispatch: false,
+            },
+            timing: WaitTiming {
+                effective_spin_threshold_ticks: DurationTicks::ZERO,
+                lease_timeout_ticks: qpc_clock.duration_from_us(1_000).expect("lease conversion"),
+                supervisor_heartbeat_ticks: &heartbeat,
+            },
+            signals: WaitSignals {
+                waiter: &waiter,
+                interrupt: &interrupt,
+                strict_timing: true,
+            },
+            mutable: WaitMutable {
+                local_metrics: &mut local_metrics,
+                pending_pre_send_spin_us: &mut pending_pre_send_spin_us,
+                force_full_cleanup: &mut force_full_cleanup,
+                terminal_error: &mut terminal_error,
+            },
+        });
+
+        assert!(matches!(
+            boundary,
+            WaitBoundary::Replan { wait_result }
+                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
+        ));
+        assert!(!force_full_cleanup);
+        assert!(terminal_error.is_none());
     }
 }
