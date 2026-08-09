@@ -49,7 +49,6 @@ mod wake_tests {
             ..WorkerRuntime::default()
         };
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).expect("frequency"));
-
         assert_eq!(
             take_wake_to_send_start_us(&mut runtime, clock, QpcTicks::from_raw(125)),
             Some(25)
@@ -457,7 +456,6 @@ pub(super) fn record_release_telemetry(
     }
     Ok(())
 }
-
 #[derive(Debug)]
 pub struct PendingObservationQueue {
     entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
@@ -666,6 +664,7 @@ pub(crate) fn drain_down_send_outcome(
             observation.delivered_count,
             observation.batch_intent_count,
             observation.lead_down,
+            observation.lead_down_saturated,
             observation.completion_error_us,
             observation.estimator_evidence,
             observation.latency_class,
@@ -768,6 +767,7 @@ pub(crate) fn drain_up_send_outcome(
             observation.sent_count,
             observation.scan_count,
             lead_up,
+            observation.lead_up_saturated,
             observation.up_completion_error_us,
             observation.estimator_evidence,
             observation.latency_class,

@@ -744,7 +744,7 @@ impl SendLatencyEstimator {
         n_keys: usize,
         latency_class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
-        self.update_observation(path, latency_class, duration_us, n_keys, None)
+        self.update_observation(path, latency_class, duration_us, n_keys, None, false)
     }
 
     pub fn update_observation(
@@ -754,6 +754,7 @@ impl SendLatencyEstimator {
         duration_us: u64,
         polyphony: usize,
         completion_error_us: Option<i64>,
+        applied_lead_saturated: bool,
     ) -> Result<(), EstimatorStateError> {
         let duration_us = duration_us.min(MAX_SAMPLE_US);
         let n = 1.max(self.max_poly.min(polyphony));
@@ -772,8 +773,6 @@ impl SendLatencyEstimator {
                 self.mixed_totals.ensure_push(duration_us, class)?;
             }
         }
-        let saturated = completion_error_us
-            .is_some_and(|error_us| error_us > 0 && self.lead_cache[n][channel][0].saturated);
         if let Some(error_us) = completion_error_us {
             self.corrections[channel].ensure_update(error_us)?;
         }
@@ -792,7 +791,8 @@ impl SendLatencyEstimator {
             }
         }
         if let Some(error_us) = completion_error_us {
-            self.corrections[channel].update(self.alpha, error_us, !saturated)?;
+            let integrate = !(applied_lead_saturated && error_us > 0);
+            self.corrections[channel].update(self.alpha, error_us, integrate)?;
         }
         self.refresh_channel(path, class);
         Ok(())
@@ -802,8 +802,14 @@ impl SendLatencyEstimator {
         &mut self,
         path: SendPath,
         error_us: i64,
+        applied_lead_saturated: bool,
     ) -> Result<(), EstimatorStateError> {
-        self.update_completion_error_with_class(path, error_us, LatencyClass::Hot)
+        self.update_completion_error_with_class(
+            path,
+            error_us,
+            LatencyClass::Hot,
+            applied_lead_saturated,
+        )
     }
 
     pub fn update_completion_error_with_class(
@@ -811,10 +817,11 @@ impl SendLatencyEstimator {
         path: SendPath,
         error_us: i64,
         class: LatencyClass,
+        applied_lead_saturated: bool,
     ) -> Result<(), EstimatorStateError> {
         let channel = channel_index(path, class);
-        let saturated = error_us > 0 && self.lead_cache[1][channel][0].saturated;
-        self.corrections[channel].update(self.alpha, error_us, !saturated)?;
+        let integrate = !(applied_lead_saturated && error_us > 0);
+        self.corrections[channel].update(self.alpha, error_us, integrate)?;
         self.refresh_channel(path, class);
         Ok(())
     }
@@ -1183,14 +1190,14 @@ mod tests {
             (SendPath::Mixed, LatencyClass::Hot, 350, 4, Some(40)),
         ] {
             combined
-                .update_observation(path, class, duration, polyphony, residual)
+                .update_observation(path, class, duration, polyphony, residual, false)
                 .unwrap();
             separate
                 .update_with_class(path, duration, polyphony, class)
                 .unwrap();
             if let Some(residual) = residual {
                 separate
-                    .update_completion_error_with_class(path, residual, class)
+                    .update_completion_error_with_class(path, residual, class, false)
                     .unwrap();
             }
         }
@@ -1221,7 +1228,14 @@ mod tests {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
         let initial_refreshes = estimator.refresh_count;
         estimator
-            .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 2, Some(50))
+            .update_observation(
+                SendPath::DownOnly,
+                LatencyClass::Hot,
+                100,
+                2,
+                Some(50),
+                false,
+            )
             .unwrap();
         assert_eq!(estimator.refresh_count, initial_refreshes + 1);
     }
@@ -1235,7 +1249,14 @@ mod tests {
             .map(|poly_cache| poly_cache[channel_index(SendPath::UpOnly, LatencyClass::Cold)])
             .collect::<Vec<_>>();
         estimator
-            .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 2, Some(50))
+            .update_observation(
+                SendPath::DownOnly,
+                LatencyClass::Hot,
+                100,
+                2,
+                Some(50),
+                false,
+            )
             .unwrap();
         let up_cold_after = estimator
             .lead_cache
@@ -1409,7 +1430,7 @@ mod tests {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
             estimator.update(SendPath::UpOnly, 100, 1);
-            estimator.update_completion_error(SendPath::UpOnly, 300);
+            estimator.update_completion_error(SendPath::UpOnly, 300, false);
         }
         let adj_up = estimator.correction_us_for(SendPath::UpOnly);
         let adj_down = estimator.correction_us_for(SendPath::DownOnly);
@@ -1426,6 +1447,7 @@ mod tests {
                 SendPath::DownOnly,
                 300,
                 LatencyClass::Hot,
+                false,
             );
 
             estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Cold);
@@ -1433,6 +1455,7 @@ mod tests {
                 SendPath::DownOnly,
                 -300,
                 LatencyClass::Cold,
+                false,
             );
         }
 
@@ -1451,7 +1474,7 @@ mod tests {
             estimator.update(SendPath::DownOnly, 800, 1);
             let error = -400 - estimator.correction_us();
             estimator
-                .update_completion_error(SendPath::DownOnly, error)
+                .update_completion_error(SendPath::DownOnly, error, false)
                 .unwrap();
         }
         let adj = estimator.correction_us();
@@ -1461,7 +1484,7 @@ mod tests {
         for _ in 0..20 {
             let error = 400 - estimator.correction_us();
             estimator
-                .update_completion_error(SendPath::DownOnly, error)
+                .update_completion_error(SendPath::DownOnly, error, false)
                 .unwrap();
         }
         let adj2 = estimator.correction_us();
@@ -1545,7 +1568,14 @@ mod tests {
         for _ in 0..40 {
             let error = 200 - estimator.correction_us();
             estimator
-                .update_observation(SendPath::DownOnly, LatencyClass::Hot, 100, 1, Some(error))
+                .update_observation(
+                    SendPath::DownOnly,
+                    LatencyClass::Hot,
+                    100,
+                    1,
+                    Some(error),
+                    false,
+                )
                 .unwrap();
         }
         let correction = estimator.correction_us();
@@ -1558,14 +1588,14 @@ mod tests {
         for _ in 0..40 {
             let error = 200 - estimator.correction_us();
             estimator
-                .update_completion_error(SendPath::DownOnly, error)
+                .update_completion_error(SendPath::DownOnly, error, false)
                 .unwrap();
         }
         let positive = estimator.correction_us();
         for _ in 0..40 {
             let error = -150 - estimator.correction_us();
             estimator
-                .update_completion_error(SendPath::DownOnly, error)
+                .update_completion_error(SendPath::DownOnly, error, false)
                 .unwrap();
         }
         let recovered = estimator.correction_us();
@@ -1582,14 +1612,50 @@ mod tests {
         assert!(estimator.lead_saturated(SendPath::DownOnly, 1));
         for _ in 0..100 {
             estimator
-                .update_observation(SendPath::DownOnly, LatencyClass::Hot, 1_000, 1, Some(500))
+                .update_observation(
+                    SendPath::DownOnly,
+                    LatencyClass::Hot,
+                    1_000,
+                    1,
+                    Some(500),
+                    true,
+                )
                 .unwrap();
         }
         assert_eq!(estimator.correction_us(), 0);
         estimator
-            .update_completion_error(SendPath::DownOnly, -500)
+            .update_completion_error(SendPath::DownOnly, -500, true)
             .unwrap();
         assert!(estimator.correction_us() < 0);
+    }
+
+    #[test]
+    fn strict_applied_saturation_does_not_wind_up_correction() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 500, 1);
+        for _ in 0..10 {
+            estimator.update(SendPath::DownOnly, 1_000, 1).unwrap();
+        }
+        let strict = estimator.estimate_lead_with_class_and_policy(
+            SendPath::DownOnly,
+            1,
+            LatencyClass::Hot,
+            true,
+        );
+        assert!(strict.saturated);
+        let before = estimator.correction_us();
+        for _ in 0..100 {
+            estimator
+                .update_observation(
+                    SendPath::DownOnly,
+                    LatencyClass::Hot,
+                    1_000,
+                    1,
+                    Some(500),
+                    true,
+                )
+                .unwrap();
+        }
+        assert_eq!(estimator.correction_us(), before);
     }
 
     #[test]
