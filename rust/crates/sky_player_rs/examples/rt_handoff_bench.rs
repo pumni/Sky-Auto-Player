@@ -17,9 +17,6 @@ use std::time::Instant;
 
 const ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
-const COLD_THRESHOLD_US: u64 = 10_000;
-const HOT_PREVIOUS_GAP_US: u64 = 5_000;
-const COLD_PREVIOUS_GAP_US: u64 = 20_000;
 
 #[derive(Default)]
 struct Samples {
@@ -64,10 +61,11 @@ fn plan_projected(
     harness: &mut ProductionDispatchTestHarness,
     expected_class: LatencyClass,
 ) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
-    harness.set_cold_threshold_us(COLD_THRESHOLD_US);
+    let threshold_us = harness.cold_threshold_us();
+    let margin_us = (threshold_us / 4).max(1);
     harness.set_previous_send_gap_us(match expected_class {
-        LatencyClass::Hot => HOT_PREVIOUS_GAP_US,
-        LatencyClass::Cold => COLD_PREVIOUS_GAP_US,
+        LatencyClass::Hot => (threshold_us / 4).max(1),
+        LatencyClass::Cold => threshold_us.saturating_add(margin_us),
     });
     let plan = harness.plan_current_dispatch_projected();
     assert_eq!(
@@ -96,10 +94,11 @@ fn run_down(key_count: usize, latency_class: LatencyClass) -> Result<Samples, St
     Ok(samples)
 }
 
-fn run_up(latency_class: LatencyClass) -> Result<Samples, String> {
+fn run_up(key_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..ITERATIONS {
-        let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(DUE_US);
+        let mut harness =
+            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, DUE_US);
         while harness.pop_observation().is_some() {}
         let plan = plan_projected(&mut harness, latency_class);
         let step = harness.wait_and_dispatch_current_plan(&plan)?;
@@ -207,12 +206,21 @@ fn main() {
             ),
         );
         scenarios.insert(
-            format!("up_only_{class_name}"),
+            format!("up_only_1_{class_name}"),
             summarize(
-                run_up(latency_class).unwrap_or_else(|error| panic!("{error}")),
+                run_up(1, latency_class).unwrap_or_else(|error| panic!("{error}")),
                 latency_class,
             ),
         );
+        for key_count in [5, 15] {
+            scenarios.insert(
+                format!("up_only_{key_count}_{class_name}"),
+                summarize(
+                    run_up(key_count, latency_class).unwrap_or_else(|error| panic!("{error}")),
+                    latency_class,
+                ),
+            );
+        }
         for event_count in [2, 10, 30] {
             scenarios.insert(
                 format!("mixed_{event_count}_{class_name}"),
@@ -229,7 +237,6 @@ fn main() {
             "benchmark": "rt_handoff_bench",
             "iterations": ITERATIONS,
             "deadline_us": DUE_US,
-            "cold_threshold_us": COLD_THRESHOLD_US,
             "transport": "deterministic_mock",
             "scenarios": scenarios,
             "elapsed_ms": started.elapsed().as_millis(),
