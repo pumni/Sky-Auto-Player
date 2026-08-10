@@ -120,6 +120,10 @@ impl WorkerRuntime {
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
     }
+
+    pub(crate) fn set_startup_dispatch_target_for_test(&mut self, target: QpcTicks) {
+        self.startup_dispatch_target_qpc = Some(target);
+    }
 }
 
 #[derive(Default)]

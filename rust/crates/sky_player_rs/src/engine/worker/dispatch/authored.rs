@@ -70,8 +70,16 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
+    let prepare_now_ticks = authored_prepare_now_ticks(
+        effective_now_ticks,
+        startup_target_selected,
+        dispatch_plan
+            .authored
+            .as_ref()
+            .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
+    );
     let prepared_batch =
-        match coordinator.prepare_next_due_authored(effective_now_ticks, requested_lead_ticks) {
+        match coordinator.prepare_next_due_authored(prepare_now_ticks, requested_lead_ticks) {
             Ok(value) => value,
             Err(error) => {
                 return DispatchStep::Terminate(format!(
@@ -179,6 +187,18 @@ fn applied_authored_lead(
         effective_lead_ticks,
         requested_lead_saturated && effective_lead_ticks == requested_lead_ticks,
     )
+}
+
+fn authored_prepare_now_ticks(
+    effective_now_ticks: TimelineTicks,
+    startup_target_selected: bool,
+    authored_deadline_ticks: TimelineTicks,
+) -> TimelineTicks {
+    if startup_target_selected {
+        effective_now_ticks.max(authored_deadline_ticks)
+    } else {
+        effective_now_ticks
+    }
 }
 
 /// Admission gate + SendInput call + telemetry + estimator update + health
@@ -798,5 +818,25 @@ mod tests {
 
         assert_eq!(applied_lead, DurationTicks::from_raw(500));
         assert!(saturated);
+    }
+
+    #[test]
+    fn startup_prepare_now_reaches_nonzero_sublead_deadline() {
+        assert_eq!(
+            authored_prepare_now_ticks(TimelineTicks::ZERO, true, TimelineTicks::from_raw(100),),
+            TimelineTicks::from_raw(100)
+        );
+        assert_eq!(
+            authored_prepare_now_ticks(
+                TimelineTicks::from_raw(150),
+                true,
+                TimelineTicks::from_raw(100),
+            ),
+            TimelineTicks::from_raw(150)
+        );
+        assert_eq!(
+            authored_prepare_now_ticks(TimelineTicks::ZERO, false, TimelineTicks::from_raw(100),),
+            TimelineTicks::ZERO
+        );
     }
 }

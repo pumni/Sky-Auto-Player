@@ -372,7 +372,6 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: TimelineTicks::ZERO,
         }
     }
-
     /// Advance simulated playback time by `us` microseconds and return effective now ticks.
     pub fn advance_playback_time_us(&mut self, us: u64) -> TimelineTicks {
         let advance_qpc = self.resources.clock.duration_from_us(us).unwrap();
@@ -382,18 +381,18 @@ impl ProductionDispatchTestHarness {
             .unwrap();
         self.effective_now_ticks
     }
-
     /// Return the deterministic effective playback time used by test setup.
     pub fn current_effective_time(&self) -> TimelineTicks {
         self.effective_now_ticks
     }
-
     pub fn set_effective_time_for_test(&mut self, ticks: TimelineTicks) {
         self.effective_now_ticks = ticks;
     }
-
     pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
         self.runtime.set_deadline_wake_qpc_for_test(Some(ticks));
+    }
+    pub fn select_startup_dispatch_target_for_test(&mut self, target: QpcTicks) {
+        self.runtime.set_startup_dispatch_target_for_test(target);
     }
 
     /// Query whether coordinator has active generation for `scan_code`.

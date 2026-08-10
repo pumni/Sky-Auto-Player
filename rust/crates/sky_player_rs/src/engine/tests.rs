@@ -283,6 +283,126 @@ fn adaptive_startup_preserves_sublead_authored_order_in_mock_session() {
     );
 }
 
+#[test]
+fn production_startup_nonzero_sublead_dispatches_at_selected_target() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 100);
+    harness.config.estimator.enable_dispatch_cost_lead = true;
+    harness.resources.estimator =
+        DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
+    for _ in 0..5 {
+        harness
+            .resources
+            .estimator
+            .update(SendPath::DownOnly, 1, 500)
+            .expect("seed estimator");
+    }
+    let plan = harness.plan_current_dispatch();
+    assert_eq!(
+        plan.authored
+            .as_ref()
+            .expect("authored plan")
+            .lead_ticks
+            .as_u64(),
+        harness
+            .resources
+            .clock
+            .duration_from_us(500)
+            .unwrap()
+            .as_u64()
+    );
+    harness.set_effective_time_for_test(TimelineTicks::ZERO);
+    harness.select_startup_dispatch_target_for_test(
+        harness.resources.clock.now().expect("startup target QPC"),
+    );
+    let calls = harness.configure_send_counter();
+
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn adaptive_startup_nonzero_sublead_reports_physical_applied_lead() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "adaptive-startup-nonzero-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "adaptive-startup-nonzero-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid nonzero startup schedule");
+    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
+    for _ in 0..5 {
+        seeded
+            .update(SendPath::DownOnly, 1, 500)
+            .expect("seed estimator");
+    }
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.estimator.state_json =
+        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
+    options.estimator.enable_dispatch_cost_lead = true;
+    options.telemetry.capacity = 8;
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("adaptive session admission");
+    session.start().expect("adaptive worker start");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("adaptive worker join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.keys_dropped, 0);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.authored_keys_rejected, 0);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let first = telemetry["records"]
+        .as_array()
+        .expect("records array")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(0))
+        .expect("first authored record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
+    assert_eq!(
+        first["applied_lead_ticks"].as_u64(),
+        Some(startup_lead_ticks)
+    );
+}
+
 fn pending_for_lead_test(
     scheduled: u64,
     release_not_before: u64,
