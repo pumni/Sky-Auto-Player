@@ -1,8 +1,8 @@
 use super::super::super::{
-    DispatchCostEstimator, DurationTicks, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_UP,
-    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
-    trace_outcome_code, try_publish_metrics,
+    DispatchCostEstimator, DurationTicks, QpcClock, RtTraceRecord, RuntimeDispatchCoordinator,
+    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector,
+    TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, trace_outcome_code,
+    try_publish_metrics,
 };
 use super::super::wait::WaitObservation;
 use super::super::{
@@ -19,9 +19,7 @@ use super::observation::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::release::take_release_observer_failure;
-use super::timing::{
-    DownSendTiming, EstimatorObservationEvidence, is_clean_estimator_observation, read_qpc_us,
-};
+use super::timing::{DownSendTiming, EstimatorObservationEvidence, is_clean_estimator_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use sky_dispatch_win32::input::PacketRetryReason;
 #[cfg(any(test, feature = "test-support"))]
@@ -176,69 +174,50 @@ pub(crate) fn publisher_down_send_outcome(
         runtime,
     )
 }
-#[allow(clippy::too_many_arguments)]
-pub(super) fn commit_suppressed_up_request(
-    view: &AuthoredBatchView,
+pub(crate) fn dispatch_stale_packet(
+    prepared: sky_dispatch_core::coordinator::PreparedStalePacket,
     coordinator: &mut RuntimeDispatchCoordinator,
-    clock_state: &mut PlaybackClockState,
-    qpc_clock: QpcClock,
     telemetry: &mut TelemetryCollector,
-    backend: &TrackedKeyState,
-    local_metrics: &mut WorkerMetricsLocal,
-    metrics: &SharedMetrics,
-    last_published_error: &mut Option<String>,
     effective_now_ticks: TimelineTicks,
-    lead_down_ticks: DurationTicks,
 ) -> DispatchStep {
-    let (_, suppressed) = match coordinator.commit_up_request(view.prepared_batch) {
-        Ok(value) => value,
-        Err(error) => {
-            return DispatchStep::Terminate(format!(
-                "coordinator note-off request failure: {error}"
-            ));
-        }
-    };
-    if !suppressed.is_empty()
-        && let Err(error) = telemetry.try_push(|| {
-            RtTraceRecord::dispatched(
-                TraceContext {
-                    event_index: view.batch_source_action_index,
-                    kind: TRACE_KIND_UP,
-                    outcome: trace_outcome_code("suppressed_stale_up"),
-                    polyphony: suppressed.len(),
-                    flags: TRACE_FLAG_ANOMALY,
-                    win32_error: 0,
-                },
-                TraceTiming {
-                    authored_ticks: view.authored_batch_scheduled_ticks,
-                    effective_deadline_ticks: view.batch_scheduled_ticks,
-                    wake_ticks: effective_now_ticks,
-                    send_started_ticks: None,
-                    send_completed_ticks: None,
-                    dispatch_cost_us: 0,
-                    core_post_send_duration_us: 0,
-                    post_send_metrics_available: false,
-                    completion_error_ticks: 0,
-                    authored_completion_error_ticks: 0,
-                    applied_lead_ticks: lead_down_ticks,
-                },
-                TraceDelivery {
-                    requested: 0,
-                    sent: 0,
-                    skipped: 0,
-                    send_attempts: 0,
-                },
-            )
-        })
-    {
+    if let Err(error) = coordinator.commit_stale_packet(prepared) {
+        return DispatchStep::Terminate(format!(
+            "coordinator stale-packet commit failure: {error}"
+        ));
+    }
+    if let Err(error) = telemetry.try_push(|| {
+        RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: prepared.source_action_index,
+                kind: TRACE_KIND_UP,
+                outcome: trace_outcome_code("suppressed_stale_up"),
+                polyphony: prepared.suppressed_intent_count,
+                flags: TRACE_FLAG_ANOMALY,
+                win32_error: 0,
+            },
+            TraceTiming {
+                authored_ticks: prepared.effective_scheduled_ticks,
+                effective_deadline_ticks: prepared.effective_scheduled_ticks,
+                wake_ticks: effective_now_ticks,
+                send_started_ticks: None,
+                send_completed_ticks: None,
+                dispatch_cost_us: 0,
+                core_post_send_duration_us: 0,
+                post_send_metrics_available: false,
+                completion_error_ticks: 0,
+                authored_completion_error_ticks: 0,
+                applied_lead_ticks: DurationTicks::ZERO,
+            },
+            TraceDelivery {
+                requested: 0,
+                sent: 0,
+                skipped: 0,
+                send_attempts: 0,
+            },
+        )
+    }) {
         return DispatchStep::Terminate(format!("native telemetry record overflow: {error}"));
     }
-    super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    let current_us = match read_qpc_us(qpc_clock, clock_state) {
-        Ok(us) => us,
-        Err(step) => return step,
-    };
-    try_publish_metrics(local_metrics, metrics, current_us, !suppressed.is_empty());
     DispatchStep::Dispatched
 }
 pub(super) fn record_blocked_unfocused_telemetry(

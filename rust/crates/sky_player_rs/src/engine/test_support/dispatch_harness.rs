@@ -564,10 +564,16 @@ impl ProductionDispatchTestHarness {
     /// The measurement must exercise `plan_next_dispatch` and
     /// `dispatch_due_pending_releases`, not the authored Up packet path.
     pub fn seed_pending_release_for_test(&mut self) {
+        let due_now = self
+            .resources
+            .coordinator
+            .next_authored_ticks(DurationTicks::ZERO)
+            .expect("current authored deadline")
+            .expect("authored release deadline");
         let prepared = self
             .resources
             .coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(u64::MAX), DurationTicks::ZERO)
+            .prepare_next_due_authored(due_now, DurationTicks::ZERO)
             .expect("prepare pending-release request")
             .expect("authored release request");
         self.resources
@@ -775,7 +781,6 @@ impl ProductionDispatchTestHarness {
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
-            prepare_now_ticks: None,
             now_ticks,
             physical_target_qpc: plan
                 .authored

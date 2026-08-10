@@ -11,9 +11,7 @@ use super::super::{
     final_down_target_admission, focus_matches, load_target_stamp, signed_ticks_to_us,
     suspend_live_input, target_stamp_still_current,
 };
-use super::observer::{
-    commit_suppressed_up_request, publisher_down_send_outcome, record_blocked_unfocused_telemetry,
-};
+use super::observer::{publisher_down_send_outcome, record_blocked_unfocused_telemetry};
 use super::timing::{interpret_down_send_timing, prepare_authored_batch_view, read_qpc_us};
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
@@ -44,7 +42,6 @@ pub(crate) fn dispatch_authored_packet(
     let AuthoredPacketContext {
         dispatch_plan,
         effective_now_ticks,
-        prepare_now_ticks: prepare_now_override,
         now_ticks,
         physical_target_qpc,
         startup_target_selected,
@@ -71,16 +68,14 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
-    let prepare_now_ticks = prepare_now_override.unwrap_or_else(|| {
-        authored_prepare_now_ticks(
-            effective_now_ticks,
-            startup_target_selected,
-            dispatch_plan
-                .authored
-                .as_ref()
-                .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
-        )
-    });
+    let prepare_now_ticks = authored_prepare_now_ticks(
+        effective_now_ticks,
+        startup_target_selected,
+        dispatch_plan
+            .authored
+            .as_ref()
+            .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
+    );
     let prepared_batch =
         match coordinator.prepare_next_due_authored(prepare_now_ticks, requested_lead_ticks) {
             Ok(value) => value,
@@ -108,61 +103,45 @@ pub(crate) fn dispatch_authored_packet(
         Err(step) => return step,
     };
 
-    let has_down_events = view.packet_masks.is_some() || view.batch_kind == ActionKind::Down;
     let (applied_lead_ticks, applied_lead_saturated) = applied_authored_lead(
-        startup_target_selected && has_down_events,
+        startup_target_selected,
         requested_lead_ticks,
         view.prepared_batch.effective_lead_ticks,
         requested_lead_saturated,
     );
-    if has_down_events {
-        return commit_down_send_outcome(
-            &view,
-            config,
-            health,
-            timing,
-            runtime,
-            local_metrics,
-            last_published_error,
-            focus_active,
-            target_hwnd,
-            target_generation,
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            metrics,
-            progress_clock,
-            qpc_clock,
-            backend,
-            coordinator,
-            clock_state,
-            telemetry,
-            effective_now_ticks,
-            now_ticks,
-            applied_lead_saturated,
-            applied_lead_ticks,
-            physical_target_qpc,
-            startup_target_selected,
-            focus_loss_fault,
-            frozen_budget,
-            supervisor_heartbeat_ticks,
-            lease_timeout_ticks,
-            observer,
-        );
-    }
-    commit_suppressed_up_request(
+    commit_down_send_outcome(
         &view,
+        config,
+        health,
+        timing,
+        runtime,
+        local_metrics,
+        last_published_error,
+        focus_active,
+        target_hwnd,
+        target_generation,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        metrics,
+        progress_clock,
+        qpc_clock,
+        backend,
         coordinator,
         clock_state,
-        qpc_clock,
         telemetry,
-        backend,
-        local_metrics,
-        metrics,
-        last_published_error,
         effective_now_ticks,
+        now_ticks,
+        applied_lead_saturated,
         applied_lead_ticks,
+        physical_target_qpc,
+        startup_target_selected,
+        focus_loss_fault,
+        frozen_budget,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
+        observer,
     )
 }
 
@@ -541,6 +520,10 @@ fn record_down_send_outcome(
             "authored physical dispatch has no canonical packet".to_string(),
         );
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+        hook.mark_first_physical_send_started();
+    }
     let result = backend.send_physical_packet(packet);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));

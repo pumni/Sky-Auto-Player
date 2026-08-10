@@ -8,16 +8,16 @@ use super::{
     EstimatorOptions, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
     FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
-    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
-    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
-    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
-    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
-    ensure_preflight_for_target, exact_sender_durations, final_control_admission_with_lease,
-    final_down_target_admission, focus_gate_matches, focus_matches, focus_matches_hwnd,
-    record_input_path_health, record_termination_error, release_runtime_outcome,
-    signed_timeline_delta_ticks, supervisor_lease_expired, target_stamp_still_current,
-    trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
+    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, StartupOrderingHook,
+    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode,
+    TelemetryOptions, TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
+    WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
+    anchored_dispatch_target_ticks, cpu_metrics_sample_due, deadline_target_ticks,
+    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
+    final_control_admission_with_lease, final_down_target_admission, focus_gate_matches,
+    focus_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
+    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
+    target_stamp_still_current, trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
 };
 use sky_dispatch_core::coordinator::PendingRelease;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -70,6 +70,7 @@ fn test_session_options(
             state_json: None,
             enable_dispatch_cost_lead: false,
         },
+        startup_ordering_hook: None,
     }
 }
 
@@ -401,6 +402,209 @@ fn adaptive_startup_nonzero_sublead_reports_physical_applied_lead() {
         first["applied_lead_ticks"].as_u64(),
         Some(startup_lead_ticks)
     );
+}
+
+#[test]
+fn stale_metadata_commits_before_precision_wait_and_first_physical_send() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "stale-zero".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 50,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "stale-fifty".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "physical-hundred".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "cleanup".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid stale-prefix schedule");
+    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
+    for _ in 0..5 {
+        seeded
+            .update(SendPath::DownOnly, 1, 500)
+            .expect("seed estimator");
+    }
+    let hook = Arc::new(StartupOrderingHook::default());
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.estimator.state_json =
+        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
+    options.estimator.enable_dispatch_cost_lead = true;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(
+        hook.stale_packet_committed.load(Ordering::SeqCst),
+        2,
+        "ordering hook values stale={} precision={} physical={}",
+        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.precision_wait_completed.load(Ordering::SeqCst),
+        hook.first_physical_send_started.load(Ordering::SeqCst),
+    );
+    assert!(
+        hook.stale_packet_committed.load(Ordering::SeqCst)
+            < hook.precision_wait_completed.load(Ordering::SeqCst)
+    );
+    assert!(
+        hook.precision_wait_completed.load(Ordering::SeqCst)
+            < hook.first_physical_send_started.load(Ordering::SeqCst)
+    );
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let stale_records = telemetry["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .filter(|record| matches!(record["event_index"].as_u64(), Some(0) | Some(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(stale_records.len(), 2);
+    assert!(
+        stale_records
+            .iter()
+            .all(|record| record["applied_lead_ticks"].as_u64() == Some(0))
+    );
+}
+
+#[test]
+fn many_leading_stale_packets_are_drained_before_precision_handoff() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let stale_count = 32usize;
+    let mut actions = Vec::with_capacity(stale_count + 2);
+    for index in 0..stale_count {
+        actions.push(KeyActionInput {
+            source_action_index: index as u32,
+            kind: ActionKind::Up,
+            scheduled_us: index as u64,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "many-stale".to_string().into(),
+        });
+    }
+    actions.push(KeyActionInput {
+        source_action_index: stale_count as u32,
+        kind: ActionKind::Down,
+        scheduled_us: 1_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "many-stale-down".to_string().into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: (stale_count + 1) as u32,
+        kind: ActionKind::Up,
+        scheduled_us: 2_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "many-stale-cleanup".to_string().into(),
+    });
+    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("valid many-stale schedule");
+    let hook = Arc::new(StartupOrderingHook::default());
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    options.telemetry.capacity = 64;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().terminal_error, None);
+    assert_eq!(
+        hook.stale_packet_committed.load(Ordering::SeqCst),
+        stale_count as u64
+    );
+    assert!(
+        hook.stale_packet_committed.load(Ordering::SeqCst)
+            < hook.precision_wait_completed.load(Ordering::SeqCst)
+    );
+    assert!(
+        hook.precision_wait_completed.load(Ordering::SeqCst)
+            < hook.first_physical_send_started.load(Ordering::SeqCst)
+    );
+}
+
+#[test]
+fn all_stale_schedule_finishes_without_precision_or_physical_work() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let actions = (0..8)
+        .map(|index| KeyActionInput {
+            source_action_index: index,
+            kind: ActionKind::Up,
+            scheduled_us: u64::from(index),
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "all-stale".to_string().into(),
+        })
+        .collect::<Vec<_>>();
+    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("valid all-stale schedule");
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.capacity = 16;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(snapshot.terminal_error, None);
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records");
+    assert_eq!(records.len(), 8);
+    assert!(records.iter().all(|record| {
+        record["kind"].as_u64() == Some(1)
+            && record["requested_count"].as_u64() == Some(0)
+            && record["send_attempts"].as_u64() == Some(0)
+            && record["applied_lead_ticks"].as_u64() == Some(0)
+    }));
 }
 
 fn run_seeded_adaptive_startup_schedule(

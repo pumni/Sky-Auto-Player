@@ -159,64 +159,7 @@ pub(crate) fn dispatch_due_from_plan(
             "authored dispatch plan has no health budget".to_string(),
         );
     }
-    let drain_startup_stale = runtime.startup_gate.is_some()
-        && runtime.startup_dispatch_target_qpc.is_none()
-        && resources
-            .coordinator
-            .next_authored_packet_masks()
-            .is_some_and(|(up_mask, down_mask)| up_mask == 0 && down_mask == 0);
-    if drain_startup_stale {
-        // Leading stale metadata has no physical deadline.  Consume the
-        // complete prefix before precision startup handoff, while keeping the
-        // real effective_now_ticks unchanged for telemetry and diagnostics.
-        let prepare_now_ticks = TimelineTicks::from_raw(u64::MAX);
-        let mut drained_any = false;
-        while resources
-            .coordinator
-            .next_authored_packet_masks()
-            .is_some_and(|(up_mask, down_mask)| up_mask == 0 && down_mask == 0)
-        {
-            let step = super::dispatch_authored_packet(
-                super::AuthoredPacketContext {
-                    dispatch_plan: plan,
-                    effective_now_ticks,
-                    prepare_now_ticks: Some(prepare_now_ticks),
-                    now_ticks,
-                    physical_target_qpc: now_ticks,
-                    startup_target_selected: false,
-                    focus_loss_fault,
-                    supervisor_heartbeat_ticks,
-                    lease_timeout_ticks,
-                },
-                config,
-                resources,
-                health,
-                timing,
-                runtime,
-                local_metrics,
-                last_published_error,
-                focus_active,
-                target_hwnd,
-                target_generation,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                desired_pause,
-                metrics,
-                progress_clock,
-                observer,
-            );
-            match step {
-                super::DispatchStep::Dispatched => drained_any = true,
-                other => return other,
-            }
-        }
-        return if drained_any {
-            super::DispatchStep::Dispatched
-        } else {
-            super::DispatchStep::NoWork
-        };
-    }
+    /* stale authored metadata is drained by the outer pre-precision loop */
     let startup_target_selected = runtime.startup_dispatch_target_qpc.is_some();
     let physical_target_qpc = match physical_target_qpc_for_work(
         plan,
@@ -234,7 +177,6 @@ pub(crate) fn dispatch_due_from_plan(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
-            prepare_now_ticks: None,
             now_ticks,
             physical_target_qpc,
             startup_target_selected,
@@ -647,7 +589,148 @@ pub(super) fn dispatch(
                 continue;
             }
 
-            if let Some((startup_scheduled_ticks, startup_lead_ticks)) = core.runtime.startup_gate {
+            // Startup metadata is drained before precision planning and wait.
+            // Commit at most one compiled packet per outer iteration so all
+            // control, focus, and lease gates are re-admitted between packets.
+            if matches!(
+                core.runtime.startup_precision_phase,
+                super::StartupPrecisionPhase::PrePrecision
+            ) {
+                match resources.coordinator.prepare_current_stale_packet() {
+                    Ok(Some(prepared)) => {
+                        match super::dispatch_stale_packet(
+                            prepared,
+                            &mut resources.coordinator,
+                            &mut resources.telemetry,
+                            TimelineTicks::ZERO,
+                        ) {
+                            super::DispatchStep::Dispatched => {
+                                #[cfg(any(test, feature = "test-support"))]
+                                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                    hook.mark_stale_packet_committed();
+                                }
+                                continue;
+                            }
+                            super::DispatchStep::Terminate(error) => {
+                                core.runtime.force_full_cleanup = true;
+                                core.runtime.terminal_error = Some(error);
+                                break;
+                            }
+                            super::DispatchStep::Continue | super::DispatchStep::NoWork => {
+                                core.runtime.force_full_cleanup = true;
+                                core.runtime.terminal_error = Some(
+                                    "stale packet did not complete its metadata commit".to_string(),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(format!(
+                            "coordinator stale-packet preparation failure: {error}"
+                        ));
+                        break;
+                    }
+                }
+            }
+
+            // Freeze the physical plan before the precision wait.  Once that
+            // wait succeeds, the handoff below may perform only final safety
+            // admission and physical transport.
+            let mut precision_plan = if matches!(
+                core.runtime.startup_precision_phase,
+                super::StartupPrecisionPhase::PrePrecision
+            ) && core.runtime.startup_gate.is_some()
+            {
+                Some(
+                    match plan_next_dispatch_projected(PlanningInput {
+                        coordinator: &resources.coordinator,
+                        estimator: &resources.estimator,
+                        qpc_clock,
+                        timing: &config.timing,
+                        health_options: core
+                            .health
+                            .as_ref()
+                            .expect("worker health initialized")
+                            .options,
+                        enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
+                    }) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("startup planning failure: {error}"));
+                            break;
+                        }
+                    },
+                )
+            } else {
+                None
+            };
+
+            if let Some(startup_gate) = core.runtime.startup_gate {
+                if !matches!(
+                    core.runtime.startup_precision_phase,
+                    super::StartupPrecisionPhase::PrePrecision
+                ) {
+                    core.runtime.startup_gate = None;
+                } else {
+                    let current_physical = resources.coordinator.next_physical_authored_packet();
+                    if current_physical
+                        != Some((
+                            startup_gate.scheduled_ticks,
+                            startup_gate.up_mask,
+                            startup_gate.down_mask,
+                        ))
+                    {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(
+                            "startup gate no longer identifies the current physical packet"
+                                .to_string(),
+                        );
+                        break;
+                    }
+                    let Some(plan) = precision_plan.as_ref() else {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some("startup gate has no frozen physical dispatch plan".to_string());
+                        break;
+                    };
+                    if plan.pending.is_some()
+                        || plan
+                            .authored
+                            .as_ref()
+                            .map(|authored| authored.path)
+                            .is_none()
+                    {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(
+                            "startup precision plan contains non-authored physical work"
+                                .to_string(),
+                        );
+                        break;
+                    }
+                    if plan
+                        .authored
+                        .as_ref()
+                        .is_some_and(|authored| authored.lead_ticks != startup_gate.lead_ticks)
+                    {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some("startup gate lead differs from frozen physical plan".to_string());
+                        break;
+                    }
+                }
+            }
+
+            if matches!(
+                core.runtime.startup_precision_phase,
+                super::StartupPrecisionPhase::PrePrecision
+            ) && core.runtime.startup_gate.is_some()
+            {
+                let startup_gate = core.runtime.startup_gate.expect("startup gate checked");
                 let target_sample_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
@@ -660,8 +743,8 @@ pub(super) fn dispatch(
                 let target_qpc = match anchored_dispatch_target_ticks_typed(
                     target_sample_ticks,
                     resources.playback.epoch,
-                    startup_scheduled_ticks,
-                    startup_lead_ticks,
+                    startup_gate.scheduled_ticks,
+                    startup_gate.lead_ticks,
                 ) {
                     Ok(target) => target,
                     Err(error) => {
@@ -726,6 +809,11 @@ pub(super) fn dispatch(
                         }
                     }
                 }
+                core.runtime.startup_precision_phase = super::StartupPrecisionPhase::PostPrecision;
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                    hook.mark_precision_wait_completed();
+                }
                 core.runtime.startup_gate = None;
                 core.runtime.allow_pre_epoch_startup_dispatch = true;
                 now_ticks = qpc_ticks_or_terminal!();
@@ -752,30 +840,39 @@ pub(super) fn dispatch(
             };
             // §8.7: fresh QPC → immutable plan → inspect slack → maybe drain
             // one observation → if drained, discard plan and rebuild from a
-            // fresh QPC sample before any admit/dispatch/wait.
-            if let Some(wait_observation) = core.runtime.pending_wait_observation.take() {
+            // fresh QPC sample before any admit/dispatch/wait.  A startup
+            // precision plan was frozen before its wait and must bypass this
+            // general observer/planning path after the wait succeeds.
+            let precision_plan_frozen = precision_plan.is_some();
+            if !precision_plan_frozen
+                && let Some(wait_observation) = core.runtime.pending_wait_observation.take()
+            {
                 core.observer.pending.push_wait(wait_observation);
             }
-            let mut dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
-                coordinator: &resources.coordinator,
-                estimator: &resources.estimator,
-                qpc_clock,
-                timing: &config.timing,
-                health_options: core
-                    .health
-                    .as_ref()
-                    .expect("worker health initialized")
-                    .options,
-                enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
-            }) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error = Some(format!("planning failure: {error}"));
-                    break;
-                }
+            let mut dispatch_plan = match precision_plan.take() {
+                Some(plan) => plan,
+                None => match plan_next_dispatch_projected(PlanningInput {
+                    coordinator: &resources.coordinator,
+                    estimator: &resources.estimator,
+                    qpc_clock,
+                    timing: &config.timing,
+                    health_options: core
+                        .health
+                        .as_ref()
+                        .expect("worker health initialized")
+                        .options,
+                    enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
+                }) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(format!("planning failure: {error}"));
+                        break;
+                    }
+                },
             };
-            if !core.observer.pending.is_empty()
+            if !precision_plan_frozen
+                && !core.observer.pending.is_empty()
                 && super::observer_has_safe_slack(
                     dispatch_plan.deadline_ticks,
                     effective_now_ticks,
@@ -880,6 +977,14 @@ pub(super) fn dispatch(
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
+                super::DispatchStep::NoWork if precision_plan_frozen => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error = Some(
+                        "startup precision handoff found no physical work at the selected target"
+                            .to_string(),
+                    );
+                    break;
+                }
                 super::DispatchStep::NoWork => {}
                 super::DispatchStep::Terminate(err) => {
                     core.runtime.force_full_cleanup = true;

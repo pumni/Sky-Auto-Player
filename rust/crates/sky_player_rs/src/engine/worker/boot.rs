@@ -383,9 +383,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    core.runtime.startup_gate = coordinator
-        .next_physical_authored_packet()
-        .map(|(scheduled_ticks, _, _)| (scheduled_ticks, startup_lead_ticks));
+    core.runtime.startup_precision_phase = super::StartupPrecisionPhase::PrePrecision;
+    core.runtime.startup_gate =
+        coordinator
+            .next_physical_authored_packet()
+            .map(|(scheduled_ticks, up_mask, down_mask)| super::StartupGate {
+                scheduled_ticks,
+                lead_ticks: startup_lead_ticks,
+                up_mask,
+                down_mask,
+            });
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();

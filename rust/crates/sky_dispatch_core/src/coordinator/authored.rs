@@ -1,6 +1,6 @@
 use super::{
     ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus, PreparedBatch,
-    ReleaseRequestResult, RuntimeDispatchCoordinator, physical_packet_kind,
+    PreparedStalePacket, ReleaseRequestResult, RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
@@ -253,6 +253,143 @@ impl RuntimeDispatchCoordinator {
         }))
     }
 
+    /// Prepare the current compiler packet when it contains only unmatched Up
+    /// metadata.  This is intentionally separate from physical batch
+    /// preparation so stale metadata cannot acquire a DispatchPath or timing
+    /// lead by accident.
+    pub fn prepare_current_stale_packet(
+        &self,
+    ) -> Result<Option<PreparedStalePacket>, CoordinatorError> {
+        let Some(batch) = self.schedule.batches.get(self.cursor) else {
+            return Ok(None);
+        };
+        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet id does not fit in usize".to_string(),
+            ))
+        })?;
+        let packet = self
+            .schedule
+            .packets
+            .get(packet_index)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIndex {
+                    index: packet_index,
+                },
+            ))?;
+        if packet.first_batch_index as usize != self.cursor {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "stale packet first batch does not match coordinator cursor".to_string(),
+                ),
+            ));
+        }
+        if packet.up_mask != 0 || packet.down_mask != 0 {
+            return Ok(None);
+        }
+        if packet.up_intent_len == 0 || packet.down_intent_len != 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "empty compiled packet is not a stale unmatched-Up packet".to_string(),
+                ),
+            ));
+        }
+        let packet_batch_count = usize::from(packet.batch_count);
+        if packet_batch_count == 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "stale packet must contain at least one authored batch".to_string(),
+                ),
+            ));
+        }
+        let batch_end =
+            self.cursor
+                .checked_add(packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        let batch_range = self
+            .schedule
+            .batches
+            .get(self.cursor..batch_end)
+            .ok_or(CoordinatorError::InvalidBatchIndex { index: self.cursor })?;
+        if batch_range.iter().any(|candidate| {
+            candidate.packet_id != batch.packet_id
+                || candidate.kind != ActionKind::Up
+                || candidate.intent_len == 0
+        }) {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "stale packet contains an invalid authored batch".to_string(),
+                ),
+            ));
+        }
+        let up_start = packet.up_intent_start as usize;
+        let up_end = up_start
+            .checked_add(usize::from(packet.up_intent_len))
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: packet_index,
+                },
+            ))?;
+        let up_intents =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: packet_index,
+                    },
+                ))?;
+        if !up_intents
+            .iter()
+            .all(|intent| intent.generation_id() == NO_GENERATION_ID)
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "zero-mask authored packet contains an owned Up intent".to_string(),
+                ),
+            ));
+        }
+        let effective_scheduled_ticks = self.effective_batch_scheduled_ticks(self.cursor)?;
+        Ok(Some(PreparedStalePacket {
+            first_batch_index: self.cursor,
+            packet_index,
+            packet_batch_count,
+            effective_scheduled_ticks,
+            source_action_index: batch.source_action_index,
+            suppressed_intent_count: up_intents.len(),
+        }))
+    }
+
+    /// Atomically consume one prepared stale compiler packet.
+    pub fn commit_stale_packet(
+        &mut self,
+        prepared: PreparedStalePacket,
+    ) -> Result<(), CoordinatorError> {
+        let current = self
+            .prepare_current_stale_packet()?
+            .ok_or(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared stale packet is no longer current".to_string(),
+                ),
+            ))?;
+        if current != prepared {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.check_invariants()?;
+        Ok(())
+    }
+
     /// Commit one physical packet after the sender reported a complete
     /// transaction. The logical Up transition is applied before Down so a
     /// same-key retrigger replaces the previous generation atomically.
@@ -434,37 +571,23 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
+        if packet.up_mask() == 0 && packet.down_mask() == 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "physical Up request cannot commit a stale metadata packet".to_string(),
+                ),
+            ));
+        }
         let mut intents = SmallVec::<[RuntimeKeyIntent; MAX_KEYS]>::new();
-        let cursor_advance = if packet.up_mask() == 0 && packet.down_mask() == 0 {
-            let batch_end = prepared
-                .index
-                .checked_add(prepared.packet_batch_count)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-            for batch_index in prepared.index..batch_end {
-                let batch = self
-                    .schedule
-                    .view_batch_ticks(batch_index, prepared.effective_scheduled_ticks)?
-                    .materialize();
-                intents.extend(batch.intents);
-            }
-            prepared.packet_batch_count
-        } else {
-            let batch = self
-                .schedule
-                .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
-                .materialize();
-            intents.extend(batch.intents);
-            1
-        };
+        let batch = self
+            .schedule
+            .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
+            .materialize();
+        intents.extend(batch.intents);
         let result = self.request_releases(&intents)?;
-        self.cursor = self
-            .cursor
-            .checked_add(cursor_advance)
-            .ok_or(CoordinatorError::Time(
-                crate::time::TimeArithmeticError::Overflow,
-            ))?;
+        self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
+            crate::time::TimeArithmeticError::Overflow,
+        ))?;
         self.check_invariants()?;
         Ok(result)
     }

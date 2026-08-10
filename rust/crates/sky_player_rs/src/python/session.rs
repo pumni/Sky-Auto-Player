@@ -117,6 +117,8 @@ impl NativeDispatchSessionPy {
                 state_json: estimator_state_json,
                 enable_dispatch_cost_lead,
             },
+            #[cfg(any(test, feature = "test-support"))]
+            startup_ordering_hook: None,
         })
         .map_err(PyRuntimeError::new_err)?;
         session.set_target_hwnd(config.target_hwnd);
@@ -616,6 +618,8 @@ impl TestDispatchSessionPy {
                 state_json: None,
                 enable_dispatch_cost_lead,
             },
+            #[cfg(any(test, feature = "test-support"))]
+            startup_ordering_hook: None,
         })
         .map_err(PyRuntimeError::new_err)?;
         Ok(Self {

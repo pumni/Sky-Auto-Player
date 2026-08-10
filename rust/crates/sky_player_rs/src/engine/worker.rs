@@ -40,7 +40,8 @@ use control::{
 };
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases, drain_one_observer, observer_has_safe_slack,
+    dispatch_due_pending_releases, dispatch_stale_packet, drain_one_observer,
+    observer_has_safe_slack,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
@@ -83,17 +84,37 @@ pub(crate) use wait::{
 use super::shared::SessionShared;
 use super::*;
 use sky_dispatch_core::model::RuntimeSchedule;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::Arc;
 
 /// Mutable state owned exclusively by the worker thread.
 ///
 /// This state deliberately lives outside the panic boundary so the worker's
 /// backend, coordinator, and telemetry can still be finalized after an
 /// injected or unexpected panic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StartupGate {
+    pub(crate) scheduled_ticks: TimelineTicks,
+    pub(crate) lead_ticks: DurationTicks,
+    pub(crate) up_mask: u16,
+    pub(crate) down_mask: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StartupPrecisionPhase {
+    #[default]
+    PrePrecision,
+    PostPrecision,
+}
+
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
-    startup_gate: Option<(TimelineTicks, DurationTicks)>,
+    pub(crate) startup_precision_phase: StartupPrecisionPhase,
+    startup_gate: Option<StartupGate>,
     startup_dispatch_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
@@ -273,7 +294,14 @@ impl<'a> Worker<'a> {
             telemetry,
             priority,
             estimator,
+            #[cfg(any(test, feature = "test-support"))]
+            startup_ordering_hook,
         } = options;
+        let mut core = WorkerCore::default();
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            core.runtime.startup_ordering_hook = startup_ordering_hook;
+        }
         Self {
             schedule: Some(schedule),
             config: WorkerConfig {
@@ -286,7 +314,7 @@ impl<'a> Worker<'a> {
                 estimator,
             },
             shared,
-            core: WorkerCore::default(),
+            core,
         }
     }
 

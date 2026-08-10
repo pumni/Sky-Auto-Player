@@ -289,6 +289,21 @@ pub struct PreparedBatch {
     pub packet_kind: Option<PhysicalPacketKind>,
 }
 
+/// One compiler packet containing only unmatched Up metadata.
+///
+/// Stale packets are coordinator metadata, not physical work.  Keeping a
+/// dedicated preparation type prevents the worker from manufacturing a
+/// physical path or deadline for a packet that will never reach SendInput.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedStalePacket {
+    pub first_batch_index: usize,
+    pub packet_index: usize,
+    pub packet_batch_count: usize,
+    pub effective_scheduled_ticks: TimelineTicks,
+    pub source_action_index: u32,
+    pub suppressed_intent_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRebaseReason {
     ReleaseRecovery,

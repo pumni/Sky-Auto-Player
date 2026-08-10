@@ -3,6 +3,11 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
 #[cfg(any(test, feature = "test-support"))]
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
 
 /// Deliberate session profiles. The profile owns backend/policy selection so
@@ -50,6 +55,41 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) telemetry: TelemetryOptions,
     pub(crate) priority: PriorityOptions,
     pub(crate) estimator: EstimatorOptions,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Default)]
+pub(crate) struct StartupOrderingHook {
+    sequence: AtomicU64,
+    pub(crate) stale_packet_committed: AtomicU64,
+    pub(crate) precision_wait_completed: AtomicU64,
+    pub(crate) first_physical_send_started: AtomicU64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl StartupOrderingHook {
+    fn next_sequence(&self) -> u64 {
+        self.sequence.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub(crate) fn mark_stale_packet_committed(&self) {
+        self.stale_packet_committed
+            .store(self.next_sequence(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn mark_precision_wait_completed(&self) {
+        self.precision_wait_completed
+            .store(self.next_sequence(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn mark_first_physical_send_started(&self) {
+        if self.first_physical_send_started.load(Ordering::SeqCst) == 0 {
+            self.first_physical_send_started
+                .store(self.next_sequence(), Ordering::SeqCst);
+        }
+    }
 }
 
 pub(crate) struct WorkerConfig {

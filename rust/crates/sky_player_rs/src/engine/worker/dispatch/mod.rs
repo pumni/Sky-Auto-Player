@@ -34,7 +34,6 @@ pub enum DispatchStep {
 pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
-    pub(crate) prepare_now_ticks: Option<TimelineTicks>,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) startup_target_selected: bool,
@@ -83,7 +82,9 @@ pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep
 pub(crate) use authored::dispatch_authored_packet;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
-pub(crate) use observer::{PendingObservationQueue, drain_one_observer, observer_has_safe_slack};
+pub(crate) use observer::{
+    PendingObservationQueue, dispatch_stale_packet, drain_one_observer, observer_has_safe_slack,
+};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 #[cfg(test)]
 pub(crate) use release::{effective_pending_cohort_lead, effective_pending_lead};

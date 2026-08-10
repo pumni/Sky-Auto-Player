@@ -462,15 +462,14 @@ fn stale_multi_up_packet_suppression_advances_atomically() {
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
 
     let stale = coordinator
-        .prepare_next_due_authored(crate::time::TimelineTicks::ZERO, DurationTicks::ZERO)
+        .prepare_current_stale_packet()
         .expect("prepare stale packet")
-        .expect("stale packet is due");
+        .expect("stale packet is current");
     assert_eq!(stale.packet_batch_count, 2);
-    assert_eq!(stale.packet_kind, None);
-    let (_, suppressed) = coordinator
-        .commit_up_request(stale)
+    assert_eq!(stale.suppressed_intent_count, 2);
+    coordinator
+        .commit_stale_packet(stale)
         .expect("suppress stale packet");
-    assert_eq!(suppressed.len(), 2);
     assert_eq!(coordinator.cursor, 2);
 
     let next = coordinator

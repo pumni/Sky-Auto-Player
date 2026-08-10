@@ -190,10 +190,14 @@ pub(crate) fn prepare_authored_batch_view(
 ) -> BatchViewResult {
     let batch_index = prepared_batch.index;
     let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
-    // Every physical authored packet, including a single Down, uses the same
-    // immutable Up-before-Down transport.  `None` is reserved for a stale Up
-    // request whose physical packet was suppressed by the coordinator.
-    let packet_mode = prepared_batch.packet_kind.is_some();
+    // Every authored batch reaching this view is physical work. Stale
+    // unmatched-Up metadata uses the dedicated coordinator path and must not
+    // acquire a physical DispatchPath.
+    let Some(packet_kind) = prepared_batch.packet_kind else {
+        return Err(DispatchStep::Terminate(
+            "stale authored packet reached physical batch view".to_string(),
+        ));
+    };
     let (
         batch_kind,
         dispatch_path,
@@ -201,7 +205,7 @@ pub(crate) fn prepare_authored_batch_view(
         batch_intent_count,
         conflict_mask,
         packet_masks,
-    ) = if packet_mode {
+    ) = {
         let packet_view = match coordinator
             .schedule
             .view_packet_ticks(prepared_batch.packet_index, batch_scheduled_ticks)
@@ -217,18 +221,17 @@ pub(crate) fn prepare_authored_batch_view(
             coordinator.check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_mask());
         let up_count = packet_view.up_mask().count_ones() as usize;
         let down_count = packet_view.down_mask().count_ones() as usize;
-        let dispatch_path = match prepared_batch.packet_kind {
-            Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => {
+        let dispatch_path = match packet_kind {
+            sky_dispatch_core::model::PhysicalPacketKind::UpOnly => {
                 DispatchPath::UpOnly { up_count }
             }
-            Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => {
+            sky_dispatch_core::model::PhysicalPacketKind::DownOnly => {
                 DispatchPath::DownOnly { down_count }
             }
-            Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed) => DispatchPath::Mixed {
+            sky_dispatch_core::model::PhysicalPacketKind::Mixed => DispatchPath::Mixed {
                 up_count,
                 down_count,
             },
-            None => DispatchPath::DownOnly { down_count: 0 },
         };
         (
             if matches!(dispatch_path, DispatchPath::UpOnly { .. }) {
@@ -254,39 +257,6 @@ pub(crate) fn prepare_authored_batch_view(
                 packet_view.up_mask(),
                 packet_view.down_mask(),
             )),
-        )
-    } else {
-        let packet_view = match coordinator
-            .schedule
-            .view_packet_ticks(prepared_batch.packet_index, batch_scheduled_ticks)
-        {
-            Ok(value) => value,
-            Err(error) => {
-                return Err(DispatchStep::Terminate(format!(
-                    "runtime stale packet view failure: {error}"
-                )));
-            }
-        };
-        if packet_view.up_mask() != 0 || packet_view.down_mask() != 0 {
-            return Err(DispatchStep::Terminate(
-                "stale authored packet has a physical mask".to_string(),
-            ));
-        }
-        let batch_intent_count = packet_view.up_intents.len() + packet_view.down_intents.len();
-        let batch_source_action_index = coordinator
-            .schedule
-            .batches
-            .get(packet_view.header.first_batch_index as usize)
-            .map_or(0, |batch| batch.source_action_index);
-        (
-            ActionKind::Up,
-            DispatchPath::UpOnly {
-                up_count: batch_intent_count,
-            },
-            batch_source_action_index,
-            batch_intent_count,
-            0,
-            None,
         )
     };
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
