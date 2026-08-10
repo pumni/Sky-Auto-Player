@@ -94,6 +94,9 @@ pub fn simulate_schedule(
                 "simulation incomplete: active generations remain".to_string(),
             ));
         }
+        let current_stale = coordinator
+            .prepare_current_stale_packet()
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
         let pending_deadline = coordinator
             .next_pending_release_ticks(crate::time::DurationTicks::ZERO)
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
@@ -103,11 +106,13 @@ pub fn simulate_schedule(
             polyphony: 1,
             lead_saturated: false,
         });
-        if let Some(dl) = coordinator
-            .next_deadline_ticks(crate::time::DurationTicks::ZERO, pending_plan.as_ref())
-            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
-        {
-            now_us = now_us.max(dl.as_u64());
+        if current_stale.is_none() {
+            if let Some(dl) = coordinator
+                .next_deadline_ticks(crate::time::DurationTicks::ZERO, pending_plan.as_ref())
+                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
+            {
+                now_us = now_us.max(dl.as_u64());
+            }
         }
 
         // 1. Drain pending releases due
@@ -146,6 +151,46 @@ pub fn simulate_schedule(
             });
             step += 1;
             now_us = completed_us;
+            continue;
+        }
+
+        // Stale metadata is never physical work.  Consume exactly one
+        // compiled packet at the current cursor without assigning it an
+        // authored deadline or a physical dispatch path.
+        if let Some(prepared) = current_stale {
+            let packet = coordinator
+                .schedule
+                .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)
+                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+            let scan_codes: Vec<u16> = packet
+                .up_intents
+                .iter()
+                .map(|i| {
+                    packet
+                        .registry
+                        .scan_code_for(i.key_slot())
+                        .expect("compiled stale key slot must belong to key registry")
+                })
+                .collect();
+            let gen_ids: Vec<Option<u64>> = packet
+                .up_intents
+                .iter()
+                .map(|i| (i.generation_id() != NO_GENERATION_ID).then_some(i.generation_id()))
+                .collect();
+            coordinator
+                .commit_stale_packet(prepared)
+                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+            events.push(TraceEvent {
+                step,
+                kind: "up".to_string(),
+                scheduled_us: prepared.effective_scheduled_ticks.as_u64(),
+                actual_us: now_us,
+                completed_us: now_us,
+                scan_codes,
+                generation_ids: gen_ids,
+                outcome: "suppressed_stale_up".to_string(),
+            });
+            step += 1;
             continue;
         }
 
