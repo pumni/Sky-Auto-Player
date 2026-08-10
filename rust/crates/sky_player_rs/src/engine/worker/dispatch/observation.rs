@@ -12,6 +12,7 @@ use super::timing::EstimatorObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::PacketRetryReason;
+use sky_dispatch_win32::input::SendTransactionStatus;
 use sky_dispatch_win32::wait::WaitOutcome;
 
 pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
@@ -27,10 +28,7 @@ pub enum DispatchObservation {
 pub struct DownTraceObservation {
     pub event_index: u32,
     pub trace_kind: u8,
-    pub result_success: bool,
-    pub requested_count: usize,
-    pub sent_count: usize,
-    pub skipped_count: usize,
+    pub result_status: SendTransactionStatus,
     pub send_attempts: u8,
     pub retry_reason: PacketRetryReason,
     pub chord_integrity_lost: bool,
@@ -53,7 +51,6 @@ pub struct DownObservation {
     pub path: DispatchPath,
     pub latency_class: LatencyClass,
     pub lead_down_saturated: bool,
-    pub lead_down: u64,
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_ticks: DurationTicks,
     pub timeline_rebase_max_ticks: DurationTicks,
@@ -64,13 +61,45 @@ pub struct DownObservation {
     pub sender_duration_ticks: DurationTicks,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
-    pub delivered_count: usize,
-    pub batch_intent_count: usize,
+    pub requested_mask: u16,
+    pub confirmed_mask: u16,
+    pub skipped_mask: u16,
     pub completed_effective_ticks: TimelineTicks,
-    pub estimator_evidence: EstimatorObservationEvidence,
     pub send_warn_us: u64,
     pub core_post_send_warn_us: u64,
     pub trace: DownTraceObservation,
+}
+
+impl DownTraceObservation {
+    pub(super) const fn result_success(self) -> bool {
+        matches!(self.result_status, SendTransactionStatus::Complete)
+    }
+}
+
+impl DownObservation {
+    pub(super) const fn requested_count(self) -> usize {
+        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).0
+    }
+
+    pub(super) const fn confirmed_count(self) -> usize {
+        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).1
+    }
+
+    pub(super) const fn skipped_count(self) -> usize {
+        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).2
+    }
+}
+
+pub(super) const fn down_transport_counts(
+    requested_mask: u16,
+    confirmed_mask: u16,
+    skipped_mask: u16,
+) -> (usize, usize, usize) {
+    (
+        requested_mask.count_ones() as usize,
+        confirmed_mask.count_ones() as usize,
+        skipped_mask.count_ones() as usize,
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -131,16 +160,18 @@ pub(super) fn record_down_send_telemetry(
         "strict_completion_slo_exceeded"
     } else if trace.chord_integrity_lost {
         "chord_integrity_lost"
-    } else if trace.result_success && trace.sent_count == trace.requested_count {
+    } else if trace.result_success()
+        && observation.confirmed_count() == observation.requested_count()
+    {
         "sent"
     } else {
         "partial_note_on"
     };
-    let force_publish = !trace.result_success
+    let force_publish = !trace.result_success()
         || !matches!(trace.retry_reason, PacketRetryReason::None)
         || trace.chord_integrity_lost;
     let mut trace_flags = 0u8;
-    if trace.result_success && trace.sent_count == trace.requested_count {
+    if trace.result_success() && observation.confirmed_count() == observation.requested_count() {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
     if trace.recovered_retry_late || trace.chord_integrity_lost {
@@ -155,7 +186,7 @@ pub(super) fn record_down_send_telemetry(
                 event_index: trace.event_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
-                polyphony: observation.batch_intent_count,
+                polyphony: observation.requested_mask.count_ones() as usize,
                 flags: trace_flags,
                 win32_error: trace.last_win32_error,
             },
@@ -171,9 +202,9 @@ pub(super) fn record_down_send_telemetry(
                 applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
-                requested: trace.requested_count,
-                sent: trace.sent_count,
-                skipped: trace.skipped_count,
+                requested: observation.requested_count(),
+                sent: observation.confirmed_count(),
+                skipped: observation.skipped_count(),
                 send_attempts: usize::from(trace.send_attempts),
             },
         )
@@ -325,6 +356,11 @@ mod tests {
     use super::*;
     use crate::engine::DispatchHealthOptions;
     use std::num::NonZeroU64;
+
+    #[test]
+    fn raw_down_masks_derive_transport_counts_when_observed() {
+        assert_eq!(down_transport_counts(0b1011, 0b0011, 0b1000), (3, 2, 1));
+    }
 
     #[test]
     fn wait_observation_defers_conversion_and_health_updates() {

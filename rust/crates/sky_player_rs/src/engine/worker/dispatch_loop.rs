@@ -651,7 +651,7 @@ pub(super) fn dispatch(
                     timing.observer_guard_ticks,
                 )
             {
-                let drain_us = match super::drain_one_observer(
+                let drain_result = match super::drain_one_observer(
                     &mut core.observer.pending,
                     config,
                     core.health.as_mut().unwrap(),
@@ -673,7 +673,8 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
-                if drain_us > 0 {
+                if observer_drain_requires_replan(drain_result) {
+                    let drain_us = drain_result.expect("Some drain result must carry duration");
                     core.metrics.observer_duration_max_us =
                         core.metrics.observer_duration_max_us.max(drain_us);
                     // Observer work invalidates the plan. Rebuild from fresh QPC.
@@ -900,7 +901,7 @@ pub(super) fn dispatch(
                     break;
                 }
             };
-            let drain_us = match super::drain_one_observer(
+            let drain_result = match super::drain_one_observer(
                 &mut core.observer.pending,
                 config,
                 core.health.as_mut().unwrap(),
@@ -922,8 +923,27 @@ pub(super) fn dispatch(
                     break;
                 }
             };
-            core.metrics.observer_duration_max_us =
-                core.metrics.observer_duration_max_us.max(drain_us);
+            if let Some(drain_us) = drain_result {
+                core.metrics.observer_duration_max_us =
+                    core.metrics.observer_duration_max_us.max(drain_us);
+            }
         }
     }))
+}
+
+#[inline]
+fn observer_drain_requires_replan(result: Option<u64>) -> bool {
+    result.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::observer_drain_requires_replan;
+
+    #[test]
+    fn zero_microsecond_observer_drain_still_invalidates_the_plan() {
+        assert!(observer_drain_requires_replan(Some(0)));
+        assert!(observer_drain_requires_replan(Some(7)));
+        assert!(!observer_drain_requires_replan(None));
+    }
 }

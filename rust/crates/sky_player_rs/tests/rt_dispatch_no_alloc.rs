@@ -115,7 +115,6 @@ fn down_observation(n: u64) -> DispatchObservation {
         path: DispatchPath::DownOnly { down_count: 1 },
         latency_class: LatencyClass::Hot,
         lead_down_saturated: false,
-        lead_down: n,
         timeline_rebase_count: 0,
         timeline_rebase_total_ticks: DurationTicks::ZERO,
         timeline_rebase_max_ticks: DurationTicks::ZERO,
@@ -125,19 +124,16 @@ fn down_observation(n: u64) -> DispatchObservation {
         dispatch_ready_qpc: QpcTicks::ZERO,
         sender_duration_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
-        delivered_count: 1,
-        batch_intent_count: 1,
+        requested_mask: 1,
+        confirmed_mask: 1,
+        skipped_mask: 0,
         completed_effective_ticks: TimelineTicks::from_raw(n),
-        estimator_evidence: clean_estimator_evidence(1),
         send_warn_us: 0,
         core_post_send_warn_us: 0,
         trace: DownTraceObservation {
             event_index: 0,
             trace_kind: 0,
-            result_success: true,
-            requested_count: 1,
-            sent_count: 1,
-            skipped_count: 0,
+            result_status: SendTransactionStatus::Complete,
             send_attempts: 1,
             retry_reason: PacketRetryReason::None,
             chord_integrity_lost: false,
@@ -149,7 +145,7 @@ fn down_observation(n: u64) -> DispatchObservation {
             sender_completed_ticks: Some(TimelineTicks::ZERO),
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
-            applied_lead_ticks: DurationTicks::ZERO,
+            applied_lead_ticks: DurationTicks::from_raw(n),
             recovered_retry_late: false,
             recovered_partial_up: false,
             strict_completion_late: false,
@@ -387,7 +383,7 @@ fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
         let first = queue.pop_front().expect("queue remains non-empty");
         match first {
             DispatchObservation::Down(observation) => {
-                assert_eq!(observation.lead_down, 1);
+                assert_eq!(observation.trace.applied_lead_ticks.as_u64(), 1);
             }
             DispatchObservation::Up(_) => panic!("oldest Down observation was not retained order"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
@@ -399,7 +395,10 @@ fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
         }
         match last.expect("newest observation must be retained") {
             DispatchObservation::Down(observation) => {
-                assert_eq!(observation.lead_down, expected_marker)
+                assert_eq!(
+                    observation.trace.applied_lead_ticks.as_u64(),
+                    expected_marker
+                )
             }
             DispatchObservation::Up(observation) => {
                 assert_eq!(observation.lead_up_ticks.as_u64(), expected_marker)
@@ -624,8 +623,8 @@ fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness)
     let drain_observer = |harness: &mut ProductionDispatchTestHarness| {
         loop {
             match harness.drain_observer() {
-                Ok(0) => break Ok(()),
-                Ok(_) => continue,
+                Ok(None) => break Ok(()),
+                Ok(Some(_)) => continue,
                 Err(step) => break Err(step),
             }
         }

@@ -293,12 +293,9 @@ pub(crate) struct DownSendTiming {
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
     pub(crate) sender_duration_ticks: DurationTicks,
-    pub(crate) requested_count: usize,
-    pub(crate) delivered_count: usize,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
     pub(crate) estimator_evidence: EstimatorObservationEvidence,
-    pub(crate) recovered_zero_progress: bool,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
     pub(crate) strict_completion_late: bool,
@@ -497,7 +494,8 @@ pub(crate) fn interpret_down_send_timing(
                 }
             }
         });
-    let saturation_positive = lead_down_saturated && completion_lateness_ticks.is_some();
+    let saturation_positive =
+        is_positive_saturation_residual(lead_down_saturated, completion_error_ticks_value);
     let saturation_streak = match view.dispatch_path {
         DispatchPath::UpOnly { .. } => {
             if saturation_positive {
@@ -522,12 +520,9 @@ pub(crate) fn interpret_down_send_timing(
         sender_started_effective_ticks,
         completed_effective_ticks,
         sender_duration_ticks,
-        requested_count,
-        delivered_count,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         estimator_evidence,
-        recovered_zero_progress,
         recovered_partial_up,
         recovered_retry_late,
         strict_completion_late,
@@ -535,6 +530,11 @@ pub(crate) fn interpret_down_send_timing(
         saturation_abort,
         saturation_streak,
     })
+}
+
+#[inline]
+fn is_positive_saturation_residual(lead_saturated: bool, completion_error_ticks: i64) -> bool {
+    lead_saturated && completion_error_ticks > 0
 }
 
 pub(crate) fn read_qpc_us(
@@ -554,5 +554,18 @@ pub(crate) fn read_qpc_us(
             }
         }
         Err(error) => Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_positive_saturation_residual;
+
+    #[test]
+    fn down_saturation_requires_strictly_positive_residual() {
+        assert!(!is_positive_saturation_residual(true, -1));
+        assert!(!is_positive_saturation_residual(true, 0));
+        assert!(is_positive_saturation_residual(true, 1));
+        assert!(!is_positive_saturation_residual(false, 1));
     }
 }

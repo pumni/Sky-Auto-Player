@@ -118,6 +118,39 @@ mod tests {
     }
 
     #[test]
+    fn successful_up_preserves_unrelated_failed_release_error() {
+        let mut state =
+            input::TrackedKeyState::with_packet_emitter(|packet| SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: packet.up_mask | packet.down_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(clock::QpcTicks::from_raw(10)),
+                    completed_ticks: Some(clock::QpcTicks::from_raw(20)),
+                    timing_error: None,
+                },
+            });
+        state.failed_release_mask = 0b010;
+        state.last_error = Some("unrelated failed release".to_string());
+
+        let outcome = state.send_physical_packet(input::PhysicalPacket::new(0b001, 0));
+
+        assert_eq!(outcome.status, SendTransactionStatus::Complete);
+        assert_eq!(state.failed_release_mask, 0b010);
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("unrelated failed release")
+        );
+    }
+
+    #[test]
     fn same_key_retrigger_packet_contains_two_physical_events() {
         let mut state = input::TrackedKeyState::with_packet_emitter(|packet| {
             assert_eq!(packet.up_mask, 0b001);

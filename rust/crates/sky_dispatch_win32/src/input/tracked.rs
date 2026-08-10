@@ -526,7 +526,9 @@ impl TrackedKeyState {
                 self.active_mask = (self.active_mask & !packet.up_mask) | packet.down_mask;
                 self.possibly_active_mask &= !union;
                 self.failed_release_mask &= !packet.up_mask;
-                self.last_error = None;
+                if self.failed_release_mask == 0 {
+                    self.last_error = None;
+                }
             }
             SendTransactionStatus::ZeroProgress => {
                 self.sendinput_zero_progress_failures =

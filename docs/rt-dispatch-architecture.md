@@ -51,8 +51,10 @@ choice, and the terminal transition.
   physical/coordinator correctness, required recovery, the mandatory terminal
   SLO decision, and a raw `dispatch_ready_qpc` sample. They then enqueue one
   allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) containing
-  QPC/timeline ticks and physical masks/counts into a fixed-capacity (64)
-  worker-owned ring and return. Tick-to-microsecond conversion, wake/send/ready
+  QPC/timeline ticks and physical requested/confirmed/skipped masks into a
+  fixed-capacity (64) worker-owned ring and return. Transport counts are derived
+  from those masks only during drain; no duplicate microsecond lead/count facts
+  are stored in the raw record. Tick-to-microsecond conversion, wake/send/ready
   deltas, completion errors, trace-record materialization, estimator update,
   health-window observation, lateness accounting, and diagnostic metric
   publication are deferred to `observer::drain_one_observer`. If the ring is

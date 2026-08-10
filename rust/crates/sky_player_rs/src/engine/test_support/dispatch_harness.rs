@@ -827,7 +827,7 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    pub fn drain_observer(&mut self) -> Result<u64, DispatchStep> {
+    pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {
         super::super::worker::drain_one_observer(
             &mut self.observer,
             &self.config,

@@ -348,24 +348,41 @@ impl HybridWaiter {
             errors.push(qpc_clock.duration_to_us(elapsed).ok()?);
         }
         errors.sort_unstable();
-        let percentile = |numerator: usize| {
-            let index = ((errors.len() * numerator).saturating_add(99) / 100)
-                .saturating_sub(1)
-                .min(errors.len() - 1);
-            errors[index]
-        };
         Some(WakeErrorStats {
-            p50_us: percentile(50),
-            p95_us: percentile(95),
-            p99_us: percentile(99),
+            p50_us: percentile_from_sorted(&errors, 50),
+            p95_us: percentile_from_sorted(&errors, 95),
+            p99_us: percentile_from_sorted(&errors, 99),
             max_us: *errors.last().unwrap_or(&0),
             robust_us: robust_wake_error_us(&errors),
         })
     }
 }
 
+fn percentile_from_sorted(sorted: &[u64], numerator: usize) -> u64 {
+    let index = ((sorted.len() * numerator).saturating_add(99) / 100)
+        .saturating_sub(1)
+        .min(sorted.len() - 1);
+    sorted[index]
+}
+
 impl Default for HybridWaiter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percentile_from_sorted;
+
+    #[test]
+    fn thirty_two_sample_p95_does_not_promote_one_extreme_maximum() {
+        let mut samples = vec![300_u64; 31];
+        samples.push(50_000);
+        samples.sort_unstable();
+
+        assert_eq!(samples.len(), 32);
+        assert_eq!(percentile_from_sorted(&samples, 95), 300);
+        assert_eq!(*samples.last().unwrap(), 50_000);
     }
 }

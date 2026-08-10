@@ -8,8 +8,8 @@ use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
     WorkerTimingState, ensure_preflight_for_target, final_control_admission_with_lease,
-    final_down_target_admission, focus_matches, load_target_stamp, suspend_live_input,
-    target_stamp_still_current,
+    final_down_target_admission, focus_matches, load_target_stamp, signed_ticks_to_us,
+    suspend_live_input, target_stamp_still_current,
 };
 use super::observer::{
     commit_suppressed_up_request, publisher_down_send_outcome, record_blocked_unfocused_telemetry,
@@ -59,13 +59,9 @@ pub(crate) fn dispatch_authored_packet(
     } = resources;
     let qpc_clock = *qpc_clock;
 
-    let (lead_down, lead_down_saturated, lead_down_ticks) = match dispatch_plan.authored.as_ref() {
-        Some(authored) => (
-            authored.lead_us,
-            authored.lead_saturated,
-            authored.lead_ticks,
-        ),
-        None => (0, false, DurationTicks::ZERO),
+    let (lead_down_saturated, lead_down_ticks) = match dispatch_plan.authored.as_ref() {
+        Some(authored) => (authored.lead_saturated, authored.lead_ticks),
+        None => (false, DurationTicks::ZERO),
     };
     let Some(frozen_budget) = dispatch_plan.authored_budget.as_ref() else {
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
@@ -123,7 +119,6 @@ pub(crate) fn dispatch_authored_packet(
             telemetry,
             effective_now_ticks,
             now_ticks,
-            lead_down,
             lead_down_saturated,
             lead_down_ticks,
             latency_class,
@@ -176,7 +171,6 @@ fn commit_down_send_outcome(
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
-    lead_down: u64,
     lead_down_saturated: bool,
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
@@ -231,7 +225,6 @@ fn commit_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        lead_down,
         lead_down_saturated,
         lead_down_ticks,
         latency_class,
@@ -467,7 +460,6 @@ fn record_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    lead_down: u64,
     lead_down_saturated: bool,
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
@@ -524,7 +516,6 @@ fn record_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        lead_down,
         lead_down_saturated,
         lead_down_ticks,
         latency_class,
@@ -556,7 +547,6 @@ fn finalize_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    lead_down: u64,
     lead_down_saturated: bool,
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
@@ -605,13 +595,11 @@ fn finalize_down_send_outcome(
         local_metrics,
         qpc_clock,
         effective_now_ticks,
-        lead_down,
         lead_down_saturated,
         lead_down_ticks,
         latency_class,
         frozen_budget,
         trace_kind,
-        result_success,
         result_confirmed_mask,
         result_skipped_mask,
         result_send_attempts,
@@ -623,12 +611,14 @@ fn finalize_down_send_outcome(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_slo_terminal_step(
     result_chord_integrity_lost: bool,
     retry_late_abort: bool,
     strict_completion_late: bool,
     saturation_abort: bool,
-    completion_error_us: i64,
+    qpc_clock: QpcClock,
+    completion_error_ticks: i64,
     view: &AuthoredBatchView,
     runtime: &mut WorkerRuntime,
 ) -> DispatchStep {
@@ -640,12 +630,28 @@ pub(super) fn resolve_slo_terminal_step(
         ));
     }
     if retry_late_abort {
+        let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks) {
+            Ok(value) => value,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-on terminal timing conversion failure: {error}"
+                ));
+            }
+        };
         return DispatchStep::Terminate(format!(
             "strict timing rejected zero-progress retry at action {}: completion was {}us late",
             view.batch_source_action_index, completion_error_us
         ));
     }
     if strict_completion_late {
+        let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks) {
+            Ok(value) => value,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-on terminal timing conversion failure: {error}"
+                ));
+            }
+        };
         let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
             "note-off"
         } else {
@@ -668,4 +674,49 @@ pub(super) fn resolve_slo_terminal_step(
         ));
     }
     DispatchStep::Dispatched
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sky_dispatch_core::coordinator::PreparedBatch;
+    use sky_dispatch_core::model::PhysicalPacketKind;
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
+        let view = AuthoredBatchView {
+            prepared_batch: PreparedBatch {
+                index: 0,
+                effective_scheduled_ticks: TimelineTicks::ZERO,
+                effective_lead_ticks: DurationTicks::ZERO,
+                packet_kind: Some(PhysicalPacketKind::DownOnly),
+                packet_batch_count: 1,
+                packet_index: 0,
+            },
+            batch_source_action_index: 0,
+            batch_intent_count: 1,
+            batch_kind: ActionKind::Down,
+            batch_scheduled_ticks: TimelineTicks::ZERO,
+            authored_batch_scheduled_ticks: TimelineTicks::ZERO,
+            conflict_mask: 0,
+            dispatch_path: DispatchPath::DownOnly { down_count: 1 },
+            packet_masks: None,
+        };
+        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
+        let mut runtime = WorkerRuntime::default();
+
+        let step = resolve_slo_terminal_step(
+            false,
+            false,
+            false,
+            false,
+            qpc_clock,
+            i64::MIN,
+            &view,
+            &mut runtime,
+        );
+
+        assert!(matches!(step, DispatchStep::Dispatched));
+    }
 }
