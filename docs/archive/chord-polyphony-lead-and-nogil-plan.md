@@ -6,6 +6,13 @@
 > Tuân thủ AGENTS.md: scheduler thuần & test được, type hints, thêm test timing edge-case,
 > 3 cổng `pytest`/`ruff`/`pyright` phải xanh.
 
+> [!WARNING]
+> Đây là tài liệu lịch sử. Các giả định cũ rằng `SendInput` hoàn tất đồng nghĩa
+> với game đã lấy mẫu sự kiện, hoặc rằng runtime có phân loại Hot/Cold, đã bị
+> vô hiệu hóa. Production chỉ có bằng chứng sender-side, dùng target QPC tuyệt
+> đối và estimator dispatch-cost schema v11; tài liệu chuẩn hiện hành được ưu
+> tiên khi nội dung bên dưới mâu thuẫn.
+
 > ⚠ **CẬP NHẬT 2026-07-13 — Phase A đã thực thi.**
 >
 > | Phase | Nội dung | Trạng thái | Commit |

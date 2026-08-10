@@ -35,7 +35,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
-    pub(crate) latency_class: LatencyClass,
+    pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) focus_loss_fault: bool,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
@@ -79,6 +79,7 @@ pub(crate) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::{PendingObservationQueue, drain_one_observer, observer_has_safe_slack};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
@@ -88,7 +89,7 @@ pub(crate) use release::{
     set_release_telemetry_failure_on_recovery,
 };
 
-use super::super::{ActionKind, DurationTicks, LatencyClass, QpcTicks, TimelineTicks};
+use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 pub(super) use super::publish_backend_metrics;

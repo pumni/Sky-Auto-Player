@@ -4,8 +4,8 @@ use super::super::{
 use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, DispatchObservation, ProjectedPlanningInput,
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
+    CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
+    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
     anchored_dispatch_target_ticks_typed, ensure_preflight_for_target, focus_matches,
     focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch_projected,
     plan_structure_is_valid, process_command_control, publish_backend_metrics, suspend_live_input,
@@ -16,6 +16,19 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
+fn planned_target_qpc(
+    plan: &super::planning::NextDispatchPlan,
+    epoch: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
+    plan.deadline_ticks
+        .map(|deadline| {
+            epoch
+                .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                .map_err(|error| format!("physical target arithmetic failure: {error}"))
+        })
+        .transpose()
+}
+
 /// Dispatch the work represented by one immutable plan.  This helper is used
 /// for both an already-due plan and a successful blocking deadline wake, so a
 /// normal timer wake never re-enters general orchestration before transport.
@@ -24,6 +37,7 @@ pub(crate) fn dispatch_due_from_plan(
     plan: &super::planning::NextDispatchPlan,
     effective_now_ticks: TimelineTicks,
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
+    physical_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     focus_loss_fault: bool,
     config: &super::WorkerConfig,
     resources: &mut super::WorkerResources,
@@ -68,6 +82,11 @@ pub(crate) fn dispatch_due_from_plan(
         None => SmallVec::new(),
     };
     if !due_pending.is_empty() {
+        let Some(physical_target_qpc) = physical_target_qpc else {
+            return super::DispatchStep::Terminate(
+                "pending dispatch has no physical target boundary".to_string(),
+            );
+        };
         let Some(frozen_budget) = plan.pending_budget.as_ref() else {
             return super::DispatchStep::Terminate(
                 "pending dispatch plan has no health budget".to_string(),
@@ -78,7 +97,7 @@ pub(crate) fn dispatch_due_from_plan(
                 due_pending,
                 pending_plan,
                 lead_up_ticks,
-                latency_class: plan.latency_class,
+                physical_target_qpc,
                 frozen_budget: *frozen_budget,
                 quit_requested,
                 skip_requested,
@@ -114,13 +133,18 @@ pub(crate) fn dispatch_due_from_plan(
             "authored dispatch plan has no health budget".to_string(),
         );
     }
+    let Some(physical_target_qpc) = physical_target_qpc else {
+        return super::DispatchStep::Terminate(
+            "authored dispatch has no physical target boundary".to_string(),
+        );
+    };
 
     super::dispatch_authored_packet(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
             now_ticks,
-            latency_class: plan.latency_class,
+            physical_target_qpc,
             focus_loss_fault,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
@@ -629,31 +653,19 @@ pub(super) fn dispatch(
             // one observation → if drained, discard plan and rebuild from a
             // fresh QPC sample before any admit/dispatch/wait.
             if let Some(wait_observation) = core.runtime.pending_wait_observation.take() {
-                if core.observer.pending.is_full() {
-                    core.metrics.observer_dropped_samples =
-                        core.metrics.observer_dropped_samples.saturating_add(1);
-                } else {
-                    core.observer.pending.push(
-                        DispatchObservation::Wait(wait_observation),
-                        &mut core.metrics.observer_dropped_samples,
-                        &mut core.metrics.observer_queue_high_watermark,
-                    );
-                }
+                core.observer.pending.push_wait(wait_observation);
             }
-            let mut dispatch_plan = match plan_next_dispatch_projected(ProjectedPlanningInput {
+            let mut dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
                 coordinator: &resources.coordinator,
                 estimator: &resources.estimator,
                 qpc_clock,
-                playback_epoch_qpc: resources.playback.epoch,
-                last_send_qpc: core.runtime.last_send_qpc_ticks,
-                cold_threshold_ticks: timing.cold_threshold_ticks,
                 timing: &config.timing,
                 health_options: core
                     .health
                     .as_ref()
                     .expect("worker health initialized")
                     .options,
-                enable_adaptive_lead: config.estimator.enable_adaptive_lead,
+                enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
             }) {
                 Ok(plan) => plan,
                 Err(error) => {
@@ -716,20 +728,17 @@ pub(super) fn dispatch(
                             }
                         }
                     };
-                    dispatch_plan = match plan_next_dispatch_projected(ProjectedPlanningInput {
+                    dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
                         coordinator: &resources.coordinator,
                         estimator: &resources.estimator,
                         qpc_clock,
-                        playback_epoch_qpc: resources.playback.epoch,
-                        last_send_qpc: core.runtime.last_send_qpc_ticks,
-                        cold_threshold_ticks: timing.cold_threshold_ticks,
                         timing: &config.timing,
                         health_options: core
                             .health
                             .as_ref()
                             .expect("worker health initialized")
                             .options,
-                        enable_adaptive_lead: config.estimator.enable_adaptive_lead,
+                        enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
                     }) {
                         Ok(plan) => plan,
                         Err(error) => {
@@ -741,10 +750,20 @@ pub(super) fn dispatch(
                     };
                 }
             }
+            let physical_target_qpc =
+                match planned_target_qpc(&dispatch_plan, resources.playback.epoch) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(error);
+                        break;
+                    }
+                };
             let authored_step = dispatch_due_from_plan(
                 &dispatch_plan,
                 effective_now_ticks,
                 now_ticks,
+                physical_target_qpc,
                 focus_loss_fault,
                 config,
                 resources,
@@ -802,7 +821,10 @@ pub(super) fn dispatch(
                     terminal_error: &mut core.runtime.terminal_error,
                 },
             }) {
-                WaitBoundary::Due { wait_result } => {
+                WaitBoundary::Due {
+                    wait_result,
+                    target_qpc,
+                } => {
                     let Some(wait_deadline_ticks) = deadline_ticks else {
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -849,6 +871,7 @@ pub(super) fn dispatch(
                         &dispatch_plan,
                         dispatch_effective_now,
                         dispatch_now_ticks,
+                        Some(target_qpc),
                         focus_loss_fault,
                         config,
                         resources,

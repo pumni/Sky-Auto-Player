@@ -9,8 +9,13 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 pub(crate) enum WaitBoundary {
-    Due { wait_result: Option<WaitResult> },
-    Replan { wait_result: WaitResult },
+    Due {
+        wait_result: Option<WaitResult>,
+        target_qpc: QpcTicks,
+    },
+    Replan {
+        wait_result: WaitResult,
+    },
     Exit,
 }
 
@@ -113,7 +118,21 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         }
     };
     if deadline_ticks <= target_sample_elapsed_ticks {
-        return WaitBoundary::Due { wait_result: None };
+        let target_qpc = match clock_state
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
+        {
+            Ok(target) => target,
+            Err(error) => {
+                *force_full_cleanup = true;
+                *terminal_error = Some(format!("deadline arithmetic failure: {error}"));
+                return WaitBoundary::Exit;
+            }
+        };
+        return WaitBoundary::Due {
+            wait_result: None,
+            target_qpc,
+        };
     }
     let target_qpc = match clock_state
         .epoch
@@ -145,6 +164,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Deadline if dispatch_deadline_wake_is_due(bounded_target, target_qpc) => {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
+                target_qpc,
             }
         }
         WaitOutcome::Deadline => WaitBoundary::Replan {
@@ -251,7 +271,7 @@ mod tests {
 
         assert!(matches!(
             boundary,
-            WaitBoundary::Replan { wait_result }
+            WaitBoundary::Replan { wait_result, .. }
                 if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
         ));
         assert!(!force_full_cleanup);

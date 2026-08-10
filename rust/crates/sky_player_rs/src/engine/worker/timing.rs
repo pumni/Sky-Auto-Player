@@ -1,6 +1,4 @@
 use crate::engine::telemetry::WorkerMetricsLocal;
-#[cfg(test)]
-use sky_dispatch_core::estimator::LatencyClass;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
@@ -126,23 +124,6 @@ pub(crate) fn exact_sender_durations(
         })?;
     let single_call = (send_attempts == 1 && !rollback_call).then_some(duration);
     Ok((Some(duration), single_call))
-}
-
-#[cfg(test)]
-pub(crate) fn classify_latency_class(
-    last_send_qpc_ticks: Option<QpcTicks>,
-    now_qpc_ticks: QpcTicks,
-    cold_threshold_ticks: DurationTicks,
-) -> Result<LatencyClass, TimeArithmeticError> {
-    let Some(last) = last_send_qpc_ticks else {
-        return Ok(LatencyClass::Cold);
-    };
-    let gap = now_qpc_ticks.checked_duration_since(last)?;
-    Ok(if gap > cold_threshold_ticks {
-        LatencyClass::Cold
-    } else {
-        LatencyClass::Hot
-    })
 }
 
 pub(crate) fn anchored_dispatch_target_ticks_typed(

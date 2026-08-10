@@ -13,7 +13,6 @@
 //!   cargo test --manifest-path rust/Cargo.toml -p sky_player_rs \
 //!       --features test-support --test rt_dispatch_no_alloc
 
-use sky_dispatch_core::estimator::LatencyClass;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
@@ -113,7 +112,7 @@ fn disable_counting() -> u64 {
 fn down_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Down(DownObservation {
         path: DispatchPath::DownOnly { down_count: 1 },
-        latency_class: LatencyClass::Hot,
+        physical_target_qpc: QpcTicks::ZERO,
         lead_down_saturated: false,
         timeline_rebase_count: 0,
         timeline_rebase_total_ticks: DurationTicks::ZERO,
@@ -121,7 +120,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         timeline_rebase_last_reason: 0,
         sender_started_qpc: QpcTicks::ZERO,
         sender_completed_qpc: QpcTicks::ZERO,
-        dispatch_ready_qpc: QpcTicks::ZERO,
+        dispatch_ready_qpc: Some(QpcTicks::ZERO),
         sender_duration_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_packet: PhysicalPacket::new(0, 1),
@@ -155,10 +154,10 @@ fn down_observation(n: u64) -> DispatchObservation {
 
 fn up_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Up(UpObservation {
-        latency_class: LatencyClass::Hot,
+        physical_target_qpc: QpcTicks::ZERO,
         sender_started_qpc: QpcTicks::ZERO,
         sender_completed_qpc: QpcTicks::ZERO,
-        dispatch_ready_qpc: QpcTicks::ZERO,
+        dispatch_ready_qpc: Some(QpcTicks::ZERO),
         sender_duration_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_mask: 1,
@@ -600,11 +599,7 @@ fn production_pending_release_hard_path_no_alloc() {
         1,
         "plan must own one due pending release"
     );
-    let step = harness.dispatch_pending_release_with_plan(
-        due_pending,
-        Some(pending_plan),
-        LatencyClass::Hot,
-    );
+    let step = harness.dispatch_pending_release_with_plan(due_pending, Some(pending_plan));
     let allocs = disable_counting();
 
     assert_eq!(
@@ -638,11 +633,7 @@ fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness)
             1,
             "recovery retry must remain coordinator-owned"
         );
-        let step = harness.dispatch_pending_release_with_plan(
-            due_pending,
-            Some(pending_plan),
-            LatencyClass::Hot,
-        );
+        let step = harness.dispatch_pending_release_with_plan(due_pending, Some(pending_plan));
         if matches!(step, DispatchStep::Terminate(_)) {
             if let Err(observer_step) = drain_observer(harness) {
                 return observer_step;

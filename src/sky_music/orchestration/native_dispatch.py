@@ -79,6 +79,7 @@ class NativeProgressSnapshotProtocol(Protocol):
     input_path_degraded: bool
     sendinput_path_degraded: bool
     core_post_send_degraded: bool
+    post_send_metrics_available: bool
     wait_path_degraded: bool
     recovered_zero_progress_but_late: int
     recovered_zero_progress_retries: int
@@ -132,8 +133,6 @@ class RustDispatchRuntime:
 
         native_info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
         estimator_state_json = load_estimator_state(
-            game_fps=int(game_fps),
-            native_build_commit=str(native_info.get("native_build_commit", "")),
             native_abi=str(native_info.get("native_abi", "")),
         )
 

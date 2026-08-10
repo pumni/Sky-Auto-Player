@@ -151,8 +151,6 @@ class PlaybackEngine:
         ):
             save_estimator_state(
                 estimator_state_json,
-                game_fps=self.game_fps,
-                native_build_commit=str(snapshot.get("native_build_commit", "")),
                 native_abi=str(snapshot.get("native_abi", "")),
             )
         if outcome == PLAYBACK_ERROR:

@@ -36,20 +36,22 @@ wires the modules; `orchestration.rs` is the loop sequencer and owns
 command/focus/pause transitions, plan creation, the pending/authored/wait
 choice, and the terminal transition.
 
-- `planning.rs` owns projected Hot/Cold classification, lead selection, the
+- `planning.rs` owns lead selection, the
   pending-release plan, frozen health budgets, and the next wait deadline.
   `plan_next_dispatch_projected()` builds exactly one immutable
   `NextDispatchPlan` per loop epoch from the coordinator's next uncompensated
-  physical boundary, the previous SendInput completion, and the estimator. It
-  never samples QPC itself, mutates the coordinator, allocates, or formats
-  strings on the success path.
+  physical boundary and the estimator. It carries the exact physical QPC
+  target through the wait and dispatch paths; it never samples QPC itself,
+  mutates the coordinator, allocates, or formats strings on the success path.
   The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
   the wait deadline, so prepare and wait cannot disagree on lead selection.
 - `dispatch/` owns the pending-release and authored-packet backend
   transactions, transaction-outcome interpretation, coordinator commit, and the
   dispatch telemetry record. Both note-on and note-off paths first finish
   physical/coordinator correctness, required recovery, the mandatory terminal
-  SLO decision, and a raw `dispatch_ready_qpc` sample. They then enqueue one
+  SLO decision, and an optional `dispatch_ready_qpc` sample. The sample is
+  captured only when strict timing or non-off telemetry requires post-send
+  metrics. They then enqueue one
   allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) containing
   QPC/timeline ticks and physical requested/confirmed/skipped masks into a
   fixed-capacity (64) worker-owned ring and return. Transport counts are derived
@@ -124,20 +126,21 @@ build provenance. Latency degradation is reported as an input-path health
 signal; the typed snapshot separates `sendinput_path_degraded`,
 `core_post_send_degraded`, `observer_degraded`, and `wait_path_degraded`.
 `input_path_degraded` is the OR of SendInput and core post-send health only;
-observer slowdown is an independent domain. SendInput warning thresholds use
-the estimator's polyphony-aware syscall budget plus a fixed margin; core
-post-send, observer, and wait thresholds remain independent. Each path also
-publishes its degraded-sample count and active threshold. UI text must not
-infer an OS hook, Filter Keys, or game-side cause from any of these sender-side
-signals.
+observer slowdown is an independent domain. SendInput warning thresholds use a
+fixed sender-side floor plus a fixed margin; core post-send, observer, and wait
+thresholds remain independent. Each path also publishes its degraded-sample
+count and active threshold. UI text must not infer an OS hook, Filter Keys, or
+game-side cause from any of these sender-side signals.
 
-Each performance sample is classified once against the budget frozen before
-dispatch; the rolling windows retain only that boolean classification, not raw
-durations. SendInput, post-send occupancy, and scheduler wake latency have
-independent fixed-capacity hysteresis windows. A single spike therefore cannot
-latch degradation for a session, and a later threshold/polyphony change cannot
-reclassify history. Backend rejection, partial packets, clock failures, and
-uncertain key state remain immediate session-latched correctness failures.
+Each health sample is classified once against its budget frozen before
+dispatch; the rolling health windows retain only that boolean classification,
+not raw durations. SendInput, post-send occupancy, and scheduler wake latency
+have independent fixed-capacity hysteresis windows. The adaptive dispatch-cost
+estimator is separate from health: it records clean sender completion cost in
+fixed path/polyphony buckets and never drives the health budget. A single spike
+therefore cannot latch degradation for a session, and a later threshold change
+cannot reclassify history. Backend rejection, partial packets, clock failures,
+and uncertain key state remain immediate session-latched correctness failures.
 
 The native final snapshot also reports `post_send_max_us`,
 `dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,

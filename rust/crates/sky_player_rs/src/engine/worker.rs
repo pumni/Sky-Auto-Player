@@ -39,16 +39,13 @@ use control::{
     CommandControlRuntime, CommandControlSignals, process_command_control,
 };
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchObservation, DispatchStep, PendingReleaseContext,
-    dispatch_authored_packet, dispatch_due_pending_releases, drain_one_observer,
-    observer_has_safe_slack,
+    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
+    dispatch_due_pending_releases, drain_one_observer, observer_has_safe_slack,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 
-#[cfg(test)]
-pub(crate) use estimator::update_estimator_after_send;
-pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
+pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_observation};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use health::FrozenDispatchBudget;
 #[cfg(test)]
@@ -65,13 +62,9 @@ pub use planning::NextDispatchPlan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::startup_lead_for_first_packet;
-pub(crate) use planning::{
-    ProjectedPlanningInput, plan_next_dispatch_projected, plan_structure_is_valid,
-};
+pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
-#[cfg(test)]
-pub(crate) use timing::classify_latency_class;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
@@ -101,7 +94,6 @@ pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
     startup_gate: Option<(TimelineTicks, DurationTicks)>,
     focus_restore_started_ticks: Option<QpcTicks>,
-    last_send_qpc_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
@@ -124,14 +116,6 @@ impl WorkerRuntime {
         self.chord_integrity_lost
     }
 
-    pub(crate) fn set_last_send_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
-        self.last_send_qpc_ticks = ticks;
-    }
-
-    pub(crate) fn last_send_qpc_for_test(&self) -> Option<QpcTicks> {
-        self.last_send_qpc_ticks
-    }
-
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
     }
@@ -152,7 +136,6 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
     pub(super) paused_poll_ticks: DurationTicks,
-    pub(crate) cold_threshold_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
@@ -173,12 +156,6 @@ impl WorkerTimingState {
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
             paused_poll_ticks: DurationTicks::ZERO,
-            cold_threshold_ticks: DurationTicks::from_raw(
-                sky_dispatch_win32::clock::qpc_us_to_ticks(
-                    sky_dispatch_core::time::SEND_COLD_THRESHOLD_US,
-                )
-                .expect("production cold threshold conversion"),
-            ),
             lease_timeout_ticks: DurationTicks::ZERO,
             retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,
@@ -226,7 +203,7 @@ pub(crate) struct WorkerResources {
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) playback: PlaybackClockState,
-    pub(super) estimator: SendLatencyEstimator,
+    pub(super) estimator: DispatchCostEstimator,
     pub(super) telemetry: TelemetryCollector,
     pub(super) scheduling: WorkerSchedulingGuards,
 }

@@ -65,7 +65,7 @@ impl NativeDispatchSessionPy {
         let enable_adaptive_spin = true;
         let spin_floor_us = 700;
         let estimator_state_json = config.estimator_state_json.clone();
-        let enable_adaptive_lead = true;
+        let enable_dispatch_cost_lead = true;
         let input_path_warn_us = 300;
         let strict_timing = parsed_profile.strict_timing();
         let strict_down_completion_late_us = 2_000;
@@ -115,7 +115,7 @@ impl NativeDispatchSessionPy {
             },
             estimator: EstimatorOptions {
                 state_json: estimator_state_json,
-                enable_adaptive_lead,
+                enable_dispatch_cost_lead,
             },
         })
         .map_err(PyRuntimeError::new_err)?;
@@ -497,7 +497,7 @@ impl TestDispatchSessionPy {
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = true,
-        enable_adaptive_lead = true,
+        enable_dispatch_cost_lead = true,
         fault_mode = "none"
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -514,7 +514,7 @@ impl TestDispatchSessionPy {
         enable_waitable_timer: bool,
         enable_event_wait: bool,
         enable_adaptive_spin: bool,
-        enable_adaptive_lead: bool,
+        enable_dispatch_cost_lead: bool,
         fault_mode: &str,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
@@ -614,7 +614,7 @@ impl TestDispatchSessionPy {
             },
             estimator: EstimatorOptions {
                 state_json: None,
-                enable_adaptive_lead,
+                enable_dispatch_cost_lead,
             },
         })
         .map_err(PyRuntimeError::new_err)?;

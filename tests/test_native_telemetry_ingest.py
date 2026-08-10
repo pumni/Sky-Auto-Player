@@ -11,11 +11,13 @@ def _compact_output(
     *,
     completion_error_ticks: int = 250,
     authored_completion_error_ticks: int = 250,
-    schema_version: int = 9,
+    schema_version: int = 10,
     requested_count: int = 1,
     sent_count: int = 1,
     skipped_count: int = 0,
     send_attempts: int = 1,
+    dispatch_cost_us: int = 70,
+    post_send_metrics_available: bool = True,
 ) -> dict[str, Any]:
     return {
         "schema_version": schema_version,
@@ -36,7 +38,9 @@ def _compact_output(
                 "wake_ticks": 10_100,
                 "send_started_ticks": 10_110,
                 "send_completed_ticks": 10_180,
+                "dispatch_cost_us": dispatch_cost_us,
                 "core_post_send_duration_us": 4,
+                "post_send_metrics_available": post_send_metrics_available,
                 "completion_error_ticks": completion_error_ticks,
                 "authored_completion_error_ticks": authored_completion_error_ticks,
                 "applied_lead_ticks": 1_000,
@@ -63,6 +67,8 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.wake_error_us == 10
     assert record.sender_completion_error_us == 25
     assert record.core_post_send_duration_us == 4
+    assert record.dispatch_cost_us == 70
+    assert record.post_send_metrics_available is True
     assert record.visible_lateness_us == 25
     assert record.dispatch_lateness_us == 25
     assert record.applied_lead_us == 100
@@ -114,6 +120,8 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["send_operation_duration_us"] == 7
     assert row["sendinput_call_duration_us"] == 7
     assert row["core_post_send_duration_us"] == 4
+    assert row["dispatch_cost_us"] == 70
+    assert row["post_send_metrics_available"] is True
     assert row["generation_ids"] == ""
     assert row["first_win32_error"] == 1460
     assert row["last_win32_error"] == 1460

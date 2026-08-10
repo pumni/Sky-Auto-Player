@@ -33,7 +33,6 @@ use std::time::Instant;
 use sky_dispatch_core::{
     compile::compile_runtime_intents,
     coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator},
-    estimator::LatencyClass,
     model::{ActionKind, KeyActionInput},
     time::{DurationTicks, TimelineTicks},
 };
@@ -112,7 +111,7 @@ fn allowed_codes(polyphony: usize) -> Vec<u16> {
 fn run_iteration(
     kind: ActionKind,
     polyphony: usize,
-    _latency_class: LatencyClass,
+    _class_name: &str,
     stats: &mut CoordinatorStats,
 ) -> Result<(), String> {
     let actions = build_actions(polyphony);
@@ -258,7 +257,7 @@ fn run_iteration(
 fn run_cell(
     kind: ActionKind,
     polyphony: usize,
-    latency_class: LatencyClass,
+    class_name: &str,
     load_mode: LoadMode,
     iters: usize,
 ) -> Result<CoordinatorStats, String> {
@@ -278,7 +277,7 @@ fn run_cell(
     let mut stats = CoordinatorStats::default();
 
     for _ in 0..iters {
-        if let Err(e) = run_iteration(kind, polyphony, latency_class, &mut stats) {
+        if let Err(e) = run_iteration(kind, polyphony, class_name, &mut stats) {
             stop.store(true, Ordering::Relaxed);
             if let Some(handle) = stressor_handle.take() {
                 let _ = handle.join();
@@ -317,14 +316,14 @@ fn main() -> Result<(), String> {
     print_header();
 
     let kinds = [(ActionKind::Down, "down"), (ActionKind::Up, "up")];
-    let classes = [(LatencyClass::Hot, "hot"), (LatencyClass::Cold, "cold")];
+    let classes = ["hot", "cold"];
     let loads = [LoadMode::Idle, LoadMode::Load];
 
     for (kind, kind_str) in &kinds {
         for &poly in POLYPHONY_LEVELS {
-            for (class, class_str) in &classes {
+            for class_str in &classes {
                 for &load in &loads {
-                    let stats = run_cell(*kind, poly, *class, load, iters)?;
+                    let stats = run_cell(*kind, poly, class_str, load, iters)?;
                     print_row(kind_str, poly, class_str, load.as_str(), &stats);
                 }
             }

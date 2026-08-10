@@ -112,17 +112,23 @@ exact SendInput completion boundary and a precomputed `DurationTicks` hold floor
 ### Rationale
 The sender-side completion-to-completion proxy preserves the intended hold floor: measuring from down-dispatch start would subtract the down injection latency from the sender timeline. For `local_precise` at 144 FPS (6.94 ms hold), this avoided the previously observed sender-side shortfall. Completion-anchoring does not establish a game-observed hold, because game sampling and kernel delivery are not instrumented here. The constant `min_hold_margin_us` models residual sender-to-device delivery latency; it is a margin, not game-onset evidence.
 
-### Interaction with Adaptive Dispatch Lead (2026-07)
-Since the RT-pipeline optimization, dispatch targets a **sender-completion timing proxy**: events are popped early by a bounded rolling p95 of `send_duration_us`, bucketed by action kind and polyphony, so sender completions land on `scheduled_us`. This is not a claim about game input sampling, rendering, or audio onset. Cold buckets use a conservative prior and lower-bucket/global evidence; the resulting lead is monotonic with polyphony and clamped to the configured maximum. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
-$$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
-and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop overhead from becoming systematic lateness. The native lead cache accepts only the current version-10 six-channel schema; an older or newer cache is discarded and playback starts from the conservative prior. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+### Interaction with Adaptive Dispatch Lead (2026-08)
+Dispatch targets a **sender-completion timing proxy**: events are admitted at a
+logical deadline and carry an absolute QPC target computed from the same clock
+sample. The lead is the nearest-rank p95 of a fixed rolling window of
+`dispatch_cost_us`, bucketed by physical send path (`down_only`, `up_only`, or
+`mixed`) and event count. It is monotonic by event count, capped by the
+configured maximum, and has no runtime Hot/Cold classification or correction
+loop. This is not a claim about game input sampling, rendering, or audio onset.
+The lead is symmetric for down and up paths; the hold/release floor still wins.
+Completion before the physical target is a terminal timing error rather than a
+negative training sample. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
 One worker loop epoch resolves exactly one immutable `NextDispatchPlan`
-(`worker/planning.rs`): it projects Hot/Cold from the upcoming uncompensated
-physical boundary and the previous SendInput completion, computes the
-path-aware authored lead once, freezes health budgets, forms the pending-release
-cohort lead once, and derives a single wait deadline from those same plans — so
-prepare-due and wait-until can never disagree on lead selection. A normal
+(`worker/planning.rs`): it computes the path-aware authored lead once, freezes
+health budgets, forms the pending-release cohort lead once, and derives a single
+wait deadline and physical QPC target from those same plans — so prepare-due and
+wait-until can never disagree on lead selection. A normal
 dispatch deadline wake reuses that plan directly; it does not restart the full
 worker epoch, drain observers, recalculate lead, or rebuild orchestration before
 physical dispatch. Interrupts, commands, focus/pause transitions, backend calls,
@@ -140,10 +146,12 @@ lead to those sub-lead actions, preserving their order. Only the first action re
 startup-anchor negative offset.
 The worker records a separate Up completion residual only from clean, non-deferred, single-source
 release cohorts.
-Normal estimator operation uses the rolling p95. Native strict timing uses the clamped rolling
-upper tail instead, so a recent outlier remains visible; strict sparse buckets also retain the
-global upper-tail guard. Repeated positive residual at the lead cap is a controlled timing error
-rather than an unreported tail.
+Normal estimator operation uses the clamped rolling p95; native strict timing
+uses the clamped rolling maximum so an observed upper-tail sample remains
+visible. Sparse buckets fall back to their path's lower-cardinality evidence and
+then the path prior; there is no cross-path contamination. Repeated positive
+residual at the lead cap is a controlled timing error rather than an unreported
+tail.
 For release observations, `lead_up_saturated` records the lead applied by the physical plan;
 `saturated_positive` is derived separately from the effective SendInput completion error, not
 from authored-timestamp lateness.
@@ -157,12 +165,10 @@ default) after `SendInput` returns. A violation is recorded as
 mixed release cohorts are not compared with their authored timestamp because their effective
 release target is different.
 
-Hot/Cold classification is projected before waiting from the upcoming
-uncompensated physical boundary minus the previous SendInput completion. A long
-idle interval therefore receives Cold lead before the worker sleeps; the class
-cannot flip merely because time passed during that wait. The logical playback
-clock remains paused during focus/manual recovery and is not used to infer
-CPU/input-path warmth or game-observed timing.
+Runtime lead selection has no Hot/Cold state. The independent calibration
+harness may still report Hot/Cold delivery-proxy classes for diagnostic
+comparison, but those classes do not enter production planning, estimator
+state, health budgets, or telemetry semantics.
 
 At a normal timer deadline, the worker keeps the immutable plan and enters the
 physical path directly. The last-mile order is fresh command/lease admission,
@@ -172,12 +178,13 @@ control plus lease admission but never a focus gate. Interrupts and lease-only
 wakes replan instead of dispatching the stale plan.
 
 The production controller has one target: `SendInput` completion at the
-effective scheduled timestamp. Its correction is bounded integral feedback
-over clean sender-side completion error. Raw Input calibration remains an
+effective scheduled timestamp. It learns only clean sender-side dispatch cost;
+it does not apply integral correction. Raw Input calibration remains an
 app-owned host delivery proxy for diagnostics only; it is not part of the
 adaptive lead, scheduler timestamps, hold duration, or any game-observed timing
-claim. The current estimator state schema is version 10 and v9 state is
-rejected without migration.
+claim. The current estimator state is version 11 and v10 or other versions are
+rejected without migration. Its exact JSON shape is
+`{version:11,max_events:30,down:[{samples:[]}...31],up:[...31],mixed:[...31]}`.
 
 ---
 
@@ -226,19 +233,29 @@ Do **not** treat `visible_lateness_us ≈ 0` as proof the game received the note
 
 ---
 
-## 7. Accuracy Improvements (2026-07-18 Overhaul)
+## 7. Accuracy Improvements (2026-08 dispatch-cost estimator)
 
-### Cold-start lead elimination (Phase D)
-The `SendLatencyEstimator` now persists its per-kind EMA state to `.cache/lead_estimator.json`
-between sessions. On the next play, warm EMA values are imported so the first note benefits from
-previous-session lead estimates rather than cold-starting at zero for `_SEED_SAMPLES` (5) sends.
-Corrupt or version-mismatched cache is silently ignored — never raises into play.
+The native `DispatchCostEstimator` persists exact sender-side completion-cost
+windows to `.cache/lead_estimator.json` through a Python envelope schema 2.
+The native state is schema 11 with three path-isolated arrays (`down`, `up`, and
+`mixed`), 31 buckets for the default maximum event count of 30, and a fixed
+rolling window of 32 samples. Each bucket starts with five seed samples; the
+nearest-rank p95 is used for the lead. Live observations are clamped to the
+maximum sample bound, while persisted values are rejected if invalid. Corrupt,
+version-mismatched, or structurally incompatible state is discarded without
+entering playback; there is no v10 migration.
 
-### Idle-gap core warmup (retired)
-The dormant `core_warmup_budget_us`, `CORE_WARMUP_SPIN_MAX_US`, and cold-warmup
-branch were removed from the Rust production wait path. High-resolution
-waitable timers, the bounded final spin, and projected Hot/Cold lead are the
-complete timing mechanism.
+The estimator is deliberately separate from health budgets. Health uses its
+fixed sender floor and hysteresis windows, while the estimator learns only
+clean, canonical dispatch observations. A missing post-send metric therefore
+cannot become a zero-cost training sample.
+
+### Wait and spin policy
+High-resolution waitable timers and the bounded final spin remain the complete
+production wait mechanism. The worker computes an absolute physical target QPC
+before either due return and carries that target through admission, `SendInput`,
+and deferred observation. The startup spin probe remains separate from dispatch
+cost estimation.
 
 ### Mid-song spin re-probe
 The native worker performs only the bounded startup probe. Mid-song reprobe was removed from the

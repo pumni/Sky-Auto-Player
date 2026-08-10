@@ -1,8 +1,7 @@
 use super::TrackedKeyState;
 use crate::engine::telemetry::{SharedMetrics, WorkerMetricsLocal};
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+use sky_dispatch_core::estimator::DispatchCostEstimator;
 
-pub(crate) const SEND_WARNING_MARGIN_US: u64 = 50;
 pub(crate) const HEALTH_WINDOW_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,11 +32,6 @@ impl Default for DispatchHealthOptions {
 }
 
 impl DispatchHealthOptions {
-    pub(crate) fn send_warn_threshold_us(self, expected_send_us: u64) -> u64 {
-        self.sendinput_warn_floor_us
-            .max(expected_send_us.saturating_add(SEND_WARNING_MARGIN_US))
-    }
-
     pub(crate) fn window_policy(self) -> HealthWindowPolicy {
         HealthWindowPolicy {
             minimum_samples: self.window_capacity.min(HEALTH_WINDOW_CAPACITY),
@@ -109,7 +103,7 @@ pub(crate) fn estimator_path_for_dispatch(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrozenDispatchBudget {
     pub(crate) path: DispatchPath,
-    pub(crate) observed_polyphony: usize,
+    pub(crate) event_count: usize,
     pub(crate) send_warn_us: u64,
     pub(crate) core_post_send_warn_us: u64,
 }
@@ -121,20 +115,14 @@ pub(crate) struct DispatchLeadEstimate {
 }
 
 pub(crate) fn estimate_dispatch_path_lead(
-    estimator: &SendLatencyEstimator,
+    estimator: &DispatchCostEstimator,
     path: DispatchPath,
-    latency_class: LatencyClass,
     strict_timing: bool,
     max_lead_us: u64,
 ) -> DispatchLeadEstimate {
     let send_path = estimator_path_for_dispatch(path);
     let count = path.event_count();
-    let value = estimator.estimate_lead_with_class_and_policy(
-        send_path,
-        count,
-        latency_class,
-        strict_timing,
-    );
+    let value = estimator.estimate_lead(send_path, count, strict_timing);
     DispatchLeadEstimate {
         applied_us: value.applied_us.min(max_lead_us),
         saturated: value.saturated,
@@ -142,30 +130,15 @@ pub(crate) fn estimate_dispatch_path_lead(
 }
 
 pub(crate) fn build_dispatch_budget(
-    estimator: &SendLatencyEstimator,
     path: DispatchPath,
-    latency_class: LatencyClass,
     options: DispatchHealthOptions,
-    strict_timing: bool,
 ) -> FrozenDispatchBudget {
-    let send_path = estimator_path_for_dispatch(path);
     let count = path.event_count();
-    let estimate = estimator.estimate_lead_with_class_and_policy(
-        send_path,
-        count,
-        latency_class,
-        strict_timing,
-    );
-    let cold = estimator
-        .estimate_lead_with_class_and_policy(send_path, count, LatencyClass::Cold, strict_timing)
-        .components
-        .cold_reserve_us;
-    let expected_send_us = estimate.components.syscall_us.max(cold);
 
     FrozenDispatchBudget {
         path,
-        observed_polyphony: count,
-        send_warn_us: options.send_warn_threshold_us(expected_send_us),
+        event_count: count,
+        send_warn_us: options.sendinput_warn_floor_us,
         core_post_send_warn_us: options.core_post_send_warn_us,
     }
 }
@@ -369,6 +342,7 @@ pub(crate) fn observe_dispatch_health(
     let DispatchHealthObservation {
         send_duration_us,
         post_send_duration_us,
+        post_send_metrics_available,
         path,
         send_warn_us,
         core_post_send_warn_us,
@@ -381,13 +355,15 @@ pub(crate) fn observe_dispatch_health(
         policy,
         sendinput_window,
     );
-    let _ = record_input_path_health(
-        post_send_duration_us,
-        core_post_send_warn_us,
-        elapsed_us,
-        policy,
-        core_post_send_window,
-    );
+    if post_send_metrics_available {
+        let _ = record_input_path_health(
+            post_send_duration_us,
+            core_post_send_warn_us,
+            elapsed_us,
+            policy,
+            core_post_send_window,
+        );
+    }
     local_metrics.sendinput_path_degraded = sendinput_window.is_degraded();
     local_metrics.core_post_send_degraded = core_post_send_window.is_degraded();
     local_metrics.sendinput_window_bad_count = sendinput_window.bad_count() as u64;
@@ -397,22 +373,31 @@ pub(crate) fn observe_dispatch_health(
     local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
         || local_metrics.core_post_send_degraded
         || local_metrics.wait_path_degraded;
-    local_metrics.core_post_send_max_us = local_metrics
-        .core_post_send_max_us
-        .max(post_send_duration_us);
-    local_metrics.dispatch_occupancy_max_us = local_metrics
-        .dispatch_occupancy_max_us
-        .max(send_duration_us.saturating_add(post_send_duration_us));
+    if post_send_metrics_available {
+        local_metrics.core_post_send_max_us = local_metrics
+            .core_post_send_max_us
+            .max(post_send_duration_us);
+    }
+    local_metrics.dispatch_occupancy_max_us =
+        local_metrics
+            .dispatch_occupancy_max_us
+            .max(if post_send_metrics_available {
+                send_duration_us.saturating_add(post_send_duration_us)
+            } else {
+                send_duration_us
+            });
     record_degraded_sample(
         send_duration_us,
         send_warn_us,
         &mut local_metrics.sendinput_degraded_samples,
     );
-    record_degraded_sample(
-        post_send_duration_us,
-        core_post_send_warn_us,
-        &mut local_metrics.core_post_send_degraded_samples,
-    );
+    if post_send_metrics_available {
+        record_degraded_sample(
+            post_send_duration_us,
+            core_post_send_warn_us,
+            &mut local_metrics.core_post_send_degraded_samples,
+        );
+    }
     if send_duration_us > send_warn_us {
         match path {
             DispatchPath::DownOnly { .. } => {
@@ -461,6 +446,7 @@ pub(crate) fn observe_observer_health(
 pub(crate) struct DispatchHealthObservation {
     pub(crate) send_duration_us: u64,
     pub(crate) post_send_duration_us: u64,
+    pub(crate) post_send_metrics_available: bool,
     pub(crate) path: DispatchPath,
     pub(crate) send_warn_us: u64,
     pub(crate) core_post_send_warn_us: u64,
@@ -512,26 +498,15 @@ pub(crate) fn publish_backend_metrics(
 mod tests {
     use super::{
         DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
-        HealthState, HealthTransition, HealthWindow, HealthWindowPolicy, SEND_WARNING_MARGIN_US,
-        build_dispatch_budget, observe_dispatch_health, observe_observer_health,
-        observe_wait_health, record_degraded_sample, record_input_path_health,
+        HealthState, HealthTransition, HealthWindow, HealthWindowPolicy, build_dispatch_budget,
+        observe_dispatch_health, observe_observer_health, observe_wait_health,
+        record_degraded_sample, record_input_path_health,
     };
     use crate::engine::telemetry::metrics::WorkerMetricsLocal;
-    use sky_dispatch_core::estimator::LatencyClass;
-    use sky_dispatch_core::estimator::SendLatencyEstimator;
-
     #[test]
-    fn send_warning_budget_grows_with_expected_polyphony_cost() {
+    fn send_warning_budget_uses_fixed_floor() {
         let options = DispatchHealthOptions::default();
-        assert_eq!(
-            options.send_warn_threshold_us(0),
-            options.sendinput_warn_floor_us
-        );
-        assert_eq!(
-            options.send_warn_threshold_us(900),
-            900 + SEND_WARNING_MARGIN_US
-        );
-        assert!(options.send_warn_threshold_us(900) > options.send_warn_threshold_us(50));
+        assert_eq!(options.sendinput_warn_floor_us, 300);
     }
 
     #[test]
@@ -640,33 +615,19 @@ mod tests {
 
     #[test]
     fn mixed_budget_is_one_packet_not_two_directional_leads() {
-        let estimator = SendLatencyEstimator::default();
         let options = DispatchHealthOptions::default();
         let mixed = build_dispatch_budget(
-            &estimator,
             DispatchPath::Mixed {
                 up_count: 2,
                 down_count: 2,
             },
-            LatencyClass::Hot,
             options,
-            false,
         );
-        let down = build_dispatch_budget(
-            &estimator,
-            DispatchPath::DownOnly { down_count: 2 },
-            LatencyClass::Hot,
-            options,
-            false,
-        );
-        let up = build_dispatch_budget(
-            &estimator,
-            DispatchPath::UpOnly { up_count: 2 },
-            LatencyClass::Hot,
-            options,
-            false,
-        );
-        assert!(mixed.send_warn_us < down.send_warn_us.saturating_add(up.send_warn_us));
+        let down = build_dispatch_budget(DispatchPath::DownOnly { down_count: 2 }, options);
+        let up = build_dispatch_budget(DispatchPath::UpOnly { up_count: 2 }, options);
+        assert_eq!(mixed.event_count, 4);
+        assert_eq!(mixed.send_warn_us, down.send_warn_us);
+        assert_eq!(mixed.send_warn_us, up.send_warn_us);
     }
 
     #[test]
@@ -711,6 +672,7 @@ mod tests {
             let obs = DispatchHealthObservation {
                 send_duration_us: 1000,
                 post_send_duration_us: 10,
+                post_send_metrics_available: true,
                 path: DispatchPath::DownOnly { down_count: 1 },
                 send_warn_us: 300,
                 core_post_send_warn_us: 300,
@@ -732,6 +694,7 @@ mod tests {
             let obs = DispatchHealthObservation {
                 send_duration_us: 100,
                 post_send_duration_us: 1000,
+                post_send_metrics_available: true,
                 path: DispatchPath::DownOnly { down_count: 1 },
                 send_warn_us: 300,
                 core_post_send_warn_us: 300,
@@ -769,5 +732,28 @@ mod tests {
             assert!(!metrics.core_post_send_degraded);
             assert!(!metrics.observer_degraded);
         }
+
+        let mut send_window = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+        let mut core_window = HealthWindow::<HEALTH_WINDOW_CAPACITY>::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        observe_dispatch_health(
+            DispatchHealthObservation {
+                send_duration_us: 100,
+                post_send_duration_us: 10_000,
+                post_send_metrics_available: false,
+                path: DispatchPath::DownOnly { down_count: 1 },
+                send_warn_us: 300,
+                core_post_send_warn_us: 300,
+                elapsed_us: 10_000,
+            },
+            policy,
+            &mut send_window,
+            &mut core_window,
+            &mut metrics,
+        );
+        assert_eq!(core_window.sample_count(), 0);
+        assert_eq!(metrics.core_post_send_degraded_samples, 0);
+        assert_eq!(metrics.core_post_send_max_us, 0);
+        assert_eq!(metrics.dispatch_occupancy_max_us, 100);
     }
 }

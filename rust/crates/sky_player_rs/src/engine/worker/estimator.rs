@@ -1,75 +1,20 @@
 use super::dispatch::timing::{EstimatorObservationEvidence, is_clean_estimator_observation};
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
-#[cfg(test)]
-use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
+use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn update_estimator_after_send(
-    estimator: &mut SendLatencyEstimator,
+/// Update the dispatch-cost estimator from the one canonical clean
+/// observation predicate.  The value trained here is physical completion
+/// minus the immutable physical target, never the sender syscall duration.
+pub(crate) fn update_estimator_after_send_observation(
+    estimator: &mut DispatchCostEstimator,
     path: SendPath,
-    duration_us: u64,
-    sent_count: usize,
-    authored_polyphony: usize,
-    applied_lead_us: u64,
-    applied_lead_saturated: bool,
-    completion_error_us: i64,
-    clean_sample: bool,
-) {
-    let evidence = EstimatorObservationEvidence {
-        status: if clean_sample {
-            SendTransactionStatus::Complete
-        } else {
-            SendTransactionStatus::IntegrityLost
-        },
-        attempts: 1,
-        retry_reason: PacketRetryReason::None,
-        requested_count: sent_count,
-        confirmed_count: if clean_sample { sent_count } else { 0 },
-        skipped_count: 0,
-        timing_valid: true,
-        transport_anomaly: false,
-        recovery_used: false,
-        chord_integrity_lost: !clean_sample,
-    };
-    let _ = update_estimator_after_send_class(
-        estimator,
-        path,
-        duration_us,
-        sent_count,
-        authored_polyphony,
-        applied_lead_us,
-        applied_lead_saturated,
-        completion_error_us,
-        evidence,
-        LatencyClass::Hot,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn update_estimator_after_send_class(
-    estimator: &mut SendLatencyEstimator,
-    path: SendPath,
-    duration_us: u64,
-    sent_count: usize,
-    authored_polyphony: usize,
-    applied_lead_us: u64,
-    applied_lead_saturated: bool,
-    completion_error_us: i64,
+    event_count: usize,
+    dispatch_cost_us: u64,
     evidence: EstimatorObservationEvidence,
-    latency_class: LatencyClass,
 ) -> Result<(), sky_dispatch_core::estimator::EstimatorStateError> {
-    if !is_clean_estimator_observation(evidence) || sent_count == 0 {
+    if !is_clean_estimator_observation(evidence) || event_count == 0 {
         return Ok(());
     }
-    estimator.update_observation(
-        path,
-        latency_class,
-        duration_us,
-        authored_polyphony,
-        (applied_lead_us > 0).then_some(completion_error_us),
-        applied_lead_saturated,
-    )
+    estimator.update(path, event_count, dispatch_cost_us)
 }
 
 pub(crate) fn record_lead_saturation(

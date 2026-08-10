@@ -1,14 +1,15 @@
 use super::super::super::{
-    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, SendLatencyEstimator, SharedMetrics, TRACE_FLAG_ANOMALY,
-    TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery,
-    TraceTiming, TrackedKeyState, trace_outcome_code, try_publish_metrics,
+    DispatchCostEstimator, DurationTicks, PlaybackClockState, QpcClock, RtTraceRecord,
+    RuntimeDispatchCoordinator, SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_UP,
+    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
+    trace_outcome_code, try_publish_metrics,
 };
+use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     WorkerRuntime, WorkerTimingState, observe_dispatch_health, publish_backend_metrics,
     record_lateness, record_lead_saturation, signed_delta, signed_ticks_to_us,
-    update_estimator_after_send_class,
+    update_estimator_after_send_observation,
 };
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
@@ -63,7 +64,8 @@ pub(crate) fn publisher_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     lead_down_saturated: bool,
     lead_down_ticks: DurationTicks,
-    latency_class: LatencyClass,
+    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    capture_dispatch_ready_qpc: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
     result_confirmed_mask: u16,
@@ -104,11 +106,15 @@ pub(crate) fn publisher_down_send_outcome(
     };
     health.up_saturation_positive_streak = up_streak;
     health.down_saturation_positive_streak = down_streak;
-    let dispatch_ready_qpc = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
+    let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
+        match qpc_clock.now() {
+            Ok(ticks) => Some(ticks),
+            Err(error) => {
+                return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
+            }
         }
+    } else {
+        None
     };
     // HARD DISPATCH READY BOUNDARY:
     // physical/coordinator ownership is safe for the next dispatch.  From
@@ -116,7 +122,7 @@ pub(crate) fn publisher_down_send_outcome(
     // run on this call stack.
     let observation = DownObservation {
         path: frozen_budget.path,
-        latency_class,
+        physical_target_qpc,
         lead_down_saturated,
         timeline_rebase_count: local_metrics.timeline_rebase_count,
         timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
@@ -209,7 +215,9 @@ pub(super) fn commit_suppressed_up_request(
                     wake_ticks: effective_now_ticks,
                     send_started_ticks: None,
                     send_completed_ticks: None,
+                    dispatch_cost_us: 0,
                     core_post_send_duration_us: 0,
+                    post_send_metrics_available: false,
                     completion_error_ticks: 0,
                     authored_completion_error_ticks: 0,
                     applied_lead_ticks: lead_down_ticks,
@@ -255,7 +263,9 @@ pub(super) fn record_blocked_unfocused_telemetry(
                 wake_ticks: effective_now_ticks,
                 send_started_ticks: None,
                 send_completed_ticks: None,
+                dispatch_cost_us: 0,
                 core_post_send_duration_us: 0,
+                post_send_metrics_available: false,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: lead_down_ticks,
@@ -279,6 +289,7 @@ pub struct PendingObservationQueue {
     entries: [Option<DispatchObservation>; OBSERVATION_QUEUE_CAPACITY],
     head: usize,
     len: usize,
+    wait: Option<WaitObservation>,
 }
 impl Default for PendingObservationQueue {
     fn default() -> Self {
@@ -286,6 +297,7 @@ impl Default for PendingObservationQueue {
             entries: [None; OBSERVATION_QUEUE_CAPACITY],
             head: 0,
             len: 0,
+            wait: None,
         }
     }
 }
@@ -306,24 +318,27 @@ impl PendingObservationQueue {
         self.entries[(self.head + self.len - 1) % self.entries.len()] = Some(observation);
         *high_watermark = (*high_watermark).max(self.len as u64);
     }
+    pub fn push_wait(&mut self, observation: WaitObservation) {
+        // Wait evidence is deliberately coalesced to the newest sample.  The
+        // queue-drop metric describes physical ring eviction; replacing this
+        // single deferred wait slot must never evict a physical observation.
+        self.wait = Some(observation);
+    }
     pub fn pop_front(&mut self) -> Option<DispatchObservation> {
-        if self.len == 0 {
-            return None;
+        if self.len > 0 {
+            let entry = self.entries[self.head].take();
+            self.head = (self.head + 1) % self.entries.len();
+            self.len -= 1;
+            return entry;
         }
-        let entry = self.entries[self.head].take();
-        self.head = (self.head + 1) % self.entries.len();
-        self.len -= 1;
-        entry
+        self.wait.take().map(DispatchObservation::Wait)
     }
     #[cfg(any(test, feature = "test-support"))]
     pub fn len(&self) -> usize {
         self.len
     }
-    pub fn is_full(&self) -> bool {
-        self.len == self.entries.len()
-    }
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len == 0 && self.wait.is_none()
     }
 }
 pub(crate) fn observer_has_safe_slack(
@@ -428,17 +443,33 @@ pub(crate) fn drain_down_send_outcome(
     last_published_error: &mut Option<String>,
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
-    estimator: &mut SendLatencyEstimator,
+    estimator: &mut DispatchCostEstimator,
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
-    let (requested_count, confirmed_count, _skipped_count, estimator_evidence) =
+    let (requested_count, _confirmed_count, _skipped_count, estimator_evidence) =
         down_observer_evidence(observation);
     let sender_duration_us = qpc_clock
         .duration_to_us(observation.sender_duration_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
+        })?;
+    let dispatch_cost_us = qpc_clock
+        .duration_to_us(
+            observation
+                .sender_completed_qpc
+                .checked_duration_since(observation.physical_target_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-on completion precedes physical target: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "note-on dispatch-cost conversion failure: {error:?}"
+            ))
         })?;
     let completed_effective_us = qpc_clock
         .timeline_to_us(observation.completed_effective_ticks)
@@ -455,31 +486,26 @@ pub(crate) fn drain_down_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on authored conversion failure: {error:?}"))
         })?;
-    let lead_down = qpc_clock
-        .duration_to_us(observation.trace.applied_lead_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on lead conversion failure: {error:?}"))
-        })?;
-    let completion_error_us =
-        signed_ticks_to_us(qpc_clock, observation.trace.completion_error_ticks).map_err(
-            |error| DispatchStep::Terminate(format!("note-on error conversion failure: {error:?}")),
-        )?;
-    let core_post_send_us = qpc_clock
-        .duration_to_us(
-            observation
-                .dispatch_ready_qpc
+    let core_post_send_us = observation
+        .dispatch_ready_qpc
+        .map(|ready| {
+            ready
                 .checked_duration_since(observation.sender_completed_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
                         "note-on observer QPC ordering failure: {error:?}"
                     ))
-                })?,
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "note-on observer post-send conversion failure: {error:?}"
-            ))
-        })?;
+                })
+                .and_then(|ticks| {
+                    qpc_clock.duration_to_us(ticks).map_err(|error| {
+                        DispatchStep::Terminate(format!(
+                            "note-on observer post-send conversion failure: {error:?}"
+                        ))
+                    })
+                })
+        })
+        .transpose()?
+        .unwrap_or(0);
     let wake_to_send_start_us = observation
         .wake_qpc
         .and_then(|wake| {
@@ -495,6 +521,7 @@ pub(crate) fn drain_down_send_outcome(
         })?;
     local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
     match observation.path {
         DispatchPath::DownOnly { .. } => {
             local_metrics.send_down_warn_threshold_us = observation.send_warn_us;
@@ -524,13 +551,19 @@ pub(crate) fn drain_down_send_outcome(
         })?;
     local_metrics.timeline_rebase_last_reason = observation.timeline_rebase_last_reason;
     record_down_recovery_metrics(observation, local_metrics);
-    let (_, force_publish) = record_down_send_telemetry(observation, telemetry, core_post_send_us)?;
+    let (_, force_publish) = record_down_send_telemetry(
+        observation,
+        telemetry,
+        core_post_send_us,
+        dispatch_cost_us,
+        observation.dispatch_ready_qpc.is_some(),
+    )?;
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
     if let Some(wake_to_send_us) = wake_to_send_start_us {
         local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
     }
-    if config.estimator.enable_adaptive_lead && observation.lead_down_saturated {
+    if config.estimator.enable_dispatch_cost_lead && observation.lead_down_saturated {
         match observation.path {
             DispatchPath::UpOnly { .. } => record_lead_saturation(
                 &mut local_metrics.lead_saturation_count_up,
@@ -546,19 +579,14 @@ pub(crate) fn drain_down_send_outcome(
             ),
         }
     }
-    if config.estimator.enable_adaptive_lead {
+    if config.estimator.enable_dispatch_cost_lead {
         let send_path = super::super::estimator_path_for_dispatch(observation.path);
-        let _ = update_estimator_after_send_class(
+        let _ = update_estimator_after_send_observation(
             estimator,
             send_path,
-            sender_duration_us,
-            confirmed_count,
             requested_count,
-            lead_down,
-            observation.lead_down_saturated,
-            completion_error_us,
+            dispatch_cost_us,
             estimator_evidence,
-            observation.latency_class,
         );
     }
     record_lateness(
@@ -571,6 +599,7 @@ pub(crate) fn drain_down_send_outcome(
         DispatchHealthObservation {
             send_duration_us: sender_duration_us,
             post_send_duration_us: core_post_send_us,
+            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
             path: observation.path,
             send_warn_us: observation.send_warn_us,
             core_post_send_warn_us: observation.core_post_send_warn_us,
@@ -594,12 +623,16 @@ pub(crate) fn drain_up_send_outcome(
     last_published_error: &mut Option<String>,
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
-    estimator: &mut SendLatencyEstimator,
+    estimator: &mut DispatchCostEstimator,
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
-    let (scan_count, sent_count, _skipped_count) = up_transport_counts(observation);
+    debug_assert_eq!(
+        observation.lead_up_ticks, observation.trace.applied_lead_ticks,
+        "raw and trace release leads must agree"
+    );
+    let (scan_count, _sent_count, _skipped_count) = up_transport_counts(observation);
     let estimator_evidence = up_estimator_evidence(observation);
     #[cfg(any(test, feature = "test-support"))]
     if take_release_observer_failure(observation.trace.recovery_required) {
@@ -611,6 +644,22 @@ pub(crate) fn drain_up_send_outcome(
         .duration_to_us(observation.sender_duration_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
+        })?;
+    let dispatch_cost_us = qpc_clock
+        .duration_to_us(
+            observation
+                .sender_completed_qpc
+                .checked_duration_since(observation.physical_target_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-off completion precedes physical target: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "note-off dispatch-cost conversion failure: {error:?}"
+            ))
         })?;
     let completed_effective_us = qpc_clock
         .timeline_to_us(observation.completed_effective_ticks)
@@ -631,22 +680,26 @@ pub(crate) fn drain_up_send_outcome(
         signed_ticks_to_us(qpc_clock, observation.up_completion_error_ticks).map_err(|error| {
             DispatchStep::Terminate(format!("note-off error conversion failure: {error:?}"))
         })?;
-    let core_post_send_us = qpc_clock
-        .duration_to_us(
-            observation
-                .dispatch_ready_qpc
+    let core_post_send_us = observation
+        .dispatch_ready_qpc
+        .map(|ready| {
+            ready
                 .checked_duration_since(observation.sender_completed_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
                         "note-off observer QPC ordering failure: {error:?}"
                     ))
-                })?,
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "note-off observer post-send conversion failure: {error:?}"
-            ))
-        })?;
+                })
+                .and_then(|ticks| {
+                    qpc_clock.duration_to_us(ticks).map_err(|error| {
+                        DispatchStep::Terminate(format!(
+                            "note-off observer post-send conversion failure: {error:?}"
+                        ))
+                    })
+                })
+        })
+        .transpose()?
+        .unwrap_or(0);
     let wake_to_send_start_us = observation
         .wake_qpc
         .and_then(|wake| {
@@ -662,14 +715,17 @@ pub(crate) fn drain_up_send_outcome(
         })?;
     local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
     local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    let lead_up = qpc_clock
-        .duration_to_us(observation.lead_up_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off lead conversion failure: {error:?}"))
-        })?;
-    record_release_telemetry(telemetry, observation, qpc_clock, core_post_send_us)?;
+    record_release_telemetry(
+        telemetry,
+        observation,
+        qpc_clock,
+        core_post_send_us,
+        dispatch_cost_us,
+        observation.dispatch_ready_qpc.is_some(),
+    )?;
     if let Some(wake_to_send_us) = wake_to_send_start_us {
         local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
     }
@@ -681,7 +737,7 @@ pub(crate) fn drain_up_send_outcome(
     }
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
-    if config.estimator.enable_adaptive_lead && observation.lead_up_saturated {
+    if config.estimator.enable_dispatch_cost_lead && observation.lead_up_saturated {
         record_lead_saturation(
             &mut local_metrics.lead_saturation_count_up,
             &mut local_metrics.positive_residual_at_cap,
@@ -689,18 +745,13 @@ pub(crate) fn drain_up_send_outcome(
             up_completion_error_us,
         );
     }
-    if config.estimator.enable_adaptive_lead {
-        let _ = update_estimator_after_send_class(
+    if config.estimator.enable_dispatch_cost_lead {
+        let _ = update_estimator_after_send_observation(
             estimator,
             sky_dispatch_core::estimator::SendPath::UpOnly,
-            sender_duration_us,
-            sent_count,
             scan_count,
-            lead_up,
-            observation.lead_up_saturated,
-            up_completion_error_us,
+            dispatch_cost_us,
             estimator_evidence,
-            observation.latency_class,
         );
     }
     record_lateness(
@@ -713,6 +764,7 @@ pub(crate) fn drain_up_send_outcome(
         DispatchHealthObservation {
             send_duration_us: sender_duration_us,
             post_send_duration_us: core_post_send_us,
+            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
             path: DispatchPath::UpOnly {
                 up_count: scan_count,
             },
@@ -743,7 +795,7 @@ pub(crate) fn drain_one_observer(
     last_published_error: &mut Option<String>,
     metrics: &SharedMetrics,
     backend: &mut TrackedKeyState,
-    estimator: &mut SendLatencyEstimator,
+    estimator: &mut DispatchCostEstimator,
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,

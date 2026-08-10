@@ -1,6 +1,6 @@
 use super::super::super::{
-    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, QpcTicks,
-    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
+    DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
+    STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
     FinalControlAdmission, FinalControlSignals, WorkerConfig, WorkerHealthState,
@@ -22,7 +22,7 @@ pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
     pub(crate) pending_plan: Option<&'a PendingDispatchPlan>,
     pub(crate) lead_up_ticks: DurationTicks,
-    pub(crate) latency_class: LatencyClass,
+    pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
     pub(crate) quit_requested: &'a AtomicBool,
     pub(crate) skip_requested: &'a AtomicBool,
@@ -227,7 +227,7 @@ pub(crate) fn dispatch_due_pending_releases(
         due_pending,
         pending_plan,
         lead_up_ticks,
-        latency_class,
+        physical_target_qpc,
         frozen_budget,
         quit_requested,
         skip_requested,
@@ -324,13 +324,19 @@ pub(crate) fn dispatch_due_pending_releases(
                 .up_completion_lateness_ticks
                 .is_some_and(|late| late > timing.strict_up_completion_late_ticks),
     };
-    let dispatch_ready_qpc = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return DispatchStep::Terminate(format!(
-                "note-off worker-ready QPC failure: {error:?}"
-            ));
+    let dispatch_ready_qpc = if config.timing.strict_timing
+        || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off)
+    {
+        match qpc_clock.now() {
+            Ok(ticks) => Some(ticks),
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-off worker-ready QPC failure: {error:?}"
+                ));
+            }
         }
+    } else {
+        None
     };
     let wake_qpc = take_deadline_wake_qpc(runtime, send.sender_started_qpc);
     // HARD DISPATCH READY BOUNDARY:
@@ -338,7 +344,7 @@ pub(crate) fn dispatch_due_pending_releases(
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
     let observation = UpObservation {
-        latency_class,
+        physical_target_qpc,
         sender_started_qpc: send.sender_started_qpc,
         sender_completed_qpc: send.sender_completed_qpc,
         dispatch_ready_qpc,
@@ -520,7 +526,6 @@ fn prepare_release_send(
             }
         },
     };
-    runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
     let retry_reason = result.evidence.retry_reason;

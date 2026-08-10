@@ -98,7 +98,7 @@ impl Default for WorkerConfig {
             },
             estimator: EstimatorOptions {
                 state_json: None,
-                enable_adaptive_lead: false,
+                enable_dispatch_cost_lead: false,
             },
         }
     }
@@ -140,5 +140,5 @@ pub(crate) struct PriorityOptions {
 
 pub(crate) struct EstimatorOptions {
     pub(crate) state_json: Option<String>,
-    pub(crate) enable_adaptive_lead: bool,
+    pub(crate) enable_dispatch_cost_lead: bool,
 }

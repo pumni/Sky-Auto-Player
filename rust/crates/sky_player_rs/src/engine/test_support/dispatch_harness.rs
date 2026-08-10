@@ -16,17 +16,17 @@ use crate::engine::worker::dispatch::{
     dispatch_due_pending_releases,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, NextDispatchPlan,
-    ProjectedPlanningInput, TargetStamp, WaitBoundary, WaitBoundaryInput, WaitDeadline,
-    WaitMutable, WaitSignals, WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime,
-    WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan, plan_next_dispatch,
-    plan_next_dispatch_projected, wait_for_next_boundary,
+    DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, NextDispatchPlan, TargetStamp,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
+    WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{
     PendingDispatchPlan, PendingRelease, RuntimeDispatchCoordinator, physical_packet_kind,
 };
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
@@ -320,7 +320,7 @@ impl ProductionDispatchTestHarness {
         let playback =
             PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
                 .expect("playback");
-        let estimator = SendLatencyEstimator::default();
+        let estimator = DispatchCostEstimator::default();
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
         let scheduling = WorkerSchedulingGuards::create_test_guards();
 
@@ -362,11 +362,8 @@ impl ProductionDispatchTestHarness {
             desired_pause: AtomicBool::new(false),
             supervisor_heartbeat_ticks: AtomicU64::new(0),
             pending_budget: crate::engine::worker::health::build_dispatch_budget(
-                &SendLatencyEstimator::default(),
                 DispatchPath::UpOnly { up_count: 1 },
-                LatencyClass::Hot,
                 health_options,
-                false,
             ),
             metrics: SharedMetrics::default(),
             progress_clock,
@@ -583,72 +580,26 @@ impl ProductionDispatchTestHarness {
 
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
-        self.plan_current_dispatch_class(LatencyClass::Hot)
-    }
-
-    pub fn plan_current_dispatch_class(&mut self, latency_class: LatencyClass) -> NextDispatchPlan {
         plan_next_dispatch(
             &self.resources.coordinator,
             &self.resources.estimator,
             self.resources.clock,
-            latency_class,
             &self.config.timing,
-            self.config.estimator.enable_adaptive_lead,
+            self.config.estimator.enable_dispatch_cost_lead,
         )
         .expect("plan_next_dispatch")
     }
 
-    pub fn cold_threshold_us(&self) -> u64 {
-        self.resources
-            .clock
-            .duration_to_us(self.timing.cold_threshold_ticks)
-            .expect("production cold threshold conversion")
-    }
-
-    /// Seed the previous completion evidence for a projected benchmark class.
-    /// The planner still computes the class itself from this gap; the harness
-    /// only supplies deterministic prior sender state.
-    pub fn set_previous_send_gap_us(&mut self, gap_us: u64) {
-        let boundary = self
-            .resources
-            .coordinator
-            .next_uncompensated_deadline_ticks()
-            .expect("next uncompensated deadline")
-            .expect("benchmark physical deadline");
-        let target_qpc = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(boundary.as_u64()))
-            .expect("benchmark target QPC");
-        let gap_ticks = self
-            .resources
-            .clock
-            .duration_from_us(gap_us)
-            .expect("previous-send gap conversion");
-        self.runtime
-            .set_last_send_qpc_for_test(Some(QpcTicks::from_raw(
-                target_qpc.as_u64().saturating_sub(gap_ticks.as_u64()),
-            )));
-    }
-
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
-        plan_next_dispatch_projected(ProjectedPlanningInput {
+        plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
             coordinator: &self.resources.coordinator,
             estimator: &self.resources.estimator,
             qpc_clock: self.resources.clock,
-            playback_epoch_qpc: self.resources.playback.epoch,
-            last_send_qpc: self.runtime_last_send_qpc(),
-            cold_threshold_ticks: self.timing.cold_threshold_ticks,
             timing: &self.config.timing,
             health_options: self.health.options,
-            enable_adaptive_lead: self.config.estimator.enable_adaptive_lead,
+            enable_dispatch_cost_lead: self.config.estimator.enable_dispatch_cost_lead,
         })
         .expect("projected dispatch plan")
-    }
-
-    fn runtime_last_send_qpc(&self) -> Option<QpcTicks> {
-        self.runtime.last_send_qpc_for_test()
     }
 
     /// Run the production wait boundary and direct frozen-plan dispatch path.
@@ -682,8 +633,11 @@ impl ProductionDispatchTestHarness {
         let wait_result = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
+                ..
             } => wait_result,
-            WaitBoundary::Due { wait_result: None } => {
+            WaitBoundary::Due {
+                wait_result: None, ..
+            } => {
                 return Err(format!(
                     "benchmark deadline was already due without a blocking wait: deadline={:?}, effective_now={:?}",
                     plan.deadline_ticks, self.effective_now_ticks
@@ -728,6 +682,14 @@ impl ProductionDispatchTestHarness {
             plan,
             effective_now_ticks,
             now_ticks,
+            plan.deadline_ticks.map(|deadline| {
+                self.resources
+                    .playback
+                    .epoch
+                    .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                    .expect("physical target QPC")
+                    .min(now_ticks)
+            }),
             false,
             &self.config,
             &mut self.resources,
@@ -792,7 +754,17 @@ impl ProductionDispatchTestHarness {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
-            latency_class: plan.latency_class(),
+            physical_target_qpc: plan
+                .deadline_ticks
+                .map(|deadline| {
+                    self.resources
+                        .playback
+                        .epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                        .expect("physical target QPC")
+                        .min(now_ticks)
+                })
+                .expect("authored physical target"),
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
@@ -824,12 +796,10 @@ impl ProductionDispatchTestHarness {
         &mut self,
         due_pending: SmallVec<[PendingRelease; 15]>,
         pending_plan: Option<&PendingDispatchPlan>,
-        latency_class: LatencyClass,
     ) -> DispatchStep {
         self.dispatch_pending_release_with_plan_and_lease(
             due_pending,
             pending_plan,
-            latency_class,
             DurationTicks::ZERO,
         )
     }
@@ -838,7 +808,6 @@ impl ProductionDispatchTestHarness {
         &mut self,
         due_pending: SmallVec<[PendingRelease; 15]>,
         pending_plan: Option<&PendingDispatchPlan>,
-        latency_class: LatencyClass,
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
         let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |p| p.lead_ticks);
@@ -846,7 +815,16 @@ impl ProductionDispatchTestHarness {
             due_pending,
             pending_plan,
             lead_up_ticks,
-            latency_class,
+            physical_target_qpc: pending_plan
+                .map(|plan| {
+                    self.resources
+                        .playback
+                        .epoch
+                        .checked_add_duration(DurationTicks::from_raw(plan.deadline_ticks.as_u64()))
+                        .expect("pending physical target QPC")
+                        .min(self.resources.clock.now().expect("pending target QPC now"))
+                })
+                .expect("pending physical target"),
             frozen_budget: self.pending_budget,
             quit_requested: &self.quit_requested,
             skip_requested: &self.skip_requested,

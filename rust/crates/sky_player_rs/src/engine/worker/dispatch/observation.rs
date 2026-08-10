@@ -5,8 +5,8 @@ use super::super::super::{
 };
 use super::super::wait::WaitObservation;
 use super::super::{
-    DispatchPath, DispatchStep, LatencyClass, WorkerHealthState, observe_wait_health,
-    release_runtime_outcome, wake_lateness_ticks,
+    DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, release_runtime_outcome,
+    wake_lateness_ticks,
 };
 use super::timing::EstimatorObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
@@ -48,7 +48,7 @@ pub struct DownTraceObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct DownObservation {
     pub path: DispatchPath,
-    pub latency_class: LatencyClass,
+    pub physical_target_qpc: QpcTicks,
     pub lead_down_saturated: bool,
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_ticks: DurationTicks,
@@ -56,7 +56,7 @@ pub struct DownObservation {
     pub timeline_rebase_last_reason: u8,
     pub sender_started_qpc: QpcTicks,
     pub sender_completed_qpc: QpcTicks,
-    pub dispatch_ready_qpc: QpcTicks,
+    pub dispatch_ready_qpc: Option<QpcTicks>,
     pub sender_duration_ticks: DurationTicks,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
@@ -146,10 +146,10 @@ pub struct UpTraceObservation {
 
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
-    pub latency_class: LatencyClass,
+    pub physical_target_qpc: QpcTicks,
     pub sender_started_qpc: QpcTicks,
     pub sender_completed_qpc: QpcTicks,
-    pub dispatch_ready_qpc: QpcTicks,
+    pub dispatch_ready_qpc: Option<QpcTicks>,
     pub sender_duration_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
     pub requested_mask: u16,
@@ -172,6 +172,8 @@ pub(super) fn record_down_send_telemetry(
     observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
     core_post_send_us: u64,
+    dispatch_cost_us: u64,
+    post_send_metrics_available: bool,
 ) -> Result<(&'static str, bool), DispatchStep> {
     let trace = observation.trace;
     let down_outcome = if trace.recovered_retry_late {
@@ -218,7 +220,9 @@ pub(super) fn record_down_send_telemetry(
                 wake_ticks: trace.wake_ticks,
                 send_started_ticks: trace.sender_started_ticks,
                 send_completed_ticks: trace.sender_completed_ticks,
+                dispatch_cost_us,
                 core_post_send_duration_us: core_post_send_us,
+                post_send_metrics_available,
                 completion_error_ticks: trace.completion_error_ticks,
                 authored_completion_error_ticks: trace.authored_completion_error_ticks,
                 applied_lead_ticks: trace.applied_lead_ticks,
@@ -243,6 +247,8 @@ pub(super) fn record_release_telemetry(
     observation: &UpObservation,
     qpc_clock: QpcClock,
     core_post_send_us: u64,
+    dispatch_cost_us: u64,
+    post_send_metrics_available: bool,
 ) -> Result<(), DispatchStep> {
     let trace = observation.trace;
     #[cfg(any(test, feature = "test-support"))]
@@ -292,7 +298,9 @@ pub(super) fn record_release_telemetry(
                 wake_ticks: trace.wake_ticks,
                 send_started_ticks: trace.sender_started_ticks,
                 send_completed_ticks: trace.sender_completed_ticks,
+                dispatch_cost_us,
                 core_post_send_duration_us: core_post_send_us,
+                post_send_metrics_available,
                 completion_error_ticks: trace.completion_error_ticks,
                 authored_completion_error_ticks: trace.authored_completion_error_ticks,
                 applied_lead_ticks: trace.applied_lead_ticks,

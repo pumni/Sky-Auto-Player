@@ -1,4 +1,4 @@
-"""Fail-safe persistent envelope for the native adaptive-lead estimator."""
+"""Fail-safe persistent envelope for the native dispatch-cost estimator."""
 
 from __future__ import annotations
 
@@ -10,14 +10,12 @@ from pathlib import Path
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
-ESTIMATOR_CACHE_SCHEMA_VERSION = 1
+ESTIMATOR_CACHE_SCHEMA_VERSION = 2
 DEFAULT_ESTIMATOR_CACHE = Path("logs") / "native_estimator_state.json"
 
 
 def load_estimator_state(
     *,
-    game_fps: int,
-    native_build_commit: str,
     native_abi: str,
     path: Path = DEFAULT_ESTIMATOR_CACHE,
 ) -> str | None:
@@ -27,14 +25,8 @@ def load_estimator_state(
             raise ValueError("cache envelope is not an object")
         if envelope.get("schema_version") != ESTIMATOR_CACHE_SCHEMA_VERSION:
             raise ValueError("cache schema mismatch")
-        if envelope.get("native_build_commit") != native_build_commit:
-            raise ValueError("native build mismatch")
         if envelope.get("native_abi") != native_abi:
             raise ValueError("native ABI mismatch")
-        if envelope.get("dispatch_schema_version") not in (2, 3):
-            raise ValueError("dispatch schema mismatch")
-        if envelope.get("game_fps") != game_fps:
-            raise ValueError("game FPS mismatch")
         state = envelope.get("estimator_state_json")
         if not isinstance(state, str) or not isinstance(json.loads(state), Mapping):
             raise ValueError("estimator state is not a JSON object")
@@ -48,8 +40,6 @@ def load_estimator_state(
 def save_estimator_state(
     state_json: str,
     *,
-    game_fps: int,
-    native_build_commit: str,
     native_abi: str,
     path: Path = DEFAULT_ESTIMATOR_CACHE,
 ) -> None:
@@ -58,10 +48,7 @@ def save_estimator_state(
             raise ValueError("estimator state is not a JSON object")
         envelope: dict[str, Any] = {
             "schema_version": ESTIMATOR_CACHE_SCHEMA_VERSION,
-            "native_build_commit": native_build_commit,
             "native_abi": native_abi,
-            "dispatch_schema_version": 3,
-            "game_fps": game_fps,
             "estimator_state_json": state_json,
         }
         path.parent.mkdir(parents=True, exist_ok=True)

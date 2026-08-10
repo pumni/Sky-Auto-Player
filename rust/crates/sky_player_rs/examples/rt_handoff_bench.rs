@@ -9,7 +9,7 @@
 #![cfg(feature = "test-support")]
 
 use serde_json::json;
-use sky_dispatch_core::{estimator::LatencyClass, time::DurationTicks};
+use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcClock;
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, ProductionDispatchTestHarness,
@@ -107,28 +107,15 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
 
 fn plan_projected(
     harness: &mut ProductionDispatchTestHarness,
-    expected_class: LatencyClass,
 ) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
-    let threshold_us = harness.cold_threshold_us();
-    let margin_us = (threshold_us / 4).max(1);
-    harness.set_previous_send_gap_us(match expected_class {
-        LatencyClass::Hot => (threshold_us / 4).max(1),
-        LatencyClass::Cold => threshold_us.saturating_add(margin_us),
-    });
-    let plan = harness.plan_current_dispatch_projected();
-    assert_eq!(
-        plan.latency_class(),
-        expected_class,
-        "projected planner classified scenario incorrectly"
-    );
-    plan
+    harness.plan_current_dispatch_projected()
 }
 
-fn run_down(key_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
+fn run_down(key_count: usize) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..ITERATIONS {
         let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, DUE_US);
-        let plan = plan_projected(&mut harness, latency_class);
+        let plan = plan_projected(&mut harness);
         let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
@@ -147,7 +134,7 @@ fn run_down(key_count: usize, latency_class: LatencyClass) -> Result<Samples, St
     Ok(samples)
 }
 
-fn run_up(key_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
+fn run_up(key_count: usize) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..ITERATIONS {
         let mut harness =
@@ -160,7 +147,7 @@ fn run_up(key_count: usize, latency_class: LatencyClass) -> Result<Samples, Stri
             }),
             "authored benchmark setup did not leave the requested physical UpOnly packet"
         );
-        let plan = plan_projected(&mut harness, latency_class);
+        let plan = plan_projected(&mut harness);
         let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
@@ -174,13 +161,13 @@ fn run_up(key_count: usize, latency_class: LatencyClass) -> Result<Samples, Stri
     Ok(samples)
 }
 
-fn run_mixed(event_count: usize, latency_class: LatencyClass) -> Result<Samples, String> {
+fn run_mixed(event_count: usize) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..ITERATIONS {
         let mut harness =
             ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, DUE_US);
         while harness.pop_observation().is_some() {}
-        let plan = plan_projected(&mut harness, latency_class);
+        let plan = plan_projected(&mut harness);
         let step = harness.wait_and_dispatch_current_plan(&plan)?;
         assert!(
             matches!(step, DispatchStep::Dispatched),
@@ -194,7 +181,7 @@ fn run_mixed(event_count: usize, latency_class: LatencyClass) -> Result<Samples,
     Ok(samples)
 }
 
-fn summarize(mut samples: Samples, planned_class: LatencyClass) -> serde_json::Value {
+fn summarize(mut samples: Samples) -> serde_json::Value {
     assert_eq!(
         samples.wake_to_send_start_us.len(),
         samples.physical_dispatches,
@@ -206,10 +193,7 @@ fn summarize(mut samples: Samples, planned_class: LatencyClass) -> serde_json::V
         "scenario did not produce the requested number of timing samples"
     );
     json!({
-        "planned_class": match planned_class {
-            LatencyClass::Hot => "hot",
-            LatencyClass::Cold => "cold",
-        },
+        "controller": "dispatch_cost",
         "deadline_wake_to_send_start_us": {
             "p50": quantile(&mut samples.wake_to_send_start_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_send_start_us, 95, 100),
@@ -239,55 +223,33 @@ fn summarize(mut samples: Samples, planned_class: LatencyClass) -> serde_json::V
 fn main() {
     let started = Instant::now();
     let mut scenarios = serde_json::Map::new();
-    for latency_class in [LatencyClass::Hot, LatencyClass::Cold] {
-        let class_name = match latency_class {
-            LatencyClass::Hot => "hot",
-            LatencyClass::Cold => "cold",
-        };
+    {
         scenarios.insert(
-            format!("down_only_1_{class_name}"),
-            summarize(
-                run_down(1, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                latency_class,
-            ),
+            "down_only_1".to_string(),
+            summarize(run_down(1).unwrap_or_else(|error| panic!("{error}"))),
         );
         scenarios.insert(
-            format!("down_only_5_{class_name}"),
-            summarize(
-                run_down(5, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                latency_class,
-            ),
+            "down_only_5".to_string(),
+            summarize(run_down(5).unwrap_or_else(|error| panic!("{error}"))),
         );
         scenarios.insert(
-            format!("down_only_15_{class_name}"),
-            summarize(
-                run_down(15, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                latency_class,
-            ),
+            "down_only_15".to_string(),
+            summarize(run_down(15).unwrap_or_else(|error| panic!("{error}"))),
         );
         scenarios.insert(
-            format!("up_only_1_{class_name}"),
-            summarize(
-                run_up(1, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                latency_class,
-            ),
+            "up_only_1".to_string(),
+            summarize(run_up(1).unwrap_or_else(|error| panic!("{error}"))),
         );
         for key_count in [5, 15] {
             scenarios.insert(
-                format!("up_only_{key_count}_{class_name}"),
-                summarize(
-                    run_up(key_count, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                    latency_class,
-                ),
+                format!("up_only_{key_count}"),
+                summarize(run_up(key_count).unwrap_or_else(|error| panic!("{error}"))),
             );
         }
         for event_count in [2, 10, 30] {
             scenarios.insert(
-                format!("mixed_{event_count}_{class_name}"),
-                summarize(
-                    run_mixed(event_count, latency_class).unwrap_or_else(|error| panic!("{error}")),
-                    latency_class,
-                ),
+                format!("mixed_{event_count}"),
+                summarize(run_mixed(event_count).unwrap_or_else(|error| panic!("{error}"))),
             );
         }
     }

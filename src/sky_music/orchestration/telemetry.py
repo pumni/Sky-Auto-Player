@@ -18,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 9
+NATIVE_TELEMETRY_SCHEMA_VERSION = 10
 
 
 def _optional_int(value: Any) -> int | None:
@@ -76,6 +76,8 @@ _CSV_FIELDS: list[str] = [
     "send_duration_pure_us",
     "bookkeeping_us",
     "dispatch_lateness_us",
+    "dispatch_cost_us",
+    "post_send_metrics_available",
     "scan_codes",
     "sent_scan_codes",
     "skipped_scan_codes",
@@ -140,6 +142,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_duration_pure_us",
         "bookkeeping_us",
         "dispatch_lateness_us",
+        "dispatch_cost_us",
         "deferred_by_us",
         "pre_send_spin_us",
         "idle_gap_us",
@@ -186,6 +189,7 @@ class TelemetryRecord:
         "delivery_last_error_us",
         "delivery_last_us",
         "dispatch_completed_us",
+        "dispatch_cost_us",
         "dispatch_id",
         "dispatch_lateness_us",
         "effective_deadline_ticks",
@@ -205,6 +209,7 @@ class TelemetryRecord:
         "native_sent_count",
         "native_skipped_count",
         "packet_id",
+        "post_send_metrics_available",
         "pre_send_spin_us",
         "reason",
         "runtime_outcome",
@@ -287,6 +292,7 @@ class TelemetryRecord:
         sender_completed_us: int | None = None,
         sendinput_call_duration_us: int | None = None,
         core_post_send_duration_us: int | None = None,
+        dispatch_cost_us: int = 0,
         send_operation_duration_us: int | None = None,
         authored_ticks: int = 0,
         effective_deadline_ticks: int = 0,
@@ -300,6 +306,7 @@ class TelemetryRecord:
         native_requested_count: int | None = None,
         native_sent_count: int | None = None,
         native_skipped_count: int | None = None,
+        post_send_metrics_available: bool = False,
         authored_completion_error_ticks: int = 0,
     ) -> None:
         self._dict = None
@@ -319,6 +326,8 @@ class TelemetryRecord:
         self.native_requested_count = native_requested_count
         self.native_sent_count = native_sent_count
         self.native_skipped_count = native_skipped_count
+        self.dispatch_cost_us = dispatch_cost_us
+        self.post_send_metrics_available = post_send_metrics_available
         self.song_name = song_name
         self.event_index = event_index
         self.kind = kind
@@ -457,6 +466,8 @@ class TelemetryRecord:
                 "send_duration_pure_us": self.send_duration_pure_us,
                 "bookkeeping_us": self.bookkeeping_us,
                 "dispatch_lateness_us": self.dispatch_lateness_us,
+                "dispatch_cost_us": self.dispatch_cost_us,
+                "post_send_metrics_available": self.post_send_metrics_available,
                 "head_of_line_delay_us": self.head_of_line_delay_us,
                 "same_timestamp_release_before_down": self.same_timestamp_release_before_down,
                 "authored_us": self.authored_us,
@@ -527,9 +538,9 @@ def materialize_native_trace(
     values; callers must not expect them in the native JSON envelope.
     """
 
-    # Schemas 7 and 8 remain readable for historical native artifacts; Rust
-    # emits only the current schema 9.
-    if output.get("schema_version") not in (7, 8, NATIVE_TELEMETRY_SCHEMA_VERSION):
+    # Schemas 7–9 remain readable for historical native artifacts; Rust emits
+    # only the current schema 10.
+    if output.get("schema_version") not in (7, 8, 9, NATIVE_TELEMETRY_SCHEMA_VERSION):
         raise ValueError("unsupported native telemetry schema version")
     records = output.get("records")
     if not isinstance(records, list):
@@ -577,6 +588,12 @@ def materialize_native_trace(
         core_post_send_duration_us = _required_nonnegative_int(
             row.get("core_post_send_duration_us"), "core_post_send_duration_us"
         )
+        dispatch_cost_us = _required_nonnegative_int(
+            row.get("dispatch_cost_us", 0), "dispatch_cost_us"
+        )
+        post_send_metrics_available = row.get("post_send_metrics_available", False)
+        if not isinstance(post_send_metrics_available, bool):
+            raise ValueError("native telemetry post-send availability is invalid")
         completion_error_ticks = _required_signed_int64(
             row.get("completion_error_ticks"), "completion_error_ticks"
         )
@@ -660,6 +677,8 @@ def materialize_native_trace(
                 sendinput_call_duration_us=send_duration_us,
                 bookkeeping_us=core_post_send_duration_us,
                 core_post_send_duration_us=core_post_send_duration_us,
+                dispatch_cost_us=dispatch_cost_us,
+                post_send_metrics_available=post_send_metrics_available,
                 authored_ticks=authored_ticks,
                 effective_deadline_ticks=effective_ticks,
                 wake_ticks=wake_ticks,

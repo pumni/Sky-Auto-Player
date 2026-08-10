@@ -25,7 +25,9 @@ pub struct RtTraceRecord {
     pub wake_ticks: u64,
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
+    pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
+    pub post_send_metrics_available: bool,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
@@ -36,7 +38,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 9;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 10;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -53,7 +55,9 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: TimelineTicks,
     pub(crate) send_started_ticks: Option<TimelineTicks>,
     pub(crate) send_completed_ticks: Option<TimelineTicks>,
+    pub(crate) dispatch_cost_us: u64,
     pub(crate) core_post_send_duration_us: u64,
+    pub(crate) post_send_metrics_available: bool,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
     pub(crate) applied_lead_ticks: DurationTicks,
@@ -113,7 +117,9 @@ impl RtTraceRecord {
             wake_ticks: timing.wake_ticks.as_u64(),
             send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
+            dispatch_cost_us: timing.dispatch_cost_us,
             core_post_send_duration_us: timing.core_post_send_duration_us,
+            post_send_metrics_available: timing.post_send_metrics_available,
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks,
@@ -325,7 +331,9 @@ mod tests {
                 wake_ticks: TimelineTicks::ZERO,
                 send_started_ticks: Some(TimelineTicks::from_raw(1)),
                 send_completed_ticks: Some(TimelineTicks::from_raw(2)),
+                dispatch_cost_us: 0,
                 core_post_send_duration_us: 0,
+                post_send_metrics_available: false,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: DurationTicks::ZERO,

@@ -790,8 +790,8 @@ proptest! {
     fn invariant_corrupt_estimator_does_not_panic(
         raw in ".*",
     ) {
-        use sky_dispatch_core::estimator::SendLatencyEstimator;
-        let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).unwrap();
+        use sky_dispatch_core::estimator::DispatchCostEstimator;
+        let mut estimator = DispatchCostEstimator::try_new(2_000, 30).unwrap();
         let _ = estimator.import_state(&raw);
     }
 

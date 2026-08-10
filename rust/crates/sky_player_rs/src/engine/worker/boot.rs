@@ -1,12 +1,11 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
 use super::super::{
-    BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass,
-    PAUSED_POLL_US, PlaybackClockState, QpcClock, QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US,
-    RuntimeDispatchCoordinator, SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US,
-    STRICT_RETRY_LATE_THRESHOLD_US, SendLatencyEstimator, SharedMetrics, TelemetryCollector,
-    TrackedKeyState, current_process_cpu_time_us, current_thread_cpu_time_us,
-    qpc_frequency_checked,
+    BackendConfig, CoordinatorError, DispatchCostEstimator, DurationTicks,
+    HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US, PlaybackClockState, QpcClock, QpcError, QpcTicks,
+    RELEASE_RETRY_BACKOFF_US, RuntimeDispatchCoordinator, STARTUP_WAKE_GUARD_US,
+    STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector, TrackedKeyState,
+    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::{
     DispatchHealthOptions, HealthWindow, OBSERVER_GUARD_US, StartupResources, Worker,
@@ -14,6 +13,7 @@ use super::{
     describe_release_outcome, initialize_startup, publish_wake_error_stats, release_state_verified,
     startup_lead_for_first_packet, wait_failure_message,
 };
+use sky_dispatch_win32::input::MAX_PACKET_EVENTS;
 use std::sync::atomic::Ordering;
 
 /// Assembles the worker's admission state: backend, estimator, coordinator,
@@ -89,9 +89,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     );
     core.metrics.power_throttling_disabled = power_throttling_disabled;
     let config = &worker.config;
-    let estimator_key_count = schedule.key_registry.len();
+    let estimator_event_capacity = MAX_PACKET_EVENTS;
     let mut estimator =
-        match SendLatencyEstimator::try_new(0.2, config.timing.max_lead_us, estimator_key_count) {
+        match DispatchCostEstimator::try_new(config.timing.max_lead_us, estimator_event_capacity) {
             Ok(estimator) => estimator,
             Err(error) => {
                 return admission_failure(
@@ -181,16 +181,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 &mut backend,
                 metrics,
                 format!("paused polling conversion failed: {error:?}"),
-            );
-        }
-    };
-    let cold_threshold_ticks = match qpc_clock.duration_from_us(SEND_COLD_THRESHOLD_US) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("cold threshold conversion failed: {error:?}"),
             );
         }
     };
@@ -334,13 +324,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
-    let startup_class = LatencyClass::Cold;
     let startup_lead_us = startup_lead_for_first_packet(
         &coordinator,
         &estimator,
-        startup_class,
         &config.timing,
-        config.estimator.enable_adaptive_lead,
+        config.estimator.enable_dispatch_cost_lead,
     );
     let startup_lead_ticks = match qpc_clock.duration_from_us(startup_lead_us) {
         Ok(ticks) => ticks,
@@ -410,7 +398,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         strict_up_completion_late_ticks,
         focus_restore_grace_ticks,
         paused_poll_ticks,
-        cold_threshold_ticks,
         lease_timeout_ticks,
         retry_backoff_ticks,
         effective_spin_threshold_ticks,

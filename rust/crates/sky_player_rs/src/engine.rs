@@ -102,9 +102,9 @@ pub mod observer_test_hooks {
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::model::ActionKind;
-use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
+use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;

@@ -81,6 +81,7 @@ pub struct WorkerMetricsLocal {
     pub input_path_degraded: bool,
     pub sendinput_path_degraded: bool,
     pub core_post_send_degraded: bool,
+    pub post_send_metrics_available: bool,
     pub observer_degraded: bool,
     pub wait_path_degraded: bool,
     pub sendinput_warn_threshold_us: u64,

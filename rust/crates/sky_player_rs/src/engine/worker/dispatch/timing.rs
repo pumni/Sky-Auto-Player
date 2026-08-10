@@ -19,7 +19,7 @@ use super::super::{
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
 use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{PreparedBatch, physical_packet_kind};
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
+use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
@@ -37,11 +37,10 @@ pub(crate) struct AuthoredDispatchPlan {
 
 /// Resolve the path-aware lead for one authored packet without reading QPC.
 pub(crate) fn resolve_authored_lead(
-    estimator: &SendLatencyEstimator,
+    estimator: &DispatchCostEstimator,
     path: DispatchPath,
-    latency_class: LatencyClass,
     timing: &TimingOptions,
-    enable_adaptive_lead: bool,
+    enable_dispatch_cost_lead: bool,
 ) -> DispatchLeadEstimate {
     if timing.dispatch_lead_us > 0 {
         return DispatchLeadEstimate {
@@ -49,19 +48,13 @@ pub(crate) fn resolve_authored_lead(
             saturated: false,
         };
     }
-    if !enable_adaptive_lead {
+    if !enable_dispatch_cost_lead {
         return DispatchLeadEstimate {
             applied_us: 0,
             saturated: false,
         };
     }
-    estimate_dispatch_path_lead(
-        estimator,
-        path,
-        latency_class,
-        timing.strict_timing,
-        timing.max_lead_us,
-    )
+    estimate_dispatch_path_lead(estimator, path, timing.strict_timing, timing.max_lead_us)
 }
 
 /// Classify the next authored packet into a [`DispatchPath`].
@@ -89,22 +82,16 @@ pub(crate) fn next_authored_path(coordinator: &RuntimeDispatchCoordinator) -> Op
 }
 
 pub(crate) fn pending_lead_for_polyphony(
-    estimator: &SendLatencyEstimator,
+    estimator: &DispatchCostEstimator,
     qpc_clock: QpcClock,
     polyphony: usize,
-    latency_class: LatencyClass,
     timing: &TimingOptions,
-    enable_adaptive_lead: bool,
+    enable_dispatch_cost_lead: bool,
 ) -> Result<(DurationTicks, bool), sky_dispatch_win32::clock::TimeConversionError> {
     let (lead_us, saturated) = if timing.dispatch_lead_us > 0 {
         (timing.dispatch_lead_us, false)
-    } else if enable_adaptive_lead {
-        let estimate = estimator.estimate_lead_with_class_and_policy(
-            SendPath::UpOnly,
-            polyphony,
-            latency_class,
-            timing.strict_timing,
-        );
+    } else if enable_dispatch_cost_lead {
+        let estimate = estimator.estimate_lead(SendPath::UpOnly, polyphony, timing.strict_timing);
         (estimate.applied_us, estimate.saturated)
     } else {
         (0, false)
@@ -123,15 +110,14 @@ pub(crate) fn pending_lead_for_polyphony(
 /// the wrong directional lead.
 pub(crate) fn startup_lead_for_first_packet(
     coordinator: &RuntimeDispatchCoordinator,
-    estimator: &SendLatencyEstimator,
-    latency_class: LatencyClass,
+    estimator: &DispatchCostEstimator,
     timing: &TimingOptions,
-    enable_adaptive_lead: bool,
+    enable_dispatch_cost_lead: bool,
 ) -> u64 {
     let path = next_authored_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
         down_count: coordinator.next_authored_polyphony().max(1),
     });
-    resolve_authored_lead(estimator, path, latency_class, timing, enable_adaptive_lead).applied_us
+    resolve_authored_lead(estimator, path, timing, enable_dispatch_cost_lead).applied_us
 }
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
@@ -392,7 +378,6 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
     let commit_result = coordinator.commit_packet_success(
         view.prepared_batch,
         sender_started_effective_ticks,
@@ -425,6 +410,7 @@ pub(crate) fn interpret_down_send_timing(
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     _qpc_clock: QpcClock,
+    physical_target_qpc: QpcTicks,
     coordinator: &mut RuntimeDispatchCoordinator,
     health: &WorkerHealthState,
     timing: &WorkerTimingState,
@@ -440,6 +426,15 @@ pub(crate) fn interpret_down_send_timing(
     result_last_win32_error: Option<u32>,
     lead_down_saturated: bool,
 ) -> Result<DownSendTiming, DispatchStep> {
+    if let Some(completed_qpc) = result_completed_ticks
+        && completed_qpc
+            .checked_duration_since(physical_target_qpc)
+            .is_err()
+    {
+        return Err(DispatchStep::Terminate(
+            "note-on completion precedes physical target boundary".to_string(),
+        ));
+    }
     let (
         sender_started_effective_ticks,
         completed_effective_ticks,

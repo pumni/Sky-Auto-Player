@@ -712,7 +712,7 @@ def _new_session(
             enable_event_wait=True,
             enable_adaptive_spin=adaptive_spin,
             dispatch_lead_us=fixed_lead_us,
-            enable_adaptive_lead=lead_mode == "adaptive",
+            enable_dispatch_cost_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
         )
     target_hwnd = _real_input_target_hwnd() if backend == "sendinput" else 0

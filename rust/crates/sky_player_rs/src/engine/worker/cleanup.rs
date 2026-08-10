@@ -7,7 +7,7 @@ use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{NativeTelemetryOutput, SharedMetrics, TelemetryCollector};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::estimator::SendLatencyEstimator;
+use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::input::{ReleaseAllOutcome, ReleaseScope};
@@ -20,7 +20,7 @@ pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) telemetry: TelemetryCollector,
-    pub(super) estimator: SendLatencyEstimator,
+    pub(super) estimator: DispatchCostEstimator,
     pub(super) playback: PlaybackClockState,
     pub(super) qpc_clock: QpcClock,
     pub(super) scheduling: WorkerSchedulingGuards,
