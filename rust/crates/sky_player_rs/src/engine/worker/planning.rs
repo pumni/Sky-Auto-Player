@@ -13,7 +13,7 @@ use super::health::{
 };
 use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{
-    CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator,
+    CoordinatorError, CoordinatorInvariantError, PendingDispatchPlan, RuntimeDispatchCoordinator,
 };
 use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
@@ -153,11 +153,21 @@ fn plan_next_dispatch_inner(
             let lead_ticks = qpc_clock
                 .duration_from_us(lead.applied_us)
                 .map_err(|error| PlanningError::TimeConversion(format!("{error:?}")))?;
+            let deadline_ticks = coordinator
+                .next_authored_ticks(lead_ticks)?
+                .ok_or_else(|| {
+                    PlanningError::Coordinator(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "authored path exists but no authored deadline exists".to_string(),
+                        ),
+                    ))
+                })?;
             Some(AuthoredDispatchPlan {
                 path,
                 lead_us: lead.applied_us,
                 lead_ticks,
                 lead_saturated: lead.saturated,
+                deadline_ticks,
             })
         }
         None => None,

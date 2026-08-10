@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _checker():
     path = Path(__file__).parents[1] / "scripts" / "check_rust_architecture.py"
@@ -104,6 +106,22 @@ def test_checker_accepts_explicit_temporary_allowlist(tmp_path):
 
     assert not report.errors
     assert any("temporary allowlist" in item.message for item in report.warnings)
+
+
+def test_checker_rejects_stale_allowlist_path(tmp_path):
+    source = tmp_path / "rust" / "crates" / "sky_dispatch_core" / "src"
+    config = tmp_path / ".config"
+    source.mkdir(parents=True)
+    config.mkdir()
+    (config / "rust_architecture_allowlist.json").write_text(
+        '{"entries":[{"path":"rust/crates/sky_dispatch_core/src/removed.rs",'
+        '"rule":"regular_module_lines","reason":"stale",'
+        '"expires_phase":"Phase 2"}]}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="allowlist path does not exist"):
+        _checker().check_repository(tmp_path)
 
 
 def test_checker_treats_python_root_as_ffi_boundary(tmp_path):

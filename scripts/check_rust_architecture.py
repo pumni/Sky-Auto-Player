@@ -87,6 +87,9 @@ def _load_allowlist(repository_root: Path) -> dict[tuple[str, str], dict[str, st
         if missing:
             raise ValueError(f"allowlist entry missing {sorted(missing)}: {entry!r}")
         key = (str(entry["path"]), str(entry["rule"]))
+        entry_path = repository_root / key[0]
+        if not entry_path.is_file():
+            raise ValueError(f"allowlist path does not exist: {key[0]}")
         result[key] = {name: str(entry[name]) for name in required}
     return result
 

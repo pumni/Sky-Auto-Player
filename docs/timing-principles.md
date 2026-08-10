@@ -136,7 +136,7 @@ and release-recovery changes still invalidate it. The planner does not mutate
 the coordinator, sample QPC itself, allocate, or format strings on success.
 Pending releases use a bounded cohort fixed point: the Up lead is selected from the releases that
 share the next effective deadline, rather than from all currently pending keys. The resulting
-deadline/lead/polyphony plan is reused for waiting and popping. The native accuracy-first path
+deadline/lead/event-count-cohort plan is reused for waiting and popping. The native accuracy-first path
 also requires `chord_stagger_us == 0`; staggered chords remain an explicit Python diagnostic path.
 A future physical anchor is created before the worker loop; the first authored action is gated at
 `startup_anchor + scheduled_us - lead_us`, including the negative offset for a note at `t=0`.
@@ -148,9 +148,13 @@ The worker records a separate Up completion residual only from clean, non-deferr
 release cohorts.
 Normal estimator operation uses the clamped rolling p95; native strict timing
 uses the clamped rolling maximum so an observed upper-tail sample remains
-visible. Sparse buckets fall back to their path's lower-cardinality evidence and
-then the path prior; there is no cross-path contamination. Repeated positive
-residual at the lead cap is a controlled timing error rather than an unreported
+visible. Sparse buckets fall back to the nearest seeded lower-cardinality bucket,
+then the nearest seeded higher-cardinality bucket, then zero; there is no
+cross-path contamination or path prior. The separate lead-saturation diagnostic
+arrays use exact event-count indices 1..14 and an explicit `15_plus` bucket at
+index 15; this diagnostic compression does not change the estimator's exact
+1..30 event-count buckets. Repeated positive residual at the lead cap is a
+controlled timing error rather than an unreported
 tail.
 For release observations, `lead_up_saturated` records the lead applied by the physical plan;
 `saturated_positive` is derived separately from the effective SendInput completion error, not

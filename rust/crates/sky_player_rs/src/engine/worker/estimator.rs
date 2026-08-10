@@ -17,13 +17,18 @@ pub(crate) fn update_estimator_after_send_observation(
     estimator.update(path, event_count, dispatch_cost_us)
 }
 
+/// Record a saturated lead by physical event count.
+///
+/// The fixed diagnostic arrays use indices 1..=14 for exact counts; index 15
+/// is an explicit `15_plus` overflow bucket. This is separate from the
+/// estimator, which retains exact event counts through 30.
 pub(crate) fn record_lead_saturation(
     counters: &mut [u64; 16],
     positive_residual_at_cap: &mut u64,
-    polyphony: usize,
+    event_count: usize,
     completion_error_us: i64,
 ) {
-    let bucket = polyphony.clamp(1, 15);
+    let bucket = event_count.clamp(1, 15);
     counters[bucket] = counters[bucket].saturating_add(1);
     if completion_error_us > 0 {
         *positive_residual_at_cap = positive_residual_at_cap.saturating_add(1);

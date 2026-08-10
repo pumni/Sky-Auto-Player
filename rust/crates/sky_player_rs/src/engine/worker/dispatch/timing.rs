@@ -26,13 +26,16 @@ use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransacti
 /// Snapshot of the next authored packet's dispatch path and lead.
 ///
 /// Built once per worker loop epoch and reused for both
-/// `prepare_next_due_authored` and `next_deadline_ticks`.
+/// `prepare_next_due_authored` and wait-boundary planning.  The deadline is
+/// the physical target for this authored work; `NextDispatchPlan::deadline_ticks`
+/// may be earlier when a pending release is also present.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AuthoredDispatchPlan {
     pub(crate) path: DispatchPath,
     pub(crate) lead_us: u64,
     pub(crate) lead_ticks: DurationTicks,
     pub(crate) lead_saturated: bool,
+    pub(crate) deadline_ticks: TimelineTicks,
 }
 
 /// Resolve the path-aware lead for one authored packet without reading QPC.

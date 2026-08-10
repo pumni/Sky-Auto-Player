@@ -2,8 +2,9 @@
 //!
 //! Verifies that the allocation-free segment of the authored dispatch path
 //! (from plan build through `dispatch_ready` — i.e. coordinator commit and
-//! observer enqueue) makes zero heap allocations.  Observer drain (estimator,
-//! health, publish) is explicitly excluded from the counter window per §8.11.
+//! observer enqueue) makes zero heap allocations.  Observer drain (health,
+//! publish) is explicitly excluded from the counter window per §8.11; direct
+//! estimator query/update allocation proofs are covered below.
 //!
 //! Uses a counting `GlobalAlloc` wrapper that increments an atomic counter on
 //! every `alloc` call.  The counter is *only* read inside the assertion window;
@@ -13,6 +14,7 @@
 //!   cargo test --manifest-path rust/Cargo.toml -p sky_player_rs \
 //!       --features test-support --test rt_dispatch_no_alloc
 
+use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
@@ -206,6 +208,43 @@ fn clean_estimator_evidence(requested_count: usize) -> EstimatorObservationEvide
         recovery_used: false,
         chord_integrity_lost: false,
     }
+}
+
+#[test]
+fn estimator_query_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut estimator = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
+    for _ in 0..5 {
+        estimator
+            .update(SendPath::UpOnly, 2, 700)
+            .expect("seed sample");
+    }
+
+    enable_counting();
+    let estimate = estimator.estimate_lead(SendPath::UpOnly, 2, false);
+    let allocs = disable_counting();
+
+    assert_eq!(estimate.applied_us, 700);
+    assert_eq!(allocs, 0, "estimator query made {allocs} allocation(s)");
+}
+
+#[test]
+fn estimator_update_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut estimator = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
+    for _ in 0..5 {
+        estimator
+            .update(SendPath::Mixed, 3, 900)
+            .expect("seed sample");
+    }
+
+    enable_counting();
+    estimator
+        .update(SendPath::Mixed, 3, 950)
+        .expect("update sample");
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "estimator update made {allocs} allocation(s)");
 }
 
 #[test]

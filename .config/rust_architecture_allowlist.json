@@ -1,7 +1,5 @@
 {
   "entries": [
-    {"path":"rust/crates/sky_dispatch_core/src/coordinator.rs","rule":"regular_module_lines","reason":"pre-existing coordinator consolidation; split by invariant owner in Phase 6","expires_phase":"Phase 6"},
-    {"path":"rust/crates/sky_dispatch_core/src/estimator.rs","rule":"regular_module_lines","reason":"pre-existing estimator implementation; split only with timing proof in Phase 6","expires_phase":"Phase 6"},
     {"path":"rust/crates/sky_dispatch_win32/src/calibration.rs","rule":"regular_module_lines","reason":"pre-existing calibration tool outside dispatch hot path","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/input.rs","rule":"facade_lines","reason":"isolate raw sender and transactions in Phase 7","expires_phase":"Phase 7"},
     {"path":"rust/crates/sky_dispatch_win32/src/wait.rs","rule":"facade_lines","reason":"isolate wait responsibilities in Phase 7","expires_phase":"Phase 7"},
