@@ -135,6 +135,41 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Seed a Down observation while leaving a future Mixed packet for the
+    /// planner.  This keeps the observer-drain replan test on the production
+    /// authored path instead of testing only the boolean drain helper.
+    pub fn new_down_then_mixed() -> Self {
+        let mut harness = Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "seed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "mixed-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "mixed-down".into(),
+            },
+        ]);
+        let plan = harness.plan_current_dispatch();
+        assert!(matches!(
+            harness.dispatch_authored_with_plan(&plan),
+            DispatchStep::Dispatched
+        ));
+        harness
+    }
+
     /// Build a retrigger packet with `event_count` physical INPUT events at
     /// one deadline (half Up, half Down). Initial owners are dispatched during
     /// setup so the measured packet is genuinely Mixed.

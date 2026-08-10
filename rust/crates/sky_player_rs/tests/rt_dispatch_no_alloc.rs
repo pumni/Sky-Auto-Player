@@ -15,7 +15,7 @@
 
 use sky_dispatch_core::estimator::LatencyClass;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
+use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, DownObservation, DownTraceObservation,
     EstimatorObservationEvidence, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
@@ -124,7 +124,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         dispatch_ready_qpc: QpcTicks::ZERO,
         sender_duration_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
-        requested_mask: 1,
+        requested_packet: PhysicalPacket::new(0, 1),
         confirmed_mask: 1,
         skipped_mask: 0,
         completed_effective_ticks: TimelineTicks::from_raw(n),
@@ -161,24 +161,23 @@ fn up_observation(n: u64) -> DispatchObservation {
         dispatch_ready_qpc: QpcTicks::ZERO,
         sender_duration_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
-        sent_count: 1,
-        scan_count: 1,
+        requested_mask: 1,
+        confirmed_mask: 1,
+        skipped_mask: 0,
+        result_status: SendTransactionStatus::Complete,
         lead_up_ticks: DurationTicks::from_raw(n),
         lead_up_saturated: false,
         completed_effective_ticks: TimelineTicks::from_raw(n),
         scheduled_ticks: TimelineTicks::ZERO,
         deferred_ticks: DurationTicks::ZERO,
         up_completion_error_ticks: 0,
-        estimator_evidence: clean_estimator_evidence(1),
         send_warn_us: 0,
         core_post_send_warn_us: 0,
         recovery_pause_ticks: None,
         trace: UpTraceObservation {
             event_index: 0,
             trace_kind: 1,
-            scan_count: 1,
-            sent_count: 1,
-            skipped_count: 0,
+            retry_reason: PacketRetryReason::None,
             send_attempts: 1,
             last_win32_error: 0,
             authored_ticks: TimelineTicks::ZERO,

@@ -2024,6 +2024,118 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
     assert_eq!(snapshot.generation_status_counts["released"], 3);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let mixed = telemetry["records"]
+        .as_array()
+        .expect("records array")
+        .iter()
+        .find(|record| record["kind"].as_u64() == Some(2))
+        .expect("successful mixed record");
+    assert_eq!(mixed["requested_count"].as_u64(), Some(3));
+    assert_eq!(mixed["sent_count"].as_u64(), Some(3));
+    assert_eq!(mixed["polyphony"].as_u64(), Some(3));
+}
+
+#[test]
+fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "retrigger-up".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "retrigger-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "release".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid same-key mixed schedule");
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().status, "finished");
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let mixed = telemetry["records"]
+        .as_array()
+        .expect("records array")
+        .iter()
+        .find(|record| record["kind"].as_u64() == Some(2))
+        .expect("successful same-key mixed record");
+    assert_eq!(mixed["requested_count"].as_u64(), Some(2));
+    assert_eq!(mixed["sent_count"].as_u64(), Some(2));
+    assert_eq!(mixed["polyphony"].as_u64(), Some(2));
+}
+
+#[test]
+fn observer_drain_rebuilds_production_plan_before_mixed_dispatch() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_then_mixed();
+    harness.config.estimator.enable_adaptive_lead = true;
+    harness.config.timing.dispatch_lead_us = 0;
+
+    let plan_a = harness.plan_current_dispatch_projected();
+    assert!(matches!(
+        plan_a.authored_path(),
+        Some(DispatchPath::Mixed { .. })
+    ));
+    let estimator_a = serde_json::to_string(&harness.resources.estimator.export_state())
+        .expect("estimator state");
+
+    let drain_result = harness.drain_observer().expect("observer drain");
+    assert!(
+        drain_result.is_some(),
+        "draining an observation must invalidate the plan"
+    );
+
+    let plan_b = harness.plan_current_dispatch_projected();
+    let estimator_b = serde_json::to_string(&harness.resources.estimator.export_state())
+        .expect("updated estimator state");
+    assert_ne!(
+        estimator_a, estimator_b,
+        "observer must mutate the estimator"
+    );
+    harness.advance_playback_time_us(2_000);
+    assert!(matches!(
+        harness.dispatch_authored_with_plan(&plan_b),
+        super::worker::DispatchStep::Dispatched
+    ));
 }
 
 #[test]
@@ -2991,7 +3103,9 @@ fn test_qpc_ordering_failure_is_terminal() {
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::ActionKind;
     use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
-    use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus, TrackedKeyState};
+    use sky_dispatch_win32::input::{
+        PacketRetryReason, PhysicalPacket, SendTransactionStatus, TrackedKeyState,
+    };
 
     let qpc_clock = QpcClock::initialize().expect("QPC");
     let mut runtime = WorkerRuntime::default();
@@ -3028,7 +3142,7 @@ fn test_qpc_ordering_failure_is_terminal() {
         authored_batch_scheduled_ticks: TimelineTicks::ZERO,
         conflict_mask: 0,
         dispatch_path: DispatchPath::DownOnly { down_count: 1 },
-        packet_masks: None,
+        packet_masks: Some(PhysicalPacket::new(0, 1)),
     };
 
     // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)

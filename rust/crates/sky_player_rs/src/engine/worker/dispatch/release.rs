@@ -45,8 +45,6 @@ pub(super) struct ReleaseSend {
     pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
     pub(super) last_win32_error: Option<u32>,
     pub(super) sender_duration_ticks: DurationTicks,
-    pub(super) sent_count: usize,
-    pub(super) skipped_count: usize,
     pub(super) attempts: u8,
     pub(super) retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     pub(super) transport: ReleaseTransportEvidence,
@@ -250,7 +248,6 @@ pub(crate) fn dispatch_due_pending_releases(
     let release_mask = due_pending
         .iter()
         .fold(0u16, |mask, pending| mask | (1u16 << pending.key_slot));
-    let scan_count = release_mask.count_ones() as usize;
     let send = match prepare_release_send(
         qpc_clock,
         backend,
@@ -347,25 +344,24 @@ pub(crate) fn dispatch_due_pending_releases(
         dispatch_ready_qpc,
         sender_duration_ticks: send.sender_duration_ticks,
         wake_qpc,
-        sent_count: send.sent_count,
-        scan_count,
+        requested_mask: send.transport.requested_mask,
+        confirmed_mask: send.transport.confirmed_mask,
+        skipped_mask: send.transport.skipped_mask,
+        result_status: send.transport.status,
         lead_up_ticks,
         lead_up_saturated,
         completed_effective_ticks: send.completed_effective_ticks,
         scheduled_ticks: reconciliation.scheduled_ticks,
         deferred_ticks: reconciliation.deferred_ticks,
         up_completion_error_ticks: reconciliation.up_completion_error_ticks,
-        estimator_evidence: reconciliation.estimator_evidence,
         send_warn_us: frozen_budget.send_warn_us,
         core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
         recovery_pause_ticks: reconciliation.recovery_pause_ticks,
         trace: UpTraceObservation {
             event_index: due_pending[reconciliation.first_index].source_action_index,
             trace_kind: super::super::TRACE_KIND_UP,
-            scan_count,
-            sent_count: send.sent_count,
-            skipped_count: send.skipped_count,
             send_attempts: send.attempts,
+            retry_reason: send.retry_reason,
             last_win32_error: send.last_win32_error.unwrap_or(0),
             authored_ticks: reconciliation.scheduled_ticks,
             effective_deadline_ticks: reconciliation.effective_deadline_ticks,
@@ -525,8 +521,6 @@ fn prepare_release_send(
         },
     };
     runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
-    let sent_count = result.evidence.confirmed_mask.count_ones() as usize;
-    let skipped_count = result.evidence.skipped_mask.count_ones() as usize;
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
     let retry_reason = result.evidence.retry_reason;
@@ -543,8 +537,6 @@ fn prepare_release_send(
         sender_started_effective_ticks,
         last_win32_error,
         sender_duration_ticks,
-        sent_count,
-        skipped_count,
         attempts,
         retry_reason,
         transport,

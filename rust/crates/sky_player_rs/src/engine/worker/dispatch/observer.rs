@@ -13,7 +13,8 @@ use super::super::{
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
     DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-    UpObservation, down_transport_counts, record_down_send_telemetry, record_release_telemetry,
+    UpObservation, record_down_send_telemetry, record_release_telemetry, up_estimator_evidence,
+    up_transport_counts,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::release::take_release_observer_failure;
@@ -74,6 +75,11 @@ pub(crate) fn publisher_down_send_outcome(
     observer: &mut PendingObservationQueue,
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
+    let Some(requested_packet) = view.packet_masks else {
+        return DispatchStep::Terminate(
+            "authored physical dispatch has no canonical packet evidence".to_string(),
+        );
+    };
     let DownSendTiming {
         sender_started_qpc,
         sender_completed_qpc,
@@ -121,9 +127,7 @@ pub(crate) fn publisher_down_send_outcome(
         dispatch_ready_qpc,
         sender_duration_ticks,
         wake_qpc,
-        requested_mask: view
-            .packet_masks
-            .map_or(0, |packet| packet.up_mask | packet.down_mask),
+        requested_packet,
         confirmed_mask: result_confirmed_mask,
         skipped_mask: result_skipped_mask,
         completed_effective_ticks,
@@ -369,6 +373,52 @@ pub fn set_observer_artificial_cost_us(us: u64) {
 pub fn reset_observer_test_hooks() {
     OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
 }
+
+fn down_observer_evidence(
+    observation: &DownObservation,
+) -> (usize, usize, usize, EstimatorObservationEvidence) {
+    let counts = (
+        observation.requested_count(),
+        observation.confirmed_count(),
+        observation.skipped_count(),
+    );
+    let evidence = EstimatorObservationEvidence {
+        status: observation.trace.result_status,
+        attempts: observation.trace.send_attempts,
+        retry_reason: observation.trace.retry_reason,
+        requested_count: counts.0,
+        confirmed_count: counts.1,
+        skipped_count: counts.2,
+        timing_valid: true,
+        transport_anomaly: observation.trace.last_win32_error != 0,
+        recovery_used: !matches!(observation.trace.retry_reason, PacketRetryReason::None),
+        chord_integrity_lost: observation.trace.chord_integrity_lost,
+    };
+    (counts.0, counts.1, counts.2, evidence)
+}
+
+fn record_down_recovery_metrics(
+    observation: &DownObservation,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if observation.trace.recovered_retry_late {
+        local_metrics.recovered_zero_progress_but_late = local_metrics
+            .recovered_zero_progress_but_late
+            .saturating_add(1);
+    }
+    if matches!(
+        observation.trace.retry_reason,
+        PacketRetryReason::ZeroProgress
+    ) {
+        local_metrics.recovered_zero_progress_retries = local_metrics
+            .recovered_zero_progress_retries
+            .saturating_add(1);
+    }
+    if observation.trace.recovered_partial_up {
+        local_metrics.recovered_partial_up_retries =
+            local_metrics.recovered_partial_up_retries.saturating_add(1);
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_down_send_outcome(
     observation: &DownObservation,
@@ -383,23 +433,8 @@ pub(crate) fn drain_down_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
-    let (requested_count, confirmed_count, skipped_count) = down_transport_counts(
-        observation.requested_mask,
-        observation.confirmed_mask,
-        observation.skipped_mask,
-    );
-    let estimator_evidence = EstimatorObservationEvidence {
-        status: observation.trace.result_status,
-        attempts: observation.trace.send_attempts,
-        retry_reason: observation.trace.retry_reason,
-        requested_count,
-        confirmed_count,
-        skipped_count,
-        timing_valid: true,
-        transport_anomaly: observation.trace.last_win32_error != 0,
-        recovery_used: !matches!(observation.trace.retry_reason, PacketRetryReason::None),
-        chord_integrity_lost: observation.trace.chord_integrity_lost,
-    };
+    let (requested_count, confirmed_count, _skipped_count, estimator_evidence) =
+        down_observer_evidence(observation);
     let sender_duration_us = qpc_clock
         .duration_to_us(observation.sender_duration_ticks)
         .map_err(|error| {
@@ -488,23 +523,7 @@ pub(crate) fn drain_down_send_outcome(
             ))
         })?;
     local_metrics.timeline_rebase_last_reason = observation.timeline_rebase_last_reason;
-    if observation.trace.recovered_retry_late {
-        local_metrics.recovered_zero_progress_but_late = local_metrics
-            .recovered_zero_progress_but_late
-            .saturating_add(1);
-    }
-    if matches!(
-        observation.trace.retry_reason,
-        PacketRetryReason::ZeroProgress
-    ) {
-        local_metrics.recovered_zero_progress_retries = local_metrics
-            .recovered_zero_progress_retries
-            .saturating_add(1);
-    }
-    if observation.trace.recovered_partial_up {
-        local_metrics.recovered_partial_up_retries =
-            local_metrics.recovered_partial_up_retries.saturating_add(1);
-    }
+    record_down_recovery_metrics(observation, local_metrics);
     let (_, force_publish) = record_down_send_telemetry(observation, telemetry, core_post_send_us)?;
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
@@ -580,6 +599,8 @@ pub(crate) fn drain_up_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
+    let (scan_count, sent_count, _skipped_count) = up_transport_counts(observation);
+    let estimator_evidence = up_estimator_evidence(observation);
     #[cfg(any(test, feature = "test-support"))]
     if take_release_observer_failure(observation.trace.recovery_required) {
         return Err(DispatchStep::Terminate(
@@ -664,7 +685,7 @@ pub(crate) fn drain_up_send_outcome(
         record_lead_saturation(
             &mut local_metrics.lead_saturation_count_up,
             &mut local_metrics.positive_residual_at_cap,
-            observation.scan_count,
+            scan_count,
             up_completion_error_us,
         );
     }
@@ -673,12 +694,12 @@ pub(crate) fn drain_up_send_outcome(
             estimator,
             sky_dispatch_core::estimator::SendPath::UpOnly,
             sender_duration_us,
-            observation.sent_count,
-            observation.scan_count,
+            sent_count,
+            scan_count,
             lead_up,
             observation.lead_up_saturated,
             up_completion_error_us,
-            observation.estimator_evidence,
+            estimator_evidence,
             observation.latency_class,
         );
     }
@@ -693,7 +714,7 @@ pub(crate) fn drain_up_send_outcome(
             send_duration_us: sender_duration_us,
             post_send_duration_us: core_post_send_us,
             path: DispatchPath::UpOnly {
-                up_count: observation.scan_count,
+                up_count: scan_count,
             },
             send_warn_us: observation.send_warn_us,
             core_post_send_warn_us: observation.core_post_send_warn_us,
@@ -709,8 +730,7 @@ pub(crate) fn drain_up_send_outcome(
         local_metrics,
         metrics,
         now_us,
-        !is_clean_estimator_observation(observation.estimator_evidence)
-            || observation.trace.recovery_required,
+        !is_clean_estimator_observation(estimator_evidence) || observation.trace.recovery_required,
     );
     Ok(())
 }

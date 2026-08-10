@@ -11,8 +11,7 @@ use super::super::{
 use super::timing::EstimatorObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_win32::input::PacketRetryReason;
-use sky_dispatch_win32::input::SendTransactionStatus;
+use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_dispatch_win32::wait::WaitOutcome;
 
 pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
@@ -61,7 +60,7 @@ pub struct DownObservation {
     pub sender_duration_ticks: DurationTicks,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
-    pub requested_mask: u16,
+    pub requested_packet: PhysicalPacket,
     pub confirmed_mask: u16,
     pub skipped_mask: u16,
     pub completed_effective_ticks: TimelineTicks,
@@ -78,26 +77,50 @@ impl DownTraceObservation {
 
 impl DownObservation {
     pub(super) const fn requested_count(self) -> usize {
-        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).0
+        down_transport_counts(
+            self.requested_packet,
+            self.confirmed_mask,
+            self.skipped_mask,
+            self.trace.result_success(),
+        )
+        .0
     }
 
     pub(super) const fn confirmed_count(self) -> usize {
-        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).1
+        down_transport_counts(
+            self.requested_packet,
+            self.confirmed_mask,
+            self.skipped_mask,
+            self.trace.result_success(),
+        )
+        .1
     }
 
     pub(super) const fn skipped_count(self) -> usize {
-        down_transport_counts(self.requested_mask, self.confirmed_mask, self.skipped_mask).2
+        down_transport_counts(
+            self.requested_packet,
+            self.confirmed_mask,
+            self.skipped_mask,
+            self.trace.result_success(),
+        )
+        .2
     }
 }
 
 pub(super) const fn down_transport_counts(
-    requested_mask: u16,
+    requested_packet: PhysicalPacket,
     confirmed_mask: u16,
     skipped_mask: u16,
+    confirmed_all_events: bool,
 ) -> (usize, usize, usize) {
+    let requested_count = requested_packet.event_count() as usize;
     (
-        requested_mask.count_ones() as usize,
-        confirmed_mask.count_ones() as usize,
+        requested_count,
+        if confirmed_all_events {
+            requested_count
+        } else {
+            confirmed_mask.count_ones() as usize
+        },
         skipped_mask.count_ones() as usize,
     )
 }
@@ -106,9 +129,7 @@ pub(super) const fn down_transport_counts(
 pub struct UpTraceObservation {
     pub event_index: u32,
     pub trace_kind: u8,
-    pub scan_count: usize,
-    pub sent_count: usize,
-    pub skipped_count: usize,
+    pub retry_reason: PacketRetryReason,
     pub send_attempts: u8,
     pub last_win32_error: u32,
     pub authored_ticks: TimelineTicks,
@@ -131,15 +152,16 @@ pub struct UpObservation {
     pub dispatch_ready_qpc: QpcTicks,
     pub sender_duration_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
-    pub sent_count: usize,
-    pub scan_count: usize,
+    pub requested_mask: u16,
+    pub confirmed_mask: u16,
+    pub skipped_mask: u16,
+    pub result_status: SendTransactionStatus,
     pub lead_up_ticks: DurationTicks,
     pub lead_up_saturated: bool,
     pub completed_effective_ticks: TimelineTicks,
     pub scheduled_ticks: TimelineTicks,
     pub deferred_ticks: DurationTicks,
     pub up_completion_error_ticks: i64,
-    pub estimator_evidence: EstimatorObservationEvidence,
     pub send_warn_us: u64,
     pub core_post_send_warn_us: u64,
     pub trace: UpTraceObservation,
@@ -186,7 +208,7 @@ pub(super) fn record_down_send_telemetry(
                 event_index: trace.event_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
-                polyphony: observation.requested_mask.count_ones() as usize,
+                polyphony: observation.requested_count(),
                 flags: trace_flags,
                 win32_error: trace.last_win32_error,
             },
@@ -234,14 +256,15 @@ pub(super) fn record_release_telemetry(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off deferral conversion failure: {error:?}"))
         })?;
+    let (scan_count, sent_count, skipped_count) = up_transport_counts(observation);
     let release_outcome = release_runtime_outcome(
         deferred_by_us,
-        trace.sent_count,
-        trace.scan_count,
+        sent_count,
+        scan_count,
         trace.recovery_required,
     );
     let mut trace_flags = 0u8;
-    if trace.sent_count == trace.scan_count {
+    if sent_count == scan_count {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
     if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
@@ -259,7 +282,7 @@ pub(super) fn record_release_telemetry(
                 event_index: trace.event_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(release_outcome),
-                polyphony: trace.scan_count,
+                polyphony: scan_count,
                 flags: trace_flags,
                 win32_error: trace.last_win32_error,
             },
@@ -275,9 +298,9 @@ pub(super) fn record_release_telemetry(
                 applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
-                requested: trace.scan_count,
-                sent: trace.sent_count,
-                skipped: trace.skipped_count,
+                requested: scan_count,
+                sent: sent_count,
+                skipped: skipped_count,
                 send_attempts: usize::from(trace.send_attempts),
             },
         )
@@ -287,6 +310,44 @@ pub(super) fn record_release_telemetry(
         )));
     }
     Ok(())
+}
+
+pub(super) const fn up_transport_counts(observation: &UpObservation) -> (usize, usize, usize) {
+    up_transport_counts_from_masks(
+        observation.requested_mask,
+        observation.confirmed_mask,
+        observation.skipped_mask,
+    )
+}
+
+pub(super) const fn up_transport_counts_from_masks(
+    requested_mask: u16,
+    confirmed_mask: u16,
+    skipped_mask: u16,
+) -> (usize, usize, usize) {
+    (
+        requested_mask.count_ones() as usize,
+        confirmed_mask.count_ones() as usize,
+        skipped_mask.count_ones() as usize,
+    )
+}
+
+pub(super) fn up_estimator_evidence(observation: &UpObservation) -> EstimatorObservationEvidence {
+    let (requested_count, confirmed_count, skipped_count) = up_transport_counts(observation);
+    EstimatorObservationEvidence {
+        status: observation.result_status,
+        attempts: observation.trace.send_attempts,
+        retry_reason: observation.trace.retry_reason,
+        requested_count,
+        confirmed_count,
+        skipped_count,
+        timing_valid: true,
+        transport_anomaly: observation.trace.last_win32_error != 0
+            || !matches!(observation.result_status, SendTransactionStatus::Complete),
+        recovery_used: observation.trace.recovery_required
+            || observation.deferred_ticks > DurationTicks::ZERO,
+        chord_integrity_lost: false,
+    }
 }
 
 /// Drain-side wait conversion. Raw wait evidence stays on the worker-owned
@@ -359,7 +420,22 @@ mod tests {
 
     #[test]
     fn raw_down_masks_derive_transport_counts_when_observed() {
-        assert_eq!(down_transport_counts(0b1011, 0b0011, 0b1000), (3, 2, 1));
+        assert_eq!(
+            down_transport_counts(PhysicalPacket::new(0b001, 0b001), 0b001, 0, true,),
+            (2, 2, 0)
+        );
+        assert_eq!(
+            down_transport_counts(PhysicalPacket::new(0b001, 0b011), 0b001, 0, true,),
+            (3, 3, 0)
+        );
+    }
+
+    #[test]
+    fn raw_up_masks_derive_transport_counts_when_observed() {
+        assert_eq!(
+            up_transport_counts_from_masks(0b111, 0b101, 0b010),
+            (3, 2, 1)
+        );
     }
 
     #[test]

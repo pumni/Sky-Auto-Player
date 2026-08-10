@@ -21,7 +21,7 @@ use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{PreparedBatch, physical_packet_kind};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
-use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
+use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
 /// Snapshot of the next authored packet's dispatch path and lead.
 ///
@@ -164,6 +164,27 @@ pub fn is_clean_estimator_observation(evidence: EstimatorObservationEvidence) ->
         && !evidence.transport_anomaly
         && !evidence.recovery_used
         && !evidence.chord_integrity_lost
+}
+
+#[inline]
+fn physical_event_counts(
+    packet_masks: Option<PhysicalPacket>,
+    dispatch_path: DispatchPath,
+    result_success: bool,
+    result_confirmed_mask: u16,
+) -> (usize, usize) {
+    let requested_count = packet_masks
+        .map(PhysicalPacket::event_count)
+        .map_or_else(|| dispatch_path.event_count(), usize::from);
+    let confirmed_count = if result_success {
+        // A Complete transaction confirms every event in the packet.  Keep
+        // directional packet identity here: a union mask cannot represent a
+        // same-key Up+Down retrigger as two INPUT events.
+        requested_count
+    } else {
+        result_confirmed_mask.count_ones() as usize
+    };
+    (requested_count, confirmed_count)
 }
 
 /// Project the prepared authored batch into a snapshot used by admission, send,
@@ -457,8 +478,12 @@ pub(crate) fn interpret_down_send_timing(
             )));
         }
     };
-    let requested_count = view.dispatch_path.event_count();
-    let delivered_count = result_confirmed_mask.count_ones() as usize;
+    let (requested_count, delivered_count) = physical_event_counts(
+        view.packet_masks,
+        view.dispatch_path,
+        result_success,
+        result_confirmed_mask,
+    );
     let recovered_zero_progress = matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
     let recovered_partial_up = matches!(
         (view.dispatch_path, result_retry_reason),
@@ -559,7 +584,12 @@ pub(crate) fn read_qpc_us(
 
 #[cfg(test)]
 mod tests {
-    use super::is_positive_saturation_residual;
+    use super::{
+        EstimatorObservationEvidence, is_clean_estimator_observation,
+        is_positive_saturation_residual, physical_event_counts,
+    };
+    use crate::engine::worker::DispatchPath;
+    use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
     #[test]
     fn down_saturation_requires_strictly_positive_residual() {
@@ -567,5 +597,40 @@ mod tests {
         assert!(!is_positive_saturation_residual(true, 0));
         assert!(is_positive_saturation_residual(true, 1));
         assert!(!is_positive_saturation_residual(false, 1));
+    }
+
+    #[test]
+    fn mixed_retrigger_retains_directional_event_cardinality() {
+        let same_key = PhysicalPacket::new(0b001, 0b001);
+        let three_events = PhysicalPacket::new(0b001, 0b011);
+
+        assert_eq!(same_key.event_count(), 2);
+        assert_eq!(three_events.event_count(), 3);
+        assert_eq!(
+            physical_event_counts(
+                Some(same_key),
+                DispatchPath::Mixed {
+                    up_count: 1,
+                    down_count: 1,
+                },
+                true,
+                0b001,
+            ),
+            (2, 2)
+        );
+        assert!(is_clean_estimator_observation(
+            EstimatorObservationEvidence {
+                status: SendTransactionStatus::Complete,
+                attempts: 1,
+                retry_reason: PacketRetryReason::None,
+                requested_count: 2,
+                confirmed_count: 2,
+                skipped_count: 0,
+                timing_valid: true,
+                transport_anomaly: false,
+                recovery_used: false,
+                chord_integrity_lost: false,
+            }
+        ));
     }
 }
