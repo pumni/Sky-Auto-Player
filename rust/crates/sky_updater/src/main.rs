@@ -62,6 +62,17 @@ fn run() -> Result<()> {
 
 fn run_update(args: &UpdaterArgs) -> Result<()> {
     let outcome = execute_update(args);
+    finalize_update(args, outcome, restart_verified)
+}
+
+fn finalize_update<F>(
+    args: &UpdaterArgs,
+    outcome: std::result::Result<(), ExecutionFailure>,
+    restart: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
     let record = match &outcome {
         Ok(()) if args.dry_run => result::dry_run(&args.current_version, &args.target_version),
         Ok(()) => result::success(&args.current_version, &args.target_version),
@@ -89,9 +100,21 @@ fn run_update(args: &UpdaterArgs) -> Result<()> {
     if should_restart {
         // The result is durable before the new process starts. This prevents
         // the restarted app from racing its own result consumption.
-        if let Err(restart_error) = restart_verified(&args.install_root) {
+        if let Err(restart_error) = restart(&args.install_root) {
             eprintln!("could not restart verified application: {restart_error}");
             if outcome.is_ok() {
+                // Installation succeeded, but the final operation did not.
+                // Keep the new files in place and overwrite the optimistic
+                // success record so the next app launch reports reality.
+                let restart_record =
+                    result::failure(&args.current_version, &args.target_version, &restart_error);
+                if let Err(write_error) = result::write_result(&restart_record) {
+                    eprintln!("could not write restart-failure result: {write_error}");
+                    return Err(write_error);
+                }
+                if let Err(log_error) = result::append_log(&restart_record) {
+                    eprintln!("could not append restart-failure log: {log_error}");
+                }
                 return Err(restart_error);
             }
         }
@@ -247,4 +270,86 @@ fn print_help() {
     println!(
         "Sky Auto Player updater\n\nUsage:\n  Sky-Auto-Player-Updater.exe --install-root <absolute-path> --parent-pid <pid> --current-version <version> --target-version <version> --channel <stable|beta> [--restart] [--dry-run]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct LocalAppDataGuard {
+        previous: Option<OsString>,
+    }
+
+    impl LocalAppDataGuard {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::var_os("LOCALAPPDATA");
+            unsafe { std::env::set_var("LOCALAPPDATA", path) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for LocalAppDataGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var("LOCALAPPDATA", value) },
+                None => unsafe { std::env::remove_var("LOCALAPPDATA") },
+            }
+        }
+    }
+
+    #[test]
+    fn restart_failure_overwrites_success_result_without_rollback() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-updater-restart-failure-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let install_root = root.join("install");
+        std::fs::create_dir_all(&install_root).expect("install root");
+        let marker = install_root.join("new-version-marker");
+        std::fs::write(&marker, b"new files stay installed").expect("marker");
+        let _local_app_data = LocalAppDataGuard::set(&root.join("local"));
+        let args = UpdaterArgs {
+            install_root: install_root.clone(),
+            parent_pid: 1,
+            current_version: "1.0.0".into(),
+            target_version: "2.0.0".into(),
+            channel: cli::Channel::Stable,
+            restart: true,
+            dry_run: false,
+        };
+
+        let result = finalize_update(&args, Ok(()), |_root| {
+            Err(UpdaterError::RestartFailed(
+                "injected restart failure".into(),
+            ))
+        });
+
+        assert!(matches!(result, Err(UpdaterError::RestartFailed(_))));
+        assert_eq!(
+            std::fs::read(&marker).expect("marker remains"),
+            b"new files stay installed"
+        );
+        let result_path = result::result_dir()
+            .expect("result directory")
+            .join("last-result.json");
+        let saved: result::UpdateResult =
+            serde_json::from_slice(&std::fs::read(result_path).expect("result file"))
+                .expect("valid result JSON");
+        assert_eq!(saved.status, "failure");
+        assert_eq!(saved.error_code.as_deref(), Some("RESTART_FAILED"));
+        assert!(
+            saved
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("injected restart failure"))
+        );
+
+        std::fs::remove_dir_all(root).expect("cleanup restart-failure fixture");
+    }
 }

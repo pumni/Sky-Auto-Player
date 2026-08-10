@@ -119,6 +119,22 @@ UpdateSettingsModal #row-auto-check Checkbox {
     margin: 0;
     background: transparent;
 }
+UpdateSettingsModal #row-beta-channel {
+    height: auto;
+    padding: 0 1;
+    align-horizontal: left;
+    align-vertical: top;
+}
+UpdateSettingsModal #row-beta-channel Static {
+    margin-left: 1;
+    width: 1fr;
+}
+UpdateSettingsModal #row-beta-channel Checkbox {
+    width: 3;
+    height: auto;
+    margin: 0;
+    background: transparent;
+}
 /* Action buttons row — wrap so the optional clear-skip button sits next to
    the check-now button on wider terminals, and wraps below on narrower ones. */
 UpdateSettingsModal #row-actions {

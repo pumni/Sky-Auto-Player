@@ -7,7 +7,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from rapidfuzz import fuzz, process
 from rich.text import Text
@@ -1512,6 +1512,7 @@ class PickerScreen(Screen[SongPickerResult]):
     def action_open_update_settings(self) -> None:
         from sky_music.config import (
             persist_update_auto_check,
+            persist_update_channel,
             persist_update_skip_version,
         )
         from sky_music.ui.textual_app.modals import UpdateSettingsModal
@@ -1530,9 +1531,23 @@ class PickerScreen(Screen[SongPickerResult]):
             if result == "check_now":
                 app.check_for_updates_worker(force=True)
 
+        def _on_channel(value: str) -> None:
+            if value not in {"stable", "beta"}:
+                return
+            persist_update_channel(self.cfg, cast(Literal["stable", "beta"], value))
+            app.notify(
+                "Beta / RC update channel enabled."
+                if value == "beta"
+                else "Stable update channel enabled.",
+                severity="information",
+                timeout=4,
+            )
+
         modal = UpdateSettingsModal(
             auto_check=self.cfg.update.auto_check,
             on_auto_check=_on_auto_check,
+            channel=self.cfg.update.channel,
+            on_channel=_on_channel,
             skip_version=self.cfg.update.skip_version,
             check_interval_s=self.cfg.update.check_interval_s,
             last_check_ts=self.cfg.update.last_check_ts,

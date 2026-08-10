@@ -155,6 +155,29 @@ def _verified_installed_updater(
     return updater
 
 
+def _preflight_install_root_writable(install_root: Path) -> None:
+    """Prove the portable install root accepts a small temporary write."""
+
+    sentinel = install_root / f".sky-auto-player-update-write-{secrets.token_hex(16)}"
+    created = False
+    try:
+        with sentinel.open("xb") as stream:
+            created = True
+            stream.write(b"Sky Auto Player update preflight\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        raise UpdateLaunchError(f"install root is not writable: {exc}") from exc
+    finally:
+        if created:
+            try:
+                sentinel.unlink()
+            except OSError as exc:
+                raise UpdateLaunchError(
+                    f"install root write preflight cleanup failed: {exc}"
+                ) from exc
+
+
 def _new_update_run() -> Path:
     update_root = _local_update_root()
     if update_root.exists() and update_root.is_symlink():
@@ -217,6 +240,7 @@ def launch_update(request: UpdateLaunchRequest) -> Path:
     if manifest.get("version") != request.current_version:
         raise UpdateLaunchError("installed manifest version does not match the running app")
     updater = _verified_installed_updater(install_root, manifest)
+    _preflight_install_root_writable(install_root)
     run_root = _new_update_run()
     staged = run_root / UPDATER_NAME
     try:

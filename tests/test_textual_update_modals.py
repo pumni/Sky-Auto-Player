@@ -134,6 +134,40 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
     _run(_with_app(actions))
 
 
+def test_update_settings_modal_persists_beta_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Checkbox
+
+    from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
+
+    channel_calls: list[str] = []
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateSettingsModal(
+            auto_check=True,
+            on_auto_check=lambda _v: None,
+            channel="beta",
+            on_channel=channel_calls.append,
+            theme_name="aurora",
+        )
+        app.push_screen(modal)
+        await pilot.pause()
+        checkbox = modal.query_one("#checkbox-beta-channel", Checkbox)
+        assert checkbox.value is True
+        checkbox.focus()
+        await pilot.press("space")
+        await pilot.pause()
+        assert checkbox.value is False
+        assert modal._channel == "stable"
+        assert channel_calls == ["stable"]
+        await pilot.press("escape")
+
+    _run(_with_app(actions))
+
+
 def test_update_settings_modal_clear_skip_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,7 +234,7 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
-    cfg = AppConfig(update=UpdateSettings(auto_check=False))
+    cfg = AppConfig(update=UpdateSettings(auto_check=False, channel="beta"))
 
     pushed: list[Any] = []
 
@@ -219,6 +253,8 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
         assert isinstance(modal, UpdateSettingsModal)
         # The modal was seeded with the live cfg values.
         assert modal._auto_check is False
+        assert modal._channel == "beta"
+        assert modal.query_one("#checkbox-beta-channel", Checkbox).value is True
         # First checkbox is auto-focused; toggle auto_check.
         cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
         assert cb_check.value is False
@@ -326,5 +362,48 @@ def test_update_banner_modal_renders(monkeypatch: pytest.MonkeyPatch) -> None:
         assert options is not None
 
         await pilot.press("escape")
+
+    _run(_with_app(actions))
+
+
+def test_update_banner_enter_defaults_to_remind_without_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import OptionList
+
+    from sky_music.domain.update_checker import UpdateInfo
+    from sky_music.ui.textual_app.modals import UpdateBannerModal
+
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        launch_calls: list[Any] = []
+        responses: list[str | None] = []
+        release = UpdateInfo(
+            latest_version="2.0.1",
+            download_url="",
+            release_notes="",
+            html_url="",
+            published_at="",
+        )
+        app._launch_native_update = lambda _release: launch_calls.append(_release)  # type: ignore[method-assign]
+        modal = UpdateBannerModal(
+            latest_version="2.0.1",
+            current_version="2.0.0",
+            theme_name="aurora",
+        )
+
+        def on_result(response: str | None) -> None:
+            responses.append(response)
+            app._handle_update_response(response, release)
+
+        app.push_screen(modal, on_result)
+        await pilot.pause()
+        options = modal.query_one("#update-banner-options", OptionList)
+        assert options.highlighted == 2
+        await pilot.press("enter")
+        await pilot.pause()
+        assert responses == ["remind"]
+        assert launch_calls == []
 
     _run(_with_app(actions))

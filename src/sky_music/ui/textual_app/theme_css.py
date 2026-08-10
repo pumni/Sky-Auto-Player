@@ -160,6 +160,14 @@ BASE_CSS = """
         margin-left: 1; width: 1fr;
     }
     UpdateSettingsModal #row-auto-check Checkbox { width: 3; height: auto; margin: 0; background: transparent; }
+    UpdateSettingsModal #row-beta-channel {
+        height: auto; padding: 0 1;
+        align-horizontal: left; align-vertical: top;
+    }
+    UpdateSettingsModal #row-beta-channel Static {
+        margin-left: 1; width: 1fr;
+    }
+    UpdateSettingsModal #row-beta-channel Checkbox { width: 3; height: auto; margin: 0; background: transparent; }
     /* Action buttons row — horizontal layout, wrap on narrow terminals. */
     UpdateSettingsModal #row-actions { height: auto; layout: horizontal; padding: 0 1; }
     UpdateSettingsModal #row-actions Button { margin: 0 1 0 0; }

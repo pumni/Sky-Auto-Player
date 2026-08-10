@@ -26,6 +26,10 @@ verified-publisher claim is required. The exact ZIP SHA256, exact manifest,
 clean-worktree/native provenance, and GitHub build attestation are the release
 integrity/provenance evidence.
 
+The GitHub repository and its release pipeline are the runtime trust root.
+SHA256 and `MANIFEST.json` verify the bytes and file set delivered by that
+release; they are integrity checks, not independent publisher authentication.
+
 Prerelease tags (`vX.Y.ZrcN`, `vX.Y.Z.devN`, and equivalent PEP 440 forms) are
 published as GitHub prereleases for beta-channel validation. Stable tags are
 published only after the repository's exact-artifact, manifest, provenance,
@@ -52,6 +56,11 @@ and exits the UI. The Rust updater then:
    user-owned paths; and
 5. writes a durable result and restarts the canonical app only after a verified
    success or verified rollback.
+
+If installation succeeds but automatic restart fails, the new installation is
+kept, `last-result.json` is overwritten with `status: "failure"` and
+`error_code: "RESTART_FAILED"`, and the updater does not roll the installation
+back solely because the process could not be started.
 
 The modal also offers **Open GitHub Releases**, **Remind me later**, and
 **Skip this version**. The manual path opens only:

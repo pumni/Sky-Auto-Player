@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import webbrowser
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from textual import events, work
 from textual.app import App
@@ -441,6 +441,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         """
         from sky_music.config import (
             persist_update_auto_check,
+            persist_update_channel,
             persist_update_skip_version,
         )
         from sky_music.ui.textual_app.modals import UpdateSettingsModal
@@ -456,6 +457,18 @@ class SkyPickerApp(App[SongPickerResult | None]):
             persist_update_skip_version(self.cfg, "")
             self.notify("Skip-version cleared.", severity="information", timeout=4)
 
+        def _on_channel(value: str) -> None:
+            if value not in {"stable", "beta"}:
+                return
+            persist_update_channel(self.cfg, cast(Literal["stable", "beta"], value))
+            self.notify(
+                "Beta / RC update channel enabled."
+                if value == "beta"
+                else "Stable update channel enabled.",
+                severity="information",
+                timeout=4,
+            )
+
         def _on_settings_result(result: object) -> None:
             if result == "check_now":
                 self.check_for_updates_worker(force=True)
@@ -463,6 +476,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         modal = UpdateSettingsModal(
             auto_check=self.cfg.update.auto_check,
             on_auto_check=_on_auto_check,
+            channel=self.cfg.update.channel,
+            on_channel=_on_channel,
             skip_version=self.cfg.update.skip_version,
             check_interval_s=self.cfg.update.check_interval_s,
             last_check_ts=self.cfg.update.last_check_ts,

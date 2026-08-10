@@ -1,16 +1,18 @@
-"""Update notifier orchestrator.
+"""Update notifier and native-updater hand-off orchestrator.
 
 Glue layer that ties together the pure version-check domain logic
 (:mod:`sky_music.domain.update_checker`) and the persistence layer
-(:mod:`sky_music.config` for skip-version / last-check timestamps). Applying
-Public releases use manual download; this module never installs or mutates an app.
+(:mod:`sky_music.config` for skip-version / last-check timestamps).
+Python checks release metadata and surfaces a user decision. The selected
+``Update and Restart`` action is handed to the verified native updater; this
+module itself never downloads, extracts, replaces, or mutates an app.
 
 The UI only needs to:
   1. Call :func:`should_auto_check` before launching the background check.
   2. Call :func:`check_for_update` in a background thread / worker.
   3. On completion, inspect the returned :class:`UpdateCheckResult`; if there
-     is a newer version the user has not skipped, surface the official GitHub
-     Releases page via :class:`sky_music.ui.textual_app.modals.UpdateModal`.
+     is a newer version the user has not skipped, surface the native-updater
+     action plus the fixed official GitHub Releases fallback.
 
 This module never blocks the dispatcher or UI thread; callers run network
 operations in their own worker.

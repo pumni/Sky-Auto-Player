@@ -389,7 +389,8 @@ class UpdateModal(PickerModal[str | None]):
             # the modal.
             self.query_one("#update-notes", RichLog).write(notes)
         options = self.query_one("#modal-options", OptionList)
-        options.highlighted = 0
+        # Opening an update notice must never preselect a mutating action.
+        options.highlighted = 2
         self.set_focus(options)
 
     def on_key(self, event: events.Key) -> None:
@@ -463,6 +464,8 @@ class UpdateSettingsModal(PickerModal[str | None]):
         *,
         auto_check: bool,
         on_auto_check: Any,
+        channel: str = "stable",
+        on_channel: Any | None = None,
         skip_version: str = "",
         check_interval_s: int = 86400,
         last_check_ts: int = 0,
@@ -478,10 +481,12 @@ class UpdateSettingsModal(PickerModal[str | None]):
             theme_name=theme_name,
         )
         self._auto_check = bool(auto_check)
+        self._channel = channel if channel in {"stable", "beta"} else "stable"
         self._skip_version = (skip_version or "").strip()
         self._check_interval_s = int(check_interval_s) if isinstance(check_interval_s, int) else 86400
         self._last_check_ts = int(last_check_ts) if isinstance(last_check_ts, int) else 0
         self._on_auto_check = on_auto_check
+        self._on_channel = on_channel or (lambda _channel: None)
         # Hot color references so renderers pick up theme-aware hex strings.
         self._theme: ThemePreset = get_theme_preset(theme_name)
         # Optional callback to clear the skip-version marker; set by the app.
@@ -541,6 +546,19 @@ class UpdateSettingsModal(PickerModal[str | None]):
                 markup=True,
             )
 
+        with Horizontal(id="row-beta-channel"):
+            yield CheckBoxSquare(
+                value=self._channel == "beta",
+                id="checkbox-beta-channel",
+                compact=True,
+            )
+            yield Static(
+                "[bold]Include beta / RC releases[/]\n"
+                f"[{muted}]Use the beta channel for release-candidate qualification.[/]",
+                id="label-beta-channel",
+                markup=True,
+            )
+
         # Action buttons — using Textual Button.Pressed → on_button_pressed.
         with Horizontal(id="row-actions"):
             yield Button(
@@ -575,6 +593,9 @@ class UpdateSettingsModal(PickerModal[str | None]):
         if event.checkbox.id == "checkbox-auto-check":
             self._auto_check = event.value
             self._on_auto_check(event.value)
+        elif event.checkbox.id == "checkbox-beta-channel":
+            self._channel = "beta" if event.value else "stable"
+            self._on_channel(self._channel)
         with contextlib.suppress(Exception):
             self.query_one("#update-settings-info", Static).update(self._info_text())
 
@@ -654,7 +675,8 @@ class UpdateBannerModal(PickerModal[str | None]):
 
     def on_modal_mounted(self) -> None:
         options = self.query_one("#update-banner-options", OptionList)
-        options.highlighted = 0
+        # The first Enter after an automatic notice must be non-mutating.
+        options.highlighted = 2
         self.set_focus(options)
 
     def on_key(self, event: events.Key) -> None:
