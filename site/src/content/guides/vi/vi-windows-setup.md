@@ -87,9 +87,10 @@ khi có bản mới. Chọn **Open GitHub Releases** để tải bản cập nh�
    vào đó.
 4. Chạy `Sky-Auto-Player.exe` từ thư mục mới.
 
-Binary Windows công khai hiện không có chữ ký và không kèm native installer hay cơ chế tự động
-thay file. Authenticode là **N/A — intentionally unsigned**; Windows SmartScreen có thể hiện
-cảnh báo ứng dụng không được nhận diện.
+Binary Windows công khai được cố ý để unsigned và không có system installer. Dùng thao tác
+**Update and Restart** trong app để cập nhật bằng native updater đã xác minh; nếu không thể
+stage, hãy tải gói canonical thủ công như trên. Authenticode là **N/A — intentionally
+unsigned**; Windows SmartScreen có thể hiện cảnh báo ứng dụng không được nhận diện.
 
 ## Gỡ cài đặt
 

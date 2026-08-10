@@ -2,7 +2,7 @@
 //!
 //! The updater is intentionally independent from `sky_player_rs`. The public
 //! modules contain validation and transaction logic; platform modules only
-//! provide bounded Win32 process/network/signature seams.
+//! provide bounded Win32 process/network seams.
 
 pub mod archive;
 pub mod cli;

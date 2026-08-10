@@ -102,9 +102,10 @@ Xác minh archive trước khi giải nén:
 
 ## Ranh giới cập nhật công khai
 
-Binary Windows công khai hiện không có chữ ký và gói phát hành không kèm native updater.
-Ứng dụng chỉ kiểm tra phiên bản rồi mở trang GitHub Releases chính thức; không tự tải xuống,
-giải nén, khởi động lại hay thay thế file ứng dụng. Authenticode là **N/A — intentionally unsigned**.
+Binary Windows công khai được cố ý để unsigned và gói phát hành có native updater.
+Updater chỉ chạy sau lựa chọn của người dùng, xác minh ZIP, SHA256 và `MANIFEST.json` chính xác
+trước khi thay thế theo transaction; đường thủ công chỉ mở trang GitHub Releases chính thức.
+Authenticode là **N/A — intentionally unsigned**.
 
 Bằng chứng integrity/provenance của gói vẫn gồm:
 
@@ -112,8 +113,9 @@ Bằng chứng integrity/provenance của gói vẫn gồm:
 - manifest băm đúng các byte unsigned được đóng gói
 - build provenance/attestation của GitHub
 
-Source Rust `sky_updater` vẫn được giữ như một security component fail-closed và được test riêng.
-Nó không được đóng gói công khai hay gọi từ app, và tiếp tục từ chối payload unsigned thay vì thêm
+Binary Rust `sky_updater` được đóng gói và chỉ được gọi từ thao tác update do người dùng chọn.
+Nó vẫn là security component fail-closed và được test riêng về HTTPS, archive, manifest và transaction; không có
+AuthentiCode requirement hay signature bypass thay vì thêm
 bypass chữ ký.
 
 ## Thông báo Điều khoản Dịch vụ

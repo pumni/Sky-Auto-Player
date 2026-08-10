@@ -200,47 +200,8 @@ jobs:
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir "dist\Sky-Auto-Player-v$version" --version $version
 
-      - name: Native updater security E2E (source component only)
+      - name: Native updater security E2E
         run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features
-
-      - name: Source-only updater Authenticode CryptoAPI fixture
-        run: |
-          $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
-          if ($signtool) {
-            $signtoolPath = $signtool.Source
-          } else {
-            $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-            $signtoolPath = Get-ChildItem -LiteralPath $sdkBin -Filter signtool.exe -Recurse -File |
-              Where-Object FullName -match '\\x64\\' |
-              Sort-Object FullName |
-              Select-Object -Last 1 -ExpandProperty FullName
-            if (-not $signtoolPath) { throw 'signtool.exe was not found in PATH or the Windows SDK' }
-          }
-          $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
-          cargo build --manifest-path rust/Cargo.toml --bin sky_updater --release
-          $fixture = (Resolve-Path "rust\target\release\sky_updater.exe").Path
-          $subject = "CN=Sky Auto Player Test Publisher"
-          $certificate = $null
-          try {
-            $certificate = New-SelfSignedCertificate `
-              -Type CodeSigningCert `
-              -Subject $subject `
-              -CertStoreLocation Cert:\CurrentUser\My `
-              -KeyAlgorithm RSA `
-              -KeyLength 2048 `
-              -Provider 'Microsoft Software Key Storage Provider' `
-              -KeyExportPolicy Exportable
-            & $signtoolPath sign /sha1 $certificate.Thumbprint /fd SHA256 $fixture
-            if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
-            $env:SKY_AUTHENTICODE_TEST_PE = $fixture
-            $env:SKY_AUTHENTICODE_TEST_PUBLISHER = $subject
-            cargo test --manifest-path rust/Cargo.toml -p sky_updater --lib signature::tests::publisher_subject_cryptoapi_fixture -- --exact
-            if ($LASTEXITCODE -ne 0) { throw "CryptoAPI signer fixture test failed with exit code $LASTEXITCODE" }
-          } finally {
-            if ($certificate) {
-              certutil.exe -user -delstore My $certificate.Thumbprint | Out-Host
-            }
-          }
 
 
   status:

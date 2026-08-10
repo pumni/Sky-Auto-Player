@@ -113,7 +113,7 @@ fn execute_update(args: &UpdaterArgs) -> std::result::Result<(), ExecutionFailur
     }
 
     let updater_path =
-        env::current_exe().map_err(|error| UpdaterError::SignatureInvalid(error.to_string()))?;
+        env::current_exe().map_err(|error| UpdaterError::InstallRootInvalid(error.to_string()))?;
     sky_updater::signature::verify_file(&updater_path)?;
 
     let run_root = updater_run_root()?;

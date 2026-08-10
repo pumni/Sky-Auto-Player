@@ -6,25 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No unreleased changes.
+Development continues toward v3.3.0. The latest supported public stable
+release remains v3.1.0; v3.2.x is retained as withdrawn historical evidence.
 
-## [3.2.1] - 2026-08-10
+## [3.2.1] - 2026-08-10 — Withdrawn before publication
 
-The `v3.2.1` release line follows the accepted `v3.2.1rc1` candidate and is
-distributed as an intentionally unsigned portable package with manual updates.
+The `v3.2.1` release line was qualified as a draft but withdrawn before
+publication. Its acceptance measurements and artifact evidence remain
+historical records and must not be treated as a public stable release.
 
 ### Added
 
-- Added unsigned portable/manual-update packaging. The app checks versions
-  and opens the official GitHub Releases page; it never installs or replaces
-  application files.
+- Added unsigned portable packaging and the release-integrity evidence model.
+  The qualified draft was never promoted to public stable.
 
 ### Changed
 
 - Changed distribution to a single clean canonical release triple:
   `Sky-Auto-Player-v<version>.zip`, its `.sha256` sidecar, and `MANIFEST.json`.
-- Changed update ownership so Python checks versions and opens the official
-  Releases page; public builds never perform automatic installation.
+- Changed the qualified draft's update ownership to a manual-only flow; this
+  behavior is historical and is superseded by the v3.3.0 development line.
 - Changed release packaging so no certificate or signing secret is required;
   `MANIFEST.json` hashes the exact unsigned bytes that are packaged.
 - Retained clean-worktree/native provenance checks and GitHub build attestation
@@ -33,13 +34,18 @@ distributed as an intentionally unsigned portable package with manual updates.
 ### Security
 
 - Recorded Authenticode for public binaries as **N/A — intentionally unsigned**.
-- Kept the source-only Rust updater fail-closed and out of the public package;
-  it must not gain a signature-verification bypass.
+- Kept the source-only Rust updater fail-closed in the withdrawn draft.
 
 ### Removed
 
-- Removed the public BAT/PowerShell/native-updater installation path and its
-  production package artifacts.
+- Removed the public BAT/PowerShell/native-updater installation path from the
+  withdrawn draft; v3.3.0 development restores a native Rust updater without
+  BAT/PowerShell artifacts.
+
+### Public release baseline
+
+v3.1.0 remains the latest supported public stable release. v3.2.0 is aborted
+and v3.2.1rc1/v3.2.1 are historical validation/draft records only.
 
 ## [3.2.0] - 2026-08-09 — Aborted / not published
 

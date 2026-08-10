@@ -32,6 +32,7 @@ BUILD_DIR = PROJECT_ROOT / "build"
 
 APP_NAME = "Sky-Auto-Player"
 NATIVE_CALIBRATION_BINARY = "native_calibration.exe"
+NATIVE_UPDATER_BINARY = "Sky-Auto-Player-Updater.exe"
 REQUIRED_ASSETS = ("config.json", "songs")
 OPTIONAL_ASSETS = ("README.md",)
 
@@ -490,6 +491,22 @@ def main() -> None:
             cwd=str(PROJECT_ROOT),
             env=native_build_env,
         )
+        updater_manifest = rust_dir / "crates" / "sky_updater" / "Cargo.toml"
+        print("[+] Building the native self-updater...")
+        subprocess.run(
+            [
+                "cargo",
+                "build",
+                "--manifest-path",
+                str(updater_manifest),
+                "--bin",
+                "sky_updater",
+                "--release",
+            ],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+            env=native_build_env,
+        )
     print("[+] Starting PyInstaller...")
     clean_flag = [] if args.no_clean else ["--clean"]
     with _source_bootloader_override():
@@ -515,6 +532,11 @@ def main() -> None:
     copy_asset(calibration_binary, release_dir / NATIVE_CALIBRATION_BINARY)
     if not run_native_calibration_smoke_test(release_dir / NATIVE_CALIBRATION_BINARY):
         raise RuntimeError("Native calibration binary smoke test failed")
+
+    updater_binary = rust_dir / "target" / "release" / "sky_updater.exe"
+    if not updater_binary.is_file():
+        raise RuntimeError(f"Native updater binary is missing: {updater_binary}")
+    copy_asset(updater_binary, release_dir / NATIVE_UPDATER_BINARY)
 
     print("[+] Copying assets...")
     for asset in REQUIRED_ASSETS:

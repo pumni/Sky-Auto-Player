@@ -30,7 +30,7 @@ evidence:
     label: Windows platform layer — only place SendInput lives
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
   - category: distribution
-    label: Distribution contract — unsigned portable/manual updates
+    label: Distribution contract — unsigned portable native updates
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
 ---
 
@@ -103,10 +103,10 @@ Verify the archive before extracting:
 
 ## Public update boundary
 
-Public Windows binaries are currently unsigned and the package does not include a native
-updater. The application only checks for versions and opens the official GitHub Releases page;
-it never downloads, extracts, restarts, or replaces application files. Authenticode is
-**N/A — intentionally unsigned**.
+Public Windows binaries are intentionally unsigned and the package includes the native updater.
+The user-triggered updater verifies the exact release ZIP, SHA256, and `MANIFEST.json` before
+transactional replacement; the manual fallback opens only the official GitHub Releases page.
+Authenticode is **N/A — intentionally unsigned**.
 
 The public integrity/provenance evidence remains:
 
@@ -114,9 +114,9 @@ The public integrity/provenance evidence remains:
 - exact unsigned bytes hashed by the manifest
 - GitHub build provenance/attestation
 
-The Rust `sky_updater` source is retained as a separately tested, fail-closed security component.
-It is not shipped in the public package or reachable from the app, and it continues to reject
-unsigned payloads rather than gaining a signature bypass.
+The Rust `sky_updater` binary is shipped and reachable only from the user-triggered update
+action. It remains separately tested and fail-closed on HTTPS, archive, manifest, and
+transaction integrity; it has no Authenticode requirement or signature bypass.
 
 ## Terms of Service notice
 

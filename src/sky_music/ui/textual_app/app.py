@@ -216,6 +216,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_mount(self) -> None:
         self._set_version_indicator()
+        self._report_last_update_result()
         self._restore_pending_update_indicator()
         # Auto-check after a short quiet window so the launch is not
         # immediately sent to the network — improves perceived responsiveness
@@ -1101,8 +1102,70 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if response == "skip":
             record_skip(self.cfg, release.latest_version)
             self.notify(f"Skipped version {release.latest_version}", timeout=3)
-        elif response == "download":
+        elif response == "update":
+            self._launch_native_update(release)
+        elif response == "github":
             self._open_manual_update_page()
+
+    def _launch_native_update(self, release: Any) -> None:
+        """Stage and spawn the native updater, then exit only after spawn."""
+        import sys
+        from pathlib import Path
+
+        from sky_music.infrastructure.update_launcher import (
+            UpdateLaunchError,
+            UpdateLaunchRequest,
+            launch_update,
+        )
+
+        if getattr(sys, "frozen", False):
+            install_root = Path(sys.executable).resolve().parent
+        else:
+            install_root = Path(__file__).resolve().parents[4]
+        try:
+            launch_update(
+                UpdateLaunchRequest(
+                    install_root=install_root,
+                    current_version=VERSION,
+                    target_version=release.latest_version,
+                    channel=self.cfg.update.channel,
+                    restart=True,
+                )
+            )
+        except UpdateLaunchError as exc:
+            self.notify(
+                f"Update could not start: {exc}. Choose Open GitHub Releases for manual update.",
+                severity="error",
+                timeout=10,
+            )
+            return
+        self.notify("Update started. Sky Auto Player will restart when it completes.", timeout=6)
+        self.exit()
+
+    def _report_last_update_result(self) -> None:
+        from sky_music.infrastructure.update_runtime import consume_last_result
+
+        result = consume_last_result()
+        if result is None:
+            return
+        if result.status == "success":
+            self.notify(
+                f"Updated successfully to v{result.target_version}.",
+                severity="information",
+                timeout=6,
+            )
+        elif result.status == "rolled_back":
+            self.notify(
+                f"Update to v{result.target_version} was rolled back: {result.message}",
+                severity="error",
+                timeout=10,
+            )
+        elif result.status == "failure":
+            self.notify(
+                f"Update to v{result.target_version} failed: {result.message}",
+                severity="error",
+                timeout=10,
+            )
 
     def _open_manual_update_page(self) -> None:
         """Open only the project's fixed official Releases page."""

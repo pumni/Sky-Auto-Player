@@ -88,9 +88,10 @@ is available. Select **Open GitHub Releases** to download the update manually:
    `logs/` into it.
 4. Start `Sky-Auto-Player.exe` from the new folder.
 
-Public Windows binaries are currently unsigned and there is no bundled native installer or
-automatic file replacement. Authenticode is **N/A — intentionally unsigned**; Windows
-SmartScreen may show an unrecognized-app warning.
+Public Windows binaries are intentionally unsigned and there is no system installer. Use the
+in-app **Update and Restart** action for a verified native update; if it cannot be staged,
+download the canonical package manually as above. Authenticode is **N/A — intentionally
+unsigned**; Windows SmartScreen may show an unrecognized-app warning.
 
 ## Uninstalling
 

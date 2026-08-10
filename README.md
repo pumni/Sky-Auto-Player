@@ -79,15 +79,15 @@ system Python, no installer, no admin rights, no registry entries.
 ## Updating
 
 Sky Auto Player checks GitHub for new releases and shows a banner when one is available. Selecting
-**Open GitHub Releases** opens the project's official release page so you can download the new ZIP
-manually. The app does not extract archives, replace application files, or run a native installer.
-The public package keeps the canonical ZIP, SHA256 sidecar, `MANIFEST.json`, and GitHub build
-provenance. Beta builds are selected through Update settings. Extract updates into a new folder and
-copy `config.json`, `.env`, `songs/`, and `logs/` as needed.
+**Update and Restart** launches the bundled native updater, which verifies the exact release ZIP,
+SHA256 sidecar, and `MANIFEST.json` before transactional replacement and restart. **Open GitHub
+Releases** remains the manual fallback. Beta builds are selected through Update settings. A
+portable installation must be user-writable; preserved user data includes `config.json`, `.env`,
+`songs/`, and `logs/`.
 
 > [!WARNING]
-> Windows binaries in this release are currently distributed without an Authenticode publisher
-> certificate. Windows SmartScreen may display an unrecognized-app warning. Download releases only
+> Windows binaries in this release are intentionally unsigned and have no Authenticode publisher
+> requirement. Windows SmartScreen may display an unrecognized-app warning. Download releases only
 > from the project's official [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases)
 > and verify the published SHA256 when desired.
 

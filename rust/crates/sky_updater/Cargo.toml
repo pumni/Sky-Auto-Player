@@ -20,8 +20,6 @@ zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
-    "Win32_Security_Cryptography",
-    "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }

@@ -9,10 +9,14 @@ from pathlib import Path
 
 APP_NAME = "Sky-Auto-Player"
 PRIMARY_EXE = f"{APP_NAME}.exe"
-REQUIRED = {PRIMARY_EXE, "native_calibration.exe", "MANIFEST.json"}
+REQUIRED = {
+    PRIMARY_EXE,
+    "native_calibration.exe",
+    "Sky-Auto-Player-Updater.exe",
+    "MANIFEST.json",
+}
 FORBIDDEN = {
     "Sky-Player.exe",
-    "Sky-Auto-Player-Updater.exe",
     "updater.bat",
     "installer",
     "updater.ps1",

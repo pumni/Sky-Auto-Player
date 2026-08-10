@@ -109,14 +109,15 @@ SHA256 checksum of the downloaded ZIP against the `.sha256` file published on th
 
 ## Updating manually
 
-**Cause**: Public Windows releases use an unsigned portable/manual-update model. There is no
-automatic installer or native updater in the public package.
+**Cause**: Public Windows releases use an unsigned portable model. The bundled updater must be
+launched by the user and the installation folder must be writable; there is no system installer.
 
 **Fix**:
 
-1. Open the [official releases page](https://github.com/pumni/Sky-Auto-Player/releases).
-2. Download the canonical ZIP, `.zip.sha256`, and `MANIFEST.json`.
-3. Verify the ZIP SHA256 when desired, extract into a new folder, and copy your
+1. Retry **Update and Restart** from the in-app update notice.
+2. If staging fails, open the [official releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+3. Download the canonical ZIP, `.zip.sha256`, and `MANIFEST.json`.
+4. Verify the ZIP SHA256 when desired, extract into a new folder, and copy your
    `config.json`, `.env`, `songs/`, and `logs/` folders.
 
 ## The HUD shows high timing jitter

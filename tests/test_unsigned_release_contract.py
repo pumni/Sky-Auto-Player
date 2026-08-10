@@ -44,18 +44,19 @@ def test_release_workflow_is_unsigned_but_keeps_integrity_gates() -> None:
         assert required in workflow
 
 
-def test_unsigned_release_tree_is_exact_and_has_no_legacy_updater(tmp_path: Path) -> None:
+def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path: Path) -> None:
     verifier = _load_manifest_verifier()
     release_dir = tmp_path / "release"
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
+    (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
     verifier.verify(release_dir, "3.2.1")
-    (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
-    with pytest.raises(RuntimeError, match="forbidden artifacts"):
+    (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="manifest hash/size mismatch"):
         verifier.verify(release_dir, "3.2.1")
 
 
@@ -66,6 +67,7 @@ def test_release_tree_rejects_legacy_update_artifacts(tmp_path: Path, legacy_nam
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
+    (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)

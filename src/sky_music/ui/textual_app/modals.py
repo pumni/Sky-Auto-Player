@@ -355,7 +355,8 @@ class UpdateModal(PickerModal[str | None]):
         # Keep YYYY-MM-DD part of "2025-11-02T..Z" — displayed alongside version.
         self.published_at = (published_at or "").split("T", 1)[0]
         self.options = [
-            PickerOption("download", "Open GitHub Releases"),
+            PickerOption("update", "Update and Restart"),
+            PickerOption("github", "Open GitHub Releases"),
             PickerOption("remind", "Remind me later"),
             PickerOption("skip", "Skip this version"),
         ]
@@ -374,7 +375,7 @@ class UpdateModal(PickerModal[str | None]):
         yield RichLog(id="update-notes", highlight=True, markup=True, wrap=True, auto_scroll=False)
         yield OptionList(*(o.label for o in self.options), id="modal-options")
         yield Static(
-            "Download the unsigned ZIP manually from the official GitHub Releases page. Verify SHA256 if desired.",
+            "Update and Restart uses the verified native updater. Manual GitHub Releases remains available as a fallback.",
             id="update-caution",
         )
 
@@ -388,7 +389,7 @@ class UpdateModal(PickerModal[str | None]):
             # the modal.
             self.query_one("#update-notes", RichLog).write(notes)
         options = self.query_one("#modal-options", OptionList)
-        options.highlighted = 1
+        options.highlighted = 0
         self.set_focus(options)
 
     def on_key(self, event: events.Key) -> None:
@@ -606,7 +607,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
 
 
 class UpdateBannerModal(PickerModal[str | None]):
-    """Modal to notify the user of an available update (Phase 5)."""
+    """Modal for the user-triggered native update hand-off."""
 
     BINDINGS = [("escape", "close", "Dismiss")]
 
@@ -629,9 +630,10 @@ class UpdateBannerModal(PickerModal[str | None]):
             theme_name=theme_name,
         )
         self.options = [
-            PickerOption("download", "Open GitHub Releases"),
+            PickerOption("update", "Update and Restart"),
+            PickerOption("github", "Open GitHub Releases"),
+            PickerOption("remind", "Remind me later"),
             PickerOption("skip", "Skip this version"),
-            PickerOption("close", "Dismiss"),
         ]
         from sky_music.domain.update_checker import UpdateInfo
         from sky_music.orchestration.update_service import format_update_banner
@@ -658,7 +660,7 @@ class UpdateBannerModal(PickerModal[str | None]):
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
             event.stop()
-            self.dismiss("close")
+            self.dismiss("remind")
         elif event.key == "enter":
             event.stop()
             self._select_current()

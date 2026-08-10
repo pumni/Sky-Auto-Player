@@ -77,7 +77,7 @@ jobs:
           # missed `-alpha` / `-dev` / `-a` / `-b` — packaging would have
           # flagged those as prerelease, so they would have been silently
           # promoted to stable channel via /releases/latest and picked up
-          # by the external updater's stable selector.
+          # by the bundled native updater's stable selector.
           $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
           Write-Host "is_prerelease: $isPre"
           "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII

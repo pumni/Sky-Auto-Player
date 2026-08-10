@@ -28,8 +28,6 @@ pub enum UpdaterError {
     ManifestInvalid(String),
     #[error("manifest hash mismatch: {0}")]
     ManifestHashMismatch(String),
-    #[error("signature invalid: {0}")]
-    SignatureInvalid(String),
     #[error("install root invalid: {0}")]
     InstallRootInvalid(String),
     #[error("transaction recovery required: {0}")]

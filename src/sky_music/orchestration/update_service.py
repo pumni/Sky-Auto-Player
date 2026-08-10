@@ -139,8 +139,8 @@ def format_update_banner(update: UpdateInfo, current_version: str) -> str:
     lines = [
         f"Sky Auto Player v{latest} is now available.",
         f"You are running v{current_version}.",
-        "Choose Open GitHub Releases to download the unsigned ZIP manually.",
-        ""
+        "Choose Update and Restart to use the verified native updater, or open GitHub Releases manually.",
+        "",
     ]
     
     notes = (update.release_notes or "").strip()
