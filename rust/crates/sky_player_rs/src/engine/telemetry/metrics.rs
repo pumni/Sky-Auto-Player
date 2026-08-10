@@ -35,6 +35,8 @@ impl RecentLatencyRing {
 
 #[derive(Debug, Clone, Default)]
 pub struct WorkerMetricsLocal {
+    /// Legacy worker-publication field. Live session snapshots derive
+    /// playback progress from the shared transition-only clock projection.
     pub elapsed_us: u64,
     pub total_us: u64,
     pub lateness_us: u64,

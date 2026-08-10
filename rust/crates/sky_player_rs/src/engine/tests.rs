@@ -27,7 +27,7 @@ use sky_dispatch_win32::clock::{
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn test_session_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
@@ -147,6 +147,133 @@ fn startup_boundary_publishes_after_worker_startup() {
     assert!(snapshot.startup_latency_us.is_some());
     let (requested, ready) = session.startup_ticks();
     assert!(requested <= ready);
+}
+
+fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+    sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "progress-idle-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 5_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "progress-idle-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid progress idle-gap schedule")
+}
+
+#[test]
+fn progress_snapshot_advances_during_idle_gap_with_telemetry_off() {
+    let mut options = test_session_options(
+        progress_idle_gap_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.mode = TelemetryMode::Off;
+
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.start().expect("worker start");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_running && snapshot.elapsed_us >= 50_000 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "progress did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let first_lite = session.snapshot_lite();
+    let first_full = session.snapshot();
+    std::thread::sleep(Duration::from_millis(100));
+    let second_lite = session.snapshot_lite();
+    let second_full = session.snapshot();
+
+    assert!(second_lite.elapsed_us > first_lite.elapsed_us);
+    assert!(second_full.elapsed_us > first_full.elapsed_us);
+    assert!(second_lite.elapsed_us >= first_lite.elapsed_us);
+    assert!(second_full.elapsed_us >= first_full.elapsed_us);
+    assert!(second_lite.elapsed_us > 0);
+    assert!(second_full.elapsed_us > 0);
+
+    session.quit().expect("quit request");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
+    let mut options = test_session_options(
+        progress_idle_gap_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.mode = TelemetryMode::Off;
+
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.start().expect("worker start");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_running && snapshot.elapsed_us >= 50_000 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "progress did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    session.pause().expect("pause request");
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if session.snapshot_lite().is_paused {
+            break;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "pause was not acknowledged"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let paused_at = session.snapshot_lite().elapsed_us;
+    std::thread::sleep(Duration::from_millis(100));
+    let paused_after = session.snapshot_lite().elapsed_us;
+    assert!(paused_after.saturating_sub(paused_at) < 20_000);
+
+    session.resume().expect("resume request");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if !session.snapshot_lite().is_paused {
+            break;
+        }
+        assert!(
+            Instant::now() < resume_deadline,
+            "resume was not acknowledged"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let resumed_after = session.snapshot_lite().elapsed_us;
+    assert!(resumed_after > paused_after + 20_000);
+
+    session.quit().expect("quit request");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 }
 
 #[test]

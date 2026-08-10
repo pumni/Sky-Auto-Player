@@ -3,8 +3,10 @@ use super::{
     TrackedKeyState, WorkerMetricsLocal, WorkerSchedulingGuards, current_process_cpu_time_us,
     current_thread_cpu_time_us, publish_backend_metrics, try_publish_metrics,
 };
+use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{NativeTelemetryOutput, SharedMetrics, TelemetryCollector};
 use parking_lot::Mutex;
+use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
@@ -19,6 +21,7 @@ pub(super) struct FinalizeResources {
     pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) telemetry: TelemetryCollector,
     pub(super) estimator: SendLatencyEstimator,
+    pub(super) playback: PlaybackClockState,
     pub(super) qpc_clock: QpcClock,
     pub(super) scheduling: WorkerSchedulingGuards,
 }
@@ -44,6 +47,7 @@ pub(super) struct FinalizePublication<'a> {
     pub(super) telemetry_output: &'a Mutex<Option<NativeTelemetryOutput>>,
     pub(super) estimator_output: &'a Mutex<Option<String>>,
     pub(super) priority_acquired: &'a Mutex<String>,
+    pub(super) progress_clock: &'a SharedProgressClock,
 }
 
 pub(super) struct FinalizeTiming {
@@ -73,6 +77,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut coordinator,
         mut telemetry,
         estimator,
+        playback,
         qpc_clock,
         scheduling,
     } = resources;
@@ -95,6 +100,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         telemetry_output,
         estimator_output,
         priority_acquired,
+        progress_clock,
     } = publication;
     let FinalizeTiming {
         start_wall_time_us,
@@ -182,7 +188,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             format!("coordinator post-cleanup invariant failure: {error}"),
         );
     }
-    let end_qpc = qpc_clock.now().and_then(|ticks| {
+    let end_ticks = qpc_clock.now();
+    let end_qpc = end_ticks.and_then(|ticks| {
         qpc_clock
             .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
             .map_err(|_| QpcError::ConversionOverflow)
@@ -198,6 +205,9 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             start_wall_time_us
         }
     };
+    if let Ok(terminal_ticks) = end_ticks {
+        progress_clock.publish_terminal(&playback, terminal_ticks);
+    }
     let terminal_abort_reason =
         if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
             "error"

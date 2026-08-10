@@ -252,6 +252,14 @@ The UI/control polling loop publishes the supervisor heartbeat. There is no
 separate heartbeat thread: if the control loop stops, native lease liveness
 reflects that failure.
 
+Playback progress uses a separate transition-only projection of the native
+`PlaybackClockState`. The worker publishes its epoch and pause anchor through a
+non-blocking atomic seqlock only at clock transitions; `snapshot_lite()` and the
+full snapshot sample QPC on the supervisor side and derive elapsed time there.
+This projection is independent of SendInput, telemetry, and observer draining,
+so a long event gap does not freeze the HUD and UI polling never adds work to
+the realtime dispatch path.
+
 Layout acceptance is a Windows manual matrix, not a CI claim: run preflight,
 resume, pause, and panic-release checks under English US, German, and French
 layouts, recording the layout identifier and result. A receiver/probe may

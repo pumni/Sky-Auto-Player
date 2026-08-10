@@ -287,6 +287,10 @@ pub(super) fn dispatch(
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
+                    shared
+                        .publication
+                        .progress_clock
+                        .publish(&resources.playback);
                     publish_backend_metrics(
                         &resources.backend,
                         &mut core.metrics,
@@ -356,6 +360,10 @@ pub(super) fn dispatch(
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
+                    shared
+                        .publication
+                        .progress_clock
+                        .publish(&resources.playback);
                     if desired_pause.load(Ordering::Acquire) {
                         core.runtime.verified_target = None;
                     }
@@ -397,6 +405,10 @@ pub(super) fn dispatch(
                     core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
+                shared
+                    .publication
+                    .progress_clock
+                    .publish(&resources.playback);
             } else if !manual_pause && resources.playback.has_pause_reason("manual") {
                 if !resources.playback.has_pause_reason("focus") {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
@@ -432,6 +444,10 @@ pub(super) fn dispatch(
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
+                    shared
+                        .publication
+                        .progress_clock
+                        .publish(&resources.playback);
                 } else {
                     core.runtime.verified_target = None;
                 }

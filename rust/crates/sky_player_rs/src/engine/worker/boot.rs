@@ -455,6 +455,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         telemetry,
         scheduling,
     });
+    shared.publication.progress_clock.publish(
+        &core
+            .resources
+            .as_ref()
+            .expect("worker resources published")
+            .playback,
+    );
 
     if core.runtime.terminal_error.is_none() {
         let startup_ready_result = qpc_clock.now().and_then(|ready_ticks| {

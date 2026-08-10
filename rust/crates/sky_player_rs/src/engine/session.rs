@@ -65,6 +65,7 @@ impl NativeDispatchSession {
             },
             publication: SessionPublication {
                 metrics,
+                progress_clock: super::shared::SharedProgressClock::default(),
                 telemetry_output: Mutex::new(None),
                 priority_acquired: Mutex::new("pending".to_string()),
                 estimator_output: Mutex::new(None),
@@ -81,6 +82,31 @@ impl NativeDispatchSession {
             shared,
             thread_handle: Mutex::new(None),
         })
+    }
+
+    fn playback_projection(&self) -> (u64, bool) {
+        let metrics_paused = self
+            .shared
+            .publication
+            .metrics
+            .is_paused
+            .load(Ordering::Relaxed);
+        let Some(anchor) = self.shared.publication.progress_clock.load() else {
+            return (0, metrics_paused);
+        };
+        let exposed_paused = anchor.paused && !anchor.frozen;
+        let Ok(qpc_clock) = QpcClock::initialize() else {
+            return (0, exposed_paused);
+        };
+        let now_qpc = if anchor.paused {
+            anchor.epoch_qpc
+        } else {
+            match qpc_clock.now() {
+                Ok(now) => now,
+                Err(_) => return (0, exposed_paused),
+            }
+        };
+        (anchor.elapsed_us(now_qpc, qpc_clock), exposed_paused)
     }
 
     pub fn start(&self) -> Result<(), String> {
@@ -353,12 +379,7 @@ impl NativeDispatchSession {
 
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let paused = self
-            .shared
-            .publication
-            .metrics
-            .is_paused
-            .load(Ordering::Relaxed);
+        let (elapsed_us, paused) = self.playback_projection();
         let outcome = self
             .shared
             .lifecycle
@@ -389,7 +410,7 @@ impl NativeDispatchSession {
         };
         let local = self.shared.publication.metrics.snapshot.load();
         EngineProgressSnapshot {
-            elapsed_us: local.elapsed_us,
+            elapsed_us,
             total_us: local.total_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
@@ -465,12 +486,7 @@ impl NativeDispatchSession {
 
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let paused = self
-            .shared
-            .publication
-            .metrics
-            .is_paused
-            .load(Ordering::Relaxed);
+        let (elapsed_us, paused) = self.playback_projection();
         let outcome = self
             .shared
             .lifecycle
@@ -506,7 +522,7 @@ impl NativeDispatchSession {
             .startup_ready
             .load(Ordering::Acquire);
         EngineSnapshot {
-            elapsed_us: local.elapsed_us,
+            elapsed_us,
             total_us: local.total_us,
             lateness_us: local.lateness_us,
             max_lateness_us: local.max_lateness_us,

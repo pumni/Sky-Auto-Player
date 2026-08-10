@@ -37,6 +37,14 @@ Song file
   -> Python HUD and telemetry writer
 ```
 
+The live progress value is a projection of Rust's authoritative
+`PlaybackClockState`. The worker publishes a small atomic clock anchor only
+when the playback epoch or pause interval changes; `snapshot_lite()` and the
+full snapshot take the supervisor-side QPC sample and derive elapsed time from
+that anchor. Progress therefore continues across long gaps without dispatch,
+telemetry, or observer activity, and the UI does not add work to the realtime
+worker.
+
 The three Rust crates have fixed responsibilities:
 
 - `sky_dispatch_core`: schedule compilation, generation ownership, timing
@@ -79,6 +87,12 @@ focus boolean.
 The supervisor heartbeat is published by the Python UI/control polling loop.
 There is no separate heartbeat thread. If that loop stops polling, the native
 lease can expire as intended.
+
+Playback progress is independent of that heartbeat and uses a separate
+transition-only projection of the native `PlaybackClockState`. The worker
+publishes its epoch and pause anchor through a non-blocking atomic seqlock only
+at clock transitions; snapshots sample QPC on the supervisor side and derive
+elapsed time there.
 
 ## Preview and calibration
 
