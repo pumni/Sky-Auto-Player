@@ -49,6 +49,22 @@ fn physical_target_qpc_for_work(
     Ok((target <= now).then_some(target))
 }
 
+/// Project the current QPC into playback time for stale metadata diagnostics.
+///
+/// A pre-epoch startup projection is intentionally zero, but once playback has
+/// begun this reports the real elapsed timeline. This never enables or mutates
+/// the physical pre-epoch startup admission path.
+fn stale_metadata_effective_now(
+    playback: &sky_dispatch_core::clock::PlaybackClockState,
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<TimelineTicks, sky_dispatch_core::time::TimeArithmeticError> {
+    if now_qpc < playback.epoch {
+        Ok(TimelineTicks::ZERO)
+    } else {
+        playback.get_elapsed_allow_pre_epoch(now_qpc, false)
+    }
+}
+
 /// Dispatch the work represented by one immutable plan.  This helper is used
 /// for both an already-due plan and a successful blocking deadline wake, so a
 /// normal timer wake never re-enters general orchestration before transport.
@@ -159,7 +175,7 @@ pub(crate) fn dispatch_due_from_plan(
             "authored dispatch plan has no health budget".to_string(),
         );
     }
-    /* stale authored metadata is drained by the outer pre-precision loop */
+    /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = runtime.startup_dispatch_target_qpc.is_some();
     let physical_target_qpc = match physical_target_qpc_for_work(
         plan,
@@ -589,50 +605,56 @@ pub(super) fn dispatch(
                 continue;
             }
 
-            // Startup metadata is drained before precision planning and wait.
-            // Commit at most one compiled packet per outer iteration so all
-            // control, focus, and lease gates are re-admitted between packets.
-            if matches!(
-                core.runtime.startup_precision_phase,
-                super::StartupPrecisionPhase::PrePrecision
-            ) {
-                match resources.coordinator.prepare_current_stale_packet() {
-                    Ok(Some(prepared)) => {
-                        match super::dispatch_stale_packet(
-                            prepared,
-                            &mut resources.coordinator,
-                            &mut resources.telemetry,
-                            TimelineTicks::ZERO,
-                        ) {
-                            super::DispatchStep::Dispatched => {
-                                #[cfg(any(test, feature = "test-support"))]
-                                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                                    hook.mark_stale_packet_committed();
-                                }
-                                continue;
-                            }
-                            super::DispatchStep::Terminate(error) => {
+            // Stale metadata is globally non-physical. Commit at most one
+            // compiled packet per outer iteration, regardless of startup
+            // phase, so every control/focus/pause/lease gate is re-admitted.
+            match resources.coordinator.prepare_current_stale_packet() {
+                Ok(Some(prepared)) => {
+                    let stale_now =
+                        match stale_metadata_effective_now(&resources.playback, now_ticks) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
                                 core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error = Some(error);
+                                core.runtime.terminal_error = Some(format!(
+                                    "stale metadata clock projection failure: {error}"
+                                ));
                                 break;
                             }
-                            super::DispatchStep::Continue | super::DispatchStep::NoWork => {
-                                core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error = Some(
-                                    "stale packet did not complete its metadata commit".to_string(),
-                                );
-                                break;
+                        };
+                    match super::dispatch_stale_packet(
+                        prepared,
+                        &mut resources.coordinator,
+                        &mut resources.telemetry,
+                        stale_now,
+                    ) {
+                        super::DispatchStep::Dispatched => {
+                            #[cfg(any(test, feature = "test-support"))]
+                            if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                hook.mark_stale_packet_committed();
                             }
+                            continue;
+                        }
+                        super::DispatchStep::Terminate(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                        super::DispatchStep::Continue | super::DispatchStep::NoWork => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(
+                                "stale packet did not complete its metadata commit".to_string(),
+                            );
+                            break;
                         }
                     }
-                    Ok(None) => {}
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!(
-                            "coordinator stale-packet preparation failure: {error}"
-                        ));
-                        break;
-                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error = Some(format!(
+                        "coordinator stale-packet preparation failure: {error}"
+                    ));
+                    break;
                 }
             }
 
