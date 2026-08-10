@@ -546,7 +546,6 @@ impl ProductionDispatchTestHarness {
         });
         calls
     }
-
     /// Pop due pending releases using plan.
     pub fn pop_due_pending_for_plan(
         &mut self,
@@ -560,16 +559,13 @@ impl ProductionDispatchTestHarness {
             .expect("pop due pending")
     }
 
-    /// Create a real coordinator-owned pending release during test setup.
-    /// The measurement must exercise `plan_next_dispatch` and
-    /// `dispatch_due_pending_releases`, not the authored Up packet path.
     pub fn seed_pending_release_for_test(&mut self) {
         let due_now = self
             .resources
             .coordinator
             .next_authored_ticks(DurationTicks::ZERO)
-            .expect("current authored deadline")
-            .expect("authored release deadline");
+            .unwrap()
+            .unwrap();
         let prepared = self
             .resources
             .coordinator
