@@ -26,6 +26,7 @@ fn physical_target_qpc_for_work(
     plan: &super::planning::NextDispatchPlan,
     epoch: sky_dispatch_win32::clock::QpcTicks,
     now: sky_dispatch_win32::clock::QpcTicks,
+    startup_dispatch_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     work: PhysicalWork,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
     let deadline = match work {
@@ -35,14 +36,16 @@ fn physical_target_qpc_for_work(
             .as_ref()
             .map(|authored| authored.deadline_ticks),
     };
-    deadline
-        .map(|deadline| {
-            epoch
-                .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-                .map(|target| target.min(now))
-                .map_err(|error| format!("physical target arithmetic failure: {error}"))
-        })
-        .transpose()
+    let Some(deadline) = deadline else {
+        return Ok(None);
+    };
+    let target = match (work, startup_dispatch_target_qpc) {
+        (PhysicalWork::Authored, Some(startup_target)) => startup_target,
+        _ => epoch
+            .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+            .map_err(|error| format!("physical target arithmetic failure: {error}"))?,
+    };
+    Ok((target <= now).then_some(target))
 }
 
 /// Dispatch the work represented by one immutable plan.  This helper is used
@@ -98,16 +101,17 @@ pub(crate) fn dispatch_due_from_plan(
         None => SmallVec::new(),
     };
     if !due_pending.is_empty() {
-        let physical_target_qpc =
-            match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Pending) {
-                Ok(Some(target)) => target,
-                Ok(None) => {
-                    return super::DispatchStep::Terminate(
-                        "pending dispatch has no physical target boundary".to_string(),
-                    );
-                }
-                Err(error) => return super::DispatchStep::Terminate(error),
-            };
+        let physical_target_qpc = match physical_target_qpc_for_work(
+            plan,
+            epoch_qpc,
+            now_ticks,
+            None,
+            PhysicalWork::Pending,
+        ) {
+            Ok(Some(target)) => target,
+            Ok(None) => return super::DispatchStep::NoWork,
+            Err(error) => return super::DispatchStep::Terminate(error),
+        };
         let Some(frozen_budget) = plan.pending_budget.as_ref() else {
             return super::DispatchStep::Terminate(
                 "pending dispatch plan has no health budget".to_string(),
@@ -154,16 +158,18 @@ pub(crate) fn dispatch_due_from_plan(
             "authored dispatch plan has no health budget".to_string(),
         );
     }
-    let physical_target_qpc =
-        match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Authored) {
-            Ok(Some(target)) => target,
-            Ok(None) => {
-                return super::DispatchStep::Terminate(
-                    "authored dispatch has no physical target boundary".to_string(),
-                );
-            }
-            Err(error) => return super::DispatchStep::Terminate(error),
-        };
+    let startup_target_selected = runtime.startup_dispatch_target_qpc.is_some();
+    let physical_target_qpc = match physical_target_qpc_for_work(
+        plan,
+        epoch_qpc,
+        now_ticks,
+        runtime.startup_dispatch_target_qpc,
+        PhysicalWork::Authored,
+    ) {
+        Ok(Some(target)) => target,
+        Ok(None) => return super::DispatchStep::NoWork,
+        Err(error) => return super::DispatchStep::Terminate(error),
+    };
 
     super::dispatch_authored_packet(
         super::AuthoredPacketContext {
@@ -171,6 +177,7 @@ pub(crate) fn dispatch_due_from_plan(
             effective_now_ticks,
             now_ticks,
             physical_target_qpc,
+            startup_target_selected,
             focus_loss_fault,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
@@ -318,6 +325,7 @@ pub(super) fn dispatch(
             }
 
             if !focus_ok {
+                core.runtime.startup_dispatch_target_qpc = None;
                 core.runtime.verified_target = None;
                 core.runtime.focus_restore_started_ticks = None;
                 if !resources.playback.has_pause_reason("focus") {
@@ -373,6 +381,7 @@ pub(super) fn dispatch(
                         &mut resources.coordinator,
                         preflight_target.hwnd,
                     ) {
+                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -400,6 +409,7 @@ pub(super) fn dispatch(
                         target_generation,
                         preflight_target,
                     ) {
+                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
                         continue;
@@ -417,6 +427,7 @@ pub(super) fn dispatch(
                         .progress_clock
                         .publish(&resources.playback);
                     if desired_pause.load(Ordering::Acquire) {
+                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                     }
                     core.runtime.focus_restore_started_ticks = None;
@@ -431,6 +442,7 @@ pub(super) fn dispatch(
             }
 
             if manual_pause && !resources.playback.has_pause_reason("manual") {
+                core.runtime.startup_dispatch_target_qpc = None;
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
                     if let Err(error) = suspend_live_input(
@@ -469,6 +481,7 @@ pub(super) fn dispatch(
                         preflight_target,
                         &mut core.runtime.verified_target,
                     ) {
+                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(format!(
@@ -485,6 +498,7 @@ pub(super) fn dispatch(
                         target_generation,
                         preflight_target,
                     ) {
+                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         continue;
                     }
@@ -597,6 +611,7 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
+                core.runtime.startup_dispatch_target_qpc = Some(target_qpc);
                 if target_sample_ticks < target_qpc {
                     let bounded_target_qpc = match lease_bounded_ticks(
                         target_qpc,
@@ -1046,6 +1061,7 @@ mod tests {
                 &plan,
                 epoch,
                 QpcTicks::from_raw(1_200),
+                None,
                 PhysicalWork::Pending
             )
             .expect("pending target")
@@ -1057,6 +1073,7 @@ mod tests {
                 &plan,
                 epoch,
                 QpcTicks::from_raw(1_200),
+                None,
                 PhysicalWork::Authored
             )
             .expect("authored target")
@@ -1072,6 +1089,7 @@ mod tests {
             &plan,
             QpcTicks::ZERO,
             QpcTicks::from_raw(1_200),
+            None,
             PhysicalWork::Pending,
         )
         .expect("pending target")
@@ -1088,6 +1106,7 @@ mod tests {
             &plan,
             epoch,
             QpcTicks::from_raw(1_500),
+            None,
             PhysicalWork::Pending,
         )
         .expect("pending target")
@@ -1096,6 +1115,7 @@ mod tests {
             &plan,
             epoch,
             QpcTicks::from_raw(1_500),
+            None,
             PhysicalWork::Authored,
         )
         .expect("authored target")
@@ -1103,5 +1123,43 @@ mod tests {
 
         assert_eq!(pending, QpcTicks::from_raw(1_500));
         assert_eq!(authored, pending);
+    }
+
+    #[test]
+    fn startup_target_is_preserved_through_physical_target_selection() {
+        let plan = plan_with_deadlines(0, 1_000);
+        let target = physical_target_qpc_for_work(
+            &plan,
+            QpcTicks::from_raw(10_000),
+            QpcTicks::from_raw(9_540),
+            Some(QpcTicks::from_raw(9_500)),
+            PhysicalWork::Authored,
+        )
+        .expect("startup target")
+        .expect("startup target is due");
+
+        assert_eq!(target, QpcTicks::from_raw(9_500));
+        assert_eq!(
+            QpcTicks::from_raw(9_700)
+                .checked_duration_since(target)
+                .expect("completion follows exact startup target")
+                .as_u64(),
+            200
+        );
+    }
+
+    #[test]
+    fn future_selected_target_is_not_replaced_with_now() {
+        let plan = plan_with_deadlines(1_000, 2_000);
+        let target = physical_target_qpc_for_work(
+            &plan,
+            QpcTicks::ZERO,
+            QpcTicks::from_raw(900),
+            None,
+            PhysicalWork::Authored,
+        )
+        .expect("target arithmetic");
+
+        assert_eq!(target, None);
     }
 }

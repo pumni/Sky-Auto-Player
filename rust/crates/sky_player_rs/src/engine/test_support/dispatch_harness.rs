@@ -757,9 +757,9 @@ impl ProductionDispatchTestHarness {
                         .epoch
                         .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
                         .expect("physical target QPC")
-                        .min(now_ticks)
                 })
                 .expect("authored physical target"),
+            startup_target_selected: false,
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,

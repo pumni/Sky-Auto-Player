@@ -1613,6 +1613,23 @@ fn first_authored_zero_timestamp_can_use_a_future_physical_anchor() {
 }
 
 #[test]
+fn startup_completion_cost_uses_exact_waited_target_after_wake() {
+    let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
+    let target =
+        anchored_dispatch_target_ticks(clock, QpcTicks::from_raw(9_540), 9_540, 10_000, 0, 500)
+            .unwrap();
+
+    assert_eq!(target, QpcTicks::from_raw(9_500));
+    assert_eq!(
+        QpcTicks::from_raw(9_700)
+            .checked_duration_since(target)
+            .unwrap()
+            .as_u64(),
+        200
+    );
+}
+
+#[test]
 fn focus_gate_requires_both_validation_and_foreground_match() {
     assert!(!focus_gate_matches(true, false, 123, true));
     assert!(!focus_gate_matches(true, true, 123, false));

@@ -46,6 +46,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        startup_target_selected,
         focus_loss_fault,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
@@ -87,12 +88,20 @@ pub(crate) fn dispatch_authored_packet(
     };
 
     let Some(prepared_batch) = prepared_batch else {
+        if startup_target_selected {
+            runtime.startup_dispatch_target_qpc = None;
+        }
         return DispatchStep::NoWork;
     };
 
     let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
         Ok(Some(view)) => view,
-        Ok(None) => return DispatchStep::NoWork,
+        Ok(None) => {
+            if startup_target_selected {
+                runtime.startup_dispatch_target_qpc = None;
+            }
+            return DispatchStep::NoWork;
+        }
         Err(step) => return step,
     };
 
@@ -125,12 +134,16 @@ pub(crate) fn dispatch_authored_packet(
             lead_down_saturated,
             lead_down_ticks,
             physical_target_qpc,
+            startup_target_selected,
             focus_loss_fault,
             frozen_budget,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
             observer,
         );
+    }
+    if startup_target_selected {
+        runtime.startup_dispatch_target_qpc = None;
     }
     commit_suppressed_up_request(
         &view,
@@ -178,6 +191,7 @@ fn commit_down_send_outcome(
     lead_down_saturated: bool,
     lead_down_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
+    startup_target_selected: bool,
     focus_loss_fault: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     supervisor_heartbeat_ticks: &AtomicU64,
@@ -218,6 +232,9 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
+    if startup_target_selected {
+        runtime.startup_dispatch_target_qpc = None;
+    }
     record_down_send_outcome(
         view,
         config,

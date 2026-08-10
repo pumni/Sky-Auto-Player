@@ -93,6 +93,7 @@ use sky_dispatch_core::model::RuntimeSchedule;
 pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
     startup_gate: Option<(TimelineTicks, DurationTicks)>,
+    startup_dispatch_target_qpc: Option<QpcTicks>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,

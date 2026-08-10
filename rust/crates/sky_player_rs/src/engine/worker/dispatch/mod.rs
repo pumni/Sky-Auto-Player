@@ -36,6 +36,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
+    pub(crate) startup_target_selected: bool,
     pub(crate) focus_loss_fault: bool,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,

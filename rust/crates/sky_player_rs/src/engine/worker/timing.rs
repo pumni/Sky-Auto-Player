@@ -127,7 +127,7 @@ pub(crate) fn exact_sender_durations(
 }
 
 pub(crate) fn anchored_dispatch_target_ticks_typed(
-    now_ticks: QpcTicks,
+    _now_ticks: QpcTicks,
     anchor_ticks: QpcTicks,
     scheduled_ticks: TimelineTicks,
     lead_ticks: DurationTicks,
@@ -140,11 +140,10 @@ pub(crate) fn anchored_dispatch_target_ticks_typed(
         .checked_sub(lead_ticks.as_u64())
         .map(QpcTicks::from_raw)
         .ok_or(QpcError::DeadlineOverflow)?;
-    Ok(target.max(now_ticks))
+    Ok(target)
 }
 
-/// Map an authored timestamp minus lead, including the negative interval that
-/// is intentionally needed for a first note at authored t=0.
+/// Map an authored timestamp minus lead to its exact absolute QPC boundary.
 #[cfg(test)]
 #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 pub(crate) fn anchored_dispatch_target_ticks(
@@ -163,19 +162,30 @@ pub(crate) fn anchored_dispatch_target_ticks(
         Some(value) => value,
         None => 0,
     };
-    if target_us <= now_qpc_us {
-        return Ok(now_ticks);
+    if target_us >= now_qpc_us {
+        let delta = qpc_clock
+            .duration_from_us(
+                target_us
+                    .checked_sub(now_qpc_us)
+                    .ok_or(QpcError::DeadlineOverflow)?,
+            )
+            .map_err(|_| QpcError::DeadlineOverflow)?;
+        return now_ticks
+            .checked_add_duration(delta)
+            .map_err(|_| QpcError::DeadlineOverflow);
     }
     let delta = qpc_clock
         .duration_from_us(
-            target_us
-                .checked_sub(now_qpc_us)
+            now_qpc_us
+                .checked_sub(target_us)
                 .ok_or(QpcError::DeadlineOverflow)?,
         )
         .map_err(|_| QpcError::DeadlineOverflow)?;
     now_ticks
-        .checked_add_duration(delta)
-        .map_err(|_| QpcError::DeadlineOverflow)
+        .as_u64()
+        .checked_sub(delta.as_u64())
+        .map(QpcTicks::from_raw)
+        .ok_or(QpcError::DeadlineOverflow)
 }
 
 /// Legacy relative helper retained for unit-test compatibility.
