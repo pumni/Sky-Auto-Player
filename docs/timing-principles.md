@@ -142,16 +142,18 @@ A future physical anchor is created before the worker loop; the first physical a
 `startup_anchor + scheduled_us - lead_us`, including the negative offset for a note at `t=0`.
 The exact QPC boundary established by that startup wait is carried through the first physical
 authored send; it is not reconstructed from a later epoch sample or replaced with the wake time.
-Leading stale-Up batches with empty physical masks do not own that boundary; the startup gate,
+Stale-Up batches with empty physical masks do not own that boundary; the startup gate,
 path, and event-count lead are selected from the first subsequent authored packet with a physical
 event, and the one-shot target remains reserved until that packet is sent. The worker has an
-explicit `PrePrecision`/`PostPrecision` phase independent of the optional `startup_gate`. During
-`PrePrecision`, control/focus admission drains exactly one current compiled stale packet per outer
-loop iteration before entering the precision wait. Once the wait succeeds, no stale commit, suffix
-scan, general replan, observer drain, unrelated publication, estimator work, allocation, or
-arbitrary wait may run before the first physical `SendInput`; only final safety/admission and the
-transport boundary remain. A same-timestamp stale packet is consumed atomically across all of its
-batches.
+explicit `PrePrecision`/`PostPrecision` phase independent of the optional `startup_gate`. After
+control/focus/pause/lease admission and before physical planning or waiting, global stale handling
+drains exactly one current compiled stale packet per outer loop iteration in either phase. Once the
+startup wait succeeds, no stale commit, suffix scan, general replan, observer drain, unrelated
+publication, estimator work, allocation, or arbitrary wait may run before the first physical
+`SendInput`; only final safety/admission and the transport boundary remain. A same-timestamp stale
+packet is consumed atomically across all of its batches. Normal planning is cursor-local; suffix
+lookahead is reserved for startup first-physical discovery. Physical prepared packets always have
+a concrete physical packet kind, while stale metadata has no physical path or deadline.
 Because the logical timeline is unsigned, later authored timestamps smaller than the requested
 lead do not saturate to the same zero deadline: the coordinator temporarily applies no early
 lead to those sub-lead actions, preserving their order. Only the first action receives the
@@ -262,7 +264,7 @@ Do **not** treat `visible_lateness_us ≈ 0` as proof the game received the note
 
 The native `DispatchCostEstimator` persists exact sender-side completion-cost
 windows to `.cache/lead_estimator.json` through a Python envelope schema 2.
-The native state is schema 11 with three path-isolated arrays (`down`, `up`, and
+The native state is version 12 with three path-isolated arrays (`down`, `up`, and
 `mixed`), 31 buckets for the default maximum event count of 30, and a fixed
 rolling window of 32 samples. Each bucket starts with five seed samples; the
 nearest-rank p95 is used for the lead. Live observations are clamped to the
