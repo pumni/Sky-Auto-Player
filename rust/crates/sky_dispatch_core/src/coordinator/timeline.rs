@@ -151,15 +151,17 @@ impl RuntimeDispatchCoordinator {
             .checked_add_duration(self.recovery_offset_ticks)?;
         // Singular release-floor source of truth for the packet's physical Up.
         let release_not_before = self.packet_release_floor_ticks(packet_index)?;
-        // Explicit pre-epoch/startup clamp: an authored timestamp before the
-        // timeline epoch lowers the effective deadline to ZERO. The clamp is
-        // intentionally explicit rather than a saturating subtraction, so a
-        // real arithmetic order violation surfaces instead of being masked.
-        let lead_deadline = match authored.checked_sub_duration(dispatch_lead) {
-            Ok(deadline) => deadline,
-            Err(crate::time::TimeArithmeticError::Underflow) => TimelineTicks::ZERO,
-            Err(error) => return Err(error.into()),
+        // The logical timeline is unsigned.  Only the first startup packet
+        // can use a physical target before the logical epoch; the worker owns
+        // that separate startup anchor.  Later authored packets must not let
+        // an oversized lead collapse distinct timestamps to ZERO.  Suppress
+        // the lead for a sub-lead authored timestamp instead.
+        let effective_lead = if authored < TimelineTicks::from_raw(dispatch_lead.as_u64()) {
+            DurationTicks::ZERO
+        } else {
+            dispatch_lead
         };
+        let lead_deadline = authored.checked_sub_duration(effective_lead)?;
         Ok(lead_deadline.max(release_not_before))
     }
 }

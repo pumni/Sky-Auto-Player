@@ -78,6 +78,93 @@ fn sublead_authored_batches_keep_distinct_deadlines() {
 }
 
 #[test]
+fn production_ticks_preserve_later_sublead_deadline_and_applied_lead() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "startup".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x16].into(),
+                reason: "later sublead".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+    let lead = DurationTicks::from_raw(500);
+
+    let first = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, lead)
+        .unwrap()
+        .expect("first startup packet is due at the logical epoch");
+    assert_eq!(first.effective_scheduled_ticks, TimelineTicks::ZERO);
+    assert_eq!(first.effective_lead_ticks, DurationTicks::ZERO);
+    coordinator
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::ZERO)
+        .unwrap();
+
+    assert_eq!(
+        coordinator.next_authored_ticks(lead).unwrap(),
+        Some(TimelineTicks::from_raw(100))
+    );
+    assert!(
+        coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(99), lead)
+            .unwrap()
+            .is_none()
+    );
+    let second = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(100), lead)
+        .unwrap()
+        .expect("later sublead packet keeps its authored deadline");
+    assert_eq!(second.effective_scheduled_ticks.as_u64(), 100);
+    assert_eq!(second.effective_lead_ticks, DurationTicks::ZERO);
+}
+
+#[test]
+fn production_ticks_apply_lead_only_at_or_after_authored_timestamp() {
+    for (scheduled, expected_deadline, expected_lead) in
+        [(500, 0, 500), (499, 499, 0), (501, 1, 500)]
+    {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: scheduled,
+                scan_codes: vec![0x15].into(),
+                reason: "boundary".into(),
+            }],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let lead = DurationTicks::from_raw(500);
+
+        assert_eq!(
+            coordinator.next_authored_ticks(lead).unwrap(),
+            Some(TimelineTicks::from_raw(expected_deadline))
+        );
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(expected_deadline), lead)
+            .unwrap()
+            .expect("deadline is due");
+        assert_eq!(prepared.effective_scheduled_ticks.as_u64(), scheduled);
+        assert_eq!(prepared.effective_lead_ticks.as_u64(), expected_lead);
+    }
+}
+
+#[test]
 fn failed_release_is_requeued_and_unblocks_later_same_key_down() {
     let schedule = compile_runtime_intents(
         &[
