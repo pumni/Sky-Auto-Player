@@ -256,31 +256,36 @@ pub(crate) fn prepare_authored_batch_view(
             )),
         )
     } else {
-        let batch_view = match coordinator
+        let packet_view = match coordinator
             .schedule
-            .view_batch_ticks(batch_index, batch_scheduled_ticks)
+            .view_packet_ticks(prepared_batch.packet_index, batch_scheduled_ticks)
         {
             Ok(value) => value,
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
-                    "runtime schedule view failure: {error}"
+                    "runtime stale packet view failure: {error}"
                 )));
             }
         };
-        let conflict_mask = coordinator.check_down_conflicts_compact(batch_view.intents);
+        if packet_view.up_mask() != 0 || packet_view.down_mask() != 0 {
+            return Err(DispatchStep::Terminate(
+                "stale authored packet has a physical mask".to_string(),
+            ));
+        }
+        let batch_intent_count = packet_view.up_intents.len() + packet_view.down_intents.len();
+        let batch_source_action_index = coordinator
+            .schedule
+            .batches
+            .get(packet_view.header.first_batch_index as usize)
+            .map_or(0, |batch| batch.source_action_index);
         (
-            batch_view.kind(),
-            match batch_view.kind() {
-                ActionKind::Up => DispatchPath::UpOnly {
-                    up_count: batch_view.intents.len(),
-                },
-                ActionKind::Down => DispatchPath::DownOnly {
-                    down_count: batch_view.intents.len(),
-                },
+            ActionKind::Up,
+            DispatchPath::UpOnly {
+                up_count: batch_intent_count,
             },
-            batch_view.source_action_index(),
-            batch_view.intents.len(),
-            conflict_mask,
+            batch_source_action_index,
+            batch_intent_count,
+            0,
             None,
         )
     };

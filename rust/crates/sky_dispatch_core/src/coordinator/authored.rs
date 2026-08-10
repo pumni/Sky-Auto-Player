@@ -422,14 +422,50 @@ impl RuntimeDispatchCoordinator {
                 cursor: self.cursor,
             });
         }
-        let batch = self
+        let packet = self
             .schedule
-            .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
-            .materialize();
-        let result = self.request_releases(&batch.intents)?;
-        self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
-            crate::time::TimeArithmeticError::Overflow,
-        ))?;
+            .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)?;
+        if packet.header.first_batch_index as usize != prepared.index
+            || usize::from(packet.header.batch_count) != prepared.packet_batch_count
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared stale packet metadata changed before commit".to_string(),
+                ),
+            ));
+        }
+        let mut intents = SmallVec::<[RuntimeKeyIntent; MAX_KEYS]>::new();
+        let cursor_advance = if packet.up_mask() == 0 && packet.down_mask() == 0 {
+            let batch_end = prepared
+                .index
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+            for batch_index in prepared.index..batch_end {
+                let batch = self
+                    .schedule
+                    .view_batch_ticks(batch_index, prepared.effective_scheduled_ticks)?
+                    .materialize();
+                intents.extend(batch.intents);
+            }
+            prepared.packet_batch_count
+        } else {
+            let batch = self
+                .schedule
+                .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
+                .materialize();
+            intents.extend(batch.intents);
+            1
+        };
+        let result = self.request_releases(&intents)?;
+        self.cursor = self
+            .cursor
+            .checked_add(cursor_advance)
+            .ok_or(CoordinatorError::Time(
+                crate::time::TimeArithmeticError::Overflow,
+            ))?;
+        self.check_invariants()?;
         Ok(result)
     }
 

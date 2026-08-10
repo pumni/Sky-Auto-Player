@@ -394,7 +394,6 @@ impl ProductionDispatchTestHarness {
     pub fn select_startup_dispatch_target_for_test(&mut self, target: QpcTicks) {
         self.runtime.set_startup_dispatch_target_for_test(target);
     }
-
     /// Query whether coordinator has active generation for `scan_code`.
     pub fn has_active_generation(&self, scan_code: u16) -> bool {
         let slot = match scan_code {
@@ -776,6 +775,7 @@ impl ProductionDispatchTestHarness {
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
+            prepare_now_ticks: None,
             now_ticks,
             physical_target_qpc: plan
                 .authored

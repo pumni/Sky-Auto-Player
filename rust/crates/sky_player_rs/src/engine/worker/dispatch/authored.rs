@@ -44,6 +44,7 @@ pub(crate) fn dispatch_authored_packet(
     let AuthoredPacketContext {
         dispatch_plan,
         effective_now_ticks,
+        prepare_now_ticks: prepare_now_override,
         now_ticks,
         physical_target_qpc,
         startup_target_selected,
@@ -70,14 +71,16 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
-    let prepare_now_ticks = authored_prepare_now_ticks(
-        effective_now_ticks,
-        startup_target_selected,
-        dispatch_plan
-            .authored
-            .as_ref()
-            .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
-    );
+    let prepare_now_ticks = prepare_now_override.unwrap_or_else(|| {
+        authored_prepare_now_ticks(
+            effective_now_ticks,
+            startup_target_selected,
+            dispatch_plan
+                .authored
+                .as_ref()
+                .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
+        )
+    });
     let prepared_batch =
         match coordinator.prepare_next_due_authored(prepare_now_ticks, requested_lead_ticks) {
             Ok(value) => value,

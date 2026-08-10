@@ -138,13 +138,15 @@ Pending releases use a bounded cohort fixed point: the Up lead is selected from 
 share the next effective deadline, rather than from all currently pending keys. The resulting
 deadline/lead/event-count-cohort plan is reused for waiting and popping. The native accuracy-first path
 also requires `chord_stagger_us == 0`; staggered chords remain an explicit Python diagnostic path.
-A future physical anchor is created before the worker loop; the first authored action is gated at
+A future physical anchor is created before the worker loop; the first physical authored action is gated at
 `startup_anchor + scheduled_us - lead_us`, including the negative offset for a note at `t=0`.
 The exact QPC boundary established by that startup wait is carried through the first physical
 authored send; it is not reconstructed from a later epoch sample or replaced with the wake time.
 Leading stale-Up batches with empty physical masks do not own that boundary; the startup gate,
 path, and event-count lead are selected from the first subsequent authored packet with a physical
-event, and the one-shot target remains reserved until that packet is sent.
+event, and the one-shot target remains reserved until that packet is sent. The worker drains the
+entire leading stale-only prefix before entering the precision wait, and consumes each compiled
+stale packet atomically across all same-timestamp batches.
 Because the logical timeline is unsigned, later authored timestamps smaller than the requested
 lead do not saturate to the same zero deadline: the coordinator temporarily applies no early
 lead to those sub-lead actions, preserving their order. Only the first action receives the

@@ -482,6 +482,45 @@ fn stale_leading_up_schedule(
     compile_runtime_intents(&actions, &[0x15]).expect("valid stale-leading schedule")
 }
 
+fn same_timestamp_stale_leading_up_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "same-timestamp-stale-a".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "same-timestamp-stale-b".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "same-timestamp-first-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "same-timestamp-cleanup".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid same-timestamp stale-leading schedule")
+}
+
 fn assert_stale_leading_up_did_not_send(telemetry: &serde_json::Value, stale_count: usize) {
     let records = telemetry["records"].as_array().expect("records array");
     for index in 0..stale_count {
@@ -497,6 +536,37 @@ fn assert_stale_leading_up_did_not_send(telemetry: &serde_json::Value, stale_cou
     let down = records
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(down_index))
+        .expect("first physical Down record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
+    assert_eq!(down["kind"].as_u64(), Some(0));
+    assert_eq!(
+        down["applied_lead_ticks"].as_u64(),
+        Some(startup_lead_ticks)
+    );
+}
+
+#[test]
+fn same_timestamp_stale_leading_up_packet_is_suppressed_atomically() {
+    let telemetry =
+        run_seeded_adaptive_startup_schedule(same_timestamp_stale_leading_up_schedule(), 1);
+    let records = telemetry["records"].as_array().expect("records array");
+    let stale = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(0))
+        .expect("same-timestamp stale packet record");
+    assert_eq!(stale["kind"].as_u64(), Some(1));
+    assert_eq!(stale["requested_count"].as_u64(), Some(0));
+    assert_eq!(stale["send_attempts"].as_u64(), Some(0));
+    assert!(
+        records
+            .iter()
+            .all(|record| record["event_index"].as_u64() != Some(1)),
+        "same packet must produce one stale telemetry record"
+    );
+    let down = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
         .expect("first physical Down record");
     let clock = QpcClock::initialize().expect("QPC");
     let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();

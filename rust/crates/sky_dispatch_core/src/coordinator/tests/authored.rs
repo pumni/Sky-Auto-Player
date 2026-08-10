@@ -430,6 +430,61 @@ fn multi_up_only_packet_advances_all_batches_once() {
 }
 
 #[test]
+fn stale_multi_up_packet_suppression_advances_atomically() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "stale-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: vec![0x16].into(),
+                reason: "stale-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "first-down".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid stale packet schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+
+    let stale = coordinator
+        .prepare_next_due_authored(crate::time::TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("prepare stale packet")
+        .expect("stale packet is due");
+    assert_eq!(stale.packet_batch_count, 2);
+    assert_eq!(stale.packet_kind, None);
+    let (_, suppressed) = coordinator
+        .commit_up_request(stale)
+        .expect("suppress stale packet");
+    assert_eq!(suppressed.len(), 2);
+    assert_eq!(coordinator.cursor, 2);
+
+    let next = coordinator
+        .prepare_next_due_authored(
+            crate::time::TimelineTicks::from_raw(100),
+            DurationTicks::ZERO,
+        )
+        .expect("prepare first physical packet")
+        .expect("first physical packet is due");
+    assert_eq!(next.packet_batch_count, 1);
+    assert_eq!(next.packet_kind, Some(PhysicalPacketKind::DownOnly));
+}
+
+#[test]
 fn mixed_packet_waits_until_release_not_before_and_rebases_following_action() {
     let schedule = compile_runtime_intents(
         &[

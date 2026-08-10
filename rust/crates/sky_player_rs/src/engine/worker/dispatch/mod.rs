@@ -34,6 +34,7 @@ pub enum DispatchStep {
 pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
+    pub(crate) prepare_now_ticks: Option<TimelineTicks>,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) startup_target_selected: bool,

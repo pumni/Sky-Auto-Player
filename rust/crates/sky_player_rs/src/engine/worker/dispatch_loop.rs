@@ -159,6 +159,64 @@ pub(crate) fn dispatch_due_from_plan(
             "authored dispatch plan has no health budget".to_string(),
         );
     }
+    let drain_startup_stale = runtime.startup_gate.is_some()
+        && runtime.startup_dispatch_target_qpc.is_none()
+        && resources
+            .coordinator
+            .next_authored_packet_masks()
+            .is_some_and(|(up_mask, down_mask)| up_mask == 0 && down_mask == 0);
+    if drain_startup_stale {
+        // Leading stale metadata has no physical deadline.  Consume the
+        // complete prefix before precision startup handoff, while keeping the
+        // real effective_now_ticks unchanged for telemetry and diagnostics.
+        let prepare_now_ticks = TimelineTicks::from_raw(u64::MAX);
+        let mut drained_any = false;
+        while resources
+            .coordinator
+            .next_authored_packet_masks()
+            .is_some_and(|(up_mask, down_mask)| up_mask == 0 && down_mask == 0)
+        {
+            let step = super::dispatch_authored_packet(
+                super::AuthoredPacketContext {
+                    dispatch_plan: plan,
+                    effective_now_ticks,
+                    prepare_now_ticks: Some(prepare_now_ticks),
+                    now_ticks,
+                    physical_target_qpc: now_ticks,
+                    startup_target_selected: false,
+                    focus_loss_fault,
+                    supervisor_heartbeat_ticks,
+                    lease_timeout_ticks,
+                },
+                config,
+                resources,
+                health,
+                timing,
+                runtime,
+                local_metrics,
+                last_published_error,
+                focus_active,
+                target_hwnd,
+                target_generation,
+                quit_requested,
+                skip_requested,
+                panic_requested,
+                desired_pause,
+                metrics,
+                progress_clock,
+                observer,
+            );
+            match step {
+                super::DispatchStep::Dispatched => drained_any = true,
+                other => return other,
+            }
+        }
+        return if drained_any {
+            super::DispatchStep::Dispatched
+        } else {
+            super::DispatchStep::NoWork
+        };
+    }
     let startup_target_selected = runtime.startup_dispatch_target_qpc.is_some();
     let physical_target_qpc = match physical_target_qpc_for_work(
         plan,
@@ -176,6 +234,7 @@ pub(crate) fn dispatch_due_from_plan(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
+            prepare_now_ticks: None,
             now_ticks,
             physical_target_qpc,
             startup_target_selected,
