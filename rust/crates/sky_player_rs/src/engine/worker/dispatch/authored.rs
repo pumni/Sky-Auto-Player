@@ -62,7 +62,7 @@ pub(crate) fn dispatch_authored_packet(
     } = resources;
     let qpc_clock = *qpc_clock;
 
-    let (lead_down_saturated, lead_down_ticks) = match dispatch_plan.authored.as_ref() {
+    let (requested_lead_saturated, requested_lead_ticks) = match dispatch_plan.authored.as_ref() {
         Some(authored) => (authored.lead_saturated, authored.lead_ticks),
         None => (false, DurationTicks::ZERO),
     };
@@ -71,7 +71,7 @@ pub(crate) fn dispatch_authored_packet(
     };
 
     let prepared_batch =
-        match coordinator.prepare_next_due_authored(effective_now_ticks, lead_down_ticks) {
+        match coordinator.prepare_next_due_authored(effective_now_ticks, requested_lead_ticks) {
             Ok(value) => value,
             Err(error) => {
                 return DispatchStep::Terminate(format!(
@@ -93,6 +93,12 @@ pub(crate) fn dispatch_authored_packet(
         }
         return DispatchStep::NoWork;
     };
+
+    let (applied_lead_ticks, applied_lead_saturated) = applied_authored_lead(
+        requested_lead_ticks,
+        prepared_batch.effective_lead_ticks,
+        requested_lead_saturated,
+    );
 
     let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
         Ok(Some(view)) => view,
@@ -131,8 +137,8 @@ pub(crate) fn dispatch_authored_packet(
             telemetry,
             effective_now_ticks,
             now_ticks,
-            lead_down_saturated,
-            lead_down_ticks,
+            applied_lead_saturated,
+            applied_lead_ticks,
             physical_target_qpc,
             startup_target_selected,
             focus_loss_fault,
@@ -156,7 +162,18 @@ pub(crate) fn dispatch_authored_packet(
         metrics,
         last_published_error,
         effective_now_ticks,
-        lead_down_ticks,
+        applied_lead_ticks,
+    )
+}
+
+fn applied_authored_lead(
+    requested_lead_ticks: DurationTicks,
+    effective_lead_ticks: DurationTicks,
+    requested_lead_saturated: bool,
+) -> (DurationTicks, bool) {
+    (
+        effective_lead_ticks,
+        requested_lead_saturated && effective_lead_ticks == requested_lead_ticks,
     )
 }
 
@@ -188,8 +205,8 @@ fn commit_down_send_outcome(
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
-    lead_down_saturated: bool,
-    lead_down_ticks: DurationTicks,
+    applied_lead_saturated: bool,
+    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
     startup_target_selected: bool,
     focus_loss_fault: bool,
@@ -221,7 +238,7 @@ fn commit_down_send_outcome(
         progress_clock,
         effective_now_ticks,
         now_ticks,
-        lead_down_ticks,
+        applied_lead_ticks,
         timing,
         has_conflicts,
         focus_loss_fault,
@@ -247,8 +264,8 @@ fn commit_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        lead_down_saturated,
-        lead_down_ticks,
+        applied_lead_saturated,
+        applied_lead_ticks,
         physical_target_qpc,
         &admission,
         observer,
@@ -296,7 +313,7 @@ fn admit_authored_down(
     progress_clock: &SharedProgressClock,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
-    lead_down_ticks: DurationTicks,
+    applied_lead_ticks: DurationTicks,
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
@@ -325,7 +342,12 @@ fn admit_authored_down(
         }
         progress_clock.publish(clock_state);
         runtime.focus_restore_started_ticks = None;
-        record_blocked_unfocused_telemetry(telemetry, view, effective_now_ticks, lead_down_ticks)?;
+        record_blocked_unfocused_telemetry(
+            telemetry,
+            view,
+            effective_now_ticks,
+            applied_lead_ticks,
+        )?;
         super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
         let current_us = read_qpc_us(qpc_clock, clock_state)?;
         try_publish_metrics(local_metrics, metrics, current_us, true);
@@ -485,8 +507,8 @@ fn record_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    lead_down_saturated: bool,
-    lead_down_ticks: DurationTicks,
+    applied_lead_saturated: bool,
+    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
     admission: &AdmissionOutcome,
     observer: &mut PendingObservationQueue,
@@ -541,8 +563,8 @@ fn record_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        lead_down_saturated,
-        lead_down_ticks,
+        applied_lead_saturated,
+        applied_lead_ticks,
         physical_target_qpc,
         frozen_budget,
         trace_kind,
@@ -572,8 +594,8 @@ fn finalize_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    lead_down_saturated: bool,
-    lead_down_ticks: DurationTicks,
+    applied_lead_saturated: bool,
+    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
@@ -609,7 +631,7 @@ fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
-        lead_down_saturated,
+        applied_lead_saturated,
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -621,8 +643,8 @@ fn finalize_down_send_outcome(
         local_metrics,
         qpc_clock,
         effective_now_ticks,
-        lead_down_saturated,
-        lead_down_ticks,
+        applied_lead_saturated,
+        applied_lead_ticks,
         physical_target_qpc,
         config.timing.strict_timing
             || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off),
@@ -746,5 +768,14 @@ mod tests {
         );
 
         assert!(matches!(step, DispatchStep::Dispatched));
+    }
+
+    #[test]
+    fn suppressed_authored_lead_cannot_report_positive_saturation() {
+        let (applied_lead, saturated) =
+            applied_authored_lead(DurationTicks::from_raw(500), DurationTicks::ZERO, true);
+
+        assert_eq!(applied_lead, DurationTicks::ZERO);
+        assert!(!saturated);
     }
 }

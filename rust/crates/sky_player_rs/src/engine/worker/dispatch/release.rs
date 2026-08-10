@@ -133,6 +133,8 @@ pub(super) struct ReleaseReconciliation {
     pub(super) up_completion_lateness_ticks: Option<DurationTicks>,
     pub(super) up_completion_error_ticks: i64,
     pub(super) up_authored_completion_error_ticks: i64,
+    pub(super) applied_lead_ticks: DurationTicks,
+    pub(super) applied_lead_saturated: bool,
     pub(super) estimator_evidence: EstimatorObservationEvidence,
 }
 
@@ -283,6 +285,7 @@ pub(crate) fn dispatch_due_pending_releases(
         &due_pending,
         &send,
         lead_up_ticks,
+        pending_plan.is_some_and(|plan| plan.lead_saturated),
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -307,7 +310,7 @@ pub(crate) fn dispatch_due_pending_releases(
     // Preserve applied-plan saturation independently of completion sign.
     // Positive-at-cap policy uses the effective completion error.
     let (lead_up_saturated, saturated_positive) = up_saturation_evidence(
-        pending_plan.is_some_and(|plan| plan.lead_saturated),
+        reconciliation.applied_lead_saturated,
         reconciliation.up_completion_error_ticks,
     );
     health.up_saturation_positive_streak = if saturated_positive {
@@ -354,7 +357,7 @@ pub(crate) fn dispatch_due_pending_releases(
         confirmed_mask: send.transport.confirmed_mask,
         skipped_mask: send.transport.skipped_mask,
         result_status: send.transport.status,
-        lead_up_ticks,
+        lead_up_ticks: reconciliation.applied_lead_ticks,
         lead_up_saturated,
         completed_effective_ticks: send.completed_effective_ticks,
         scheduled_ticks: reconciliation.scheduled_ticks,
@@ -376,7 +379,7 @@ pub(crate) fn dispatch_due_pending_releases(
             sender_completed_ticks: Some(send.completed_effective_ticks),
             completion_error_ticks: reconciliation.up_completion_error_ticks,
             authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
-            applied_lead_ticks: lead_up_ticks,
+            applied_lead_ticks: reconciliation.applied_lead_ticks,
             deferred_ticks: reconciliation.deferred_ticks,
             recovery_required: reconciliation.recovery_required,
         },
@@ -557,6 +560,7 @@ fn reconcile_release_recovery(
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
+    lead_up_saturated: bool,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     // The caller has already fail-closed on any backend-skipped disagreement
     // (`force_full_cleanup` + terminate). Confirmed-only reconciliation below
@@ -604,6 +608,7 @@ fn reconcile_release_recovery(
         lead_up_ticks,
         recovery_required,
         recovery_pause_ticks,
+        lead_up_saturated,
     )
 }
 
@@ -616,6 +621,7 @@ fn reconcile_release_outcome(
     lead_up_ticks: DurationTicks,
     recovery_required: bool,
     recovery_pause_ticks: Option<DurationTicks>,
+    lead_up_saturated: bool,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     let mut first_index: Option<usize> = None;
     let mut first_deadline: Option<TimelineTicks> = None;
@@ -661,6 +667,12 @@ fn reconcile_release_outcome(
             "coordinator returned no release deadline".to_string(),
         ));
     };
+    let (applied_lead_ticks, applied_lead_saturated) = effective_pending_lead(
+        &due_pending[first_index],
+        lead_up_ticks,
+        lead_up_saturated,
+        effective_deadline_ticks,
+    );
     let Some(scheduled_ticks) = due_pending
         .iter()
         .map(|pending| pending.scheduled_release_ticks)
@@ -734,6 +746,8 @@ fn reconcile_release_outcome(
         up_completion_lateness_ticks,
         up_completion_error_ticks,
         up_authored_completion_error_ticks,
+        applied_lead_ticks,
+        applied_lead_saturated,
         estimator_evidence,
     })
 }
@@ -784,9 +798,57 @@ fn up_saturation_evidence(lead_up_saturated: bool, completion_error_ticks: i64) 
     )
 }
 
+fn effective_pending_lead(
+    pending: &PendingRelease,
+    requested_lead_ticks: DurationTicks,
+    requested_lead_saturated: bool,
+    effective_deadline_ticks: TimelineTicks,
+) -> (DurationTicks, bool) {
+    let available_release_ticks = DurationTicks::from_raw(pending.scheduled_release_ticks.as_u64());
+    let effective_requested_lead = requested_lead_ticks.min(available_release_ticks);
+    let lead_deadline = pending
+        .scheduled_release_ticks
+        .checked_sub_duration(effective_requested_lead)
+        .expect("effective pending lead cannot underflow");
+    let floor_controls = pending.release_not_before_ticks >= lead_deadline
+        || pending.next_retry_ticks >= lead_deadline;
+    if floor_controls || effective_deadline_ticks != lead_deadline {
+        return (DurationTicks::ZERO, false);
+    }
+    let applied_lead_ticks = pending
+        .scheduled_release_ticks
+        .checked_duration_since(effective_deadline_ticks)
+        .unwrap_or(DurationTicks::ZERO);
+    (
+        applied_lead_ticks,
+        requested_lead_saturated && applied_lead_ticks == requested_lead_ticks,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::up_saturation_evidence;
+    use super::{effective_pending_lead, up_saturation_evidence};
+    use sky_dispatch_core::coordinator::PendingRelease;
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    fn pending(scheduled: u64, release_not_before: u64, next_retry: u64) -> PendingRelease {
+        PendingRelease {
+            generation_id: 1,
+            scan_code: 0x15,
+            key_slot: 0,
+            source_action_index: 0,
+            packet_id: 0,
+            scheduled_release_us: scheduled,
+            scheduled_release_ticks: TimelineTicks::from_raw(scheduled),
+            down_dispatch_started_ticks: TimelineTicks::ZERO,
+            release_not_before_ticks: TimelineTicks::from_raw(release_not_before),
+            reason_id: 0,
+            retry_count: 0,
+            next_retry_ticks: TimelineTicks::from_raw(next_retry),
+            first_failure_ticks: None,
+            last_win32_error: None,
+        }
+    }
 
     #[test]
     fn applied_up_saturation_uses_effective_completion_error() {
@@ -808,5 +870,69 @@ mod tests {
 
         assert!(lead_up_saturated);
         assert!(!saturated_positive);
+    }
+
+    #[test]
+    fn release_floor_suppresses_applied_lead_and_saturation() {
+        let release = pending(1_000, 700, 0);
+        assert_eq!(
+            effective_pending_lead(
+                &release,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(700),
+            ),
+            (DurationTicks::ZERO, false)
+        );
+    }
+
+    #[test]
+    fn retry_floor_suppresses_applied_lead_and_saturation() {
+        let release = pending(1_000, 0, 700);
+        assert_eq!(
+            effective_pending_lead(
+                &release,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(700),
+            ),
+            (DurationTicks::ZERO, false)
+        );
+    }
+
+    #[test]
+    fn lead_controlled_release_can_report_applied_capped_lead() {
+        let release = pending(1_000, 0, 0);
+        assert_eq!(
+            effective_pending_lead(
+                &release,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(500),
+            ),
+            (DurationTicks::from_raw(500), true)
+        );
+    }
+
+    #[test]
+    fn repeated_floor_deferred_releases_do_not_build_saturation_streak() {
+        let release = pending(1_000, 700, 0);
+        let mut streak = 0u8;
+        for _ in 0..3 {
+            let (applied_lead, saturated) = effective_pending_lead(
+                &release,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(700),
+            );
+            assert_eq!(applied_lead, DurationTicks::ZERO);
+            let (_, positive) = up_saturation_evidence(saturated, 100);
+            streak = if positive {
+                streak.saturating_add(1)
+            } else {
+                0
+            };
+        }
+        assert_eq!(streak, 0);
     }
 }

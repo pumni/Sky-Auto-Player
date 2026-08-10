@@ -140,6 +140,8 @@ deadline/lead/event-count-cohort plan is reused for waiting and popping. The nat
 also requires `chord_stagger_us == 0`; staggered chords remain an explicit Python diagnostic path.
 A future physical anchor is created before the worker loop; the first authored action is gated at
 `startup_anchor + scheduled_us - lead_us`, including the negative offset for a note at `t=0`.
+The exact QPC boundary established by that startup wait is carried through the first physical
+authored send; it is not reconstructed from a later epoch sample or replaced with the wake time.
 Because the logical timeline is unsigned, later authored timestamps smaller than the requested
 lead do not saturate to the same zero deadline: the coordinator temporarily applies no early
 lead to those sub-lead actions, preserving their order. Only the first action receives the
@@ -156,9 +158,14 @@ index 15; this diagnostic compression does not change the estimator's exact
 1..30 event-count buckets. Repeated positive residual at the lead cap is a
 controlled timing error rather than an unreported
 tail.
-For release observations, `lead_up_saturated` records the lead applied by the physical plan;
-`saturated_positive` is derived separately from the effective SendInput completion error, not
-from authored-timestamp lateness.
+For authored observations, `applied_lead_ticks` comes from the coordinator's prepared batch,
+not from the requested estimator lead. For release observations, it is derived from the
+scheduled release minus the effective physical deadline. A completion/ownership hold floor or
+retry floor therefore reports applied lead zero. `lead_up_saturated` is true only when the
+lead-adjusted deadline itself controls the physical target and the applied lead still equals the
+estimator-capped maximum; `saturated_positive` is derived separately from the effective SendInput
+completion error, not from authored-timestamp lateness. This prevents floor-deferred work from
+building a false positive-at-cap saturation streak.
 
 Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
 boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed

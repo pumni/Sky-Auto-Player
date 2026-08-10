@@ -178,6 +178,12 @@ wait-path health; observer degradation remains a separate signal.
   frame-safe floor. It never snaps note-on timestamps to a frame grid.
 - Authored timestamps are immutable; only an actual release-recovery pause may
   shift the effective epoch, and it preserves later authored spacing.
+- The first startup wait's exact QPC target is carried into the first physical
+  authored send. Later authored timestamps smaller than the requested lead use
+  effective lead zero rather than collapsing to the logical epoch. Applied
+  lead means the lead that actually moved the physical deadline; release and
+  retry floors can reduce it to zero, and saturation is counted only when the
+  lead-adjusted deadline controls the send target.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.
