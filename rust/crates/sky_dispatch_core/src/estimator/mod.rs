@@ -17,7 +17,7 @@ use thiserror::Error;
 use window::{ROLLING_WINDOW_CAPACITY, RollingWindow};
 
 pub const MAX_SAMPLE_US: u64 = 60_000_000;
-pub const ESTIMATOR_STATE_VERSION: u32 = 11;
+pub const ESTIMATOR_STATE_VERSION: u32 = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum EstimatorConfigError {

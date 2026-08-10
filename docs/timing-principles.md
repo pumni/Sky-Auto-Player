@@ -193,9 +193,9 @@ effective scheduled timestamp. It learns only clean sender-side dispatch cost;
 it does not apply integral correction. Raw Input calibration remains an
 app-owned host delivery proxy for diagnostics only; it is not part of the
 adaptive lead, scheduler timestamps, hold duration, or any game-observed timing
-claim. The current estimator state is version 11 and v10 or other versions are
+claim. The current estimator state is version 12 and v11 or other versions are
 rejected without migration. Its exact JSON shape is
-`{version:11,max_events:30,down:[{samples:[]}...31],up:[...31],mixed:[...31]}`.
+`{version:12,max_events:30,down:[{samples:[]}...31],up:[...31],mixed:[...31]}`.
 
 ---
 

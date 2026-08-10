@@ -181,7 +181,7 @@ fn paths_refresh_independently() {
 }
 
 #[test]
-fn state_v11_round_trips_oldest_to_newest() {
+fn state_v12_round_trips_oldest_to_newest() {
     let mut source = DispatchCostEstimator::new(5_000, 30);
     for value in 1..=7 {
         source.update(SendPath::Mixed, 2, value).unwrap();
@@ -202,6 +202,13 @@ fn state_validation_rejects_v10_large_buckets_and_mismatch() {
     assert!(matches!(
         estimator.import_state(&json),
         Err(EstimatorStateError::UnsupportedVersion(10))
+    ));
+
+    state.version = 11;
+    let json = serde_json::to_string(&state).unwrap();
+    assert!(matches!(
+        estimator.import_state(&json),
+        Err(EstimatorStateError::UnsupportedVersion(11))
     ));
 
     state.version = ESTIMATOR_STATE_VERSION;
