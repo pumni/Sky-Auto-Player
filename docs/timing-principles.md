@@ -144,9 +144,14 @@ The exact QPC boundary established by that startup wait is carried through the f
 authored send; it is not reconstructed from a later epoch sample or replaced with the wake time.
 Leading stale-Up batches with empty physical masks do not own that boundary; the startup gate,
 path, and event-count lead are selected from the first subsequent authored packet with a physical
-event, and the one-shot target remains reserved until that packet is sent. The worker drains the
-entire leading stale-only prefix before entering the precision wait, and consumes each compiled
-stale packet atomically across all same-timestamp batches.
+event, and the one-shot target remains reserved until that packet is sent. The worker has an
+explicit `PrePrecision`/`PostPrecision` phase independent of the optional `startup_gate`. During
+`PrePrecision`, control/focus admission drains exactly one current compiled stale packet per outer
+loop iteration before entering the precision wait. Once the wait succeeds, no stale commit, suffix
+scan, general replan, observer drain, unrelated publication, estimator work, allocation, or
+arbitrary wait may run before the first physical `SendInput`; only final safety/admission and the
+transport boundary remain. A same-timestamp stale packet is consumed atomically across all of its
+batches.
 Because the logical timeline is unsigned, later authored timestamps smaller than the requested
 lead do not saturate to the same zero deadline: the coordinator temporarily applies no early
 lead to those sub-lead actions, preserving their order. Only the first action receives the
@@ -172,7 +177,9 @@ applied lead zero for the packet. `lead_up_saturated` is true only when every co
 lead-controlled and the applied lead still equals the estimator-capped maximum;
 `saturated_positive` is derived separately from the effective SendInput completion error, not
 from authored-timestamp lateness. This prevents floor-deferred work from building a false
-positive-at-cap saturation streak or making strict behavior depend on source ordering.
+positive-at-cap saturation streak or making strict behavior depend on source ordering. Stale
+metadata is nonphysical: it has no `DispatchPath`, never updates estimator/health/saturation
+evidence, and always reports `applied_lead_ticks = 0`.
 
 Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
 boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed

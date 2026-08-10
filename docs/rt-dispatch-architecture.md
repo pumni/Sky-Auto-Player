@@ -82,12 +82,17 @@ different: it preserves the immutable plan and hands it directly to the
 dispatch helper, so the worker does not restart the full orchestration epoch
 between the deadline and `SendInput`.
 
-The precision boundary is intentionally short. Health thresholds are frozen in
-the plan, the final admission checks panic/quit/skip/pause, supervisor lease,
-target generation, and focus as applicable, and an `Allowed` result proceeds
-directly to the backend transport. Estimator, health-window, telemetry
-materialization, and observer work remain deferred after the fixed raw
-observation enqueue.
+The precision boundary is intentionally short. Before the first startup
+precision wait, control/focus admission drains at most one leading stale-only
+compiled packet per outer worker iteration. After the wait succeeds, the
+frozen physical plan goes through only the final panic/quit/skip/pause,
+supervisor-lease, target-generation, and focus admission required for the
+imminent transport; an `Allowed` result proceeds directly to the backend. No
+stale commit, suffix scan, general replanning, observer drain, unrelated
+telemetry/metrics publication, estimator work, allocation, or arbitrary wait
+may occur between that successful wait and the first physical `SendInput`.
+Estimator, health-window, telemetry materialization, and observer work remain
+deferred after the fixed raw observation enqueue.
 
 Every physical send uses the shared control-and-lease gate with a fresh QPC
 sample. Down-bearing authored traffic then applies the target-generation and
@@ -187,9 +192,19 @@ wait-path health; observer degradation remains a separate signal.
   counted only when every member of the cohort is lead-controlled.
   Leading stale-Up batches with empty physical masks are suppressed without
   consuming the startup target; a compiled stale packet is consumed atomically
-  across all batches sharing its timestamp. All leading stale packets drain
-  before the precision startup wait, and startup anchoring uses the first
+  across all batches sharing its timestamp. An explicit
+  `StartupPrecisionPhase` is separate from the optional startup gate: all
+  leading stale packets drain one compiled packet per outer iteration while in
+  `PrePrecision`, then the first physical packet is frozen and precision-waited.
+  `startup_gate` is not a phase flag. Startup anchoring uses the first
   subsequent authored packet that contains a physical event.
+
+  Stale metadata has no physical path, deadline, sender boundary, estimator or
+  health evidence. It emits at most one diagnostic record per compiled packet,
+  with zero requested/sent events, zero send attempts, no send boundaries,
+  zero dispatch cost, and `applied_lead_ticks = 0`. Same-timestamp stale
+  batches remain one atomic compiled packet even when they contain multiple
+  unmatched Up intents.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.
