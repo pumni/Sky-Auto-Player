@@ -60,6 +60,7 @@ def _runtime(session: Any) -> RustDispatchRuntime:
     runtime._controls = None
     runtime._focus_guard = SimpleNamespace()
     runtime._has_played = False
+    runtime._last_focus_active = None
     runtime._last_hwnd = None
     runtime._manual_paused = False
     runtime._min_hold_us = 0
@@ -80,6 +81,8 @@ class FakeSession:
         self.report_calls = 0
         self.panic_calls = 0
         self.quit_calls = 0
+        self.target_hwnd_calls: list[int] = []
+        self.focus_hint_calls: list[bool] = []
 
     def start(self) -> None:
         return None
@@ -109,6 +112,12 @@ class FakeSession:
 
     def quit(self) -> None:
         self.quit_calls += 1
+
+    def set_target_hwnd(self, hwnd: int) -> None:
+        self.target_hwnd_calls.append(hwnd)
+
+    def set_focus_hint(self, active: bool) -> None:
+        self.focus_hint_calls.append(active)
 
 
 def _report(status: str, outcome: str = "finished") -> dict[str, Any]:
@@ -177,3 +186,31 @@ def test_unknown_live_status_has_native_contract_error() -> None:
 
     with pytest.raises(NativeDispatchError, match="unknown native session status: corrupt"):
         _runtime(session).run()
+
+
+def test_focus_hint_publishes_foreground_transition_when_hwnd_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sky_music.platform.win32 import window_target
+
+    session = FakeSession([_live("finished", finished=True)], _report("finished"))
+    runtime = _runtime(session)
+    runtime._require_focus = True
+    runtime._last_hwnd = 123
+    runtime._last_focus_active = True
+
+    foreground = True
+    monkeypatch.setattr(window_target, "cached_target_hwnd", lambda: 123)
+    monkeypatch.setattr(window_target, "is_foreground_cached_hwnd", lambda: foreground)
+
+    runtime._publish_focus()
+    assert session.target_hwnd_calls == []
+    assert session.focus_hint_calls == []
+
+    foreground = False
+    runtime._publish_focus()
+    assert session.target_hwnd_calls == []
+    assert session.focus_hint_calls == [False]
+
+    runtime._publish_focus()
+    assert session.focus_hint_calls == [False]

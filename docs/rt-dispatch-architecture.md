@@ -111,7 +111,8 @@ estimator, telemetry capacity, lease, and strict-completion policy are Rust
 dispatch-mode details.
 
 The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
-`panic`), `set_target_hwnd`, `snapshot_lite`, and `session_report`.
+`panic`), `set_target_hwnd`, transition-only `set_focus_hint`,
+`snapshot_lite`, and `session_report`.
 
 `snapshot_lite` is the frequent control/UI read and returns a frozen typed
 `ProgressSnapshot` with a nested `BackendHealthSnapshot`. It contains state,
@@ -217,10 +218,11 @@ health; observer and wait-path degradation remain separate signals.
 ## Focus and liveness
 
 Python owns process-name validation and target discovery. It sends one HWND
-with `set_target_hwnd`; Rust uses the focus-tracker atomic as the coarse loop
-gate and performs one authoritative `GetForegroundWindow()` comparison against
-the stamped HWND immediately before a Down dispatch. Python does not send a
-second focus boolean.
+with `set_target_hwnd` and uses its cheap cached-HWND foreground probe to send
+`set_focus_hint(bool)` only on supervisor-observed transitions. Rust uses this
+hint as a coarse fail-closed loop gate and wake-up, then performs one
+authoritative `GetForegroundWindow()` comparison against the stamped HWND
+immediately before a Down dispatch. A `true` hint never authorizes input.
 
 The HWND is also passed directly to preflight and cleanup verification. The
 sender continues to inject the same physical scan codes; the layout-aware VK
@@ -241,6 +243,12 @@ as its coarse gate. Immediately before a Down, the worker performs one fresh
 focus query against the exact stamped HWND, rechecks the target stamp, and
 gates quit, skip, panic, and pause state before `SendInput`, so a change during
 the Win32 verification window cannot send an unverified chord.
+
+Every successful focus-pause transition publishes the progress-clock anchor
+immediately after `enter_pause("focus", ...)`, including the authored early
+unfocused admission and the final last-mile Down admission. This keeps
+`snapshot_lite.is_paused` and elapsed-time freezing correct even when focus is
+lost between supervisor samples or during a long event gap.
 
 Each physical-state pass resolves the target thread and keyboard layout once,
 maps only the requested fixed scan-code mask, and then reads the aggregate key

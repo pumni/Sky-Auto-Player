@@ -8,6 +8,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
 
+fn publish_focus_hint(focus_active: &AtomicBool, interrupt: &OwnedEvent, active: bool) {
+    if focus_active.swap(active, Ordering::AcqRel) != active {
+        let _ = interrupt.signal();
+    }
+}
+
 fn timeline_rebase_reason(code: u8) -> Option<String> {
     match code {
         3 => Some("release_recovery".to_string()),
@@ -48,8 +54,8 @@ impl NativeDispatchSession {
                 quit_requested: AtomicBool::new(false),
                 skip_requested: AtomicBool::new(false),
                 panic_requested: AtomicBool::new(false),
-                // Foreground ownership is derived from target_hwnd inside the
-                // worker. Python no longer publishes a second focus boolean.
+                // Supervisor hint only: the worker still performs the
+                // authoritative foreground-HWND check before every Down.
                 focus_active: AtomicBool::new(true),
                 #[cfg(any(test, feature = "test-support"))]
                 command_timing: CommandTimingState::default(),
@@ -375,6 +381,16 @@ impl NativeDispatchSession {
                 .fetch_add(1, Ordering::AcqRel);
             let _ = self.shared.commands.interrupt.signal();
         }
+    }
+
+    /// Publish a transition-only supervisor focus hint. This wakes the worker
+    /// for prompt coarse-gate handling, but never authorizes physical input.
+    pub fn set_focus_hint(&self, active: bool) {
+        publish_focus_hint(
+            &self.shared.commands.focus_active,
+            &self.shared.commands.interrupt,
+            active,
+        );
     }
 
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
@@ -759,5 +775,30 @@ impl NativeDispatchSession {
             .lock()
             .clone()
             .ok_or_else(|| "native estimator state is unavailable".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_focus_hint;
+    use sky_dispatch_win32::event::OwnedEvent;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn focus_hint_signals_only_on_state_transition() {
+        let focus_active = AtomicBool::new(true);
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+
+        publish_focus_hint(&focus_active, &interrupt, true);
+        assert_eq!(interrupt.signal_generation(), 0);
+        assert!(!interrupt.try_take());
+
+        publish_focus_hint(&focus_active, &interrupt, false);
+        assert_eq!(interrupt.signal_generation(), 1);
+        assert!(interrupt.try_take());
+
+        publish_focus_hint(&focus_active, &interrupt, false);
+        assert_eq!(interrupt.signal_generation(), 1);
+        assert!(!interrupt.try_take());
     }
 }

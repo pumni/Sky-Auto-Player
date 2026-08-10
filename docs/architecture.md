@@ -67,7 +67,8 @@ fields: minimum hold, focus requirement, target HWND, telemetry enablement, and
 the native profile. `DispatchSession` accepts authored actions and validates
 them against the native canonical 15-key registry; callers cannot inject an
 external scan-code allowlist. It exposes only lifecycle commands,
-`set_target_hwnd`, a small `snapshot_lite`, and one final `session_report`.
+`set_target_hwnd`, the transition-only supervisor `set_focus_hint`, a small
+`snapshot_lite`, and one final `session_report`.
 
 `snapshot_lite` returns a frozen typed `ProgressSnapshot` with a nested frozen
 `BackendHealthSnapshot`. It contains state, elapsed/total time, completion
@@ -79,10 +80,12 @@ generation counts. `session_report` remains the one final mapping and is
 materialized only after the worker has stopped; it is the sole source for final
 native telemetry.
 
-Focus has one source of truth: Python finds and validates the target process,
-then sends its HWND with `set_target_hwnd`. Rust compares that HWND with
-`GetForegroundWindow()` before dispatch. Python does not publish a second
-focus boolean.
+Focus has two deliberately separate roles: Python finds and validates the
+target process, sends its HWND with `set_target_hwnd`, and publishes a
+transition-only foreground hint with `set_focus_hint`; Rust uses that hint for
+the coarse loop gate and wake-up. The hint is never input authorization:
+Rust compares the stamped HWND with `GetForegroundWindow()` immediately before
+each Down dispatch.
 
 The supervisor heartbeat is published by the Python UI/control polling loop.
 There is no separate heartbeat thread. If that loop stops polling, the native

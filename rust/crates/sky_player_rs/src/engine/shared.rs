@@ -15,7 +15,7 @@ use std::sync::{Condvar, Mutex as StdMutex};
 /// derive current progress from QPC without asking the worker to publish at UI
 /// cadence. The sequence protects readers from observing a mixed anchor while
 /// keeping the worker and supervisor free of a blocking mutex.
-pub(super) struct SharedProgressClock {
+pub(crate) struct SharedProgressClock {
     sequence: AtomicU64,
     epoch_qpc: AtomicU64,
     pause_started_qpc: AtomicU64,

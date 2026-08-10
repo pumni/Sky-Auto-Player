@@ -16,6 +16,7 @@ use super::observer::{
 };
 use super::timing::{interpret_down_send_timing, prepare_authored_batch_view, read_qpc_us};
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
+use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -37,6 +38,7 @@ pub(crate) fn dispatch_authored_packet(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     metrics: &SharedMetrics,
+    progress_clock: &SharedProgressClock,
     observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let AuthoredPacketContext {
@@ -112,6 +114,7 @@ pub(crate) fn dispatch_authored_packet(
             panic_requested,
             desired_pause,
             metrics,
+            progress_clock,
             qpc_clock,
             backend,
             coordinator,
@@ -164,6 +167,7 @@ fn commit_down_send_outcome(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     metrics: &SharedMetrics,
+    progress_clock: &SharedProgressClock,
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -200,6 +204,7 @@ fn commit_down_send_outcome(
         panic_requested,
         desired_pause,
         metrics,
+        progress_clock,
         effective_now_ticks,
         now_ticks,
         lead_down_ticks,
@@ -271,6 +276,7 @@ fn admit_authored_down(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     metrics: &SharedMetrics,
+    progress_clock: &SharedProgressClock,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     lead_down_ticks: DurationTicks,
@@ -300,6 +306,7 @@ fn admit_authored_down(
                 "playback clock failure: {error}"
             )));
         }
+        progress_clock.publish(clock_state);
         runtime.focus_restore_started_ticks = None;
         record_blocked_unfocused_telemetry(telemetry, view, effective_now_ticks, lead_down_ticks)?;
         super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
@@ -403,6 +410,7 @@ fn admit_authored_down(
                             "playback clock failure after final focus check: {error}"
                         )));
                     }
+                    progress_clock.publish(clock_state);
                     runtime.focus_restore_started_ticks = None;
                     super::publish_backend_metrics(
                         backend,

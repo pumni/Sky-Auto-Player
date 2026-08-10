@@ -6,6 +6,7 @@
 //! verification of production dispatch functions.
 
 use crate::engine::config::WorkerConfig;
+use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
@@ -58,6 +59,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) supervisor_heartbeat_ticks: AtomicU64,
     pub(crate) pending_budget: FrozenDispatchBudget,
     pub(crate) metrics: SharedMetrics,
+    pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
     pub(crate) interrupt: OwnedEvent,
     effective_now_ticks: TimelineTicks,
@@ -332,6 +334,8 @@ impl ProductionDispatchTestHarness {
             telemetry,
             scheduling,
         };
+        let progress_clock = SharedProgressClock::default();
+        progress_clock.publish(&resources.playback);
 
         let health_options = DispatchHealthOptions::default();
         let health = WorkerHealthState::new(health_options);
@@ -365,6 +369,7 @@ impl ProductionDispatchTestHarness {
                 false,
             ),
             metrics: SharedMetrics::default(),
+            progress_clock,
             observer: PendingObservationQueue::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
             effective_now_ticks: TimelineTicks::ZERO,
@@ -742,6 +747,7 @@ impl ProductionDispatchTestHarness {
             &self.supervisor_heartbeat_ticks,
             self.timing.lease_timeout_ticks,
             &self.metrics,
+            &self.progress_clock,
             &mut self.observer,
         )
     }
@@ -808,6 +814,7 @@ impl ProductionDispatchTestHarness {
             &self.panic_requested,
             &self.desired_pause,
             &self.metrics,
+            &self.progress_clock,
             &mut self.observer,
         )
     }

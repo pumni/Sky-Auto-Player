@@ -1055,6 +1055,36 @@ fn authored_up_only_is_not_blocked_by_focus_loss() {
 }
 
 #[test]
+fn authored_focus_pause_publishes_progress_anchor() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.config.focus.require_focus = true;
+    harness
+        .resources
+        .backend
+        .set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::AllUp);
+    harness.focus_active.store(false, Ordering::Release);
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(
+        matches!(step, super::worker::DispatchStep::Continue),
+        "unfocused authored Down must pause and replan: {step:?}"
+    );
+    let anchor = harness
+        .progress_clock
+        .load()
+        .expect("progress anchor after focus pause");
+    assert!(
+        anchor.paused,
+        "focus pause must be visible in the projection"
+    );
+}
+
+#[test]
 fn authored_up_only_is_not_blocked_by_target_change() {
     use super::test_support::ProductionDispatchTestHarness;
 

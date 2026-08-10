@@ -225,6 +225,11 @@ impl NativeDispatchSessionPy {
         Ok(())
     }
 
+    fn set_focus_hint(&self, active: bool) -> PyResult<()> {
+        self.session.set_focus_hint(active);
+        Ok(())
+    }
+
     fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let snap = self.session.snapshot();
         let dict = PyDict::new(py);

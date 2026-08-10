@@ -43,6 +43,7 @@ pub(crate) fn dispatch_due_from_plan(
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     metrics: &crate::engine::telemetry::SharedMetrics,
+    progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: &mut super::dispatch::PendingObservationQueue,
 ) -> super::DispatchStep {
     if !plan_structure_is_valid(plan) {
@@ -139,6 +140,7 @@ pub(crate) fn dispatch_due_from_plan(
         panic_requested,
         desired_pause,
         metrics,
+        progress_clock,
         observer,
     )
 }
@@ -762,6 +764,7 @@ pub(super) fn dispatch(
                 supervisor_heartbeat_ticks,
                 timing.lease_timeout_ticks,
                 metrics,
+                &shared.publication.progress_clock,
                 &mut core.observer.pending,
             );
             match authored_step {
@@ -865,6 +868,7 @@ pub(super) fn dispatch(
                         supervisor_heartbeat_ticks,
                         timing.lease_timeout_ticks,
                         metrics,
+                        &shared.publication.progress_clock,
                         &mut core.observer.pending,
                     ) {
                         super::DispatchStep::Terminate(error) => {
