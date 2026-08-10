@@ -120,6 +120,20 @@ impl RuntimeDispatchCoordinator {
         Some((packet.up_mask, packet.down_mask))
     }
 
+    /// Return the first authored packet at or after the cursor that has a
+    /// physical event, skipping compiler-preserved stale-Up metadata.
+    pub fn next_physical_authored_packet(&self) -> Option<(TimelineTicks, u16, u16)> {
+        for (batch_index, batch) in self.schedule.batches.iter().enumerate().skip(self.cursor) {
+            let packet = self.schedule.packets.get(batch.packet_id as usize)?;
+            if packet.up_mask == 0 && packet.down_mask == 0 {
+                continue;
+            }
+            let scheduled_ticks = self.effective_batch_scheduled_ticks(batch_index).ok()?;
+            return Some((scheduled_ticks, packet.up_mask, packet.down_mask));
+        }
+        None
+    }
+
     #[cfg(test)]
     pub fn pop_next_due_authored(
         &mut self,

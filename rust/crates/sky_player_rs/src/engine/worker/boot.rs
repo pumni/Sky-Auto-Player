@@ -384,10 +384,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             }
         };
     core.runtime.startup_gate = coordinator
-        .batch_scheduled_ticks
-        .first()
-        .copied()
-        .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
+        .next_physical_authored_packet()
+        .map(|(scheduled_ticks, _, _)| (scheduled_ticks, startup_lead_ticks));
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();

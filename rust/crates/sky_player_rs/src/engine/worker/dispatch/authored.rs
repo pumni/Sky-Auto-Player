@@ -96,20 +96,12 @@ pub(crate) fn dispatch_authored_packet(
     };
 
     let Some(prepared_batch) = prepared_batch else {
-        if startup_target_selected {
-            runtime.startup_dispatch_target_qpc = None;
-        }
         return DispatchStep::NoWork;
     };
 
     let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
         Ok(Some(view)) => view,
-        Ok(None) => {
-            if startup_target_selected {
-                runtime.startup_dispatch_target_qpc = None;
-            }
-            return DispatchStep::NoWork;
-        }
+        Ok(None) => return DispatchStep::NoWork,
         Err(step) => return step,
     };
 
@@ -155,9 +147,6 @@ pub(crate) fn dispatch_authored_packet(
             lease_timeout_ticks,
             observer,
         );
-    }
-    if startup_target_selected {
-        runtime.startup_dispatch_target_qpc = None;
     }
     commit_suppressed_up_request(
         &view,

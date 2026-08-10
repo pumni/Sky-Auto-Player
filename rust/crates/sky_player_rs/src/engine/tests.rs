@@ -403,6 +403,122 @@ fn adaptive_startup_nonzero_sublead_reports_physical_applied_lead() {
     );
 }
 
+fn run_seeded_adaptive_startup_schedule(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    allowed_count: usize,
+) -> serde_json::Value {
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
+    for _ in 0..5 {
+        seeded
+            .update(SendPath::DownOnly, 1, 500)
+            .expect("seed estimator");
+    }
+    let mut options = test_session_options(
+        schedule,
+        allowed_count,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.estimator.state_json =
+        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
+    options.estimator.enable_dispatch_cost_lead = true;
+    options.telemetry.capacity = 16;
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("adaptive session admission");
+    session.start().expect("adaptive worker start");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("adaptive worker join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.keys_dropped, 0);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert_eq!(snapshot.authored_keys_rejected, 0);
+    assert_eq!(snapshot.chord_integrity_lost, 0);
+    serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+        .expect("valid telemetry JSON")
+}
+
+fn stale_leading_up_schedule(
+    stale_timestamps: &[u64],
+) -> sky_dispatch_core::model::RuntimeSchedule {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let mut actions = Vec::with_capacity(stale_timestamps.len() + 2);
+    for (index, scheduled_us) in stale_timestamps.iter().copied().enumerate() {
+        actions.push(KeyActionInput {
+            source_action_index: index as u32,
+            kind: ActionKind::Up,
+            scheduled_us,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "stale-leading-up".to_string().into(),
+        });
+    }
+    let down_index = stale_timestamps.len() as u32;
+    actions.push(KeyActionInput {
+        source_action_index: down_index,
+        kind: ActionKind::Down,
+        scheduled_us: 100,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "stale-leading-down".to_string().into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: down_index + 1,
+        kind: ActionKind::Up,
+        scheduled_us: 1_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "stale-leading-cleanup".to_string().into(),
+    });
+    compile_runtime_intents(&actions, &[0x15]).expect("valid stale-leading schedule")
+}
+
+fn assert_stale_leading_up_did_not_send(telemetry: &serde_json::Value, stale_count: usize) {
+    let records = telemetry["records"].as_array().expect("records array");
+    for index in 0..stale_count {
+        let record = records
+            .iter()
+            .find(|record| record["event_index"].as_u64() == Some(index as u64))
+            .expect("stale Up record");
+        assert_eq!(record["kind"].as_u64(), Some(1));
+        assert_eq!(record["requested_count"].as_u64(), Some(0));
+        assert_eq!(record["send_attempts"].as_u64(), Some(0));
+    }
+    let down_index = stale_count as u64;
+    let down = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(down_index))
+        .expect("first physical Down record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
+    assert_eq!(down["kind"].as_u64(), Some(0));
+    assert_eq!(
+        down["applied_lead_ticks"].as_u64(),
+        Some(startup_lead_ticks)
+    );
+}
+
+#[test]
+fn stale_leading_up_does_not_consume_startup_target() {
+    let telemetry = run_seeded_adaptive_startup_schedule(stale_leading_up_schedule(&[0]), 1);
+    assert_stale_leading_up_did_not_send(&telemetry, 1);
+}
+
+#[test]
+fn multiple_stale_leading_ups_do_not_consume_startup_target() {
+    let telemetry = run_seeded_adaptive_startup_schedule(stale_leading_up_schedule(&[0, 50]), 1);
+    assert_stale_leading_up_did_not_send(&telemetry, 2);
+}
+
 fn pending_for_lead_test(
     scheduled: u64,
     release_not_before: u64,

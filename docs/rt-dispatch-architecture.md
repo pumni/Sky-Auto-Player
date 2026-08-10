@@ -185,6 +185,9 @@ wait-path health; observer degradation remains a separate signal.
   startup observation reports its exact requested physical lead, while release
   and retry floors can reduce a whole physical cohort to zero. Saturation is
   counted only when every member of the cohort is lead-controlled.
+  Leading stale-Up batches with empty physical masks are suppressed without
+  consuming the startup target; startup anchoring uses the first subsequent
+  authored packet that contains a physical event.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.

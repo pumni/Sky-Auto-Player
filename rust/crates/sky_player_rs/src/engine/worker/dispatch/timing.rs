@@ -62,10 +62,14 @@ pub(crate) fn resolve_authored_lead(
 
 /// Classify the next authored packet into a [`DispatchPath`].
 ///
-/// Empty physical masks (stale Up suppression metadata) keep the historical
-/// Down-polyphony fallback so wait/prepare stay consistent with prior behavior.
+/// Leading empty physical masks are stale-Up suppression metadata. Skip them
+/// when selecting the startup/next physical path, while retaining the legacy
+/// Down fallback if the remaining authored stream contains only stale Ups.
 pub(crate) fn next_authored_path(coordinator: &RuntimeDispatchCoordinator) -> Option<DispatchPath> {
-    let (up_mask, down_mask) = coordinator.next_authored_packet_masks()?;
+    let (up_mask, down_mask) = coordinator.next_physical_authored_packet().map_or_else(
+        || coordinator.next_authored_packet_masks(),
+        |(_, up_mask, down_mask)| Some((up_mask, down_mask)),
+    )?;
     let up_count = up_mask.count_ones() as usize;
     let down_count = down_mask.count_ones() as usize;
     match physical_packet_kind(up_mask, down_mask) {
