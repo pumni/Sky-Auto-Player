@@ -297,11 +297,13 @@ impl<'a> Worker<'a> {
             #[cfg(any(test, feature = "test-support"))]
             startup_ordering_hook,
         } = options;
-        let mut core = WorkerCore::default();
         #[cfg(any(test, feature = "test-support"))]
-        {
-            core.runtime.startup_ordering_hook = startup_ordering_hook;
-        }
+        let runtime = WorkerRuntime {
+            startup_ordering_hook,
+            ..WorkerRuntime::default()
+        };
+        #[cfg(not(any(test, feature = "test-support")))]
+        let runtime = WorkerRuntime::default();
         Self {
             schedule: Some(schedule),
             config: WorkerConfig {
@@ -314,7 +316,10 @@ impl<'a> Worker<'a> {
                 estimator,
             },
             shared,
-            core,
+            core: WorkerCore {
+                runtime,
+                ..WorkerCore::default()
+            },
         }
     }
 
