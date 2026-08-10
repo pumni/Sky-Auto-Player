@@ -106,13 +106,12 @@ pub fn simulate_schedule(
             polyphony: 1,
             lead_saturated: false,
         });
-        if current_stale.is_none() {
-            if let Some(dl) = coordinator
+        if current_stale.is_none()
+            && let Some(dl) = coordinator
                 .next_deadline_ticks(crate::time::DurationTicks::ZERO, pending_plan.as_ref())
                 .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
-            {
-                now_us = now_us.max(dl.as_u64());
-            }
+        {
+            now_us = now_us.max(dl.as_u64());
         }
 
         // 1. Drain pending releases due
