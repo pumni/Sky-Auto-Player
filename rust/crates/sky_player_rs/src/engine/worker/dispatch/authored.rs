@@ -814,4 +814,31 @@ mod tests {
             TimelineTicks::ZERO
         );
     }
+
+    #[test]
+    fn startup_physical_target_matrix_preserves_requested_lead() {
+        let anchor = QpcTicks::from_raw(10_000);
+        let lead = DurationTicks::from_raw(500);
+        for (scheduled, expected_target) in
+            [(0, 9_500), (100, 9_600), (499, 9_999), (500, 10_000), (501, 10_001)]
+        {
+            let target = super::super::super::anchored_dispatch_target_ticks_typed(
+                QpcTicks::from_raw(9_500),
+                anchor,
+                TimelineTicks::from_raw(scheduled),
+                lead,
+            )
+            .expect("startup target");
+            assert_eq!(target, QpcTicks::from_raw(expected_target));
+            assert_eq!(
+                applied_authored_lead(
+                    true,
+                    lead,
+                    DurationTicks::ZERO,
+                    false,
+                ),
+                (lead, false)
+            );
+        }
+    }
 }
