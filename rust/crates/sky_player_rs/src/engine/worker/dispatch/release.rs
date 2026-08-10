@@ -830,7 +830,6 @@ mod tests {
     use super::{effective_pending_lead, up_saturation_evidence};
     use sky_dispatch_core::coordinator::PendingRelease;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-
     fn pending(scheduled: u64, release_not_before: u64, next_retry: u64) -> PendingRelease {
         PendingRelease {
             generation_id: 1,
@@ -849,73 +848,36 @@ mod tests {
             last_win32_error: None,
         }
     }
-
     #[test]
     fn applied_up_saturation_uses_effective_completion_error() {
-        let effective_completion_error_us = 100;
-        let authored_completion_error_us = -100;
-        assert!(effective_completion_error_us > 0);
-        assert!(authored_completion_error_us < 0);
-
-        let (lead_up_saturated, saturated_positive) =
-            up_saturation_evidence(true, effective_completion_error_us);
-
-        assert!(lead_up_saturated);
-        assert!(saturated_positive);
+        for (error, positive) in [(100, true), (-100, false)] {
+            let (saturated, actual_positive) = up_saturation_evidence(true, error);
+            assert!(saturated);
+            assert_eq!(actual_positive, positive);
+        }
     }
-
     #[test]
-    fn applied_up_saturation_preserves_negative_unwind_signal() {
-        let (lead_up_saturated, saturated_positive) = up_saturation_evidence(true, -100);
-
-        assert!(lead_up_saturated);
-        assert!(!saturated_positive);
-    }
-
-    #[test]
-    fn release_floor_suppresses_applied_lead_and_saturation() {
-        let release = pending(1_000, 700, 0);
-        assert_eq!(
-            effective_pending_lead(
-                &release,
-                DurationTicks::from_raw(500),
-                true,
-                TimelineTicks::from_raw(700),
+    fn pending_floors_suppress_applied_lead_and_saturation() {
+        for (release, deadline, expected) in [
+            (pending(1_000, 700, 0), 700, (DurationTicks::ZERO, false)),
+            (pending(1_000, 0, 700), 700, (DurationTicks::ZERO, false)),
+            (
+                pending(1_000, 0, 0),
+                500,
+                (DurationTicks::from_raw(500), true),
             ),
-            (DurationTicks::ZERO, false)
-        );
-    }
+        ] {
+            assert_eq!(
+                effective_pending_lead(
+                    &release,
+                    DurationTicks::from_raw(500),
+                    true,
+                    TimelineTicks::from_raw(deadline),
+                ),
+                expected
+            );
+        }
 
-    #[test]
-    fn retry_floor_suppresses_applied_lead_and_saturation() {
-        let release = pending(1_000, 0, 700);
-        assert_eq!(
-            effective_pending_lead(
-                &release,
-                DurationTicks::from_raw(500),
-                true,
-                TimelineTicks::from_raw(700),
-            ),
-            (DurationTicks::ZERO, false)
-        );
-    }
-
-    #[test]
-    fn lead_controlled_release_can_report_applied_capped_lead() {
-        let release = pending(1_000, 0, 0);
-        assert_eq!(
-            effective_pending_lead(
-                &release,
-                DurationTicks::from_raw(500),
-                true,
-                TimelineTicks::from_raw(500),
-            ),
-            (DurationTicks::from_raw(500), true)
-        );
-    }
-
-    #[test]
-    fn repeated_floor_deferred_releases_do_not_build_saturation_streak() {
         let release = pending(1_000, 700, 0);
         let mut streak = 0u8;
         for _ in 0..3 {

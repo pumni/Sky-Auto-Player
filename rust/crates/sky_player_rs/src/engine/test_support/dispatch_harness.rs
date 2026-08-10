@@ -667,10 +667,41 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(now_ticks, false)
             .map_err(|error| format!("benchmark timeline: {error}"))?;
         self.effective_now_ticks = effective_now_ticks;
-
         Ok(self.dispatch_plan_at(plan, effective_now_ticks, now_ticks))
     }
-
+    fn align_epoch_to_deadline_for_test(&mut self, deadline: TimelineTicks, now_ticks: QpcTicks) {
+        let duration = DurationTicks::from_raw(deadline.as_u64());
+        let target = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(duration)
+            .unwrap();
+        if target > now_ticks {
+            let raw = now_ticks.as_u64().checked_sub(deadline.as_u64()).unwrap();
+            self.resources.playback.epoch = QpcTicks::from_raw(raw);
+        }
+    }
+    fn align_epoch_to_selected_target_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        effective_now_ticks: TimelineTicks,
+        now_ticks: QpcTicks,
+    ) {
+        let selected_deadline = plan
+            .pending
+            .as_ref()
+            .filter(|pending| effective_now_ticks >= pending.deadline_ticks)
+            .map(|pending| pending.deadline_ticks)
+            .or_else(|| {
+                plan.authored
+                    .as_ref()
+                    .map(|authored| authored.deadline_ticks)
+            });
+        if let Some(deadline) = selected_deadline {
+            self.align_epoch_to_deadline_for_test(deadline, now_ticks);
+        }
+    }
     fn dispatch_plan_at(
         &mut self,
         plan: &NextDispatchPlan,
@@ -678,6 +709,7 @@ impl ProductionDispatchTestHarness {
         now_ticks: QpcTicks,
     ) -> DispatchStep {
         self.effective_now_ticks = effective_now_ticks;
+        self.align_epoch_to_selected_target_for_test(plan, effective_now_ticks, now_ticks);
         dispatch_due_from_plan(
             plan,
             effective_now_ticks,
@@ -706,14 +738,12 @@ impl ProductionDispatchTestHarness {
             &mut self.observer,
         )
     }
-
     /// Invoke the production frozen-plan helper without the kernel wait.
     /// Tests use this to cover all structural plan states directly.
     pub fn dispatch_due_from_plan_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
         self.dispatch_plan_at(plan, self.effective_now_ticks, now_ticks)
     }
-
     /// Query the current authored packet path without mutating state.
     pub fn current_authored_path(&self) -> Option<DispatchPath> {
         let (up_mask, down_mask) = self.resources.coordinator.next_authored_packet_masks()?;
@@ -731,18 +761,19 @@ impl ProductionDispatchTestHarness {
             }),
         }
     }
-
     /// Dispatch authored packet using an explicit production `NextDispatchPlan`.
     pub fn dispatch_authored_with_plan(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         self.dispatch_authored_with_plan_and_lease(plan, DurationTicks::ZERO)
     }
-
     pub fn dispatch_authored_with_plan_and_lease(
         &mut self,
         plan: &NextDispatchPlan,
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
+        if let Some(authored) = plan.authored.as_ref() {
+            self.align_epoch_to_deadline_for_test(authored.deadline_ticks, now_ticks);
+        }
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
@@ -785,7 +816,6 @@ impl ProductionDispatchTestHarness {
             &mut self.observer,
         )
     }
-
     /// Dispatch pending releases using explicit `due_pending` and `pending_plan`.
     pub fn dispatch_pending_release_with_plan(
         &mut self,
@@ -798,13 +828,16 @@ impl ProductionDispatchTestHarness {
             DurationTicks::ZERO,
         )
     }
-
     pub fn dispatch_pending_release_with_plan_and_lease(
         &mut self,
         due_pending: SmallVec<[PendingRelease; 15]>,
         pending_plan: Option<&PendingDispatchPlan>,
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
+        if let Some(plan) = pending_plan {
+            let now_ticks = self.resources.clock.now().expect("pending target QPC now");
+            self.align_epoch_to_deadline_for_test(plan.deadline_ticks, now_ticks);
+        }
         let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |p| p.lead_ticks);
         let ctx = PendingReleaseContext {
             due_pending,
@@ -817,7 +850,6 @@ impl ProductionDispatchTestHarness {
                         .epoch
                         .checked_add_duration(DurationTicks::from_raw(plan.deadline_ticks.as_u64()))
                         .expect("pending physical target QPC")
-                        .min(self.resources.clock.now().expect("pending target QPC now"))
                 })
                 .expect("pending physical target"),
             frozen_budget: self.pending_budget,
@@ -841,7 +873,6 @@ impl ProductionDispatchTestHarness {
             &self.target_hwnd,
         )
     }
-
     pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {
         super::super::worker::drain_one_observer(
             &mut self.observer,
@@ -858,13 +889,11 @@ impl ProductionDispatchTestHarness {
             &mut self.timing,
         )
     }
-
     pub fn pop_observation(
         &mut self,
     ) -> Option<super::super::worker::dispatch::DispatchObservation> {
         self.observer.pop_front()
     }
-
     pub fn pending_observation_count(&self) -> usize {
         self.observer.len()
     }

@@ -147,6 +147,135 @@ fn startup_boundary_publishes_after_worker_startup() {
     assert!(requested <= ready);
 }
 
+#[test]
+fn adaptive_startup_preserves_sublead_authored_order_in_mock_session() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::estimator::ESTIMATOR_STATE_VERSION;
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "adaptive-startup-a".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "adaptive-startup-b".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "adaptive-startup-a-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 1_100,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "adaptive-startup-b-up".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid adaptive startup schedule");
+
+    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
+    for _ in 0..5 {
+        seeded
+            .update(SendPath::DownOnly, 1, 500)
+            .expect("seed estimator");
+    }
+    let seeded_state = serde_json::to_string(&seeded.export_state()).expect("seeded state JSON");
+    assert!(seeded_state.contains(&format!("\"version\":{ESTIMATOR_STATE_VERSION}")));
+
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.estimator.state_json = Some(seeded_state);
+    options.estimator.enable_dispatch_cost_lead = true;
+    options.telemetry.capacity = 8;
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("adaptive session admission");
+    session.start().expect("adaptive worker start");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("adaptive worker join")
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.keys_dropped, 0);
+    assert_eq!(snapshot.chord_split_events, 0);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert_eq!(snapshot.authored_keys_rejected, 0);
+    assert_eq!(snapshot.chord_integrity_lost, 0);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records array");
+    let first = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(0))
+        .expect("first authored record");
+    let second = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(1))
+        .expect("second authored record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let second_authored_ticks = clock.duration_from_us(100).expect("100us ticks").as_u64();
+
+    assert_eq!(first["kind"].as_u64(), Some(0));
+    assert_eq!(second["kind"].as_u64(), Some(0));
+    assert_eq!(first["effective_deadline_ticks"].as_u64(), Some(0));
+    assert_eq!(
+        second["effective_deadline_ticks"].as_u64(),
+        Some(second_authored_ticks)
+    );
+    assert_ne!(
+        second["effective_deadline_ticks"].as_u64(),
+        first["effective_deadline_ticks"].as_u64()
+    );
+    assert_eq!(second["applied_lead_ticks"].as_u64(), Some(0));
+
+    let exported: serde_json::Value = serde_json::from_str(
+        &session
+            .estimator_state_json()
+            .expect("exported estimator state"),
+    )
+    .expect("valid exported estimator state");
+    assert_eq!(
+        exported["version"].as_u64(),
+        Some(u64::from(ESTIMATOR_STATE_VERSION))
+    );
+}
+
 fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
     sky_dispatch_core::compile::compile_runtime_intents(
         &[

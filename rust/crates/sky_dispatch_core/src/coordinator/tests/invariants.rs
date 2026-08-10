@@ -586,7 +586,7 @@ fn invariant_mismatch_prevents_sender_invocation() {
 }
 
 #[test]
-fn authored_lead_underflow_uses_explicit_zero_clamp() {
+fn authored_sublead_preserves_later_timestamp() {
     let schedule = compile_runtime_intents(
         &[KeyActionInput {
             source_action_index: 0,
@@ -600,12 +600,13 @@ fn authored_lead_underflow_uses_explicit_zero_clamp() {
     .expect("valid schedule");
     let coordinator =
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
-    // A dispatch lead larger than the authored timestamp underflows the
-    // authored deadline; this must clamp to the timeline epoch, not wrap.
+    // A later authored packet whose requested lead crosses logical zero uses
+    // effective lead zero, preserving its authored timestamp rather than
+    // collapsing it onto the timeline epoch.
     assert_eq!(
         coordinator
             .packet_effective_deadline_ticks(0, DurationTicks::from_raw(1_000))
             .unwrap(),
-        TimelineTicks::ZERO
+        TimelineTicks::from_raw(30)
     );
 }
