@@ -125,9 +125,9 @@ zero. It has no trace, hash maps, generation ledger, estimator internals, or
 build provenance. Latency degradation is reported as an input-path health
 signal; the typed snapshot separates `sendinput_path_degraded`,
 `core_post_send_degraded`, `observer_degraded`, and `wait_path_degraded`.
-`input_path_degraded` is the OR of SendInput and core post-send health only;
-observer slowdown is an independent domain. SendInput warning thresholds use a
-fixed sender-side floor plus a fixed margin; core post-send, observer, and wait
+`input_path_degraded` is the OR of SendInput, core post-send, and wait-path
+health; observer slowdown is an independent domain. SendInput warning
+thresholds use the fixed sender-side floor; core post-send, observer, and wait
 thresholds remain independent. Each path also publishes its degraded-sample
 count and active threshold. UI text must not infer an OS hook, Filter Keys, or
 game-side cause from any of these sender-side signals.
@@ -137,7 +137,7 @@ dispatch; the rolling health windows retain only that boolean classification,
 not raw durations. SendInput, post-send occupancy, and scheduler wake latency
 have independent fixed-capacity hysteresis windows. The adaptive dispatch-cost
 estimator is separate from health: it records clean sender completion cost in
-fixed path/polyphony buckets and never drives the health budget. A single spike
+fixed path/event-count buckets and never drives the health budget. A single spike
 therefore cannot latch degradation for a session, and a later threshold change
 cannot reclassify history. Backend rejection, partial packets, clock failures,
 and uncertain key state remain immediate session-latched correctness failures.
@@ -164,8 +164,8 @@ The native lifecycle/status domain is separate from UI presentation status:
 is accepted before live-status validation; Python then joins once, materializes
 `session_report`, parses telemetry and estimator state, and only then surfaces a
 terminal error. Normal completion never invokes panic cleanup.
-`input_path_degraded` remains the aggregate of SendInput and core post-send
-health; observer and wait-path degradation remain separate signals.
+`input_path_degraded` remains the aggregate of SendInput, core post-send, and
+wait-path health; observer degradation remains a separate signal.
 
 ## Invariants
 

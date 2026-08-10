@@ -61,6 +61,8 @@ pub struct WorkerMetricsLocal {
     pub keys_inserted_before_failure: u64,
     pub keys_rolled_back: u64,
     pub rollback_residue_keys: u64,
+    /// Saturation diagnostics indexed by physical event count. Index 0 is
+    /// unused; index 15 is the explicit `15_plus` overflow bucket.
     pub lead_saturation_count_down: [u64; 16],
     pub lead_saturation_count_up: [u64; 16],
     pub positive_residual_at_cap: u64,

@@ -682,14 +682,7 @@ impl ProductionDispatchTestHarness {
             plan,
             effective_now_ticks,
             now_ticks,
-            plan.deadline_ticks.map(|deadline| {
-                self.resources
-                    .playback
-                    .epoch
-                    .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-                    .expect("physical target QPC")
-                    .min(now_ticks)
-            }),
+            self.resources.playback.epoch,
             false,
             &self.config,
             &mut self.resources,
@@ -755,7 +748,9 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_target_qpc: plan
-                .deadline_ticks
+                .authored
+                .as_ref()
+                .map(|authored| authored.deadline_ticks)
                 .map(|deadline| {
                     self.resources
                         .playback
