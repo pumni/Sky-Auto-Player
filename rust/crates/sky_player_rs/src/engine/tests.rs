@@ -2,6 +2,7 @@ use super::telemetry::metrics::RecentLatencyRing;
 use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
+use super::worker::dispatch::{effective_pending_cohort_lead, effective_pending_lead};
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchPath, DownAdmission,
     EstimatorOptions, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
@@ -18,6 +19,7 @@ use super::{
     signed_timeline_delta_ticks, supervisor_lease_expired, target_stamp_still_current,
     trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
 };
+use sky_dispatch_core::coordinator::PendingRelease;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
@@ -250,10 +252,15 @@ fn adaptive_startup_preserves_sublead_authored_order_in_mock_session() {
         .expect("second authored record");
     let clock = QpcClock::initialize().expect("QPC");
     let second_authored_ticks = clock.duration_from_us(100).expect("100us ticks").as_u64();
+    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
 
     assert_eq!(first["kind"].as_u64(), Some(0));
     assert_eq!(second["kind"].as_u64(), Some(0));
     assert_eq!(first["effective_deadline_ticks"].as_u64(), Some(0));
+    assert_eq!(
+        first["applied_lead_ticks"].as_u64(),
+        Some(startup_lead_ticks)
+    );
     assert_eq!(
         second["effective_deadline_ticks"].as_u64(),
         Some(second_authored_ticks)
@@ -274,6 +281,113 @@ fn adaptive_startup_preserves_sublead_authored_order_in_mock_session() {
         exported["version"].as_u64(),
         Some(u64::from(ESTIMATOR_STATE_VERSION))
     );
+}
+
+fn pending_for_lead_test(
+    scheduled: u64,
+    release_not_before: u64,
+    next_retry: u64,
+) -> PendingRelease {
+    PendingRelease {
+        generation_id: 1,
+        scan_code: 0x15,
+        key_slot: 0,
+        source_action_index: 0,
+        packet_id: 0,
+        scheduled_release_us: scheduled,
+        scheduled_release_ticks: TimelineTicks::from_raw(scheduled),
+        down_dispatch_started_ticks: TimelineTicks::ZERO,
+        release_not_before_ticks: TimelineTicks::from_raw(release_not_before),
+        reason_id: 0,
+        retry_count: 0,
+        next_retry_ticks: TimelineTicks::from_raw(next_retry),
+        first_failure_ticks: None,
+        last_win32_error: None,
+    }
+}
+
+#[test]
+fn pending_floors_suppress_applied_lead_and_saturation() {
+    for (release, deadline, expected) in [
+        (
+            pending_for_lead_test(1_000, 700, 0),
+            700,
+            (DurationTicks::ZERO, false),
+        ),
+        (
+            pending_for_lead_test(1_000, 0, 700),
+            700,
+            (DurationTicks::ZERO, false),
+        ),
+        (
+            pending_for_lead_test(1_000, 0, 0),
+            500,
+            (DurationTicks::from_raw(500), true),
+        ),
+    ] {
+        assert_eq!(
+            effective_pending_lead(
+                &release,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(deadline),
+            ),
+            expected
+        );
+    }
+
+    let release = pending_for_lead_test(1_000, 700, 0);
+    let mut streak = 0u8;
+    for _ in 0..3 {
+        let (applied_lead, saturated) = effective_pending_lead(
+            &release,
+            DurationTicks::from_raw(500),
+            true,
+            TimelineTicks::from_raw(700),
+        );
+        assert_eq!(applied_lead, DurationTicks::ZERO);
+        streak = if saturated {
+            streak.saturating_add(1)
+        } else {
+            0
+        };
+    }
+    assert_eq!(streak, 0);
+}
+
+#[test]
+fn pending_cohort_saturation_is_independent_of_source_order() {
+    let mut lead_controlled = pending_for_lead_test(1_000, 0, 0);
+    lead_controlled.source_action_index = 1;
+    let mut floor_tie = pending_for_lead_test(1_000, 500, 0);
+    floor_tie.source_action_index = 2;
+    let first_lead: smallvec::SmallVec<[PendingRelease; 15]> =
+        smallvec::smallvec![lead_controlled.clone(), floor_tie.clone()];
+    let first_floor: smallvec::SmallVec<[PendingRelease; 15]> =
+        smallvec::smallvec![floor_tie, lead_controlled];
+    let expected = (DurationTicks::ZERO, false);
+    for cohort in [&first_lead, &first_floor] {
+        assert_eq!(
+            effective_pending_cohort_lead(
+                cohort,
+                DurationTicks::from_raw(500),
+                true,
+                TimelineTicks::from_raw(500),
+            ),
+            expected
+        );
+    }
+    let mut streaks = [0u8; 2];
+    for _ in 0..3 {
+        for streak in &mut streaks {
+            *streak = if expected.1 {
+                streak.saturating_add(1)
+            } else {
+                0
+            };
+        }
+    }
+    assert_eq!(streaks, [0, 0]);
 }
 
 fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {

@@ -159,13 +159,15 @@ index 15; this diagnostic compression does not change the estimator's exact
 controlled timing error rather than an unreported
 tail.
 For authored observations, `applied_lead_ticks` comes from the coordinator's prepared batch,
-not from the requested estimator lead. For release observations, it is derived from the
-scheduled release minus the effective physical deadline. A completion/ownership hold floor or
-retry floor therefore reports applied lead zero. `lead_up_saturated` is true only when the
-lead-adjusted deadline itself controls the physical target and the applied lead still equals the
-estimator-capped maximum; `saturated_positive` is derived separately from the effective SendInput
-completion error, not from authored-timestamp lateness. This prevents floor-deferred work from
-building a false positive-at-cap saturation streak.
+not from the requested estimator lead, except that the exact first-startup physical target
+reports the requested lead that created that target. For release observations, it is derived from
+the scheduled release minus the effective physical deadline only when the lead-adjusted target
+controls every member of the physical cohort; a hold/retry floor in any cohort member reports
+applied lead zero for the packet. `lead_up_saturated` is true only when every cohort member is
+lead-controlled and the applied lead still equals the estimator-capped maximum;
+`saturated_positive` is derived separately from the effective SendInput completion error, not
+from authored-timestamp lateness. This prevents floor-deferred work from building a false
+positive-at-cap saturation streak or making strict behavior depend on source ordering.
 
 Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
 boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed

@@ -94,12 +94,6 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::NoWork;
     };
 
-    let (applied_lead_ticks, applied_lead_saturated) = applied_authored_lead(
-        requested_lead_ticks,
-        prepared_batch.effective_lead_ticks,
-        requested_lead_saturated,
-    );
-
     let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
         Ok(Some(view)) => view,
         Ok(None) => {
@@ -112,6 +106,12 @@ pub(crate) fn dispatch_authored_packet(
     };
 
     let has_down_events = view.packet_masks.is_some() || view.batch_kind == ActionKind::Down;
+    let (applied_lead_ticks, applied_lead_saturated) = applied_authored_lead(
+        startup_target_selected && has_down_events,
+        requested_lead_ticks,
+        view.prepared_batch.effective_lead_ticks,
+        requested_lead_saturated,
+    );
     if has_down_events {
         return commit_down_send_outcome(
             &view,
@@ -167,10 +167,14 @@ pub(crate) fn dispatch_authored_packet(
 }
 
 fn applied_authored_lead(
+    startup_target_selected: bool,
     requested_lead_ticks: DurationTicks,
     effective_lead_ticks: DurationTicks,
     requested_lead_saturated: bool,
 ) -> (DurationTicks, bool) {
+    if startup_target_selected {
+        return (requested_lead_ticks, requested_lead_saturated);
+    }
     (
         effective_lead_ticks,
         requested_lead_saturated && effective_lead_ticks == requested_lead_ticks,
@@ -772,10 +776,27 @@ mod tests {
 
     #[test]
     fn suppressed_authored_lead_cannot_report_positive_saturation() {
-        let (applied_lead, saturated) =
-            applied_authored_lead(DurationTicks::from_raw(500), DurationTicks::ZERO, true);
+        let (applied_lead, saturated) = applied_authored_lead(
+            false,
+            DurationTicks::from_raw(500),
+            DurationTicks::ZERO,
+            true,
+        );
 
         assert_eq!(applied_lead, DurationTicks::ZERO);
         assert!(!saturated);
+    }
+
+    #[test]
+    fn startup_physical_target_reports_requested_applied_lead() {
+        let (applied_lead, saturated) = applied_authored_lead(
+            true,
+            DurationTicks::from_raw(500),
+            DurationTicks::ZERO,
+            true,
+        );
+
+        assert_eq!(applied_lead, DurationTicks::from_raw(500));
+        assert!(saturated);
     }
 }

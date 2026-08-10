@@ -84,6 +84,8 @@ pub(crate) use authored::dispatch_authored_packet;
 pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::{PendingObservationQueue, drain_one_observer, observer_has_safe_slack};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
+#[cfg(test)]
+pub(crate) use release::{effective_pending_cohort_lead, effective_pending_lead};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use release::{
     release_recovery_completed_before_ready, set_release_observer_failure_on_recovery,

@@ -667,8 +667,8 @@ fn reconcile_release_outcome(
             "coordinator returned no release deadline".to_string(),
         ));
     };
-    let (applied_lead_ticks, applied_lead_saturated) = effective_pending_lead(
-        &due_pending[first_index],
+    let (applied_lead_ticks, applied_lead_saturated) = effective_pending_cohort_lead(
+        due_pending,
         lead_up_ticks,
         lead_up_saturated,
         effective_deadline_ticks,
@@ -798,12 +798,35 @@ fn up_saturation_evidence(lead_up_saturated: bool, completion_error_ticks: i64) 
     )
 }
 
-fn effective_pending_lead(
+#[cfg(test)]
+pub(crate) fn effective_pending_lead(
     pending: &PendingRelease,
     requested_lead_ticks: DurationTicks,
     requested_lead_saturated: bool,
     effective_deadline_ticks: TimelineTicks,
 ) -> (DurationTicks, bool) {
+    let application = pending_lead_application(
+        pending,
+        requested_lead_ticks,
+        requested_lead_saturated,
+        effective_deadline_ticks,
+    );
+    (application.applied_lead_ticks, application.saturated)
+}
+
+#[derive(Clone, Copy)]
+struct PendingLeadApplication {
+    applied_lead_ticks: DurationTicks,
+    lead_controlled: bool,
+    saturated: bool,
+}
+
+fn pending_lead_application(
+    pending: &PendingRelease,
+    requested_lead_ticks: DurationTicks,
+    requested_lead_saturated: bool,
+    effective_deadline_ticks: TimelineTicks,
+) -> PendingLeadApplication {
     let available_release_ticks = DurationTicks::from_raw(pending.scheduled_release_ticks.as_u64());
     let effective_requested_lead = requested_lead_ticks.min(available_release_ticks);
     let lead_deadline = pending
@@ -813,88 +836,51 @@ fn effective_pending_lead(
     let floor_controls = pending.release_not_before_ticks >= lead_deadline
         || pending.next_retry_ticks >= lead_deadline;
     if floor_controls || effective_deadline_ticks != lead_deadline {
-        return (DurationTicks::ZERO, false);
+        return PendingLeadApplication {
+            applied_lead_ticks: DurationTicks::ZERO,
+            lead_controlled: false,
+            saturated: false,
+        };
     }
     let applied_lead_ticks = pending
         .scheduled_release_ticks
         .checked_duration_since(effective_deadline_ticks)
         .unwrap_or(DurationTicks::ZERO);
-    (
+    PendingLeadApplication {
         applied_lead_ticks,
-        requested_lead_saturated && applied_lead_ticks == requested_lead_ticks,
-    )
+        lead_controlled: true,
+        saturated: requested_lead_saturated && applied_lead_ticks == requested_lead_ticks,
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{effective_pending_lead, up_saturation_evidence};
-    use sky_dispatch_core::coordinator::PendingRelease;
-    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-    fn pending(scheduled: u64, release_not_before: u64, next_retry: u64) -> PendingRelease {
-        PendingRelease {
-            generation_id: 1,
-            scan_code: 0x15,
-            key_slot: 0,
-            source_action_index: 0,
-            packet_id: 0,
-            scheduled_release_us: scheduled,
-            scheduled_release_ticks: TimelineTicks::from_raw(scheduled),
-            down_dispatch_started_ticks: TimelineTicks::ZERO,
-            release_not_before_ticks: TimelineTicks::from_raw(release_not_before),
-            reason_id: 0,
-            retry_count: 0,
-            next_retry_ticks: TimelineTicks::from_raw(next_retry),
-            first_failure_ticks: None,
-            last_win32_error: None,
-        }
-    }
-    #[test]
-    fn applied_up_saturation_uses_effective_completion_error() {
-        for (error, positive) in [(100, true), (-100, false)] {
-            let (saturated, actual_positive) = up_saturation_evidence(true, error);
-            assert!(saturated);
-            assert_eq!(actual_positive, positive);
-        }
-    }
-    #[test]
-    fn pending_floors_suppress_applied_lead_and_saturation() {
-        for (release, deadline, expected) in [
-            (pending(1_000, 700, 0), 700, (DurationTicks::ZERO, false)),
-            (pending(1_000, 0, 700), 700, (DurationTicks::ZERO, false)),
-            (
-                pending(1_000, 0, 0),
-                500,
-                (DurationTicks::from_raw(500), true),
-            ),
-        ] {
-            assert_eq!(
-                effective_pending_lead(
-                    &release,
-                    DurationTicks::from_raw(500),
-                    true,
-                    TimelineTicks::from_raw(deadline),
-                ),
-                expected
-            );
-        }
+pub(crate) fn effective_pending_cohort_lead(
+    due_pending: &SmallVec<[PendingRelease; 15]>,
+    requested_lead_ticks: DurationTicks,
+    requested_lead_saturated: bool,
+    effective_deadline_ticks: TimelineTicks,
+) -> (DurationTicks, bool) {
+    let mut common_applied_lead: Option<DurationTicks> = None;
+    let mut cohort_saturated = true;
 
-        let release = pending(1_000, 700, 0);
-        let mut streak = 0u8;
-        for _ in 0..3 {
-            let (applied_lead, saturated) = effective_pending_lead(
-                &release,
-                DurationTicks::from_raw(500),
-                true,
-                TimelineTicks::from_raw(700),
-            );
-            assert_eq!(applied_lead, DurationTicks::ZERO);
-            let (_, positive) = up_saturation_evidence(saturated, 100);
-            streak = if positive {
-                streak.saturating_add(1)
-            } else {
-                0
-            };
+    for pending in due_pending {
+        let application = pending_lead_application(
+            pending,
+            requested_lead_ticks,
+            requested_lead_saturated,
+            effective_deadline_ticks,
+        );
+        if !application.lead_controlled {
+            return (DurationTicks::ZERO, false);
         }
-        assert_eq!(streak, 0);
+        if common_applied_lead.is_some_and(|common| common != application.applied_lead_ticks) {
+            return (DurationTicks::ZERO, false);
+        }
+        common_applied_lead = Some(application.applied_lead_ticks);
+        cohort_saturated &= application.saturated;
     }
+
+    (
+        common_applied_lead.unwrap_or(DurationTicks::ZERO),
+        cohort_saturated,
+    )
 }
