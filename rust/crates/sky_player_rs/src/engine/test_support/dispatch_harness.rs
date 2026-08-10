@@ -756,9 +756,7 @@ impl ProductionDispatchTestHarness {
                 up_count,
                 down_count,
             }),
-            Err(_) => Some(DispatchPath::DownOnly {
-                down_count: self.resources.coordinator.next_authored_polyphony().max(1),
-            }),
+            Err(_) => None,
         }
     }
     /// Dispatch authored packet using an explicit production `NextDispatchPlan`.

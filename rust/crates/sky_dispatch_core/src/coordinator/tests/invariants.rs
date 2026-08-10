@@ -308,7 +308,7 @@ fn single_up_real_generation_gates_release_floor() {
         .prepare_next_due_authored(TimelineTicks::from_raw(80), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
-    assert_eq!(prepared.packet_kind, Some(PhysicalPacketKind::UpOnly));
+    assert_eq!(prepared.packet_kind, PhysicalPacketKind::UpOnly);
 }
 
 #[test]
@@ -373,11 +373,17 @@ fn no_generation_id_stale_up_does_not_require_active_generation() {
     let mut coordinator =
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
     // A stale Up has NO_GENERATION_ID and must not require an active
-    // generation; it prepares without an invariant error.
-    let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
-        .unwrap();
-    assert!(prepared.is_none() || prepared.unwrap().packet_kind.is_none());
+    // generation; it is prepared only through the metadata-specific API.
+    let stale = coordinator
+        .prepare_current_stale_packet()
+        .unwrap()
+        .expect("stale metadata packet");
+    assert_eq!(stale.suppressed_intent_count, 1);
+    assert!(
+        coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .is_err()
+    );
 }
 
 #[test]

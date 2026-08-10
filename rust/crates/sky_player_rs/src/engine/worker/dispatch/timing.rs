@@ -18,7 +18,9 @@ use super::super::{
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
 use crate::engine::config::TimingOptions;
-use sky_dispatch_core::coordinator::{PreparedBatch, physical_packet_kind};
+use sky_dispatch_core::coordinator::{
+    CoordinatorError, CoordinatorInvariantError, PreparedBatch, physical_packet_kind,
+};
 use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
@@ -60,32 +62,48 @@ pub(crate) fn resolve_authored_lead(
     estimate_dispatch_path_lead(estimator, path, timing.strict_timing, timing.max_lead_us)
 }
 
-/// Classify the next authored packet into a [`DispatchPath`].
-///
-/// Leading empty physical masks are stale-Up suppression metadata. Skip them
-/// when selecting the startup/next physical path, while retaining the legacy
-/// Down fallback if the remaining authored stream contains only stale Ups.
-pub(crate) fn next_authored_path(coordinator: &RuntimeDispatchCoordinator) -> Option<DispatchPath> {
-    let (up_mask, down_mask) = coordinator.next_physical_authored_packet().map_or_else(
-        || coordinator.next_authored_packet_masks(),
-        |(_, up_mask, down_mask)| Some((up_mask, down_mask)),
-    )?;
+fn dispatch_path_from_masks(
+    up_mask: u16,
+    down_mask: u16,
+) -> Result<DispatchPath, CoordinatorError> {
     let up_count = up_mask.count_ones() as usize;
     let down_count = down_mask.count_ones() as usize;
-    match physical_packet_kind(up_mask, down_mask) {
-        Ok(PhysicalPacketKind::UpOnly) => Some(DispatchPath::UpOnly { up_count }),
-        Ok(PhysicalPacketKind::DownOnly) => Some(DispatchPath::DownOnly { down_count }),
-        Ok(PhysicalPacketKind::Mixed) => Some(DispatchPath::Mixed {
+    match physical_packet_kind(up_mask, down_mask)? {
+        PhysicalPacketKind::UpOnly => Ok(DispatchPath::UpOnly { up_count }),
+        PhysicalPacketKind::DownOnly => Ok(DispatchPath::DownOnly { down_count }),
+        PhysicalPacketKind::Mixed => Ok(DispatchPath::Mixed {
             up_count,
             down_count,
         }),
-        Err(_) => {
-            let polyphony = coordinator.next_authored_polyphony().max(1);
-            Some(DispatchPath::DownOnly {
-                down_count: polyphony,
-            })
-        }
     }
+}
+
+/// Classify only the packet at the coordinator cursor. Normal planning must
+/// never look through stale metadata to borrow a future packet's path.
+pub(crate) fn current_authored_physical_path(
+    coordinator: &RuntimeDispatchCoordinator,
+) -> Result<Option<DispatchPath>, CoordinatorError> {
+    let Some((up_mask, down_mask)) = coordinator.next_authored_packet_masks() else {
+        return Ok(None);
+    };
+    if up_mask == 0 && down_mask == 0 {
+        return Err(CoordinatorError::Invariant(
+            CoordinatorInvariantError::Accounting(
+                "stale metadata reached normal physical planner".to_string(),
+            ),
+        ));
+    }
+    dispatch_path_from_masks(up_mask, down_mask).map(Some)
+}
+
+/// Find the first subsequent physical packet for startup gate construction.
+/// This is the only authored suffix-lookahead path.
+pub(crate) fn startup_first_physical_path(
+    coordinator: &RuntimeDispatchCoordinator,
+) -> Option<DispatchPath> {
+    coordinator
+        .next_physical_authored_packet()
+        .and_then(|(_, up_mask, down_mask)| dispatch_path_from_masks(up_mask, down_mask).ok())
 }
 
 pub(crate) fn pending_lead_for_polyphony(
@@ -121,7 +139,7 @@ pub(crate) fn startup_lead_for_first_packet(
     timing: &TimingOptions,
     enable_dispatch_cost_lead: bool,
 ) -> u64 {
-    let path = next_authored_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
+    let path = startup_first_physical_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
         down_count: coordinator.next_authored_polyphony().max(1),
     });
     resolve_authored_lead(estimator, path, timing, enable_dispatch_cost_lead).applied_us
@@ -193,11 +211,7 @@ pub(crate) fn prepare_authored_batch_view(
     // Every authored batch reaching this view is physical work. Stale
     // unmatched-Up metadata uses the dedicated coordinator path and must not
     // acquire a physical DispatchPath.
-    let Some(packet_kind) = prepared_batch.packet_kind else {
-        return Err(DispatchStep::Terminate(
-            "stale authored packet reached physical batch view".to_string(),
-        ));
-    };
+    let packet_kind = prepared_batch.packet_kind;
     let (
         batch_kind,
         dispatch_path,

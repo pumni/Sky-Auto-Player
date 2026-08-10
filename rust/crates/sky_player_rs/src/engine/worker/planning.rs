@@ -5,8 +5,8 @@
 //! and the earliest physical wait deadline.
 
 pub(crate) use super::dispatch::timing::{
-    AuthoredDispatchPlan, next_authored_path, pending_lead_for_polyphony, resolve_authored_lead,
-    startup_lead_for_first_packet,
+    AuthoredDispatchPlan, current_authored_physical_path, pending_lead_for_polyphony,
+    resolve_authored_lead, startup_lead_for_first_packet,
 };
 use super::health::{
     DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, build_dispatch_budget,
@@ -147,7 +147,7 @@ fn plan_next_dispatch_inner(
     enable_dispatch_cost_lead: bool,
     health_options: DispatchHealthOptions,
 ) -> Result<NextDispatchPlan, PlanningError> {
-    let authored = match next_authored_path(coordinator) {
+    let authored = match current_authored_physical_path(coordinator)? {
         Some(path) => {
             let lead = resolve_authored_lead(estimator, path, timing, enable_dispatch_cost_lead);
             let lead_ticks = qpc_clock

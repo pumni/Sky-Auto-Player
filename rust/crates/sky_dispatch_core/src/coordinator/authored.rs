@@ -219,30 +219,7 @@ impl RuntimeDispatchCoordinator {
         if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(&batch)) {
             return Ok(None);
         }
-        let packet_kind = match physical_packet_kind(packet.up_mask, packet.down_mask) {
-            Ok(kind) => Some(kind),
-            Err(error)
-                if packet.up_intent_len > 0
-                    && packet.down_intent_len == 0
-                    && self
-                        .schedule
-                        .intents
-                        .get(
-                            packet.up_intent_start as usize
-                                ..(packet.up_intent_start as usize
-                                    + usize::from(packet.up_intent_len)),
-                        )
-                        .is_some_and(|intents| {
-                            intents
-                                .iter()
-                                .all(|intent| intent.generation_id() == NO_GENERATION_ID)
-                        }) =>
-            {
-                let _ = error;
-                None
-            }
-            Err(error) => return Err(error),
-        };
+        let packet_kind = physical_packet_kind(packet.up_mask, packet.down_mask)?;
         Ok(Some(PreparedBatch {
             index,
             effective_scheduled_ticks,

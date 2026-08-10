@@ -472,10 +472,9 @@ fn admit_authored_down(
 /// dispatch-function line limit.
 fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     match view.prepared_batch.packet_kind {
-        Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => TRACE_KIND_UP,
-        Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => TRACE_KIND_DOWN,
-        Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed) => TRACE_KIND_MIXED,
-        None => TRACE_KIND_DOWN,
+        sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
+        sky_dispatch_core::model::PhysicalPacketKind::DownOnly => TRACE_KIND_DOWN,
+        sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
     }
 }
 
@@ -739,7 +738,7 @@ mod tests {
                 index: 0,
                 effective_scheduled_ticks: TimelineTicks::ZERO,
                 effective_lead_ticks: DurationTicks::ZERO,
-                packet_kind: Some(PhysicalPacketKind::DownOnly),
+                packet_kind: PhysicalPacketKind::DownOnly,
                 packet_batch_count: 1,
                 packet_index: 0,
             },

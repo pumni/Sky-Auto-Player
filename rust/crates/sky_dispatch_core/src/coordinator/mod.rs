@@ -283,10 +283,10 @@ pub struct PreparedBatch {
     /// timestamp without maintaining a second cursor.
     pub packet_index: usize,
     pub packet_batch_count: usize,
-    /// `None` is reserved for an authored stale-Up batch whose compiler
-    /// metadata contains no physical event and is handled by the legacy
-    /// suppression path.
-    pub packet_kind: Option<PhysicalPacketKind>,
+    /// Every prepared authored batch is physical work. Stale unmatched-Up
+    /// metadata is represented only by [`PreparedStalePacket`] and cannot
+    /// enter physical preparation.
+    pub packet_kind: PhysicalPacketKind,
 }
 
 /// One compiler packet containing only unmatched Up metadata.

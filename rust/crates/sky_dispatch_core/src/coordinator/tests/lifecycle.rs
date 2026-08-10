@@ -387,10 +387,10 @@ fn cancel_live_generations_preserves_future_scheduled_generations() {
     assert!(coordinator.cancel_live_generations().unwrap().is_empty());
 
     let stale_up = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+        .prepare_current_stale_packet()
         .expect("cancelled generation makes its future Up stale")
         .expect("stale authored Up remains in the immutable timeline");
-    assert_eq!(stale_up.packet_kind, None);
+    assert_eq!(stale_up.suppressed_intent_count, 1);
 }
 
 #[test]
