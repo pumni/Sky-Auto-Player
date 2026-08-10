@@ -8,8 +8,9 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
     anchored_dispatch_target_ticks_typed, ensure_preflight_for_target, focus_matches,
     focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch_projected,
-    plan_structure_is_valid, process_command_control, publish_backend_metrics, suspend_live_input,
-    target_stamp_still_current, wait_failure_message, wait_for_next_boundary,
+    plan_structure_is_valid, process_command_control, publish_backend_metrics,
+    record_termination_error, suspend_live_input, target_stamp_still_current, wait_failure_message,
+    wait_for_next_boundary,
 };
 use smallvec::SmallVec;
 use std::any::Any;
@@ -974,8 +975,11 @@ pub(super) fn dispatch(
                 Ok(ticks) => ticks,
                 Err(error) => {
                     core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error =
-                        Some(format!("observer finalization QPC failure: {error:?}"));
+                    record_termination_error(
+                        &mut core.runtime.terminal_error,
+                        &mut core.errors.secondary,
+                        format!("observer finalization QPC failure: {error:?}"),
+                    );
                     break;
                 }
             };
@@ -996,8 +1000,11 @@ pub(super) fn dispatch(
                 Ok(value) => value,
                 Err(error) => {
                     core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error =
-                        Some(format!("observer finalization failed: {error:?}"));
+                    record_termination_error(
+                        &mut core.runtime.terminal_error,
+                        &mut core.errors.secondary,
+                        format!("observer finalization failed: {error:?}"),
+                    );
                     break;
                 }
             };
