@@ -611,6 +611,14 @@ fn run_seeded_adaptive_startup_schedule(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     allowed_count: usize,
 ) -> serde_json::Value {
+    run_seeded_adaptive_startup_schedule_with_capacity(schedule, allowed_count, 16).1
+}
+
+fn run_seeded_adaptive_startup_schedule_with_capacity(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    allowed_count: usize,
+    telemetry_capacity: usize,
+) -> (super::EngineSnapshot, serde_json::Value) {
     use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 
     let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
@@ -631,7 +639,7 @@ fn run_seeded_adaptive_startup_schedule(
     options.estimator.state_json =
         Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
     options.estimator.enable_dispatch_cost_lead = true;
-    options.telemetry.capacity = 16;
+    options.telemetry.capacity = telemetry_capacity;
     options.wait.supervisor_lease_timeout_us = 3_000_000;
 
     let session = NativeDispatchSession::new(options).expect("adaptive session admission");
@@ -649,8 +657,9 @@ fn run_seeded_adaptive_startup_schedule(
     assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
     assert_eq!(snapshot.authored_keys_rejected, 0);
     assert_eq!(snapshot.chord_integrity_lost, 0);
-    serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
-        .expect("valid telemetry JSON")
+    let telemetry = serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+        .expect("valid telemetry JSON");
+    (snapshot, telemetry)
 }
 
 fn stale_leading_up_schedule(
@@ -791,6 +800,551 @@ fn stale_leading_up_does_not_consume_startup_target() {
 fn multiple_stale_leading_ups_do_not_consume_startup_target() {
     let telemetry = run_seeded_adaptive_startup_schedule(stale_leading_up_schedule(&[0, 50]), 1);
     assert_stale_leading_up_did_not_send(&telemetry, 2);
+}
+
+fn run_mock_schedule(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    allowed_count: usize,
+    telemetry_capacity: usize,
+) -> (super::EngineSnapshot, serde_json::Value) {
+    let mut options = test_session_options(
+        schedule,
+        allowed_count,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.capacity = telemetry_capacity;
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    (snapshot, telemetry)
+}
+
+#[test]
+fn midstream_stale_packet_is_metadata_not_physical_work() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "midstream-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "midstream-a-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_500,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "midstream-stale".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "midstream-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "midstream-b-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid midstream stale schedule");
+    let (snapshot, telemetry) = run_mock_schedule(schedule, 2, 16);
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let records = telemetry["records"].as_array().expect("records");
+    let stale = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
+        .expect("midstream stale record");
+    assert_eq!(stale["outcome"].as_u64(), Some(4), "stale record: {stale}");
+    assert_eq!(stale["requested_count"].as_u64(), Some(0));
+    assert_eq!(stale["sent_count"].as_u64(), Some(0));
+    assert_eq!(stale["send_attempts"].as_u64(), Some(0));
+    assert_eq!(stale["applied_lead_ticks"].as_u64(), Some(0));
+    assert!(stale["wake_ticks"].as_u64().is_some_and(|ticks| ticks > 0));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["event_index"].as_u64() == Some(3))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn trailing_stale_packet_finishes_without_physical_dispatch() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "trailing-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "trailing-release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_500,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "trailing-stale".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid trailing stale schedule");
+    let (snapshot, telemetry) = run_mock_schedule(schedule, 1, 8);
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let stale = telemetry["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
+        .expect("trailing stale record");
+    assert_eq!(stale["outcome"].as_u64(), Some(4));
+    assert_eq!(stale["requested_count"].as_u64(), Some(0));
+    assert_eq!(stale["send_attempts"].as_u64(), Some(0));
+}
+
+#[test]
+fn same_timestamp_midstream_stale_packet_is_committed_once() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "cohort-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 500,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "cohort-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "cohort-stale-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "cohort-stale-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Down,
+                scheduled_us: 1_500,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "cohort-redown".into(),
+            },
+            KeyActionInput {
+                source_action_index: 5,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "cohort-cleanup".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    )
+    .expect("valid same-timestamp stale schedule");
+    let (snapshot, telemetry) = run_mock_schedule(schedule, 3, 16);
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let records = telemetry["records"].as_array().expect("records");
+    let stale = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
+        .expect("same-timestamp stale record");
+    assert_eq!(stale["outcome"].as_u64(), Some(4));
+    assert_eq!(stale["polyphony"].as_u64(), Some(2));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["outcome"].as_u64() == Some(4))
+            .count(),
+        1
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record["event_index"].as_u64() != Some(3))
+    );
+}
+
+#[test]
+fn stale_ups_with_down_same_timestamp_use_one_down_packet() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "mixed-stale-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "mixed-stale-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "mixed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "mixed-cleanup".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    )
+    .expect("valid stale-plus-down schedule");
+    let (snapshot, telemetry) = run_seeded_adaptive_startup_schedule_with_capacity(schedule, 3, 8);
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let records = telemetry["records"].as_array().expect("records");
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["outcome"].as_u64() == Some(4))
+            .count(),
+        0
+    );
+    let physical = records
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
+        .expect("physical down record");
+    assert_eq!(physical["kind"].as_u64(), Some(0));
+    assert_eq!(physical["requested_count"].as_u64(), Some(1));
+}
+
+#[test]
+fn owned_up_stale_up_and_down_same_timestamp_count_only_physical_events() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "owned-up-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "owned-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "owned-stale".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "owned-redown".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "owned-cleanup".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    )
+    .expect("valid owned-plus-stale schedule");
+    let (snapshot, telemetry) = run_seeded_adaptive_startup_schedule_with_capacity(schedule, 3, 8);
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let packet = telemetry["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|record| {
+            record["kind"].as_u64() == Some(2) && record["requested_count"].as_u64() == Some(2)
+        })
+        .expect("mixed physical record");
+    assert_eq!(packet["kind"].as_u64(), Some(2));
+    assert_eq!(packet["requested_count"].as_u64(), Some(2));
+    assert_ne!(packet["requested_count"].as_u64(), Some(3));
+}
+
+#[test]
+fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let stale_count = 64usize;
+    let mut actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "many-midstream-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 500,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "many-midstream-release".into(),
+        },
+    ];
+    for index in 0..stale_count {
+        actions.push(KeyActionInput {
+            source_action_index: (index + 2) as u32,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000 + index as u64,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "many-midstream-stale".into(),
+        });
+    }
+    actions.extend([
+        KeyActionInput {
+            source_action_index: (stale_count + 2) as u32,
+            kind: ActionKind::Down,
+            scheduled_us: 2_000,
+            scan_codes: smallvec::smallvec![0x17],
+            reason: "many-midstream-next-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: (stale_count + 3) as u32,
+            kind: ActionKind::Up,
+            scheduled_us: 3_000,
+            scan_codes: smallvec::smallvec![0x17],
+            reason: "many-midstream-cleanup".into(),
+        },
+    ]);
+    let schedule = compile_runtime_intents(&actions, &[0x15, 0x16, 0x17])
+        .expect("valid many-midstream stale schedule");
+    let hook = Arc::new(StartupOrderingHook::default());
+    let mut options = test_session_options(
+        schedule,
+        3,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.capacity = 128;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".into()));
+    assert_eq!(snapshot.terminal_error, None);
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    assert_eq!(
+        telemetry["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .filter(|record| record["outcome"].as_u64() == Some(4))
+            .count(),
+        stale_count
+    );
+}
+
+#[test]
+fn production_startup_matrix_preserves_first_physical_lead() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let clock = QpcClock::initialize().expect("QPC");
+    let startup_lead_ticks = clock.duration_from_us(500).expect("500us").as_u64();
+    for scheduled_us in [0, 100, 499, 500, 501] {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: scheduled_us + 1_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-cleanup".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid startup matrix schedule");
+        let telemetry = run_seeded_adaptive_startup_schedule(schedule, 1);
+        let first = telemetry["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .find(|record| record["event_index"].as_u64() == Some(0))
+            .expect("first physical record");
+        assert_eq!(
+            first["applied_lead_ticks"].as_u64(),
+            Some(startup_lead_ticks)
+        );
+    }
+}
+
+#[test]
+fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "bucket-first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 500,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "bucket-release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "bucket-stale".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 1_500,
+                scan_codes: smallvec::smallvec![0x17, 0x18],
+                reason: "bucket-two-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 2_500,
+                scan_codes: smallvec::smallvec![0x17, 0x18],
+                reason: "bucket-cleanup".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17, 0x18],
+    )
+    .expect("valid bucket schedule");
+    let clock = QpcClock::initialize().expect("QPC");
+    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
+    for _ in 0..5 {
+        seeded.update(SendPath::DownOnly, 1, 300).expect("seed x1");
+        seeded.update(SendPath::DownOnly, 2, 700).expect("seed x2");
+        seeded
+            .update(SendPath::DownOnly, 3, 1_100)
+            .expect("seed x3");
+    }
+    let mut options = test_session_options(
+        schedule,
+        4,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.estimator.state_json =
+        Some(serde_json::to_string(&seeded.export_state()).expect("state JSON"));
+    options.estimator.enable_dispatch_cost_lead = true;
+    options.telemetry.capacity = 16;
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().terminal_error, None);
+    let records: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("records JSON");
+    let two_down = records["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(3))
+        .expect("two-down record");
+    assert_eq!(two_down["requested_count"].as_u64(), Some(2));
+    let expected_lead_ticks = clock.duration_from_us(700).expect("700us").as_u64();
+    assert_eq!(
+        two_down["applied_lead_ticks"].as_u64(),
+        Some(expected_lead_ticks)
+    );
 }
 
 fn pending_for_lead_test(
