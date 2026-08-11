@@ -3,7 +3,7 @@ pub(crate) mod metrics;
 pub use metrics::WorkerMetricsLocal;
 pub(crate) use metrics::{SharedMetrics, cpu_metrics_sample_due, try_publish_metrics};
 
-use sky_dispatch_core::time::{DurationTicks, TimeArithmeticError, TimelineTicks};
+use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};
 use std::collections::VecDeque;
 
 /// Fixed-size record retained on the real-time worker path.
@@ -25,11 +25,16 @@ pub struct RtTraceRecord {
     pub wake_ticks: u64,
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
+    /// Legacy completion-target residual, retained for diagnostics only.
+    /// The primary timing evidence is `dispatch_start_error_ticks`.
     pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
     pub post_send_metrics_available: bool,
+    pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
+    /// Historical compatibility field. Adaptive lead is no longer part of
+    /// runtime evidence and this publication adapter always emits zero.
     pub applied_lead_ticks: u32,
     pub win32_error: u32,
     pub requested_count: u8,
@@ -38,7 +43,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 10;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 11;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -55,12 +60,12 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: TimelineTicks,
     pub(crate) send_started_ticks: Option<TimelineTicks>,
     pub(crate) send_completed_ticks: Option<TimelineTicks>,
-    pub(crate) dispatch_cost_us: u64,
+    pub(crate) completion_residual_us: u64,
     pub(crate) core_post_send_duration_us: u64,
     pub(crate) post_send_metrics_available: bool,
+    pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
-    pub(crate) applied_lead_ticks: DurationTicks,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,9 +108,6 @@ impl RtTraceRecord {
             u8::try_from(delivery.skipped).map_err(|_| TimeArithmeticError::Overflow)?;
         let send_attempts =
             u8::try_from(delivery.send_attempts).map_err(|_| TimeArithmeticError::Overflow)?;
-        let applied_lead_ticks = u32::try_from(timing.applied_lead_ticks.as_u64())
-            .map_err(|_| TimeArithmeticError::Overflow)?;
-
         Ok(Self {
             event_index: context.event_index,
             kind: context.kind,
@@ -117,12 +119,13 @@ impl RtTraceRecord {
             wake_ticks: timing.wake_ticks.as_u64(),
             send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
-            dispatch_cost_us: timing.dispatch_cost_us,
+            dispatch_cost_us: timing.completion_residual_us,
             core_post_send_duration_us: timing.core_post_send_duration_us,
             post_send_metrics_available: timing.post_send_metrics_available,
+            dispatch_start_error_ticks: timing.dispatch_start_error_ticks,
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
-            applied_lead_ticks,
+            applied_lead_ticks: 0,
             win32_error: context.win32_error,
             requested_count,
             sent_count,
@@ -155,6 +158,8 @@ pub struct NativeTelemetrySummary {
     pub requested_key_count: u64,
     pub sent_key_count: u64,
     pub skipped_key_count: u64,
+    pub max_dispatch_start_error_ticks: i64,
+    pub max_dispatch_start_error_abs_ticks: u64,
     pub max_lateness_us: i64,
     pub max_send_duration_us: u64,
     pub lateness_histogram_50us: [u64; 16],
@@ -169,6 +174,8 @@ pub struct NativeTelemetrySummary {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TimingSemantics {
     pub evidence_kind: &'static str,
+    pub primary_metric: &'static str,
+    pub completion_metric: &'static str,
     pub scheduled_boundary: &'static str,
     pub wake_boundary: &'static str,
     pub sender_start_boundary: &'static str,
@@ -179,7 +186,9 @@ pub struct TimingSemantics {
 impl Default for TimingSemantics {
     fn default() -> Self {
         Self {
-            evidence_kind: "sender_completion",
+            evidence_kind: "sender_start_error",
+            primary_metric: "dispatch_start_error_ticks",
+            completion_metric: "completion_error_ticks_diagnostic_only",
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
             sender_start_boundary: "sendinput_call_entry",
@@ -211,6 +220,12 @@ impl NativeTelemetrySummary {
         self.skipped_key_count = self
             .skipped_key_count
             .saturating_add(u64::from(record.skipped_count));
+        self.max_dispatch_start_error_ticks = self
+            .max_dispatch_start_error_ticks
+            .max(record.dispatch_start_error_ticks);
+        self.max_dispatch_start_error_abs_ticks = self
+            .max_dispatch_start_error_abs_ticks
+            .max(record.dispatch_start_error_ticks.unsigned_abs());
     }
 }
 
@@ -309,7 +324,7 @@ mod tests {
         TRACE_KIND_UP, TelemetryCollector, TelemetryMode, TraceContext, TraceDelivery, TraceTiming,
         trace_outcome_code,
     };
-    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+    use sky_dispatch_core::time::TimelineTicks;
 
     fn record_with_index(
         event_index: u32,
@@ -332,12 +347,12 @@ mod tests {
                 wake_ticks: TimelineTicks::ZERO,
                 send_started_ticks: Some(TimelineTicks::from_raw(1)),
                 send_completed_ticks: Some(TimelineTicks::from_raw(2)),
-                dispatch_cost_us: 0,
+                completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
+                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                applied_lead_ticks: DurationTicks::ZERO,
             },
             TraceDelivery {
                 requested,

@@ -11,8 +11,9 @@ use super::super::{
 };
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
-    DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-    UpObservation, record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
+    BlockedUnfocusedObservation, DispatchObservation, DownObservation, DownTraceObservation,
+    OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation, UpObservation,
+    record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
     up_transport_counts,
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -62,8 +63,6 @@ pub(crate) fn publisher_down_send_outcome(
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
     effective_now_ticks: TimelineTicks,
-    lead_down_saturated: bool,
-    lead_down_ticks: DurationTicks,
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
     capture_dispatch_ready_qpc: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
@@ -114,7 +113,6 @@ pub(crate) fn publisher_down_send_outcome(
     let observation = DownObservation {
         path: frozen_budget.path,
         physical_target_qpc,
-        lead_down_saturated,
         timeline_rebase_count: local_metrics.timeline_rebase_count,
         timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
         timeline_rebase_max_ticks: local_metrics.timeline_rebase_max_ticks,
@@ -143,9 +141,9 @@ pub(crate) fn publisher_down_send_outcome(
             wake_ticks: effective_now_ticks,
             sender_started_ticks: Some(sender_started_effective_ticks),
             sender_completed_ticks: Some(completed_effective_ticks),
+            dispatch_start_error_ticks: timing_proof.dispatch_start_error_ticks,
             completion_error_ticks: completion_error_ticks_value,
             authored_completion_error_ticks: authored_completion_error_ticks_value,
-            applied_lead_ticks: lead_down_ticks,
             recovered_retry_late,
             recovered_partial_up,
             strict_completion_late,
@@ -170,7 +168,9 @@ pub(crate) fn publisher_down_send_outcome(
 pub(crate) fn dispatch_stale_packet(
     prepared: sky_dispatch_core::coordinator::PreparedStalePacket,
     coordinator: &mut RuntimeDispatchCoordinator,
-    telemetry: &mut TelemetryCollector,
+    observer: &PendingObservationQueue,
+    dropped_samples: &mut u64,
+    queue_high_watermark: &mut u64,
     effective_now_ticks: TimelineTicks,
 ) -> DispatchStep {
     if let Err(error) = coordinator.commit_stale_packet(prepared) {
@@ -178,28 +178,44 @@ pub(crate) fn dispatch_stale_packet(
             "coordinator stale-packet commit failure: {error}"
         ));
     }
+    observer.push(
+        DispatchObservation::StaleMetadata(StaleMetadataObservation {
+            source_action_index: prepared.source_action_index,
+            effective_scheduled_ticks: prepared.effective_scheduled_ticks,
+            effective_now_ticks,
+            suppressed_intent_count: prepared.suppressed_intent_count,
+        }),
+        dropped_samples,
+        queue_high_watermark,
+    );
+    DispatchStep::Dispatched
+}
+fn drain_stale_metadata_observation(
+    observation: &StaleMetadataObservation,
+    telemetry: &mut TelemetryCollector,
+) -> Result<(), DispatchStep> {
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
             TraceContext {
-                event_index: prepared.source_action_index,
+                event_index: observation.source_action_index,
                 kind: TRACE_KIND_UP,
                 outcome: trace_outcome_code("suppressed_stale_up"),
-                polyphony: prepared.suppressed_intent_count,
+                polyphony: observation.suppressed_intent_count,
                 flags: TRACE_FLAG_ANOMALY,
                 win32_error: 0,
             },
             TraceTiming {
-                authored_ticks: prepared.effective_scheduled_ticks,
-                effective_deadline_ticks: prepared.effective_scheduled_ticks,
-                wake_ticks: effective_now_ticks,
+                authored_ticks: observation.effective_scheduled_ticks,
+                effective_deadline_ticks: observation.effective_scheduled_ticks,
+                wake_ticks: observation.effective_now_ticks,
                 send_started_ticks: None,
                 send_completed_ticks: None,
-                dispatch_cost_us: 0,
+                completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
+                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                applied_lead_ticks: DurationTicks::ZERO,
             },
             TraceDelivery {
                 requested: 0,
@@ -209,38 +225,39 @@ pub(crate) fn dispatch_stale_packet(
             },
         )
     }) {
-        return DispatchStep::Terminate(format!("native telemetry record overflow: {error}"));
+        return Err(DispatchStep::Terminate(format!(
+            "native telemetry record overflow: {error}"
+        )));
     }
-    DispatchStep::Dispatched
+    Ok(())
 }
-pub(super) fn record_blocked_unfocused_telemetry(
+
+fn drain_blocked_unfocused_observation(
+    observation: &BlockedUnfocusedObservation,
     telemetry: &mut TelemetryCollector,
-    view: &AuthoredBatchView,
-    effective_now_ticks: TimelineTicks,
-    lead_down_ticks: DurationTicks,
 ) -> Result<(), DispatchStep> {
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
             TraceContext {
-                event_index: view.batch_source_action_index,
+                event_index: observation.event_index,
                 kind: TRACE_KIND_DOWN,
                 outcome: trace_outcome_code("blocked_unfocused"),
-                polyphony: view.batch_intent_count,
+                polyphony: observation.polyphony,
                 flags: TRACE_FLAG_ANOMALY,
                 win32_error: 0,
             },
             TraceTiming {
-                authored_ticks: view.authored_batch_scheduled_ticks,
-                effective_deadline_ticks: view.batch_scheduled_ticks,
-                wake_ticks: effective_now_ticks,
+                authored_ticks: observation.authored_ticks,
+                effective_deadline_ticks: observation.effective_deadline_ticks,
+                wake_ticks: observation.effective_now_ticks,
                 send_started_ticks: None,
                 send_completed_ticks: None,
-                dispatch_cost_us: 0,
+                completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
+                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                applied_lead_ticks: lead_down_ticks,
             },
             TraceDelivery {
                 requested: 0,
@@ -344,7 +361,7 @@ impl ObserverRuntime {
                         if stop_thread.load(Ordering::Acquire) {
                             break;
                         }
-                        std::thread::yield_now();
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                     let now_qpc_ticks = match qpc_clock.now() {
@@ -495,7 +512,7 @@ pub(crate) fn drain_down_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
         })?;
-    let dispatch_cost_us = qpc_clock
+    let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
                 .sender_completed_qpc
@@ -508,7 +525,7 @@ pub(crate) fn drain_down_send_outcome(
         )
         .map_err(|error| {
             DispatchStep::Terminate(format!(
-                "note-on dispatch-cost conversion failure: {error:?}"
+                "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
     let completed_effective_us = qpc_clock
@@ -595,7 +612,7 @@ pub(crate) fn drain_down_send_outcome(
         observation,
         telemetry,
         core_post_send_us,
-        dispatch_cost_us,
+        completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
     )?;
     local_metrics.core_post_send_max_us =
@@ -637,10 +654,6 @@ pub(crate) fn drain_up_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
-    debug_assert_eq!(
-        observation.lead_up_ticks, observation.trace.applied_lead_ticks,
-        "raw and trace release leads must agree"
-    );
     let (scan_count, _sent_count, _skipped_count) = up_transport_counts(observation);
     #[cfg(any(test, feature = "test-support"))]
     if take_release_observer_failure(observation.trace.recovery_required) {
@@ -653,7 +666,7 @@ pub(crate) fn drain_up_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
         })?;
-    let dispatch_cost_us = qpc_clock
+    let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
                 .sender_completed_qpc
@@ -666,7 +679,7 @@ pub(crate) fn drain_up_send_outcome(
         )
         .map_err(|error| {
             DispatchStep::Terminate(format!(
-                "note-off dispatch-cost conversion failure: {error:?}"
+                "note-off completion-residual conversion failure: {error:?}"
             ))
         })?;
     let completed_effective_us = qpc_clock
@@ -731,7 +744,7 @@ pub(crate) fn drain_up_send_outcome(
         observation,
         qpc_clock,
         core_post_send_us,
-        dispatch_cost_us,
+        completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
     )?;
     if let Some(wake_to_send_us) = wake_to_send_start_us {
@@ -826,6 +839,12 @@ pub(crate) fn drain_one_observer(
         DispatchObservation::Wait(wait) => {
             super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
         }
+        DispatchObservation::StaleMetadata(stale) => {
+            drain_stale_metadata_observation(stale, telemetry)?;
+        }
+        DispatchObservation::BlockedUnfocused(blocked) => {
+            drain_blocked_unfocused_observation(blocked, telemetry)?;
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     {
@@ -857,7 +876,12 @@ pub(crate) fn drain_one_observer(
         &mut health.observer_window,
         local_metrics,
     );
-    if matches!(observation, DispatchObservation::Wait(_)) {
+    if matches!(
+        observation,
+        DispatchObservation::Wait(_)
+            | DispatchObservation::StaleMetadata(_)
+            | DispatchObservation::BlockedUnfocused(_)
+    ) {
         try_publish_metrics(local_metrics, metrics, now_us, false);
     }
     Ok(Some(drain_us))

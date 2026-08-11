@@ -113,7 +113,6 @@ fn down_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Down(DownObservation {
         path: DispatchPath::DownOnly { down_count: 1 },
         physical_target_qpc: QpcTicks::ZERO,
-        lead_down_saturated: false,
         timeline_rebase_count: 0,
         timeline_rebase_total_ticks: DurationTicks::ZERO,
         timeline_rebase_max_ticks: DurationTicks::ZERO,
@@ -142,9 +141,9 @@ fn down_observation(n: u64) -> DispatchObservation {
             wake_ticks: TimelineTicks::ZERO,
             sender_started_ticks: Some(TimelineTicks::ZERO),
             sender_completed_ticks: Some(TimelineTicks::ZERO),
+            dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
-            applied_lead_ticks: DurationTicks::from_raw(n),
             recovered_retry_late: false,
             recovered_partial_up: false,
             strict_completion_late: false,
@@ -164,8 +163,6 @@ fn up_observation(n: u64) -> DispatchObservation {
         confirmed_mask: 1,
         skipped_mask: 0,
         result_status: SendTransactionStatus::Complete,
-        lead_up_ticks: DurationTicks::from_raw(n),
-        lead_up_saturated: false,
         completed_effective_ticks: TimelineTicks::from_raw(n),
         scheduled_ticks: TimelineTicks::ZERO,
         deferred_ticks: DurationTicks::ZERO,
@@ -184,9 +181,9 @@ fn up_observation(n: u64) -> DispatchObservation {
             wake_ticks: TimelineTicks::ZERO,
             sender_started_ticks: Some(TimelineTicks::ZERO),
             sender_completed_ticks: Some(TimelineTicks::ZERO),
+            dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
-            applied_lead_ticks: DurationTicks::ZERO,
             deferred_ticks: DurationTicks::ZERO,
             recovery_required: false,
         },
@@ -378,10 +375,14 @@ fn overflow_drops_newest_for_down_and_up() {
         let first = queue.pop_front().expect("queue remains non-empty");
         match first {
             DispatchObservation::Down(observation) => {
-                assert_eq!(observation.trace.applied_lead_ticks.as_u64(), 0);
+                assert_eq!(observation.trace.dispatch_start_error_ticks, 0);
             }
             DispatchObservation::Up(_) => panic!("unexpected Up observation in seeded queue"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
+            DispatchObservation::StaleMetadata(_) => panic!("stale observation not expected"),
+            DispatchObservation::BlockedUnfocused(_) => {
+                panic!("blocked observation not expected")
+            }
         }
 
         let mut last = None;
@@ -391,12 +392,16 @@ fn overflow_drops_newest_for_down_and_up() {
         match last.expect("newest observation must be retained") {
             DispatchObservation::Down(observation) => {
                 assert_eq!(
-                    observation.trace.applied_lead_ticks.as_u64(),
-                    (OBSERVATION_QUEUE_CAPACITY - 1) as u64
+                    observation.trace.dispatch_start_error_ticks,
+                    (OBSERVATION_QUEUE_CAPACITY - 1) as i64
                 )
             }
             DispatchObservation::Up(_) => panic!("newest Up observation must be dropped"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
+            DispatchObservation::StaleMetadata(_) => panic!("stale observation not expected"),
+            DispatchObservation::BlockedUnfocused(_) => {
+                panic!("blocked observation not expected")
+            }
         }
     }
 }

@@ -3,7 +3,9 @@ use super::{
     PreparedStalePacket, ReleaseRequestResult, RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
-use crate::time::{DurationTicks, TimelineTicks};
+#[cfg(test)]
+use crate::time::DurationTicks;
+use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
@@ -58,9 +60,8 @@ impl RuntimeDispatchCoordinator {
     /// Return the next authored dispatch deadline in the playback tick domain.
     /// The authored schedule remains immutable; recovery is represented only
     /// by `recovery_offset_ticks`.
-    pub fn next_authored_ticks(
+    pub(crate) fn next_authored_ticks_uncompensated(
         &self,
-        _dispatch_lead: DurationTicks,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         let Some(batch) = self.schedule.batches.get(self.cursor) else {
             return Ok(None);
@@ -70,8 +71,21 @@ impl RuntimeDispatchCoordinator {
                 "packet id does not fit in usize".to_string(),
             ))
         })?;
-        let effective = self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
+        let effective = self.packet_effective_deadline_ticks_uncompensated(packet_index)?;
         Ok(Some(effective))
+    }
+
+    #[cfg(not(test))]
+    pub fn next_authored_ticks(&self) -> Result<Option<TimelineTicks>, CoordinatorError> {
+        self.next_authored_ticks_uncompensated()
+    }
+
+    #[cfg(test)]
+    pub fn next_authored_ticks(
+        &self,
+        _dispatch_lead: DurationTicks,
+    ) -> Result<Option<TimelineTicks>, CoordinatorError> {
+        self.next_authored_ticks_uncompensated()
     }
 
     /// Return the earliest upcoming physical boundary from the authored and
@@ -84,8 +98,8 @@ impl RuntimeDispatchCoordinator {
     pub fn next_uncompensated_deadline_ticks(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
-        let authored = self.next_authored_ticks(DurationTicks::ZERO)?;
-        let pending = self.next_pending_release_ticks(DurationTicks::ZERO)?;
+        let authored = self.next_authored_ticks_uncompensated()?;
+        let pending = self.next_pending_release_ticks()?;
         if self.release_recovery_started_ticks.is_some() {
             return Ok(pending);
         }
@@ -131,18 +145,15 @@ impl RuntimeDispatchCoordinator {
     pub fn pop_next_due_authored(
         &mut self,
         now_us: u64,
-        dispatch_lead_us: u64,
+        _dispatch_lead_us: u64,
     ) -> Option<(RuntimeBatch, u64)> {
-        let (index, lead) = self
-            .pop_next_due_authored_ticks(
-                TimelineTicks::from_raw(now_us),
-                DurationTicks::from_raw(dispatch_lead_us),
-            )
+        let index = self
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
             .ok()??;
         let popped = self
             .schedule
             .materialize_batch(index, self.recovery_offset_ticks.as_u64());
-        Some((popped, lead.as_u64()))
+        Some((popped, 0))
     }
 
     /// Variant of [`pop_next_due_authored`] that returns the batch index.
@@ -154,20 +165,16 @@ impl RuntimeDispatchCoordinator {
     pub fn pop_next_due_authored_index(
         &mut self,
         now_us: u64,
-        dispatch_lead_us: u64,
+        _dispatch_lead_us: u64,
     ) -> Option<(usize, u64)> {
-        self.pop_next_due_authored_ticks(
-            TimelineTicks::from_raw(now_us),
-            DurationTicks::from_raw(dispatch_lead_us),
-        )
-        .ok()?
-        .map(|(index, lead)| (index, lead.as_u64()))
+        self.pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
+            .ok()?
+            .map(|index| (index, 0))
     }
 
-    pub fn prepare_next_due_authored(
+    fn prepare_next_due_authored_uncompensated(
         &mut self,
         now: TimelineTicks,
-        _dispatch_lead: DurationTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         if self.cursor >= self.schedule.batches.len()
             || self.release_recovery_started_ticks.is_some()
@@ -202,7 +209,7 @@ impl RuntimeDispatchCoordinator {
             ));
         }
         let effective_scheduled_ticks =
-            self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
+            self.packet_effective_deadline_ticks_uncompensated(packet_index)?;
         let deadline = effective_scheduled_ticks;
         if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(&batch)) {
             return Ok(None);
@@ -215,6 +222,23 @@ impl RuntimeDispatchCoordinator {
             packet_batch_count: usize::from(packet.batch_count),
             packet_kind,
         }))
+    }
+
+    #[cfg(not(test))]
+    pub fn prepare_next_due_authored(
+        &mut self,
+        now: TimelineTicks,
+    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
+        self.prepare_next_due_authored_uncompensated(now)
+    }
+
+    #[cfg(test)]
+    pub fn prepare_next_due_authored(
+        &mut self,
+        now: TimelineTicks,
+        _dispatch_lead: DurationTicks,
+    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
+        self.prepare_next_due_authored_uncompensated(now)
     }
 
     /// Prepare the current compiler packet when it contains only unmatched Up
@@ -557,14 +581,13 @@ impl RuntimeDispatchCoordinator {
     pub fn pop_next_due_authored_ticks(
         &mut self,
         now: TimelineTicks,
-        dispatch_lead: DurationTicks,
-    ) -> Result<Option<(usize, DurationTicks)>, CoordinatorError> {
-        let Some(prepared) = self.prepare_next_due_authored(now, dispatch_lead)? else {
+    ) -> Result<Option<usize>, CoordinatorError> {
+        let Some(prepared) = self.prepare_next_due_authored_uncompensated(now)? else {
             return Ok(None);
         };
         self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
             crate::time::TimeArithmeticError::Overflow,
         ))?;
-        Ok(Some((prepared.index, DurationTicks::ZERO)))
+        Ok(Some(prepared.index))
     }
 }

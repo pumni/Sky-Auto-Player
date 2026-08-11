@@ -96,6 +96,5 @@ pub(crate) use release::{
 use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
-pub(super) use super::publish_backend_metrics;
 use sky_dispatch_core::coordinator::PreparedBatch;
 use sky_dispatch_win32::input::PhysicalPacket;

@@ -3,30 +3,27 @@ use super::{
     PendingRelease, RuntimeDispatchCoordinator,
 };
 use crate::model::*;
-use crate::time::{DurationTicks, TimelineTicks};
+use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
     #[cfg(test)]
-    pub fn next_pending_release_us(&self, lead_up: u64) -> Option<u64> {
+    pub fn next_pending_release_us(&self, _dispatch_lead_us: u64) -> Option<u64> {
         if self.pending_mask == 0 {
             return None;
         }
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .map(|pending| pending.get_effective_release_us(lead_up))
+            .map(|pending| pending.get_effective_release_us())
             .min()
     }
 
-    pub fn next_pending_release_ticks(
-        &self,
-        _lead_up: DurationTicks,
-    ) -> Result<Option<TimelineTicks>, CoordinatorError> {
+    pub fn next_pending_release_ticks(&self) -> Result<Option<TimelineTicks>, CoordinatorError> {
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .map(|pending| pending.get_effective_release_ticks(DurationTicks::ZERO))
+            .map(|pending| pending.get_effective_release_ticks())
             .try_fold(None::<TimelineTicks>, |current, value| {
                 let value = value?;
                 Ok(Some(current.map_or(value, |best| best.min(value))))
@@ -34,23 +31,22 @@ impl RuntimeDispatchCoordinator {
     }
 
     #[cfg(test)]
-    pub fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize {
+    pub fn pending_count_due_at(&self, deadline_us: u64) -> usize {
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .filter(|pending| pending.get_effective_release_us(lead_up) <= deadline_us)
+            .filter(|pending| pending.get_effective_release_us() <= deadline_us)
             .count()
     }
 
     pub fn pending_count_due_at_ticks(
         &self,
         deadline: TimelineTicks,
-        _lead_up: DurationTicks,
     ) -> Result<usize, CoordinatorError> {
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .map(|pending| pending.get_effective_release_ticks(DurationTicks::ZERO))
+            .map(|pending| pending.get_effective_release_ticks())
             .try_fold(0usize, |count, value| {
                 Ok(count + usize::from(value? <= deadline))
             })
@@ -62,30 +58,27 @@ impl RuntimeDispatchCoordinator {
         if self.pending_mask == 0 {
             return Ok(None);
         }
-        let deadline_ticks = self
-            .next_pending_release_ticks(DurationTicks::ZERO)?
-            .ok_or_else(|| {
-                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
-                    "pending mask is set but no pending release exists".to_string(),
-                ))
-            })?;
+        let deadline_ticks = self.next_pending_release_ticks()?.ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "pending mask is set but no pending release exists".to_string(),
+            ))
+        })?;
         Ok(Some(PendingDispatchPlan {
             deadline_ticks,
             polyphony: self
-                .pending_count_due_at_ticks(deadline_ticks, DurationTicks::ZERO)?
+                .pending_count_due_at_ticks(deadline_ticks)?
                 .clamp(1, MAX_KEYS),
         }))
     }
 
     pub fn next_deadline_ticks(
         &self,
-        _dispatch_lead: DurationTicks,
         pending_plan: Option<&PendingDispatchPlan>,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         if self.release_recovery_started_ticks.is_some() {
             return Ok(pending_plan.map(|plan| plan.deadline_ticks));
         }
-        let authored = self.next_authored_ticks(DurationTicks::ZERO)?;
+        let authored = self.next_authored_ticks_uncompensated()?;
         let pending = pending_plan.map(|plan| plan.deadline_ticks);
         Ok(match (authored, pending) {
             (Some(a), Some(p)) => Some(a.min(p)),
@@ -111,7 +104,7 @@ impl RuntimeDispatchCoordinator {
         let deadline_us = self.next_pending_release_us(0)?;
         Some(PendingDispatchPlan {
             deadline_ticks: TimelineTicks::from_raw(deadline_us),
-            polyphony: self.pending_count_due_at(deadline_us, 0).clamp(1, MAX_KEYS),
+            polyphony: self.pending_count_due_at(deadline_us).clamp(1, MAX_KEYS),
         })
     }
 
@@ -135,12 +128,16 @@ impl RuntimeDispatchCoordinator {
     }
 
     #[cfg(test)]
-    pub fn next_deadline_us(&self, dispatch_lead_us: u64, lead_up: u64) -> Option<u64> {
+    pub fn next_deadline_us(
+        &self,
+        dispatch_lead_us: u64,
+        _dispatch_lead_up_us: u64,
+    ) -> Option<u64> {
         if self.release_recovery_active() {
-            return self.next_pending_release_us(lead_up);
+            return self.next_pending_release_us(0);
         }
         let authored = self.next_authored_us(dispatch_lead_us);
-        let pending = self.next_pending_release_us(lead_up);
+        let pending = self.next_pending_release_us(0);
         match (authored, pending) {
             (Some(a), Some(p)) => Some(a.min(p)),
             (Some(a), None) => Some(a),
@@ -153,9 +150,9 @@ impl RuntimeDispatchCoordinator {
     pub fn pop_due_pending(
         &mut self,
         now_us: u64,
-        lead_up: u64,
+        _dispatch_lead_us: u64,
     ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
-        self.pop_due_pending_until(now_us, lead_up)
+        self.pop_due_pending_until(now_us)
     }
 
     #[cfg(test)]
@@ -164,15 +161,11 @@ impl RuntimeDispatchCoordinator {
         now_us: u64,
         plan: &PendingDispatchPlan,
     ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
-        self.pop_due_pending_until(now_us.min(plan.deadline_ticks.as_u64()), 0)
+        self.pop_due_pending_until(now_us.min(plan.deadline_ticks.as_u64()))
     }
 
     #[cfg(test)]
-    fn pop_due_pending_until(
-        &mut self,
-        now_us: u64,
-        lead_up: u64,
-    ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
+    fn pop_due_pending_until(&mut self, now_us: u64) -> SmallVec<[PendingRelease; MAX_KEYS]> {
         if self.pending_mask == 0 {
             return SmallVec::new();
         }
@@ -181,7 +174,7 @@ impl RuntimeDispatchCoordinator {
             .pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .filter(|pending| pending.get_effective_release_us(lead_up) <= now_us)
+            .filter(|pending| pending.get_effective_release_us() <= now_us)
             .cloned()
             .collect();
 
@@ -191,7 +184,7 @@ impl RuntimeDispatchCoordinator {
 
         due.sort_by_key(|p| {
             (
-                p.get_effective_release_us(lead_up),
+                p.get_effective_release_us(),
                 p.source_action_index,
                 p.scan_code,
             )
@@ -216,7 +209,7 @@ impl RuntimeDispatchCoordinator {
         let mut due_with_deadline: SmallVec<[(PendingRelease, TimelineTicks); MAX_KEYS]> =
             SmallVec::new();
         for pending in self.pending_by_slot.iter().filter_map(Option::as_ref) {
-            let deadline = pending.get_effective_release_ticks(DurationTicks::ZERO)?;
+            let deadline = pending.get_effective_release_ticks()?;
             if deadline <= limit {
                 due_with_deadline.push((pending.clone(), deadline));
             }

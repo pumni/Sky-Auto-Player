@@ -234,17 +234,14 @@ pub struct PendingRelease {
 impl PendingRelease {
     #[allow(dead_code)]
     #[cfg(test)]
-    pub fn get_effective_release_us(&self, _dispatch_lead: u64) -> u64 {
+    pub fn get_effective_release_us(&self) -> u64 {
         self.release_not_before_ticks
             .as_u64()
             .max(self.scheduled_release_us)
             .max(self.next_retry_ticks.as_u64())
     }
 
-    pub fn get_effective_release_ticks(
-        &self,
-        _dispatch_lead: DurationTicks,
-    ) -> Result<TimelineTicks, CoordinatorError> {
+    pub fn get_effective_release_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
         Ok(self
             .release_not_before_ticks
             .max(self.scheduled_release_ticks)
@@ -343,7 +340,7 @@ impl RuntimeDispatchCoordinator {
     pub fn new<F>(
         schedule: RuntimeSchedule,
         min_hold_us: u64,
-        delivery_margin_us: u64,
+        _delivery_margin_us: u64,
         us_to_ticks: F,
     ) -> Self
     where
@@ -353,22 +350,17 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             DurationTicks::from_raw(us_to_ticks(min_hold_us).as_u64()),
-            delivery_margin_us,
-            DurationTicks::from_raw(us_to_ticks(delivery_margin_us).as_u64()),
             |microseconds| Ok(us_to_ticks(microseconds)),
         )
         .expect("legacy coordinator construction uses an infallible tick converter")
     }
 
     /// Construct the coordinator with all scheduling durations represented in
-    /// the QPC tick domain. The legacy delivery-margin arguments are accepted
-    /// for source compatibility but are intentionally ignored.
+    /// the QPC tick domain.
     pub fn try_new_ticks<F>(
         schedule: RuntimeSchedule,
         min_hold_us: u64,
         min_hold_ticks: DurationTicks,
-        _delivery_margin_us: u64,
-        _delivery_margin_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, CoordinatorError>
     where

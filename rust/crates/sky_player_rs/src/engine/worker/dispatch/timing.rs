@@ -205,6 +205,7 @@ pub(crate) struct DownSendTiming {
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
     pub(crate) sender_duration_ticks: DurationTicks,
+    pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
     pub(crate) observation_evidence: DispatchObservationEvidence,
@@ -326,7 +327,6 @@ pub(crate) fn interpret_down_send_timing(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
-    _lead_down_saturated: bool,
 ) -> Result<DownSendTiming, DispatchStep> {
     if let Some(completed_qpc) = result_completed_ticks
         && completed_qpc
@@ -355,6 +355,15 @@ pub(crate) fn interpret_down_send_timing(
     // `resolve_send_boundaries`.
     let sender_started_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
     let sender_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
+    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
+        TimelineTicks::from_raw(sender_started_qpc.as_u64()),
+        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on dispatch-start timing conversion failure: {error}"
+        ))
+    })?;
     let completion_error_ticks_value =
         match signed_timeline_delta_ticks(completed_effective_ticks, view.batch_scheduled_ticks) {
             Ok(value) => value,
@@ -422,6 +431,7 @@ pub(crate) fn interpret_down_send_timing(
         sender_started_effective_ticks,
         completed_effective_ticks,
         sender_duration_ticks,
+        dispatch_start_error_ticks,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         observation_evidence,
@@ -430,26 +440,6 @@ pub(crate) fn interpret_down_send_timing(
         strict_completion_late,
         retry_late_abort,
     })
-}
-
-pub(crate) fn read_qpc_us(
-    qpc_clock: QpcClock,
-    clock_state: &PlaybackClockState,
-) -> Result<u64, DispatchStep> {
-    match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => Ok(us),
-                Err(error) => Err(DispatchStep::Terminate(format!(
-                    "QPC us conversion failure: {error:?}"
-                ))),
-            }
-        }
-        Err(error) => Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    }
 }
 
 #[cfg(test)]

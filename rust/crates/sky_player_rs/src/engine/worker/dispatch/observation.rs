@@ -21,6 +21,25 @@ pub enum DispatchObservation {
     Down(DownObservation),
     Up(UpObservation),
     Wait(WaitObservation),
+    StaleMetadata(StaleMetadataObservation),
+    BlockedUnfocused(BlockedUnfocusedObservation),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StaleMetadataObservation {
+    pub source_action_index: u32,
+    pub effective_scheduled_ticks: TimelineTicks,
+    pub effective_now_ticks: TimelineTicks,
+    pub suppressed_intent_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BlockedUnfocusedObservation {
+    pub event_index: u32,
+    pub authored_ticks: TimelineTicks,
+    pub effective_deadline_ticks: TimelineTicks,
+    pub effective_now_ticks: TimelineTicks,
+    pub polyphony: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -37,9 +56,9 @@ pub struct DownTraceObservation {
     pub wake_ticks: TimelineTicks,
     pub sender_started_ticks: Option<TimelineTicks>,
     pub sender_completed_ticks: Option<TimelineTicks>,
+    pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
-    pub applied_lead_ticks: DurationTicks,
     pub recovered_retry_late: bool,
     pub recovered_partial_up: bool,
     pub strict_completion_late: bool,
@@ -49,7 +68,6 @@ pub struct DownTraceObservation {
 pub struct DownObservation {
     pub path: DispatchPath,
     pub physical_target_qpc: QpcTicks,
-    pub lead_down_saturated: bool,
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_ticks: DurationTicks,
     pub timeline_rebase_max_ticks: DurationTicks,
@@ -137,9 +155,9 @@ pub struct UpTraceObservation {
     pub wake_ticks: TimelineTicks,
     pub sender_started_ticks: Option<TimelineTicks>,
     pub sender_completed_ticks: Option<TimelineTicks>,
+    pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
-    pub applied_lead_ticks: DurationTicks,
     pub deferred_ticks: DurationTicks,
     pub recovery_required: bool,
 }
@@ -156,8 +174,6 @@ pub struct UpObservation {
     pub confirmed_mask: u16,
     pub skipped_mask: u16,
     pub result_status: SendTransactionStatus,
-    pub lead_up_ticks: DurationTicks,
-    pub lead_up_saturated: bool,
     pub completed_effective_ticks: TimelineTicks,
     pub scheduled_ticks: TimelineTicks,
     pub deferred_ticks: DurationTicks,
@@ -172,7 +188,7 @@ pub(super) fn record_down_send_telemetry(
     observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
     core_post_send_us: u64,
-    dispatch_cost_us: u64,
+    completion_residual_us: u64,
     post_send_metrics_available: bool,
 ) -> Result<(&'static str, bool), DispatchStep> {
     let trace = observation.trace;
@@ -220,12 +236,12 @@ pub(super) fn record_down_send_telemetry(
                 wake_ticks: trace.wake_ticks,
                 send_started_ticks: trace.sender_started_ticks,
                 send_completed_ticks: trace.sender_completed_ticks,
-                dispatch_cost_us,
+                completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,
+                dispatch_start_error_ticks: trace.dispatch_start_error_ticks,
                 completion_error_ticks: trace.completion_error_ticks,
                 authored_completion_error_ticks: trace.authored_completion_error_ticks,
-                applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
                 requested: observation.requested_count(),
@@ -247,7 +263,7 @@ pub(super) fn record_release_telemetry(
     observation: &UpObservation,
     qpc_clock: QpcClock,
     core_post_send_us: u64,
-    dispatch_cost_us: u64,
+    completion_residual_us: u64,
     post_send_metrics_available: bool,
 ) -> Result<(), DispatchStep> {
     let trace = observation.trace;
@@ -298,12 +314,12 @@ pub(super) fn record_release_telemetry(
                 wake_ticks: trace.wake_ticks,
                 send_started_ticks: trace.sender_started_ticks,
                 send_completed_ticks: trace.sender_completed_ticks,
-                dispatch_cost_us,
+                completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,
+                dispatch_start_error_ticks: trace.dispatch_start_error_ticks,
                 completion_error_ticks: trace.completion_error_ticks,
                 authored_completion_error_ticks: trace.authored_completion_error_ticks,
-                applied_lead_ticks: trace.applied_lead_ticks,
             },
             TraceDelivery {
                 requested: scan_count,

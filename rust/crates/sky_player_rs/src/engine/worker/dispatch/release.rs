@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
-    pub(crate) lead_up_ticks: DurationTicks,
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
     pub(crate) quit_requested: &'a AtomicBool,
@@ -132,7 +131,7 @@ pub(super) struct ReleaseReconciliation {
     pub(super) up_completion_lateness_ticks: Option<DurationTicks>,
     pub(super) up_completion_error_ticks: i64,
     pub(super) up_authored_completion_error_ticks: i64,
-    pub(super) applied_lead_ticks: DurationTicks,
+    pub(super) dispatch_start_error_ticks: i64,
     pub(super) observation_evidence: DispatchObservationEvidence,
 }
 
@@ -224,7 +223,6 @@ pub(crate) fn dispatch_due_pending_releases(
     RELEASE_READY_REACHED.store(false, Ordering::SeqCst);
     let PendingReleaseContext {
         due_pending,
-        lead_up_ticks,
         physical_target_qpc,
         frozen_budget,
         quit_requested,
@@ -280,7 +278,7 @@ pub(crate) fn dispatch_due_pending_releases(
         timing,
         &due_pending,
         &send,
-        lead_up_ticks,
+        physical_target_qpc,
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -339,8 +337,6 @@ pub(crate) fn dispatch_due_pending_releases(
         confirmed_mask: send.transport.confirmed_mask,
         skipped_mask: send.transport.skipped_mask,
         result_status: send.transport.status,
-        lead_up_ticks: reconciliation.applied_lead_ticks,
-        lead_up_saturated: false,
         completed_effective_ticks: send.completed_effective_ticks,
         scheduled_ticks: reconciliation.scheduled_ticks,
         deferred_ticks: reconciliation.deferred_ticks,
@@ -359,9 +355,9 @@ pub(crate) fn dispatch_due_pending_releases(
             wake_ticks: send.actual_ticks,
             sender_started_ticks: send.sender_started_effective_ticks,
             sender_completed_ticks: Some(send.completed_effective_ticks),
+            dispatch_start_error_ticks: reconciliation.dispatch_start_error_ticks,
             completion_error_ticks: reconciliation.up_completion_error_ticks,
             authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
-            applied_lead_ticks: reconciliation.applied_lead_ticks,
             deferred_ticks: reconciliation.deferred_ticks,
             recovery_required: reconciliation.recovery_required,
         },
@@ -541,7 +537,7 @@ fn reconcile_release_recovery(
     timing: &WorkerTimingState,
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
-    lead_up_ticks: DurationTicks,
+    physical_target_qpc: QpcTicks,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     // The caller has already fail-closed on any backend-skipped disagreement
     // (`force_full_cleanup` + terminate). Confirmed-only reconciliation below
@@ -586,7 +582,7 @@ fn reconcile_release_recovery(
         clock_state,
         due_pending,
         send,
-        lead_up_ticks,
+        physical_target_qpc,
         recovery_required,
         recovery_pause_ticks,
     )
@@ -598,14 +594,14 @@ fn reconcile_release_outcome(
     _clock_state: &mut PlaybackClockState,
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
-    lead_up_ticks: DurationTicks,
+    physical_target_qpc: QpcTicks,
     recovery_required: bool,
     recovery_pause_ticks: Option<DurationTicks>,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     let mut first_index: Option<usize> = None;
     let mut first_deadline: Option<TimelineTicks> = None;
     for (index, pending) in due_pending.iter().enumerate() {
-        let deadline = match pending.get_effective_release_ticks(lead_up_ticks) {
+        let deadline = match pending.get_effective_release_ticks() {
             Ok(deadline) => deadline,
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
@@ -696,6 +692,15 @@ fn reconcile_release_outcome(
                 )));
             }
         };
+    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
+        TimelineTicks::from_raw(send.sender_started_qpc.as_u64()),
+        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-off dispatch-start timing conversion failure: {error}"
+        ))
+    })?;
     let observation_evidence = DispatchObservationEvidence {
         status: send.transport.status,
         attempts: send.attempts,
@@ -719,7 +724,7 @@ fn reconcile_release_outcome(
         up_completion_lateness_ticks,
         up_completion_error_ticks,
         up_authored_completion_error_ticks,
-        applied_lead_ticks: DurationTicks::ZERO,
+        dispatch_start_error_ticks,
         observation_evidence,
     })
 }

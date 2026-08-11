@@ -190,13 +190,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             }
         };
     }
-    let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
         min_hold_ticks,
-        0,
-        delivery_margin_ticks,
         |us| {
             qpc_clock
                 .timeline_from_us(us)

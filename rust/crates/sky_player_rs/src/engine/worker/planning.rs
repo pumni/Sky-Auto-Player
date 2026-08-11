@@ -119,13 +119,11 @@ pub(crate) fn plan_next_dispatch_projected(
     let authored = match super::dispatch::timing::current_authored_physical_path(coordinator)? {
         Some(path) => Some(AuthoredDispatchPlan {
             path,
-            deadline_ticks: coordinator
-                .next_authored_ticks(sky_dispatch_core::time::DurationTicks::ZERO)?
-                .ok_or_else(|| {
-                    PlanningError::Coordinator(CoordinatorError::TimeConversion(
-                        "authored path exists but no authored deadline exists".to_string(),
-                    ))
-                })?,
+            deadline_ticks: coordinator.next_authored_ticks()?.ok_or_else(|| {
+                PlanningError::Coordinator(CoordinatorError::TimeConversion(
+                    "authored path exists but no authored deadline exists".to_string(),
+                ))
+            })?,
         }),
         None => None,
     };

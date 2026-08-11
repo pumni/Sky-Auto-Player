@@ -22,7 +22,8 @@ const DUE_US: u64 = 10_000;
 #[derive(Default)]
 struct Samples {
     wake_to_send_start_us: Vec<u64>,
-    sendinput_duration_us: Vec<u64>,
+    dispatch_start_error_us: Vec<i64>,
+    send_duration_us: Vec<u64>,
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
 }
@@ -38,6 +39,12 @@ fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usiz
 
 fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
+    let signed_ticks_to_us = |value: i64| {
+        qpc_clock
+            .duration_to_us(DurationTicks::from_raw(value.unsigned_abs()))
+            .expect("timing conversion") as i64
+            * value.signum()
+    };
     match observation {
         DispatchObservation::Down(value) => {
             let wake_to_send_start_us = value.wake_qpc.and_then(|wake| {
@@ -55,19 +62,17 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 )
             });
             samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            samples.sendinput_duration_us.push(
+            samples
+                .dispatch_start_error_us
+                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.send_duration_us.push(
                 qpc_clock
                     .duration_to_us(value.sender_duration_ticks)
                     .expect("duration"),
             );
-            samples.completion_error_us.push(
-                qpc_clock
-                    .duration_to_us(DurationTicks::from_raw(
-                        value.trace.completion_error_ticks.unsigned_abs(),
-                    ))
-                    .expect("error") as i64
-                    * value.trace.completion_error_ticks.signum(),
-            );
+            samples
+                .completion_error_us
+                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
         }
         DispatchObservation::Up(value) => {
             let wake_to_send_start_us = value.wake_qpc.and_then(|wake| {
@@ -85,22 +90,26 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 )
             });
             samples.wake_to_send_start_us.push(wake_to_send_start_us);
-            samples.sendinput_duration_us.push(
+            samples
+                .dispatch_start_error_us
+                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.send_duration_us.push(
                 qpc_clock
                     .duration_to_us(value.sender_duration_ticks)
                     .expect("duration"),
             );
-            samples.completion_error_us.push(
-                qpc_clock
-                    .duration_to_us(DurationTicks::from_raw(
-                        value.up_completion_error_ticks.unsigned_abs(),
-                    ))
-                    .expect("error") as i64
-                    * value.up_completion_error_ticks.signum(),
-            );
+            samples
+                .completion_error_us
+                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
         }
         DispatchObservation::Wait(wait) => {
             panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")
+        }
+        DispatchObservation::StaleMetadata(value) => {
+            panic!("benchmark handoff queued unexpected stale metadata: {value:?}")
+        }
+        DispatchObservation::BlockedUnfocused(value) => {
+            panic!("benchmark handoff queued unexpected blocked observation: {value:?}")
         }
     }
 }
@@ -192,8 +201,13 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         ITERATIONS,
         "scenario did not produce the requested number of timing samples"
     );
+    assert_eq!(
+        samples.dispatch_start_error_us.len(),
+        samples.physical_dispatches,
+        "every physical dispatch must have one start-error sample"
+    );
     json!({
-        "controller": "dispatch_cost",
+        "controller": "dispatch_start_error",
         "deadline_wake_to_send_start_us": {
             "p50": quantile(&mut samples.wake_to_send_start_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_send_start_us, 95, 100),
@@ -201,7 +215,16 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max": samples.wake_to_send_start_us.iter().copied().max(),
             "samples": samples.wake_to_send_start_us.len(),
         },
-        "completion_error_us": {
+        "dispatch_start_error_us": {
+            "min": samples.dispatch_start_error_us.iter().copied().min(),
+            "p50": quantile(&mut samples.dispatch_start_error_us, 50, 100),
+            "p95": quantile(&mut samples.dispatch_start_error_us, 95, 100),
+            "p99": quantile(&mut samples.dispatch_start_error_us, 99, 100),
+            "p99_9": quantile(&mut samples.dispatch_start_error_us, 999, 1000),
+            "max": samples.dispatch_start_error_us.iter().copied().max(),
+            "samples": samples.dispatch_start_error_us.len(),
+        },
+        "completion_error_us_diagnostic": {
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
             "p95": quantile(&mut samples.completion_error_us, 95, 100),
@@ -209,12 +232,14 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max_abs": samples.completion_error_us.iter().map(|value| value.unsigned_abs()).max(),
             "samples": samples.completion_error_us.len(),
         },
-        "sendinput_duration_us": {
-            "p50": quantile(&mut samples.sendinput_duration_us, 50, 100),
-            "p95": quantile(&mut samples.sendinput_duration_us, 95, 100),
-            "p99": quantile(&mut samples.sendinput_duration_us, 99, 100),
-            "max": samples.sendinput_duration_us.iter().copied().max(),
-            "samples": samples.sendinput_duration_us.len(),
+        "send_duration_us": {
+            "min": samples.send_duration_us.iter().copied().min(),
+            "p50": quantile(&mut samples.send_duration_us, 50, 100),
+            "p95": quantile(&mut samples.send_duration_us, 95, 100),
+            "p99": quantile(&mut samples.send_duration_us, 99, 100),
+            "p99_9": quantile(&mut samples.send_duration_us, 999, 1000),
+            "max": samples.send_duration_us.iter().copied().max(),
+            "samples": samples.send_duration_us.len(),
         },
         "physical_dispatches": samples.physical_dispatches,
     })

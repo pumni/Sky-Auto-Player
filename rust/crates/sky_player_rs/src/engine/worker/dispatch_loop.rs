@@ -76,7 +76,6 @@ pub(crate) fn dispatch_due_from_plan(
     timing: &super::WorkerTimingState,
     runtime: &mut super::WorkerRuntime,
     local_metrics: &mut super::WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
     secondary_errors: &mut Vec<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
@@ -87,7 +86,6 @@ pub(crate) fn dispatch_due_from_plan(
     desired_pause: &AtomicBool,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    metrics: &crate::engine::telemetry::SharedMetrics,
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: &mut super::dispatch::PendingObservationQueue,
 ) -> super::DispatchStep {
@@ -97,7 +95,6 @@ pub(crate) fn dispatch_due_from_plan(
         );
     }
     let pending_plan = plan.pending.as_ref();
-    let lead_up_ticks = DurationTicks::ZERO;
     let due_pending = match pending_plan {
         Some(pending) => match resources
             .coordinator
@@ -127,7 +124,6 @@ pub(crate) fn dispatch_due_from_plan(
         match super::dispatch_due_pending_releases(
             super::PendingReleaseContext {
                 due_pending,
-                lead_up_ticks,
                 physical_target_qpc,
                 frozen_budget: *frozen_budget,
                 quit_requested,
@@ -190,7 +186,6 @@ pub(crate) fn dispatch_due_from_plan(
         timing,
         runtime,
         local_metrics,
-        last_published_error,
         focus_active,
         target_hwnd,
         target_generation,
@@ -198,7 +193,6 @@ pub(crate) fn dispatch_due_from_plan(
         skip_requested,
         panic_requested,
         desired_pause,
-        metrics,
         progress_clock,
         observer,
     )
@@ -601,7 +595,9 @@ pub(super) fn dispatch(
                     match super::dispatch_stale_packet(
                         prepared,
                         &mut resources.coordinator,
-                        &mut resources.telemetry.lock(),
+                        &core.observer.pending,
+                        &mut core.metrics.observer_dropped_samples,
+                        &mut core.metrics.observer_queue_high_watermark,
                         stale_now,
                     ) {
                         super::DispatchStep::Dispatched => {
@@ -687,7 +683,6 @@ pub(super) fn dispatch(
                 &timing,
                 &mut core.runtime,
                 &mut core.metrics,
-                &mut core.errors.last_published,
                 &mut core.errors.secondary,
                 focus_active,
                 target_hwnd,
@@ -698,7 +693,6 @@ pub(super) fn dispatch(
                 desired_pause,
                 supervisor_heartbeat_ticks,
                 timing.lease_timeout_ticks,
-                metrics,
                 &shared.publication.progress_clock,
                 &mut core.observer.pending,
             );
@@ -798,7 +792,6 @@ pub(super) fn dispatch(
                         &timing,
                         &mut core.runtime,
                         &mut core.metrics,
-                        &mut core.errors.last_published,
                         &mut core.errors.secondary,
                         focus_active,
                         target_hwnd,
@@ -809,7 +802,6 @@ pub(super) fn dispatch(
                         desired_pause,
                         supervisor_heartbeat_ticks,
                         timing.lease_timeout_ticks,
-                        metrics,
                         &shared.publication.progress_clock,
                         &mut core.observer.pending,
                     ) {

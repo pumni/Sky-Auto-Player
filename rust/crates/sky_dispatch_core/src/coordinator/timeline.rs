@@ -126,10 +126,9 @@ impl RuntimeDispatchCoordinator {
         Ok(release_not_before)
     }
 
-    pub fn packet_effective_deadline_ticks(
+    pub(crate) fn packet_effective_deadline_ticks_uncompensated(
         &self,
         packet_index: usize,
-        _dispatch_lead: DurationTicks,
     ) -> Result<TimelineTicks, CoordinatorError> {
         let packet = *self
             .schedule
@@ -152,5 +151,22 @@ impl RuntimeDispatchCoordinator {
         // Singular release-floor source of truth for the packet's physical Up.
         let release_not_before = self.packet_release_floor_ticks(packet_index)?;
         Ok(authored.max(release_not_before))
+    }
+
+    #[cfg(not(test))]
+    pub fn packet_effective_deadline_ticks(
+        &self,
+        packet_index: usize,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        self.packet_effective_deadline_ticks_uncompensated(packet_index)
+    }
+
+    #[cfg(test)]
+    pub fn packet_effective_deadline_ticks(
+        &self,
+        packet_index: usize,
+        _dispatch_lead: crate::time::DurationTicks,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        self.packet_effective_deadline_ticks_uncompensated(packet_index)
     }
 }

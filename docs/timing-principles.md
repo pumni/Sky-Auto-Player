@@ -128,7 +128,10 @@ publishes the final report. Observer output cannot authorize or reorder input.
 The authoritative sender-side metrics are:
 
 - `sender_started_qpc` and `sender_completed_qpc`;
-- QPC sender duration and completion residual;
+- signed `dispatch_start_error_ticks = sender_started_qpc - physical_target_qpc`
+  as the primary dispatch timing metric;
+- `send_duration = sender_completed_qpc - sender_started_qpc`;
+- completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
 - release-floor/defer/recovery evidence; and
 - bounded observer queue/drop and telemetry counters.
@@ -137,6 +140,10 @@ The authoritative sender-side metrics are:
 They must not be described as game-observed timing. The compatibility report
 field `estimator_state_json` is deprecated and returns a non-operative marker;
 old lead fields remain zero. No production decision may depend on them.
+
+The signed start residual may be early or late and is retained without taking
+an absolute value. It is observation/benchmark output, not controller
+feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
 
 ## 8. Validation obligations
 

@@ -46,7 +46,6 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) timing: WorkerTimingState,
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
-    pub(crate) last_published_error: Option<String>,
     pub(crate) secondary_errors: Vec<String>,
     pub(crate) focus_active: AtomicBool,
     pub(crate) target_hwnd: AtomicIsize,
@@ -295,13 +294,8 @@ impl ProductionDispatchTestHarness {
         let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
             .expect("schedule");
         let qpc_clock = QpcClock::initialize().expect("qpc_clock");
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            schedule,
-            0,
-            DurationTicks::ZERO,
-            0,
-            DurationTicks::ZERO,
-            |us| {
+        let coordinator =
+            RuntimeDispatchCoordinator::try_new_ticks(schedule, 0, DurationTicks::ZERO, |us| {
                 qpc_clock
                     .duration_from_us(us)
                     .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
@@ -310,9 +304,8 @@ impl ProductionDispatchTestHarness {
                             "{error:?}"
                         ))
                     })
-            },
-        )
-        .expect("coordinator");
+            })
+            .expect("coordinator");
         let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
         backend.set_test_emitters();
         let waiter = HybridWaiter::new();
@@ -348,7 +341,6 @@ impl ProductionDispatchTestHarness {
                 generation: 0,
             })),
             local_metrics: WorkerMetricsLocal::default(),
-            last_published_error: None,
             secondary_errors: Vec::new(),
             focus_active: AtomicBool::new(true),
             target_hwnd: AtomicIsize::new(1),
@@ -557,13 +549,13 @@ impl ProductionDispatchTestHarness {
         let due_now = self
             .resources
             .coordinator
-            .next_authored_ticks(DurationTicks::ZERO)
+            .next_authored_ticks()
             .unwrap()
             .unwrap();
         let prepared = self
             .resources
             .coordinator
-            .prepare_next_due_authored(due_now, DurationTicks::ZERO)
+            .prepare_next_due_authored(due_now)
             .expect("prepare pending-release request")
             .expect("authored release request");
         self.resources
@@ -710,7 +702,6 @@ impl ProductionDispatchTestHarness {
             &self.timing,
             &mut self.runtime,
             &mut self.local_metrics,
-            &mut self.last_published_error,
             &mut self.secondary_errors,
             &self.focus_active,
             &self.target_hwnd,
@@ -721,7 +712,6 @@ impl ProductionDispatchTestHarness {
             &self.desired_pause,
             &self.supervisor_heartbeat_ticks,
             self.timing.lease_timeout_ticks,
-            &self.metrics,
             &self.progress_clock,
             &mut self.observer,
         )
@@ -789,7 +779,6 @@ impl ProductionDispatchTestHarness {
             &self.timing,
             &mut self.runtime,
             &mut self.local_metrics,
-            &mut self.last_published_error,
             &self.focus_active,
             &self.target_hwnd,
             &self.target_generation,
@@ -797,7 +786,6 @@ impl ProductionDispatchTestHarness {
             &self.skip_requested,
             &self.panic_requested,
             &self.desired_pause,
-            &self.metrics,
             &self.progress_clock,
             &mut self.observer,
         )
@@ -824,10 +812,8 @@ impl ProductionDispatchTestHarness {
             let now_ticks = self.resources.clock.now().expect("pending target QPC now");
             self.align_epoch_to_deadline_for_test(plan.deadline_ticks, now_ticks);
         }
-        let lead_up_ticks = DurationTicks::ZERO;
         let ctx = PendingReleaseContext {
             due_pending,
-            lead_up_ticks,
             physical_target_qpc: pending_plan
                 .map(|plan| {
                     self.resources

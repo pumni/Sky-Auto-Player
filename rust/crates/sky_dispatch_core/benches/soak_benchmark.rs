@@ -257,8 +257,6 @@ fn run_soak_scenario(
         schedule,
         NOTE_HOLD_US / 2,
         DurationTicks::from_raw(NOTE_HOLD_US / 2),
-        0,
-        DurationTicks::ZERO,
         |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
     )
     .map_err(|error| format!("coordinator construction failed: {error}"))?;
@@ -285,7 +283,7 @@ fn run_soak_scenario(
 
         // Advance to next coordinator deadline.
         if let Some(dl) = coordinator
-            .next_deadline_ticks(DurationTicks::ZERO, None)
+            .next_deadline_ticks(None)
             .map_err(|error| format!("coordinator deadline failed: {error}"))?
         {
             now_us = now_us.max(dl.as_u64());
@@ -363,8 +361,8 @@ fn run_soak_scenario(
         }
 
         // Pop next authored batch.
-        if let Some((batch_index, _)) = coordinator
-            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us), DurationTicks::ZERO)
+        if let Some(batch_index) = coordinator
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
             .map_err(|error| format!("coordinator authored pop failed: {error}"))?
         {
             let batch = coordinator

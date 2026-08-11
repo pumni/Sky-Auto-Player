@@ -1698,6 +1698,7 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 dispatch_cost_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
+                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: 0,
@@ -2455,12 +2456,12 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             wake_ticks: TimelineTicks::from_raw(13),
             send_started_ticks: Some(TimelineTicks::from_raw(20)),
             send_completed_ticks: Some(TimelineTicks::from_raw(25)),
-            dispatch_cost_us: 5,
+            completion_residual_us: 5,
             core_post_send_duration_us: 4,
             post_send_metrics_available: true,
+            dispatch_start_error_ticks: 8,
             completion_error_ticks: 1,
             authored_completion_error_ticks: 2,
-            applied_lead_ticks: DurationTicks::from_raw(2),
         },
         TraceDelivery {
             requested: 3,
@@ -2503,12 +2504,12 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            dispatch_cost_us: 0,
+            completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
+            dispatch_start_error_ticks: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
-            applied_lead_ticks: DurationTicks::ZERO,
         },
         TraceDelivery {
             requested: 1,
@@ -2540,12 +2541,12 @@ fn native_summary_ignores_non_backend_trace() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            dispatch_cost_us: 0,
+            completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
+            dispatch_start_error_ticks: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
-            applied_lead_ticks: DurationTicks::ZERO,
         },
         TraceDelivery {
             requested: 0,
@@ -3153,8 +3154,6 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         schedule,
         10_000,
         min_hold_ticks,
-        0,
-        DurationTicks::ZERO,
         |us| {
             qpc_clock
                 .timeline_from_us(us)
@@ -3328,18 +3327,14 @@ fn note_on_lateness_shifts_note_off_floor_one_to_one() {
 
     let min_hold_us = 10_000u64;
     let min_hold_ticks = DurationTicks::from_raw(min_hold_us);
-    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        min_hold_us,
-        min_hold_ticks,
-        0,
-        DurationTicks::ZERO,
-        |us| Ok(TimelineTicks::from_raw(us)),
-    )
-    .expect("coordinator");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::try_new_ticks(schedule, min_hold_us, min_hold_ticks, |us| {
+            Ok(TimelineTicks::from_raw(us))
+        })
+        .expect("coordinator");
 
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
         .unwrap()
         .unwrap();
 
@@ -3387,18 +3382,14 @@ fn fast_note_on_preserves_authored_note_off() {
 
     let min_hold_us = 10_000u64;
     let min_hold_ticks = DurationTicks::from_raw(min_hold_us);
-    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        min_hold_us,
-        min_hold_ticks,
-        0,
-        DurationTicks::ZERO,
-        |us| Ok(TimelineTicks::from_raw(us)),
-    )
-    .expect("coordinator");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::try_new_ticks(schedule, min_hold_us, min_hold_ticks, |us| {
+            Ok(TimelineTicks::from_raw(us))
+        })
+        .expect("coordinator");
 
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
         .unwrap()
         .unwrap();
 
@@ -3455,14 +3446,12 @@ fn late_first_event_does_not_move_second_event() {
         schedule,
         10_000,
         DurationTicks::from_raw(10_000),
-        0,
-        DurationTicks::ZERO,
         |us| Ok(TimelineTicks::from_raw(us)),
     )
     .expect("coordinator");
 
     let p1 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(11_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(11_000))
         .unwrap()
         .unwrap();
     assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
@@ -3475,7 +3464,7 @@ fn late_first_event_does_not_move_second_event() {
         .unwrap();
 
     let p2 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(20_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(20_000))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -3491,7 +3480,7 @@ fn late_first_event_does_not_move_second_event() {
         .unwrap();
 
     let p3 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(50_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(50_000))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -3544,14 +3533,12 @@ fn release_floor_does_not_move_unrelated_future_action() {
         schedule,
         10_000,
         DurationTicks::from_raw(10_000),
-        0,
-        DurationTicks::ZERO,
         |us| Ok(TimelineTicks::from_raw(us)),
     )
     .expect("coordinator");
 
     let p_down_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
         .unwrap()
         .unwrap();
     coordinator
@@ -3563,7 +3550,7 @@ fn release_floor_does_not_move_unrelated_future_action() {
         .unwrap();
 
     let p_up_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(25_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(25_000))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -3579,7 +3566,7 @@ fn release_floor_does_not_move_unrelated_future_action() {
         .unwrap();
 
     let p_down_b = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(30_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(30_000))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -3620,14 +3607,12 @@ fn explicit_release_recovery_may_shift_timeline() {
         schedule,
         10_000,
         DurationTicks::from_raw(10_000),
-        0,
-        DurationTicks::ZERO,
         |us| Ok(TimelineTicks::from_raw(us)),
     )
     .expect("coordinator");
 
     let p_down_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
         .unwrap()
         .unwrap();
     coordinator
@@ -3639,7 +3624,7 @@ fn explicit_release_recovery_may_shift_timeline() {
         .unwrap();
 
     let p_up_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(20_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(20_000))
         .unwrap()
         .unwrap();
     let (requested, _) = coordinator.commit_up_request(p_up_a).unwrap();
@@ -3709,14 +3694,12 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
         schedule,
         10_000,
         DurationTicks::from_raw(10_000),
-        0,
-        DurationTicks::ZERO,
         |us| Ok(TimelineTicks::from_raw(us)),
     )
     .expect("coordinator");
 
     let p1 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
         .unwrap()
         .unwrap();
     assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));

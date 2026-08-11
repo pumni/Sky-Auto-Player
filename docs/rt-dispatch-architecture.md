@@ -40,8 +40,9 @@ cause a replan.
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored/effective timestamps are used as authored. Pending
 release deadlines include only the completion-anchored hold floor and retry or
-recovery floors. Compatibility lead arguments may remain at APIs used by old
-tests/callers, but production ignores them and reports zero applied lead.
+recovery floors. Any remaining lead-shaped arguments are test-only
+compatibility seams; production coordinator APIs do not accept a dispatch lead
+and the publication adapter reports the historical applied-lead field as zero.
 
 The physical target is derived once from the playback epoch:
 
@@ -79,6 +80,17 @@ frozen plan
 The supplied `started` sample is the physical start/admission boundary. The
 sender reports `completed`; production does not subtract a learned send cost
 from the target. Completion is used for diagnostics and release ownership.
+
+The primary sender-side timing evidence is the signed start residual:
+
+```text
+dispatch_start_error_ticks = sender_started_qpc - physical_target_qpc
+send_duration = sender_completed_qpc - sender_started_qpc
+completion_error = sender_completed_qpc - physical_target_qpc  # diagnostic only
+```
+
+The start residual is benchmark/observability output only. It is never fed
+back into scheduling or used as adaptive compensation.
 
 Packet construction validates scan-code masks and sends Up entries before Down
 entries in one call. A zero, partial, skipped, mixed, or otherwise inconsistent

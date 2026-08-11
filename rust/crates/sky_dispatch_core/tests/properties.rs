@@ -9,15 +9,13 @@ use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 fn test_coordinator(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     min_hold_us: u64,
-    delivery_margin_us: u64,
+    _delivery_margin_us: u64,
     _us_to_ticks: fn(u64) -> TimelineTicks,
 ) -> RuntimeDispatchCoordinator {
     RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         min_hold_us,
         DurationTicks::from_raw(min_hold_us),
-        delivery_margin_us,
-        DurationTicks::from_raw(delivery_margin_us),
         |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
     )
     .expect("test coordinator configuration is valid")
@@ -91,7 +89,7 @@ fn final_focus_loss_does_not_consume_the_prepared_authored_batch() {
     );
 
     let _prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::ZERO)
         .expect("first batch is due")
         .expect("prepared batch");
 
@@ -99,7 +97,7 @@ fn final_focus_loss_does_not_consume_the_prepared_authored_batch() {
     // the same batch available for a later prepare/commit cycle.
     assert_eq!(
         coordinator
-            .next_authored_ticks(DurationTicks::ZERO)
+            .next_authored_ticks()
             .expect("typed authored deadline")
             .map(TimelineTicks::as_u64),
         Some(0)
@@ -132,7 +130,7 @@ fn prepared_batch_cursor_commits_once_after_down_success() {
         sky_dispatch_core::time::TimelineTicks::from_raw,
     );
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::ZERO)
         .expect("typed prepare")
         .expect("down is due");
 
@@ -141,7 +139,7 @@ fn prepared_batch_cursor_commits_once_after_down_success() {
         .expect("down commit");
     assert_eq!(
         coordinator
-            .next_authored_ticks(DurationTicks::ZERO)
+            .next_authored_ticks()
             .expect("typed authored deadline")
             .map(TimelineTicks::as_u64),
         Some(1_000)
@@ -179,17 +177,16 @@ trait LegacyCoordinatorTestApi {
 
 impl LegacyCoordinatorTestApi for RuntimeDispatchCoordinator {
     fn next_pending_release_us(&self, lead_up: u64) -> Option<u64> {
-        self.next_pending_release_ticks(DurationTicks::from_raw(lead_up))
+        let _ = lead_up;
+        self.next_pending_release_ticks()
             .expect("typed pending deadline")
             .map(TimelineTicks::as_u64)
     }
 
     fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize {
-        self.pending_count_due_at_ticks(
-            TimelineTicks::from_raw(deadline_us),
-            DurationTicks::from_raw(lead_up),
-        )
-        .expect("typed pending count")
+        let _ = lead_up;
+        self.pending_count_due_at_ticks(TimelineTicks::from_raw(deadline_us))
+            .expect("typed pending count")
     }
 
     fn pop_due_pending(
@@ -210,17 +207,15 @@ impl LegacyCoordinatorTestApi for RuntimeDispatchCoordinator {
         now_us: u64,
         dispatch_lead_us: u64,
     ) -> Option<(RuntimeBatch, u64)> {
-        let (index, lead) = self
-            .pop_next_due_authored_ticks(
-                TimelineTicks::from_raw(now_us),
-                DurationTicks::from_raw(dispatch_lead_us),
-            )
+        let _ = dispatch_lead_us;
+        let index = self
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
             .ok()??;
         let batch = self
             .schedule
             .try_materialize_batch_authored(index)
             .expect("typed authored batch materialization");
-        Some((batch, lead.as_u64()))
+        Some((batch, 0))
     }
 
     fn activate_sent_downs(
@@ -419,7 +414,7 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
     let authored_hold_us = 478_u64;
     let min_hold_us = 1_u64;
     let send_latency_us = 0_u64;
-    let release_lead_us = 1_479_u64;
+    let _release_lead_us = 1_479_u64;
     let down_scheduled_us = 1_000_u64;
     let up_scheduled_us = down_scheduled_us + authored_hold_us;
     let actions = vec![
@@ -474,7 +469,7 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
     assert!(suppressed.is_empty());
     let expected_due = up_scheduled_us.max(completed_us + min_hold_us);
     let actual_due = coordinator
-        .next_pending_release_ticks(DurationTicks::from_raw(release_lead_us))
+        .next_pending_release_ticks()
         .unwrap()
         .expect("release must remain pending");
     assert_eq!(

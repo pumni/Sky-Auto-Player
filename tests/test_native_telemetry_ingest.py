@@ -11,6 +11,7 @@ def _compact_output(
     *,
     completion_error_ticks: int = 250,
     authored_completion_error_ticks: int = 250,
+    dispatch_start_error_ticks: int = 0,
     schema_version: int = 10,
     requested_count: int = 1,
     sent_count: int = 1,
@@ -41,6 +42,7 @@ def _compact_output(
                 "dispatch_cost_us": dispatch_cost_us,
                 "core_post_send_duration_us": 4,
                 "post_send_metrics_available": post_send_metrics_available,
+                "dispatch_start_error_ticks": dispatch_start_error_ticks,
                 "completion_error_ticks": completion_error_ticks,
                 "authored_completion_error_ticks": authored_completion_error_ticks,
                 "applied_lead_ticks": 1_000,
@@ -90,6 +92,16 @@ def test_native_trace_materializer_preserves_zero_relative_send_start() -> None:
     assert record.sender_started_us == 0
     assert record.sender_completed_us == 2
     assert record.send_duration_us == 2
+
+
+def test_native_v11_uses_signed_dispatch_start_error_as_primary_evidence() -> None:
+    output = _compact_output(schema_version=11, dispatch_start_error_ticks=-30)
+    record = materialize_native_trace(output)[0]
+
+    assert record.dispatch_start_error_ticks == -30
+    assert record.dispatch_start_error_us == -3
+    assert record._materialize()["evidence_scope"] == "sender_start_error"
+    assert record._materialize()["dispatch_start_error_us"] == -3
 
 
 def test_native_trace_materializer_rejects_missing_core_post_send_duration() -> None:
