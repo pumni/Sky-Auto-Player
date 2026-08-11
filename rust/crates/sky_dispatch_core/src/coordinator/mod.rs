@@ -7,16 +7,8 @@ use thiserror::Error;
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
 
-pub const MAX_RELEASE_RETRIES: u8 = 8;
-#[cfg(test)]
-const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
-
 type SplitIntentResult = (
     SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
-    SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
-);
-type ReleaseRequestResult = (
-    SmallVec<[PendingRelease; MAX_KEYS]>,
     SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
 );
 
@@ -25,7 +17,6 @@ type ReleaseRequestResult = (
 pub enum GenerationStatus {
     Scheduled,
     Active,
-    ReleasePending,
     Released,
     DroppedConflict,
     DroppedBackend,
@@ -38,7 +29,6 @@ impl GenerationStatus {
         match self {
             Self::Scheduled => "scheduled",
             Self::Active => "active",
-            Self::ReleasePending => "release_pending",
             Self::Released => "released",
             Self::DroppedConflict => "dropped_conflict",
             Self::DroppedBackend => "dropped_backend",
@@ -66,12 +56,9 @@ impl GenerationStatus {
                 | (Self::Scheduled, Self::DroppedExpired)
                 | (Self::Scheduled, Self::DroppedBackend)
                 | (Self::Scheduled, Self::Cancelled)
-                | (Self::Active, Self::ReleasePending)
+                | (Self::Active, Self::Released)
                 | (Self::Active, Self::DroppedBackend)
                 | (Self::Active, Self::Cancelled)
-                | (Self::ReleasePending, Self::Released)
-                | (Self::ReleasePending, Self::DroppedBackend)
-                | (Self::ReleasePending, Self::Cancelled)
         )
     }
 }
@@ -140,15 +127,15 @@ pub fn physical_packet_kind(
 
 /// Counter-only generation summary.
 ///
-/// Active and release-pending counts are derived from `active_mask`/`pending_mask`
-/// at query time; this struct tracks only terminal and implicit-scheduled generations.
+/// Active counts are derived from `active_mask` at query time; this struct
+/// tracks only terminal generations.
 /// No `HashMap` is allocated; all fields are plain `u64`.
 ///
-/// Invariant: `scheduled + active + release_pending + released
-///            + dropped_conflict + dropped_backend + dropped_expired + cancelled
+/// Invariant: `scheduled + active + released + dropped_conflict
+///            + dropped_backend + dropped_expired + cancelled
 ///            == total (generation_count)`
 ///
-/// "scheduled" is implicit: `generation_count - (active + release_pending + terminal_total)`.
+/// "scheduled" is implicit: `generation_count - (active + terminal_total)`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GenerationCounters {
     pub released: u64,
@@ -176,17 +163,14 @@ impl GenerationCounters {
             GenerationStatus::DroppedExpired => self.dropped_expired += 1,
             GenerationStatus::Cancelled => self.cancelled += 1,
             // Non-terminal states are not tracked here; they are derived from masks.
-            GenerationStatus::Scheduled
-            | GenerationStatus::Active
-            | GenerationStatus::ReleasePending => {}
+            GenerationStatus::Scheduled | GenerationStatus::Active => {}
         }
     }
 }
 
-pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
+pub const ALL_GENERATION_STATUSES: [GenerationStatus; 7] = [
     GenerationStatus::Scheduled,
     GenerationStatus::Active,
-    GenerationStatus::ReleasePending,
     GenerationStatus::Released,
     GenerationStatus::DroppedConflict,
     GenerationStatus::DroppedBackend,
@@ -198,7 +182,6 @@ mod authored;
 mod cleanup;
 mod conflict;
 mod ownership;
-mod pending;
 mod timeline;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveGeneration {
@@ -210,50 +193,6 @@ pub struct ActiveGeneration {
     pub down_dispatch_started_ticks: TimelineTicks,
     pub down_dispatch_completed_ticks: TimelineTicks,
     pub release_not_before_ticks: TimelineTicks,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingRelease {
-    pub generation_id: GenerationId,
-    pub scan_code: u16,
-    pub key_slot: KeySlot,
-    pub source_action_index: u32,
-    pub packet_id: PacketId,
-    /// Authored microsecond metadata retained for telemetry serialization only.
-    pub scheduled_release_us: u64,
-    pub scheduled_release_ticks: TimelineTicks,
-    pub down_dispatch_started_ticks: TimelineTicks,
-    pub release_not_before_ticks: TimelineTicks,
-    pub reason_id: ReasonId,
-    pub retry_count: u8,
-    pub next_retry_ticks: TimelineTicks,
-    pub first_failure_ticks: Option<TimelineTicks>,
-    pub last_win32_error: Option<u32>,
-}
-
-impl PendingRelease {
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub fn get_effective_release_us(&self) -> u64 {
-        self.release_not_before_ticks
-            .as_u64()
-            .max(self.scheduled_release_us)
-            .max(self.next_retry_ticks.as_u64())
-    }
-
-    pub fn get_effective_release_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
-        Ok(self
-            .release_not_before_ticks
-            .max(self.scheduled_release_ticks)
-            .max(self.next_retry_ticks))
-    }
-}
-
-/// The release cohort selected for one upcoming dispatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingDispatchPlan {
-    pub deadline_ticks: TimelineTicks,
-    pub polyphony: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,19 +225,6 @@ pub struct PreparedStalePacket {
     pub suppressed_intent_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimelineRebaseReason {
-    ReleaseRecovery,
-}
-
-impl TimelineRebaseReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReleaseRecovery => "release_recovery",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
@@ -308,27 +234,18 @@ pub struct RuntimeDispatchCoordinator {
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
     pub active_mask: u16,
-    /// Physical-key ownership mask. A release-pending key remains blocked
-    /// here until a verified Up completion, while logical accounting moves
-    /// from `active_mask` to `pending_mask`.
+    /// Physical-key ownership mask. An active key remains blocked until its
+    /// authored Up is committed in the same canonical packet lifecycle.
     blocked_mask: u16,
-    pending_by_slot: [Option<PendingRelease>; MAX_KEYS],
-    pub pending_mask: u16,
-    /// Terminal and implicit-scheduled generation counts.
+    /// Terminal generation counts.
     ///
-    /// Active and release-pending counts are derived from `active_mask`/`pending_mask`
-    /// respectively, so they are not stored here.  This eliminates the
-    /// `HashMap<GenerationId, GenerationStatus>` from the hot dispatch path.
+    /// Active count is derived from `active_mask`, so it is not stored here.
+    /// This eliminates the `HashMap<GenerationId, GenerationStatus>` from the
+    /// hot dispatch path.
     counters: GenerationCounters,
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
-    recovery_offset_ticks: DurationTicks,
     up_intent_locations: Box<[Option<(usize, usize)>]>,
-    timeline_rebase_count: u64,
-    timeline_rebase_total_ticks: u64,
-    timeline_rebase_max_ticks: u64,
-    last_timeline_rebase_reason: Option<TimelineRebaseReason>,
-    release_recovery_started_ticks: Option<TimelineTicks>,
 }
 
 #[cfg(test)]
@@ -429,18 +346,10 @@ impl RuntimeDispatchCoordinator {
             active_by_slot: std::array::from_fn(|_| None),
             active_mask: 0,
             blocked_mask: 0,
-            pending_by_slot: std::array::from_fn(|_| None),
-            pending_mask: 0,
             counters: GenerationCounters::default(),
             generation_states,
             generation_count,
-            recovery_offset_ticks: DurationTicks::ZERO,
             up_intent_locations: up_intent_locations.into_boxed_slice(),
-            timeline_rebase_count: 0,
-            timeline_rebase_total_ticks: 0,
-            timeline_rebase_max_ticks: 0,
-            last_timeline_rebase_reason: None,
-            release_recovery_started_ticks: None,
         })
     }
 
@@ -455,25 +364,5 @@ impl RuntimeDispatchCoordinator {
 
     pub fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
         self.active_by_slot[usize::from(slot)].as_ref()
-    }
-
-    pub fn recovery_offset_ticks(&self) -> DurationTicks {
-        self.recovery_offset_ticks
-    }
-
-    pub fn timeline_rebase_count(&self) -> u64 {
-        self.timeline_rebase_count
-    }
-
-    pub fn timeline_rebase_total_ticks(&self) -> DurationTicks {
-        DurationTicks::from_raw(self.timeline_rebase_total_ticks)
-    }
-
-    pub fn timeline_rebase_max_ticks(&self) -> DurationTicks {
-        DurationTicks::from_raw(self.timeline_rebase_max_ticks)
-    }
-
-    pub fn last_timeline_rebase_reason(&self) -> Option<TimelineRebaseReason> {
-        self.last_timeline_rebase_reason
     }
 }

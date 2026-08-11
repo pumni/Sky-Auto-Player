@@ -1,13 +1,10 @@
-//! Dispatch subtree: authored note-on path, pending-release note-off path,
-//! pure timing projection, and the observer/publish stage.
+//! Dispatch subtree: authored packet path, pure timing projection, and the
+//! observer/publish stage.
 //!
 //! Structural ownership:
 //! - `authored.rs` owns the authored physical packet dispatch, final
 //!   admission, physical sender invocation, backend result handling, and
 //!   coordinator commit for the note-on path.
-//! - `release.rs` owns pending-release physical send, `ReleaseTransportEvidence`,
-//!   retry/recovery reconciliation, and the coordinator pending-release
-//!   transition.
 //! - `timing.rs` owns pure typed timing projection (sender start/completion,
 //!   completion errors, strict completion predicates, typed duration
 //!   conversion). It must not import `SharedMetrics`, `TelemetryCollector`,
@@ -18,10 +15,9 @@
 mod authored;
 pub(crate) mod observation;
 pub(crate) mod observer;
-mod release;
 pub(crate) mod timing;
 
-/// Outcome of one dispatch-loop authored or pending-release step.
+/// Outcome of one authored packet dispatch step.
 #[derive(Debug)]
 pub enum DispatchStep {
     NoWork,
@@ -83,14 +79,6 @@ pub(crate) use authored::dispatch_authored_packet;
 pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::{
     ObserverRuntime, PendingObservationQueue, dispatch_stale_packet, drain_one_observer,
-};
-pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
-#[cfg(test)]
-pub(crate) use release::{effective_pending_cohort_lead, effective_pending_lead};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use release::{
-    release_recovery_completed_before_ready, set_release_observer_failure_on_recovery,
-    set_release_telemetry_failure_on_recovery,
 };
 
 use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};

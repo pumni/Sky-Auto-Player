@@ -110,8 +110,8 @@ pub struct WorkerMetricsLocal {
     pub timeline_rebase_max_us: u64,
     pub timeline_rebase_total_ticks: DurationTicks,
     pub timeline_rebase_max_ticks: DurationTicks,
-    /// 0 = none, 3 = release_recovery. Authored lateness and release-floor
-    /// enforcement never rebase the authored timeline.
+    /// Deprecated compatibility field. Authored dispatch never rebases its
+    /// timeline, so production always leaves this at zero.
     pub timeline_rebase_last_reason: u8,
     pub dispatch_occupancy_max_us: u64,
     pub send_down_degraded_samples: u64,

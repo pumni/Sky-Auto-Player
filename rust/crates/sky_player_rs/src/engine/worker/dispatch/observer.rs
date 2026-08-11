@@ -16,8 +16,6 @@ use super::observation::{
     record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
     up_transport_counts,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::release::take_release_observer_failure;
 use super::timing::{DispatchObservationEvidence, DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use crossbeam_queue::ArrayQueue;
@@ -29,7 +27,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 pub(crate) fn take_deadline_wake_qpc(
     runtime: &mut WorkerRuntime,
-    _sender_started_qpc: sky_dispatch_win32::clock::QpcTicks,
+    _final_admission_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Option<sky_dispatch_win32::clock::QpcTicks> {
     runtime.last_dispatch_deadline_wake_qpc.take()
 }
@@ -82,11 +80,11 @@ pub(crate) fn publisher_down_send_outcome(
         );
     };
     let DownSendTiming {
-        sender_started_qpc,
-        sender_completed_qpc,
-        sender_started_effective_ticks,
+        final_admission_qpc,
+        sendinput_completed_qpc,
+        final_admission_effective_ticks,
         completed_effective_ticks,
-        sender_duration_ticks,
+        admission_to_completion_ticks,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
         recovered_partial_up,
@@ -95,7 +93,7 @@ pub(crate) fn publisher_down_send_outcome(
         strict_completion_late,
         ..
     } = *timing_proof;
-    let wake_qpc = take_deadline_wake_qpc(runtime, sender_started_qpc);
+    let wake_qpc = take_deadline_wake_qpc(runtime, final_admission_qpc);
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
             Ok(ticks) => Some(ticks),
@@ -117,10 +115,10 @@ pub(crate) fn publisher_down_send_outcome(
         timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
         timeline_rebase_max_ticks: local_metrics.timeline_rebase_max_ticks,
         timeline_rebase_last_reason: local_metrics.timeline_rebase_last_reason,
-        sender_started_qpc,
-        sender_completed_qpc,
+        final_admission_qpc,
+        sendinput_completed_qpc,
         dispatch_ready_qpc,
-        sender_duration_ticks,
+        admission_to_completion_ticks,
         wake_qpc,
         requested_packet,
         confirmed_mask: result_confirmed_mask,
@@ -139,8 +137,8 @@ pub(crate) fn publisher_down_send_outcome(
             authored_ticks: view.authored_batch_scheduled_ticks,
             effective_deadline_ticks: view.batch_scheduled_ticks,
             wake_ticks: effective_now_ticks,
-            sender_started_ticks: Some(sender_started_effective_ticks),
-            sender_completed_ticks: Some(completed_effective_ticks),
+            final_admission_ticks: Some(final_admission_effective_ticks),
+            sendinput_completed_ticks: Some(completed_effective_ticks),
             dispatch_start_error_ticks: timing_proof.dispatch_start_error_ticks,
             completion_error_ticks: completion_error_ticks_value,
             authored_completion_error_ticks: authored_completion_error_ticks_value,
@@ -208,8 +206,8 @@ fn drain_stale_metadata_observation(
                 authored_ticks: observation.effective_scheduled_ticks,
                 effective_deadline_ticks: observation.effective_scheduled_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                send_started_ticks: None,
-                send_completed_ticks: None,
+                final_admission_ticks: None,
+                sendinput_completed_ticks: None,
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
@@ -250,8 +248,8 @@ fn drain_blocked_unfocused_observation(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                send_started_ticks: None,
-                send_completed_ticks: None,
+                final_admission_ticks: None,
+                sendinput_completed_ticks: None,
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
@@ -431,14 +429,12 @@ pub struct ObserverTestHookGuard {
 impl Drop for ObserverTestHookGuard {
     fn drop(&mut self) {
         reset_observer_test_hooks();
-        super::release::reset_release_test_hooks();
     }
 }
 #[cfg(any(test, feature = "test-support"))]
 pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
     let lock = OBSERVER_TEST_HOOK_LOCK.lock();
     reset_observer_test_hooks();
-    super::release::reset_release_test_hooks();
     ObserverTestHookGuard { _lock: lock }
 }
 #[cfg(any(test, feature = "test-support"))]
@@ -507,15 +503,15 @@ pub(crate) fn drain_down_send_outcome(
 ) -> Result<(), DispatchStep> {
     let (_requested_count, _confirmed_count, _skipped_count, _observation_evidence) =
         down_observer_evidence(observation);
-    let sender_duration_us = qpc_clock
-        .duration_to_us(observation.sender_duration_ticks)
+    let admission_to_completion_us = qpc_clock
+        .duration_to_us(observation.admission_to_completion_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
         })?;
     let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
-                .sender_completed_qpc
+                .sendinput_completed_qpc
                 .checked_duration_since(observation.physical_target_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
@@ -547,7 +543,7 @@ pub(crate) fn drain_down_send_outcome(
         .dispatch_ready_qpc
         .map(|ready| {
             ready
-                .checked_duration_since(observation.sender_completed_qpc)
+                .checked_duration_since(observation.sendinput_completed_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
                         "note-on observer QPC ordering failure: {error:?}"
@@ -567,7 +563,7 @@ pub(crate) fn drain_down_send_outcome(
         .wake_qpc
         .and_then(|wake| {
             observation
-                .sender_started_qpc
+                .final_admission_qpc
                 .checked_duration_since(wake)
                 .ok()
         })
@@ -628,7 +624,7 @@ pub(crate) fn drain_down_send_outcome(
     );
     observe_dispatch_health(
         DispatchHealthObservation {
-            send_duration_us: sender_duration_us,
+            send_duration_us: admission_to_completion_us,
             post_send_duration_us: core_post_send_us,
             post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
             path: observation.path,
@@ -655,21 +651,15 @@ pub(crate) fn drain_up_send_outcome(
     now_us: u64,
 ) -> Result<(), DispatchStep> {
     let (scan_count, _sent_count, _skipped_count) = up_transport_counts(observation);
-    #[cfg(any(test, feature = "test-support"))]
-    if take_release_observer_failure(observation.trace.recovery_required) {
-        return Err(DispatchStep::Terminate(
-            "injected release observer failure".to_string(),
-        ));
-    }
-    let sender_duration_us = qpc_clock
-        .duration_to_us(observation.sender_duration_ticks)
+    let admission_to_completion_us = qpc_clock
+        .duration_to_us(observation.admission_to_completion_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
         })?;
     let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
-                .sender_completed_qpc
+                .sendinput_completed_qpc
                 .checked_duration_since(observation.physical_target_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
@@ -705,7 +695,7 @@ pub(crate) fn drain_up_send_outcome(
         .dispatch_ready_qpc
         .map(|ready| {
             ready
-                .checked_duration_since(observation.sender_completed_qpc)
+                .checked_duration_since(observation.sendinput_completed_qpc)
                 .map_err(|error| {
                     DispatchStep::Terminate(format!(
                         "note-off observer QPC ordering failure: {error:?}"
@@ -725,7 +715,7 @@ pub(crate) fn drain_up_send_outcome(
         .wake_qpc
         .and_then(|wake| {
             observation
-                .sender_started_qpc
+                .final_admission_qpc
                 .checked_duration_since(wake)
                 .ok()
         })
@@ -766,7 +756,7 @@ pub(crate) fn drain_up_send_outcome(
     );
     observe_dispatch_health(
         DispatchHealthObservation {
-            send_duration_us: sender_duration_us,
+            send_duration_us: admission_to_completion_us,
             post_send_duration_us: core_post_send_us,
             post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
             path: DispatchPath::UpOnly {

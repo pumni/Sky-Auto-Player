@@ -14,8 +14,8 @@ pub use config::DispatchProfile;
 pub(crate) use config::StartupOrderingHook;
 use config::WorkerConfig;
 pub(crate) use config::{
-    BackendConfig, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
-    TimingOptions, WaitOptions,
+    BackendConfig, DEFAULT_SPIN_FLOOR_US, DEFAULT_SPIN_THRESHOLD_US, FocusOptions,
+    NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
 pub use session::NativeDispatchSession;
 pub use snapshot::{EngineProgressSnapshot, EngineSnapshot};
@@ -54,6 +54,18 @@ pub mod dispatch_primitives {
         DispatchObservationEvidence, is_clean_dispatch_observation,
     };
     pub use super::worker::health::DispatchPath;
+
+    /// Production timing policy constants shared by diagnostic benchmarks.
+    pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
+    pub const PRODUCTION_SPIN_FLOOR_US: u64 = super::config::DEFAULT_SPIN_FLOOR_US;
+    pub const PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
+        super::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
+
+    /// Derive the production adaptive threshold without duplicating its
+    /// policy or magic numbers in a benchmark.
+    pub fn production_spin_threshold_us(wake_error_us: u64) -> u64 {
+        super::worker::derive_spin_threshold_us(wake_error_us, super::config::DEFAULT_SPIN_FLOOR_US)
+    }
 }
 
 /// Test-only hooks for §8.12 slow-observer regression scenarios.
@@ -80,24 +92,6 @@ pub mod observer_test_hooks {
     /// Clear the artificial observer cost after a scenario.
     pub fn reset_observer_test_hooks() {
         super::worker::dispatch::observer::reset_observer_test_hooks();
-    }
-
-    /// Inject a post-send telemetry error only when release recovery is
-    /// exhausted. Test-only: production never enables this hook.
-    pub fn set_release_telemetry_failure_on_recovery(enabled: bool) {
-        super::worker::dispatch::set_release_telemetry_failure_on_recovery(enabled);
-    }
-
-    /// Inject a post-send observer error only when release recovery is
-    /// exhausted. Test-only: production never enables this hook.
-    pub fn set_release_observer_failure_on_recovery(enabled: bool) {
-        super::worker::dispatch::set_release_observer_failure_on_recovery(enabled);
-    }
-
-    /// Return whether exhausted release recovery completed before the ready
-    /// boundary was sampled in the current test scenario.
-    pub fn release_recovery_completed_before_ready() -> bool {
-        super::worker::dispatch::release_recovery_completed_before_ready()
     }
 }
 
@@ -133,6 +127,5 @@ const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
-const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn partial_transport_plus_physical_all_up_is_inconclusive() {
+    let reconciled = reconcile_release_observation(0x0003, 0x0001, InstrumentPhysicalState::AllUp);
+    assert_eq!(reconciled, ReconciledRelease::Inconclusive(0x0002));
+}
+
+#[test]
+fn zero_progress_plus_physical_all_up_is_inconclusive() {
+    let reconciled = reconcile_release_observation(0x0003, 0x0000, InstrumentPhysicalState::AllUp);
+    assert_eq!(reconciled, ReconciledRelease::Inconclusive(0x0003));
+}
+
+#[test]
+fn full_transport_and_all_up_are_verified_success() {
+    let reconciled = reconcile_release_observation(0x0003, 0x0003, InstrumentPhysicalState::AllUp);
+    assert_eq!(reconciled, ReconciledRelease::VerifiedAllUp);
+}
+
+#[test]
+fn focus_loss_probe_cannot_report_cleanup_success() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.set_probe(|mask, _| instrument_physical_state_for_mask(isize::MAX, mask));
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(isize::MAX);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+}
+
+#[test]
 fn partial_inserted_without_rollback_is_integrity_lost() {
     let outcome = emit_down_with(&[0x15, 0x16], |codes, key_up| {
         test_send_result(codes.len() as u8, if key_up { 2 } else { 1 }, 0)
@@ -56,7 +92,7 @@ fn zero_progress_retry_only_runs_when_first_inserted_is_zero() {
 }
 
 #[test]
-fn up_send_failure_leaves_pending_release_unacknowledged() {
+fn up_send_failure_leaves_requested_release_unconfirmed() {
     let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
         let len = codes.len() as u8;
         if key_up {
@@ -79,7 +115,7 @@ fn up_send_failure_leaves_pending_release_unacknowledged() {
 }
 
 #[test]
-fn up_send_success_clears_pending_release() {
+fn up_send_success_clears_requested_release() {
     let mut state = TrackedKeyState::with_emitter(|codes, _| {
         let len = codes.len() as u8;
         test_send_result(len, len, 0)
@@ -115,4 +151,25 @@ fn cleanup_fsm_idempotent_on_repeated_calls() {
     assert!(outcome1.released_successfully);
     assert!(outcome2.released_successfully);
     assert_eq!(state.active_mask, 0);
+}
+
+#[test]
+fn cleanup_transport_anomaly_and_partial_transport_fail_closed_even_if_probe_is_all_up() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    // Physical all-up evidence cannot compensate for partial transport.
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
+    state.active_mask = 0x0003;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_keys(), vec![0x15, 0x16]);
+    assert!(outcome.transport_anomaly);
 }

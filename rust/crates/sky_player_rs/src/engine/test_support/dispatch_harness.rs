@@ -12,20 +12,17 @@ use crate::engine::telemetry::{
 };
 use crate::engine::worker::dispatch::PendingObservationQueue;
 use crate::engine::worker::dispatch::{
-    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases,
+    AuthoredPacketContext, DispatchStep, dispatch_authored_packet,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, NextDispatchPlan, TargetStamp,
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
+    DispatchHealthOptions, DispatchPath, NextDispatchPlan, TargetStamp, WaitBoundary,
+    WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals, WaitTiming,
     WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
     dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
     wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::coordinator::{
-    PendingDispatchPlan, PendingRelease, RuntimeDispatchCoordinator, physical_packet_kind,
-};
+use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
@@ -35,7 +32,6 @@ use sky_dispatch_win32::input::{
     SendTransactionOutcome, SendTransactionStatus, TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
-use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -46,7 +42,6 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) timing: WorkerTimingState,
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
-    pub(crate) secondary_errors: Vec<String>,
     pub(crate) focus_active: AtomicBool,
     pub(crate) target_hwnd: AtomicIsize,
     pub(crate) target_generation: AtomicU64,
@@ -55,11 +50,11 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) panic_requested: AtomicBool,
     pub(crate) desired_pause: AtomicBool,
     pub(crate) supervisor_heartbeat_ticks: AtomicU64,
-    pub(crate) pending_budget: FrozenDispatchBudget,
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
     pub(crate) interrupt: OwnedEvent,
+    pub(crate) last_wait_result: Option<WaitResult>,
     effective_now_ticks: TimelineTicks,
 }
 
@@ -251,39 +246,6 @@ impl ProductionDispatchTestHarness {
         harness
     }
 
-    pub fn new_pending_future_with_authored_due() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "pending-seed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x15].into(),
-                reason: "pending-release".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x16].into(),
-                reason: "authored-due".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 3_000,
-                scan_codes: vec![0x16].into(),
-                reason: "authored-cleanup".into(),
-            },
-        ])
-    }
-
     fn create_harness(actions: &[KeyActionInput]) -> Self {
         let mut scan_codes: Vec<u16> = actions
             .iter()
@@ -341,7 +303,6 @@ impl ProductionDispatchTestHarness {
                 generation: 0,
             })),
             local_metrics: WorkerMetricsLocal::default(),
-            secondary_errors: Vec::new(),
             focus_active: AtomicBool::new(true),
             target_hwnd: AtomicIsize::new(1),
             target_generation: AtomicU64::new(0),
@@ -350,16 +311,36 @@ impl ProductionDispatchTestHarness {
             panic_requested: AtomicBool::new(false),
             desired_pause: AtomicBool::new(false),
             supervisor_heartbeat_ticks: AtomicU64::new(0),
-            pending_budget: crate::engine::worker::health::build_dispatch_budget(
-                DispatchPath::UpOnly { up_count: 1 },
-                health_options,
-            ),
             metrics: SharedMetrics::default(),
             progress_clock,
             observer: PendingObservationQueue::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
+            last_wait_result: None,
             effective_now_ticks: TimelineTicks::ZERO,
         }
+    }
+
+    /// Configure the real HybridWaiter and tick-domain spin threshold used by
+    /// the production wait boundary. This is benchmark-only setup; it does
+    /// not alter the production worker configuration.
+    pub fn configure_wait_policy(
+        &mut self,
+        waitable_timer_enabled: bool,
+        event_wait_enabled: bool,
+        spin_threshold_us: u64,
+    ) -> Result<(), String> {
+        self.resources.waiter =
+            HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
+        self.timing.effective_spin_threshold_ticks = self
+            .resources
+            .clock
+            .duration_from_us(spin_threshold_us)
+            .map_err(|error| format!("benchmark spin threshold conversion: {error:?}"))?;
+        Ok(())
+    }
+
+    pub fn last_wait_result(&self) -> Option<WaitResult> {
+        self.last_wait_result
     }
     /// Advance simulated playback time by `us` microseconds and return effective now ticks.
     pub fn advance_playback_time_us(&mut self, us: u64) -> TimelineTicks {
@@ -403,89 +384,11 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.possibly_active_mask
     }
 
-    /// Number of full-instrument cleanup operations performed by production
-    /// release recovery. This is a test-support observation of the backend,
-    /// not a replacement for the production cleanup call.
+    /// Number of full-instrument cleanup operations performed by terminal
+    /// cleanup. This is a test-support observation of the backend, not a
+    /// replacement for the production cleanup call.
     pub fn full_instrument_release_calls(&self) -> u64 {
         self.resources.backend.full_instrument_release_calls
-    }
-
-    /// Make every production pending-release send fail while retaining a
-    /// real sender seam. The counter is incremented inside the emitter that
-    /// production invokes, so tests can distinguish physical cleanup from a
-    /// helper-only assertion.
-    pub fn configure_persistent_release_failure(&mut self, calls: Arc<AtomicU64>) {
-        let clock = self.resources.clock;
-        let emitter_calls = Arc::clone(&calls);
-        self.resources
-            .backend
-            .set_emitter(move |scan_codes, key_up| {
-                let now = clock.now().expect("test QPC");
-                if key_up {
-                    emitter_calls.fetch_add(1, Ordering::SeqCst);
-                    PlatformSendResult {
-                        requested: scan_codes.len() as u8,
-                        inserted: 0,
-                        started_ticks: now,
-                        completed_ticks: Some(now),
-                        win32_error: 1460,
-                        timing_error: None,
-                    }
-                } else {
-                    PlatformSendResult {
-                        requested: scan_codes.len() as u8,
-                        inserted: scan_codes.len() as u8,
-                        started_ticks: now,
-                        completed_ticks: Some(now),
-                        win32_error: 0,
-                        timing_error: None,
-                    }
-                }
-            });
-        let packet_clock = self.resources.clock;
-        let packet_calls = Arc::clone(&calls);
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let now = packet_clock.now().expect("test QPC");
-            let requested_mask = packet.up_mask | packet.down_mask;
-            if packet.up_mask != 0 {
-                packet_calls.fetch_add(1, Ordering::SeqCst);
-                SendTransactionOutcome {
-                    status: SendTransactionStatus::ZeroProgress,
-                    evidence: SendEvidence {
-                        requested_mask,
-                        confirmed_mask: 0,
-                        skipped_mask: 0,
-                        first_inserted: 0,
-                        attempts: 1,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::ZeroProgress,
-                        first_win32_error: Some(1460),
-                        last_win32_error: Some(1460),
-                        started_ticks: Some(now),
-                        completed_ticks: Some(now),
-                        timing_error: None,
-                    },
-                }
-            } else {
-                SendTransactionOutcome {
-                    status: SendTransactionStatus::Complete,
-                    evidence: SendEvidence {
-                        requested_mask,
-                        confirmed_mask: requested_mask,
-                        skipped_mask: 0,
-                        first_inserted: packet.event_count(),
-                        attempts: 1,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_win32_error: None,
-                        last_win32_error: None,
-                        started_ticks: Some(now),
-                        completed_ticks: Some(now),
-                        timing_error: None,
-                    },
-                }
-            }
-        });
     }
 
     pub fn configure_send_counter(&mut self) -> Arc<AtomicU64> {
@@ -532,38 +435,6 @@ impl ProductionDispatchTestHarness {
         });
         calls
     }
-    /// Pop due pending releases using plan.
-    pub fn pop_due_pending_for_plan(
-        &mut self,
-        effective_now: TimelineTicks,
-        plan: &NextDispatchPlan,
-    ) -> SmallVec<[PendingRelease; 15]> {
-        let pending = plan.pending().expect("pending release plan");
-        self.resources
-            .coordinator
-            .pop_due_pending_ticks(effective_now, pending)
-            .expect("pop due pending")
-    }
-
-    pub fn seed_pending_release_for_test(&mut self) {
-        let due_now = self
-            .resources
-            .coordinator
-            .next_authored_ticks()
-            .unwrap()
-            .unwrap();
-        let prepared = self
-            .resources
-            .coordinator
-            .prepare_next_due_authored(due_now)
-            .expect("prepare pending-release request")
-            .expect("authored release request");
-        self.resources
-            .coordinator
-            .commit_up_request(prepared)
-            .expect("commit pending-release request");
-    }
-
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
         plan_next_dispatch(
@@ -634,6 +505,7 @@ impl ProductionDispatchTestHarness {
                     .unwrap_or_else(|| "benchmark wait exited".to_string()));
             }
         };
+        self.last_wait_result = Some(wait_result);
         self.runtime
             .set_deadline_wake_qpc_for_test(wait_result.wake_qpc);
         let now_ticks = self
@@ -669,15 +541,10 @@ impl ProductionDispatchTestHarness {
         now_ticks: QpcTicks,
     ) {
         let selected_deadline = plan
-            .pending
+            .authored
             .as_ref()
-            .filter(|pending| effective_now_ticks >= pending.deadline_ticks)
-            .map(|pending| pending.deadline_ticks)
-            .or_else(|| {
-                plan.authored
-                    .as_ref()
-                    .map(|authored| authored.deadline_ticks)
-            });
+            .map(|authored| authored.deadline_ticks)
+            .filter(|deadline| effective_now_ticks >= *deadline);
         if let Some(deadline) = selected_deadline {
             self.align_epoch_to_deadline_for_test(deadline, now_ticks);
         }
@@ -702,7 +569,6 @@ impl ProductionDispatchTestHarness {
             &self.timing,
             &mut self.runtime,
             &mut self.local_metrics,
-            &mut self.secondary_errors,
             &self.focus_active,
             &self.target_hwnd,
             &self.target_generation,
@@ -788,60 +654,6 @@ impl ProductionDispatchTestHarness {
             &self.desired_pause,
             &self.progress_clock,
             &mut self.observer,
-        )
-    }
-    /// Dispatch pending releases using explicit `due_pending` and `pending_plan`.
-    pub fn dispatch_pending_release_with_plan(
-        &mut self,
-        due_pending: SmallVec<[PendingRelease; 15]>,
-        pending_plan: Option<&PendingDispatchPlan>,
-    ) -> DispatchStep {
-        self.dispatch_pending_release_with_plan_and_lease(
-            due_pending,
-            pending_plan,
-            DurationTicks::ZERO,
-        )
-    }
-    pub fn dispatch_pending_release_with_plan_and_lease(
-        &mut self,
-        due_pending: SmallVec<[PendingRelease; 15]>,
-        pending_plan: Option<&PendingDispatchPlan>,
-        lease_timeout_ticks: DurationTicks,
-    ) -> DispatchStep {
-        if let Some(plan) = pending_plan {
-            let now_ticks = self.resources.clock.now().expect("pending target QPC now");
-            self.align_epoch_to_deadline_for_test(plan.deadline_ticks, now_ticks);
-        }
-        let ctx = PendingReleaseContext {
-            due_pending,
-            physical_target_qpc: pending_plan
-                .map(|plan| {
-                    self.resources
-                        .playback
-                        .epoch
-                        .checked_add_duration(DurationTicks::from_raw(plan.deadline_ticks.as_u64()))
-                        .expect("pending physical target QPC")
-                })
-                .expect("pending physical target"),
-            frozen_budget: self.pending_budget,
-            quit_requested: &self.quit_requested,
-            skip_requested: &self.skip_requested,
-            panic_requested: &self.panic_requested,
-            desired_pause: &self.desired_pause,
-            supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
-            lease_timeout_ticks,
-            observer: &mut self.observer,
-        };
-        dispatch_due_pending_releases(
-            ctx,
-            &self.config,
-            &mut self.resources,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &mut self.secondary_errors,
-            &self.target_hwnd,
         )
     }
     pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {

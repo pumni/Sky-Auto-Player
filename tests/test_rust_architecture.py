@@ -39,7 +39,6 @@ CANONICAL_DISPATCH_FILES = {
     "mod.rs",
     "observation.rs",
     "observer.rs",
-    "release.rs",
     "timing.rs",
 }
 

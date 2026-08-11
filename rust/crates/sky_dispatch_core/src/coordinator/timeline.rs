@@ -1,51 +1,14 @@
-use super::{
-    CoordinatorError, CoordinatorInvariantError, RuntimeDispatchCoordinator, TimelineRebaseReason,
-};
+use super::{CoordinatorError, CoordinatorInvariantError, RuntimeDispatchCoordinator};
 use crate::model::*;
-use crate::time::{DurationTicks, TimelineTicks};
+use crate::time::TimelineTicks;
 
 impl RuntimeDispatchCoordinator {
-    pub(super) fn apply_timeline_rebase(
-        &mut self,
-        delta: DurationTicks,
-        reason: TimelineRebaseReason,
-    ) -> Result<(), CoordinatorError> {
-        if delta == DurationTicks::ZERO {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "timeline rebase delta must be non-zero".to_string(),
-                ),
-            ));
-        }
-        let next_offset = self.recovery_offset_ticks.checked_add(delta)?;
-        let next_count =
-            self.timeline_rebase_count
-                .checked_add(1)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-        let next_total = self
-            .timeline_rebase_total_ticks
-            .checked_add(delta.as_u64())
-            .ok_or(CoordinatorError::Time(
-                crate::time::TimeArithmeticError::Overflow,
-            ))?;
-        let next_max = self.timeline_rebase_max_ticks.max(delta.as_u64());
-        self.recovery_offset_ticks = next_offset;
-        self.timeline_rebase_count = next_count;
-        self.timeline_rebase_total_ticks = next_total;
-        self.timeline_rebase_max_ticks = next_max;
-        self.last_timeline_rebase_reason = Some(reason);
-        Ok(())
-    }
-
     pub fn effective_total_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
-        self.batch_scheduled_ticks
+        Ok(self
+            .batch_scheduled_ticks
             .last()
             .copied()
-            .map_or(Ok(TimelineTicks::ZERO), |scheduled| {
-                Ok(scheduled.checked_add_duration(self.recovery_offset_ticks)?)
-            })
+            .unwrap_or(TimelineTicks::ZERO))
     }
 
     pub fn effective_batch_scheduled_ticks(
@@ -55,25 +18,14 @@ impl RuntimeDispatchCoordinator {
         self.batch_scheduled_ticks
             .get(index)
             .copied()
-            .ok_or(CoordinatorError::InvalidBatchIndex { index })?
-            .checked_add_duration(self.recovery_offset_ticks)
-            .map_err(CoordinatorError::from)
+            .ok_or(CoordinatorError::InvalidBatchIndex { index })
     }
 
     /// Return the next dispatch deadline for one physical packet.
     ///
     /// A packet containing releases cannot be dispatched before the latest
-    /// sender-side minimum-hold floor owned by its physical Up mask.  Waiting
+    /// sender-side minimum-hold floor owned by its physical Up mask. Waiting
     /// and preparation both use this single calculation.
-    /// Compute the sender-side minimum-hold floor owned by every physical Up
-    /// intent with a real generation in the given packet.
-    ///
-    /// Fail-closed: a physical Up with a real generation must be backed by an
-    /// active generation that owns its key slot, and that generation must match
-    /// the authored generation. `NO_GENERATION_ID` (stale Up) does not require
-    /// an active generation. Every real generation, including a generation
-    /// whose lifecycle is terminal, must still be owned by the exact active
-    /// slot or the deadline computation fails before `SendInput`.
     fn packet_release_floor_ticks(
         &self,
         packet_index: usize,
@@ -146,9 +98,7 @@ impl RuntimeDispatchCoordinator {
             .copied()
             .ok_or(CoordinatorError::InvalidBatchIndex {
                 index: first_batch_index,
-            })?
-            .checked_add_duration(self.recovery_offset_ticks)?;
-        // Singular release-floor source of truth for the packet's physical Up.
+            })?;
         let release_not_before = self.packet_release_floor_ticks(packet_index)?;
         Ok(authored.max(release_not_before))
     }

@@ -2,6 +2,10 @@ use super::telemetry::TelemetryMode;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
+pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 150;
+pub(crate) const DEFAULT_SPIN_FLOOR_US: u64 = 700;
+pub(crate) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
+
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
@@ -105,8 +109,8 @@ impl Default for WorkerConfig {
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
                 input_path_warn_us: 300,
-                spin_threshold_us: 150,
-                spin_floor_us: 700,
+                spin_threshold_us: DEFAULT_SPIN_THRESHOLD_US,
+                spin_floor_us: DEFAULT_SPIN_FLOOR_US,
             },
             focus: FocusOptions {
                 require_focus: false,

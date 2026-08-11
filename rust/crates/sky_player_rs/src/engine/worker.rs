@@ -44,14 +44,12 @@ pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch::drain_one_observer;
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases, dispatch_stale_packet,
+    AuthoredPacketContext, DispatchStep, dispatch_authored_packet, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use health::FrozenDispatchBudget;
 #[cfg(test)]
 pub(crate) use health::HealthWindowPolicy;
 #[cfg(test)]
@@ -66,6 +64,7 @@ pub use planning::NextDispatchPlan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
+pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
@@ -142,7 +141,6 @@ pub(crate) struct WorkerTimingState {
     pub(super) focus_restore_grace_ticks: DurationTicks,
     pub(super) paused_poll_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
-    pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
@@ -161,7 +159,6 @@ impl WorkerTimingState {
             focus_restore_grace_ticks: DurationTicks::ZERO,
             paused_poll_ticks: DurationTicks::ZERO,
             lease_timeout_ticks: DurationTicks::ZERO,
-            retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
@@ -172,7 +169,8 @@ impl WorkerTimingState {
 }
 
 /// Fixed observer guard converted to QPC ticks during worker admission.
-pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
+pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
+    crate::engine::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
 
 pub(crate) struct WorkerHealthState {
     pub(super) options: DispatchHealthOptions,

@@ -326,7 +326,6 @@ pub(crate) fn clean_completion_proven(
     all_released
         && counts.get("scheduled").copied().unwrap_or_default() == 0
         && counts.get("active").copied().unwrap_or_default() == 0
-        && counts.get("release_pending").copied().unwrap_or_default() == 0
         && counts.get("dropped_backend").copied().unwrap_or_default() == 0
         && counts.get("dropped_conflict").copied().unwrap_or_default() == 0
         && counts.get("dropped_expired").copied().unwrap_or_default() == 0

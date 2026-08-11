@@ -23,10 +23,14 @@ pub struct RtTraceRecord {
     pub authored_ticks: u64,
     pub effective_deadline_ticks: u64,
     pub wake_ticks: u64,
+    /// Deprecated compatibility key. Its value is the final admission QPC
+    /// boundary, not a second syscall-entry sample.
     pub send_started_ticks: u64,
+    /// Deprecated compatibility key for the SendInput return QPC boundary.
     pub send_completed_ticks: u64,
     /// Legacy completion-target residual, retained for diagnostics only.
     /// The primary timing evidence is `dispatch_start_error_ticks`.
+    /// Deprecated compatibility key for completion residual diagnostics.
     pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
     pub post_send_metrics_available: bool,
@@ -58,8 +62,12 @@ pub(crate) struct TraceTiming {
     pub(crate) authored_ticks: TimelineTicks,
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: TimelineTicks,
-    pub(crate) send_started_ticks: Option<TimelineTicks>,
-    pub(crate) send_completed_ticks: Option<TimelineTicks>,
+    /// Compatibility output `send_started_ticks` is sourced from this final
+    /// admission boundary; no second QPC sample is taken.
+    pub(crate) final_admission_ticks: Option<TimelineTicks>,
+    /// Compatibility output `send_completed_ticks` is the SendInput return
+    /// boundary.
+    pub(crate) sendinput_completed_ticks: Option<TimelineTicks>,
     pub(crate) completion_residual_us: u64,
     pub(crate) core_post_send_duration_us: u64,
     pub(crate) post_send_metrics_available: bool,
@@ -117,8 +125,12 @@ impl RtTraceRecord {
             authored_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
             wake_ticks: timing.wake_ticks.as_u64(),
-            send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
-            send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
+            send_started_ticks: timing
+                .final_admission_ticks
+                .map_or(0, TimelineTicks::as_u64),
+            send_completed_ticks: timing
+                .sendinput_completed_ticks
+                .map_or(0, TimelineTicks::as_u64),
             dispatch_cost_us: timing.completion_residual_us,
             core_post_send_duration_us: timing.core_post_send_duration_us,
             post_send_metrics_available: timing.post_send_metrics_available,
@@ -191,8 +203,8 @@ impl Default for TimingSemantics {
             completion_metric: "completion_error_ticks_diagnostic_only",
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
-            sender_start_boundary: "sendinput_call_entry",
-            sender_completion_boundary: "sendinput_call_return",
+            sender_start_boundary: "final_admission_qpc_before_sendinput",
+            sender_completion_boundary: "sendinput_completion_qpc",
             game_observed_available: false,
         }
     }
@@ -350,8 +362,8 @@ mod tests {
                 authored_ticks: TimelineTicks::ZERO,
                 effective_deadline_ticks: TimelineTicks::ZERO,
                 wake_ticks: TimelineTicks::ZERO,
-                send_started_ticks: Some(TimelineTicks::from_raw(1)),
-                send_completed_ticks: Some(TimelineTicks::from_raw(2)),
+                final_admission_ticks: Some(TimelineTicks::from_raw(1)),
+                sendinput_completed_ticks: Some(TimelineTicks::from_raw(2)),
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
@@ -384,6 +396,20 @@ mod tests {
         assert_eq!(summary.up_count, 1);
         assert_eq!(summary.requested_key_count, 2);
         assert_eq!(summary.sent_key_count, 2);
+    }
+
+    #[test]
+    fn timing_semantics_names_the_admission_boundary_without_extra_qpc() {
+        let semantics = super::TimingSemantics::default();
+        assert_eq!(
+            semantics.sender_start_boundary,
+            "final_admission_qpc_before_sendinput"
+        );
+        assert_eq!(
+            semantics.sender_completion_boundary,
+            "sendinput_completion_qpc"
+        );
+        assert!(!semantics.game_observed_available);
     }
 
     #[test]

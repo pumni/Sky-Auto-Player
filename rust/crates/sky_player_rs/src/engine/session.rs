@@ -14,11 +14,10 @@ fn publish_focus_hint(focus_active: &AtomicBool, interrupt: &OwnedEvent, active:
     }
 }
 
-fn timeline_rebase_reason(code: u8) -> Option<String> {
-    match code {
-        3 => Some("release_recovery".to_string()),
-        _ => None,
-    }
+fn timeline_rebase_reason(_code: u8) -> Option<String> {
+    // Compatibility field only: authored dispatch no longer rebases its
+    // timeline and therefore never emits a reason.
+    None
 }
 
 pub struct NativeDispatchSession {

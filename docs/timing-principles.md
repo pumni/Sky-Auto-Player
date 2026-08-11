@@ -14,12 +14,13 @@ microsecond conversions.
 
 | Term | Meaning |
 | --- | --- |
-| `scheduled` | Authored/effective playback timestamp, including explicit recovery offset. |
+| `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `started` | One authoritative QPC sample taken immediately before final admission/SendInput. |
-| `completed` | QPC sample returned after the packetized SendInput call. |
+| `final_admission_qpc` | One authoritative QPC sample taken immediately before final admission and supplied to the packetized SendInput call. |
+| `sendinput_completion_qpc` | QPC sample returned after the packetized SendInput call. |
+| `admission_to_completion` | The interval from `final_admission_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `effective_release` | Release deadline after hold and retry/recovery floors. |
+| `effective_release` | Release deadline after the completion-anchored hold floor. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
 `physical_target`. Historical `dispatch_lead_us`, estimator state, and lead
@@ -38,19 +39,18 @@ effective_min_hold = max(requested_min_hold_us, frame_us + 500)
 For every successful Down packet:
 
 ```text
-release_floor = completed + effective_min_hold
-effective_release = max(authored_release, release_floor, retry_not_before)
+release_floor = sendinput_completion_qpc + effective_min_hold
+effective_release = max(authored_release, release_floor)
 ```
 
 The release floor is a sender-side contract. A completion sample does not prove
-kernel delivery or game observation. A slow Down can defer its own release and
-the corresponding recovery state, but cannot shift unrelated future authored
-actions.
+kernel delivery or game observation. A slow Down can defer its own release but
+cannot shift unrelated future authored actions.
 
 ## 3. Planning and physical target
 
-Each worker epoch freezes one typed plan. It contains the current authored or
-pending deadline, physical path, polyphony, health budget, and absolute QPC
+Each worker epoch freezes one typed plan. It contains the current authored
+deadline, physical path, polyphony, health budget, and absolute QPC
 target. The same deadline is used for waiting, due selection, final target
 validation, and observation. The coordinator remains the sole owner of
 schedule and key-generation state.
@@ -74,18 +74,18 @@ The final physical path is ordered and fail-closed:
 
 1. Recheck command, target generation, focus (Down only), and the prepared
    packet against the current coordinator state.
-2. Take one authoritative QPC `started` sample.
+2. Take one authoritative QPC `final_admission_qpc` sample.
 3. Evaluate the lease using that same sample.
 4. Call the packetized `SendInput` transport with that supplied start sample.
-5. Read/validate the transport's `completed` QPC boundary and masks.
+5. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
 6. Commit coordinator ownership using the confirmed transport result.
 7. Enqueue one bounded raw observation and return to orchestration.
 
 The transport sends Up entries before Down entries in one call. Partial Down or
 mixed integrity loss is never blindly retried. A skipped key that the
 coordinator still owns is state disagreement and requires full cleanup and
-termination. Up recovery may requeue only unconfirmed ownership and must finish
-before the worker advertises a ready boundary.
+termination. Any zero/partial transport result is terminal for the playback
+worker; cleanup is a separate fail-closed release-all operation.
 
 Up-only traffic uses command and lease admission but not the Down focus gate.
 Down traffic compares the stamped HWND with the current foreground window at
@@ -127,13 +127,13 @@ publishes the final report. Observer output cannot authorize or reorder input.
 
 The authoritative sender-side metrics are:
 
-- `sender_started_qpc` and `sender_completed_qpc`;
-- signed `dispatch_start_error_ticks = sender_started_qpc - physical_target_qpc`
+- `final_admission_qpc` and `sendinput_completion_qpc`;
+- signed `dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc`
   as the primary dispatch timing metric;
-- `send_duration = sender_completed_qpc - sender_started_qpc`;
+- `admission_to_completion = sendinput_completion_qpc - final_admission_qpc`;
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
-- release-floor/defer/recovery evidence; and
+- release-floor/defer evidence; and
 - bounded observer queue/drop and telemetry counters.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
@@ -144,6 +144,11 @@ old lead fields remain zero. No production decision may depend on them.
 The signed start residual may be early or late and is retained without taking
 an absolute value. It is observation/benchmark output, not controller
 feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
+
+The serialized `send_started_ticks`, `send_completed_ticks`, and
+`send_duration_us` names remain compatibility aliases for older Python/API
+callers. They map to the same admission and completion boundaries above;
+production does not take a second QPC sample to preserve the old names.
 
 ## 8. Validation obligations
 

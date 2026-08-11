@@ -416,10 +416,10 @@ pub struct BatchView<'a> {
     pub intents: &'a [CompactIntent],
     /// Key registry shared by the whole session (scan-code lookup).
     pub registry: &'a KeyRegistry,
-    /// Effective scheduled time including any recovery offset.
+    /// Effective scheduled time from the authored timeline.
     pub scheduled_ticks: TimelineTicks,
     /// Authored timestamp retained as telemetry metadata. It is not used for
-    /// production deadline or recovery calculations.
+    /// production deadline calculations.
     pub scheduled_us: u64,
 }
 

@@ -4,7 +4,6 @@
     {"path":"rust/crates/sky_dispatch_win32/src/input.rs","rule":"facade_lines","reason":"isolate raw sender and transactions in Phase 7","expires_phase":"Phase 7"},
     {"path":"rust/crates/sky_dispatch_win32/src/wait.rs","rule":"facade_lines","reason":"isolate wait responsibilities in Phase 7","expires_phase":"Phase 7"},
     {"path":"rust/crates/sky_player_rs/src/engine/tests.rs","rule":"regular_module_lines","reason":"centralized regression matrix; colocate tests in Phase 10","expires_phase":"Phase 10"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/dispatch/release.rs","rule":"dispatch_function_lines","reason":"pre-existing release helper exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/dispatch_loop.rs","rule":"regular_module_lines","reason":"pre-existing worker loop exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/planning.rs","rule":"regular_module_lines","reason":"pre-existing planning module exceeds the hard line budget; split only with timing proof in Phase 13","expires_phase":"Phase 13"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/wait.rs","rule":"facade_lines","reason":"pre-existing worker wait facade exceeds the hard line budget; split platform seams in Phase 13","expires_phase":"Phase 13"},
@@ -23,7 +22,6 @@
 
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"production_glob_import","reason":"make physical input dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/raw.rs","rule":"production_glob_import","reason":"make raw input dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_dispatch_win32/src/input/tracked.rs","rule":"production_glob_import","reason":"make tracked input dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_dispatch_win32/src/wait/spin.rs","rule":"production_glob_import","reason":"make wait dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker.rs","rule":"production_glob_import","reason":"make worker dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/orchestration.rs","rule":"production_glob_import","reason":"make orchestration dependencies explicit in Phase 9","expires_phase":"Phase 9"},

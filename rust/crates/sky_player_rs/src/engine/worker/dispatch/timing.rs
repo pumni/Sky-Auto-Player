@@ -200,11 +200,11 @@ pub(crate) fn prepare_authored_batch_view(
 
 /// Timing-derived evidence captured from the note-on SendInput call.
 pub(crate) struct DownSendTiming {
-    pub(crate) sender_started_qpc: QpcTicks,
-    pub(crate) sender_completed_qpc: QpcTicks,
-    pub(crate) sender_started_effective_ticks: TimelineTicks,
+    pub(crate) final_admission_qpc: QpcTicks,
+    pub(crate) sendinput_completed_qpc: QpcTicks,
+    pub(crate) final_admission_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
-    pub(crate) sender_duration_ticks: DurationTicks,
+    pub(crate) admission_to_completion_ticks: DurationTicks,
     pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
@@ -235,7 +235,7 @@ fn resolve_send_boundaries(
     ),
     DispatchStep,
 > {
-    let sender_started_ticks = match result_started_ticks {
+    let final_admission_ticks = match result_started_ticks {
         Some(ticks) => ticks,
         None => {
             return Err(DispatchStep::Terminate(
@@ -251,8 +251,8 @@ fn resolve_send_boundaries(
             ));
         }
     };
-    let sender_duration_ticks =
-        match completed_qpc_ticks.checked_duration_since(sender_started_ticks) {
+    let admission_to_completion_ticks =
+        match completed_qpc_ticks.checked_duration_since(final_admission_ticks) {
             Ok(duration) => duration,
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
@@ -260,8 +260,8 @@ fn resolve_send_boundaries(
                 )));
             }
         };
-    let sender_started_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
-        sender_started_ticks,
+    let final_admission_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+        final_admission_ticks,
         runtime.allow_pre_epoch_startup_dispatch,
     ) {
         Ok(ticks) => ticks,
@@ -284,7 +284,7 @@ fn resolve_send_boundaries(
     };
     let commit_result = coordinator.commit_packet_success(
         view.prepared_batch,
-        sender_started_effective_ticks,
+        final_admission_effective_ticks,
         completed_effective_ticks,
     );
     if let Err(error) = commit_result {
@@ -296,9 +296,9 @@ fn resolve_send_boundaries(
         .checked_duration_since(view.batch_scheduled_ticks)
         .ok();
     Ok((
-        sender_started_effective_ticks,
+        final_admission_effective_ticks,
         completed_effective_ticks,
-        sender_duration_ticks,
+        admission_to_completion_ticks,
         completion_lateness_ticks,
     ))
 }
@@ -338,9 +338,9 @@ pub(crate) fn interpret_down_send_timing(
         ));
     }
     let (
-        sender_started_effective_ticks,
+        final_admission_effective_ticks,
         completed_effective_ticks,
-        sender_duration_ticks,
+        admission_to_completion_ticks,
         completion_lateness_ticks,
     ) = resolve_send_boundaries(
         view,
@@ -353,10 +353,10 @@ pub(crate) fn interpret_down_send_timing(
     // Expose the raw QPC sender-completion boundary for the deferred observer.
     // Guaranteed `Some` here: a missing boundary already terminated inside
     // `resolve_send_boundaries`.
-    let sender_started_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
-    let sender_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
+    let final_admission_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
+    let sendinput_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
-        TimelineTicks::from_raw(sender_started_qpc.as_u64()),
+        TimelineTicks::from_raw(final_admission_qpc.as_u64()),
         TimelineTicks::from_raw(physical_target_qpc.as_u64()),
     )
     .map_err(|error| {
@@ -426,11 +426,11 @@ pub(crate) fn interpret_down_send_timing(
             }
         });
     Ok(DownSendTiming {
-        sender_started_qpc,
-        sender_completed_qpc,
-        sender_started_effective_ticks,
+        final_admission_qpc,
+        sendinput_completed_qpc,
+        final_admission_effective_ticks,
         completed_effective_ticks,
-        sender_duration_ticks,
+        admission_to_completion_ticks,
         dispatch_start_error_ticks,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,

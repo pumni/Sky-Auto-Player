@@ -11,30 +11,19 @@ use super::{
     publish_backend_metrics, suspend_live_input, target_stamp_still_current, wait_failure_message,
     wait_for_next_boundary,
 };
-use smallvec::SmallVec;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhysicalWork {
-    Pending,
-    Authored,
-}
 
 fn physical_target_qpc_for_work(
     plan: &super::planning::NextDispatchPlan,
     epoch: sky_dispatch_win32::clock::QpcTicks,
     now: sky_dispatch_win32::clock::QpcTicks,
-    work: PhysicalWork,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
-    let deadline = match work {
-        PhysicalWork::Pending => plan.pending.as_ref().map(|pending| pending.deadline_ticks),
-        PhysicalWork::Authored => plan
-            .authored
-            .as_ref()
-            .map(|authored| authored.deadline_ticks),
-    };
+    let deadline = plan
+        .authored
+        .as_ref()
+        .map(|authored| authored.deadline_ticks);
     let Some(deadline) = deadline else {
         return Ok(None);
     };
@@ -76,7 +65,6 @@ pub(crate) fn dispatch_due_from_plan(
     timing: &super::WorkerTimingState,
     runtime: &mut super::WorkerRuntime,
     local_metrics: &mut super::WorkerMetricsLocal,
-    secondary_errors: &mut Vec<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
@@ -94,64 +82,6 @@ pub(crate) fn dispatch_due_from_plan(
             "dispatch plan has inconsistent physical-work budgets".to_string(),
         );
     }
-    let pending_plan = plan.pending.as_ref();
-    let due_pending = match pending_plan {
-        Some(pending) => match resources
-            .coordinator
-            .pop_due_pending_ticks(effective_now_ticks, pending)
-        {
-            Ok(due) => due,
-            Err(error) => {
-                return super::DispatchStep::Terminate(format!(
-                    "coordinator pending-pop failure: {error}"
-                ));
-            }
-        },
-        None => SmallVec::new(),
-    };
-    if !due_pending.is_empty() {
-        let physical_target_qpc =
-            match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Pending) {
-                Ok(Some(target)) => target,
-                Ok(None) => return super::DispatchStep::NoWork,
-                Err(error) => return super::DispatchStep::Terminate(error),
-            };
-        let Some(frozen_budget) = plan.pending_budget.as_ref() else {
-            return super::DispatchStep::Terminate(
-                "pending dispatch plan has no health budget".to_string(),
-            );
-        };
-        match super::dispatch_due_pending_releases(
-            super::PendingReleaseContext {
-                due_pending,
-                physical_target_qpc,
-                frozen_budget: *frozen_budget,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                desired_pause,
-                supervisor_heartbeat_ticks,
-                lease_timeout_ticks,
-                observer,
-            },
-            config,
-            resources,
-            health,
-            timing,
-            runtime,
-            local_metrics,
-            secondary_errors,
-            target_hwnd,
-        ) {
-            super::DispatchStep::Dispatched => return super::DispatchStep::Dispatched,
-            super::DispatchStep::Continue => return super::DispatchStep::Continue,
-            super::DispatchStep::NoWork => {}
-            super::DispatchStep::Terminate(error) => {
-                return super::DispatchStep::Terminate(error);
-            }
-        }
-    }
-
     if plan.authored.is_none() {
         return super::DispatchStep::NoWork;
     }
@@ -162,12 +92,11 @@ pub(crate) fn dispatch_due_from_plan(
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
-    let physical_target_qpc =
-        match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Authored) {
-            Ok(Some(target)) => target,
-            Ok(None) => return super::DispatchStep::NoWork,
-            Err(error) => return super::DispatchStep::Terminate(error),
-        };
+    let physical_target_qpc = match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks) {
+        Ok(Some(target)) => target,
+        Ok(None) => return super::DispatchStep::NoWork,
+        Err(error) => return super::DispatchStep::Terminate(error),
+    };
 
     super::dispatch_authored_packet(
         super::AuthoredPacketContext {
@@ -683,7 +612,6 @@ pub(super) fn dispatch(
                 &timing,
                 &mut core.runtime,
                 &mut core.metrics,
-                &mut core.errors.secondary,
                 focus_active,
                 target_hwnd,
                 target_generation,
@@ -792,7 +720,6 @@ pub(super) fn dispatch(
                         &timing,
                         &mut core.runtime,
                         &mut core.metrics,
-                        &mut core.errors.secondary,
                         focus_active,
                         target_hwnd,
                         target_generation,
@@ -844,105 +771,41 @@ pub(super) fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysicalWork, physical_target_qpc_for_work};
+    use super::physical_target_qpc_for_work;
     use crate::engine::worker::health::DispatchPath;
     use crate::engine::worker::planning::{AuthoredDispatchPlan, NextDispatchPlan};
-    use sky_dispatch_core::coordinator::PendingDispatchPlan;
     use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 
-    fn plan_with_deadlines(authored: u64, pending: u64) -> NextDispatchPlan {
+    fn authored_plan(deadline: u64) -> NextDispatchPlan {
         NextDispatchPlan {
             authored: Some(AuthoredDispatchPlan {
                 path: DispatchPath::DownOnly { down_count: 1 },
-                deadline_ticks: TimelineTicks::from_raw(authored),
+                deadline_ticks: TimelineTicks::from_raw(deadline),
             }),
             authored_budget: None,
-            pending: Some(PendingDispatchPlan {
-                deadline_ticks: TimelineTicks::from_raw(pending),
-                polyphony: 1,
-            }),
-            pending_budget: None,
-            deadline_ticks: Some(TimelineTicks::from_raw(authored.min(pending))),
+            deadline_ticks: Some(TimelineTicks::from_raw(deadline)),
         }
     }
 
     #[test]
-    fn pending_overdue_work_uses_its_own_physical_target() {
-        let plan = plan_with_deadlines(1_000, 1_100);
-        let epoch = QpcTicks::ZERO;
+    fn authored_overdue_work_uses_its_physical_target() {
+        let plan = authored_plan(1_000);
 
         assert_eq!(
-            physical_target_qpc_for_work(
-                &plan,
-                epoch,
-                QpcTicks::from_raw(1_200),
-                PhysicalWork::Pending
-            )
-            .expect("pending target")
-            .expect("pending deadline"),
-            QpcTicks::from_raw(1_100)
-        );
-        assert_eq!(
-            physical_target_qpc_for_work(
-                &plan,
-                epoch,
-                QpcTicks::from_raw(1_200),
-                PhysicalWork::Authored
-            )
-            .expect("authored target")
-            .expect("authored deadline"),
+            physical_target_qpc_for_work(&plan, QpcTicks::ZERO, QpcTicks::from_raw(1_200),)
+                .expect("authored target")
+                .expect("authored deadline"),
             QpcTicks::from_raw(1_000)
         );
     }
 
     #[test]
-    fn pending_target_remains_earlier_when_authored_is_later() {
-        let plan = plan_with_deadlines(1_100, 1_000);
-        let target = physical_target_qpc_for_work(
-            &plan,
-            QpcTicks::ZERO,
-            QpcTicks::from_raw(1_200),
-            PhysicalWork::Pending,
-        )
-        .expect("pending target")
-        .expect("pending deadline");
-
-        assert_eq!(target, QpcTicks::from_raw(1_000));
-    }
-
-    #[test]
-    fn equal_authored_and_pending_deadlines_share_the_same_target() {
-        let plan = plan_with_deadlines(1_000, 1_000);
-        let epoch = QpcTicks::from_raw(500);
-        let pending = physical_target_qpc_for_work(
-            &plan,
-            epoch,
-            QpcTicks::from_raw(1_500),
-            PhysicalWork::Pending,
-        )
-        .expect("pending target")
-        .expect("pending deadline");
-        let authored = physical_target_qpc_for_work(
-            &plan,
-            epoch,
-            QpcTicks::from_raw(1_500),
-            PhysicalWork::Authored,
-        )
-        .expect("authored target")
-        .expect("authored deadline");
-
-        assert_eq!(pending, QpcTicks::from_raw(1_500));
-        assert_eq!(authored, pending);
-    }
-
-    #[test]
     fn startup_target_cannot_precede_the_playback_epoch() {
-        let plan = plan_with_deadlines(0, 1_000);
+        let plan = authored_plan(0);
         let target = physical_target_qpc_for_work(
             &plan,
             QpcTicks::from_raw(10_000),
             QpcTicks::from_raw(9_540),
-            PhysicalWork::Authored,
         )
         .expect("target arithmetic");
 
@@ -951,14 +814,9 @@ mod tests {
 
     #[test]
     fn future_selected_target_is_not_replaced_with_now() {
-        let plan = plan_with_deadlines(1_000, 2_000);
-        let target = physical_target_qpc_for_work(
-            &plan,
-            QpcTicks::ZERO,
-            QpcTicks::from_raw(900),
-            PhysicalWork::Authored,
-        )
-        .expect("target arithmetic");
+        let plan = authored_plan(1_000);
+        let target = physical_target_qpc_for_work(&plan, QpcTicks::ZERO, QpcTicks::from_raw(900))
+            .expect("target arithmetic");
 
         assert_eq!(target, None);
     }

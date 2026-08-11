@@ -165,83 +165,6 @@ fn production_ticks_do_not_advance_authored_deadlines() {
 }
 
 #[test]
-fn failed_release_is_requeued_and_unblocks_later_same_key_down() {
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "down-1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x15].into(),
-                reason: "up-1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 4_000,
-                scan_codes: vec![0x15].into(),
-                reason: "down-2".into(),
-            },
-        ],
-        &[0x15],
-    )
-    .expect("valid schedule");
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
-    let (down, _) = coordinator
-        .pop_next_due_authored(0, 0)
-        .expect("first down is due");
-    coordinator.activate_sent_downs(
-        &down.intents,
-        &[0x15],
-        0,
-        crate::time::TimelineTicks::from_raw(0),
-        10,
-        crate::time::TimelineTicks::from_raw(10),
-    );
-
-    let (up, _) = coordinator
-        .pop_next_due_authored(1_000, 0)
-        .expect("up is due");
-    let (_, suppressed) = coordinator
-        .request_releases(&up.intents)
-        .expect("valid release request");
-    assert!(suppressed.is_empty());
-
-    let due = coordinator.pop_due_pending(1_000, 0);
-    assert_eq!(due.len(), 1);
-    assert!(
-        !coordinator
-            .requeue_failed_releases(&due, &[], 1_000, 1_000, Some(5))
-            .expect("valid recovery")
-    );
-    assert_eq!(coordinator.next_pending_release_us(0), Some(3_000));
-    assert!(!coordinator.is_finished());
-
-    let retry = coordinator.pop_due_pending(3_000, 0);
-    assert_eq!(retry.len(), 1);
-    coordinator.complete_releases(&retry, &[0x15]);
-    assert_eq!(coordinator.finish_release_recovery(3_000), Ok(Some(2_000)));
-    assert_eq!(coordinator.schedule.batches[2].scheduled_us, 4_000);
-
-    let (next_down, _) = coordinator
-        .pop_next_due_authored(6_000, 0)
-        .expect("same-key down remains schedulable after recovery");
-    let (playable, conflicts) = coordinator
-        .split_down_intents(&next_down.intents)
-        .expect("valid transition");
-    assert_eq!(playable.len(), 1);
-    assert!(conflicts.is_empty());
-}
-
-#[test]
 fn down_commit_uses_pre_send_timestamp() {
     let schedule = compile_runtime_intents(
         &[
@@ -420,7 +343,6 @@ fn multi_up_only_packet_advances_all_batches_once() {
         .unwrap();
     assert_eq!(coordinator.cursor, 3);
     assert_eq!(coordinator.active_mask, 0);
-    assert_eq!(coordinator.pending_mask, 0);
     assert_eq!(
         coordinator
             .generation_status_counts()
@@ -610,7 +532,7 @@ fn owned_and_stale_up_with_down_is_mixed_with_physical_count_two() {
 }
 
 #[test]
-fn mixed_packet_waits_until_release_not_before_and_rebases_following_action() {
+fn mixed_packet_waits_until_release_not_before_without_shifting_following_action() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -673,8 +595,6 @@ fn mixed_packet_waits_until_release_not_before_and_rebases_following_action() {
             TimelineTicks::from_raw(130),
         )
         .unwrap();
-    assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 0);
-    assert_eq!(coordinator.timeline_rebase_count(), 0);
     let following = coordinator
         .prepare_next_due_authored(TimelineTicks::from_raw(199), DurationTicks::ZERO)
         .unwrap();
@@ -684,6 +604,56 @@ fn mixed_packet_waits_until_release_not_before_and_rebases_following_action() {
         .unwrap()
         .unwrap();
     assert_eq!(following.effective_scheduled_ticks.as_u64(), 200);
+}
+
+#[test]
+fn authored_packet_lifecycle_has_no_pending_release_state() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid authored lifecycle schedule");
+    let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 20, 0, TimelineTicks::from_raw);
+
+    let down = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("prepare down")
+        .expect("down is due");
+    coordinator
+        .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(10))
+        .expect("commit down");
+    let up = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+        .expect("prepare up")
+        .expect("up is due");
+    coordinator
+        .commit_packet_success(
+            up,
+            TimelineTicks::from_raw(100),
+            TimelineTicks::from_raw(101),
+        )
+        .expect("commit up");
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.get("released"), Some(&1));
+    assert!(!counts.contains_key("release_pending"));
+    assert_eq!(coordinator.active_mask, 0);
+    assert!(coordinator.is_finished());
 }
 
 #[test]
@@ -798,76 +768,4 @@ fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
         .unwrap()
         .unwrap();
     assert_eq!(prepared.packet_kind, PhysicalPacketKind::Mixed);
-}
-
-#[test]
-fn same_key_down_waits_for_recovery_and_timeline_does_not_catch_up() {
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "down-1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x15].into(),
-                reason: "up-1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x15].into(),
-                reason: "down-2".into(),
-            },
-        ],
-        &[0x15],
-    )
-    .expect("valid schedule");
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
-    let (down, _) = coordinator
-        .pop_next_due_authored(0, 0)
-        .expect("first down is due");
-    coordinator.activate_sent_downs(
-        &down.intents,
-        &[0x15],
-        0,
-        crate::time::TimelineTicks::from_raw(0),
-        10,
-        crate::time::TimelineTicks::from_raw(10),
-    );
-    let (up, _) = coordinator
-        .pop_next_due_authored(1_000, 0)
-        .expect("up is due");
-    let _ = coordinator.request_releases(&up.intents);
-    let due = coordinator.pop_due_pending(1_000, 0);
-    assert!(
-        !coordinator
-            .requeue_failed_releases(&due, &[], 1_000, 1_000, Some(5))
-            .expect("valid recovery")
-    );
-
-    assert!(coordinator.pop_next_due_authored(2_000, 0).is_none());
-    assert_eq!(coordinator.next_deadline_us(0, 0), Some(3_000));
-
-    let retry = coordinator.pop_due_pending(3_000, 0);
-    coordinator.complete_releases(&retry, &[0x15]);
-    assert_eq!(coordinator.finish_release_recovery(3_000), Ok(Some(2_000)));
-    assert_eq!(coordinator.schedule.batches[2].scheduled_us, 2_000);
-    assert!(coordinator.pop_next_due_authored(3_000, 0).is_none());
-    let (next_down, _) = coordinator
-        .pop_next_due_authored(4_000, 0)
-        .expect("timeline-shifted same-key down is due");
-    assert_eq!(next_down.scheduled_us, 4_000);
-    let (playable, conflicts) = coordinator
-        .split_down_intents(&next_down.intents)
-        .expect("valid transition");
-    assert_eq!(playable.len(), 1);
-    assert!(conflicts.is_empty());
 }

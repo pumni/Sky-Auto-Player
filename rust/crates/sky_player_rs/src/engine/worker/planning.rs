@@ -1,17 +1,15 @@
-//! Immutable per-epoch physical-deadline planning.
+//! Immutable per-epoch authored physical-deadline planning.
 //!
-//! Planning never consults diagnostic state.  Authored and pending deadlines
-//! are the coordinator's effective QPC-timeline deadlines; wake guards are
-//! applied only by the wait strategy.
+//! Planning never consults diagnostic state. Authored deadlines are the
+//! coordinator's effective QPC-timeline deadlines; wake guards are applied
+//! only by the wait strategy.
 
 use super::health::{
     DispatchHealthOptions, DispatchPath, FrozenDispatchBudget, build_dispatch_budget,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::config::TimingOptions;
-use sky_dispatch_core::coordinator::{
-    CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator,
-};
+use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::time::TimelineTicks;
 use std::fmt;
 
@@ -35,8 +33,6 @@ impl Default for AuthoredDispatchPlan {
 pub(crate) struct NextDispatchPlan {
     pub(crate) authored: Option<AuthoredDispatchPlan>,
     pub(crate) authored_budget: Option<FrozenDispatchBudget>,
-    pub(crate) pending: Option<PendingDispatchPlan>,
-    pub(crate) pending_budget: Option<FrozenDispatchBudget>,
     pub(crate) deadline_ticks: Option<TimelineTicks>,
 }
 
@@ -45,8 +41,6 @@ pub(crate) struct NextDispatchPlan {
 pub struct NextDispatchPlan {
     pub(crate) authored: Option<AuthoredDispatchPlan>,
     pub(crate) authored_budget: Option<FrozenDispatchBudget>,
-    pub(crate) pending: Option<PendingDispatchPlan>,
-    pub(crate) pending_budget: Option<FrozenDispatchBudget>,
     pub(crate) deadline_ticks: Option<TimelineTicks>,
 }
 
@@ -55,21 +49,10 @@ impl NextDispatchPlan {
     pub fn authored_path(&self) -> Option<DispatchPath> {
         self.authored.as_ref().map(|plan| plan.path)
     }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn pending(&self) -> Option<&PendingDispatchPlan> {
-        self.pending.as_ref()
-    }
 }
 
 pub(crate) fn plan_structure_is_valid(plan: &NextDispatchPlan) -> bool {
     plan.authored.is_some() == plan.authored_budget.is_some()
-        && plan.pending.is_some() == plan.pending_budget.is_some()
 }
 
 #[derive(Debug)]
@@ -115,7 +98,6 @@ pub(crate) fn plan_next_dispatch_projected(
         coordinator,
         health_options,
     } = input;
-
     let authored = match super::dispatch::timing::current_authored_physical_path(coordinator)? {
         Some(path) => Some(AuthoredDispatchPlan {
             path,
@@ -127,30 +109,13 @@ pub(crate) fn plan_next_dispatch_projected(
         }),
         None => None,
     };
-    let pending = coordinator.plan_pending_dispatch_ticks()?;
     let authored_budget = authored
         .as_ref()
         .map(|plan| build_dispatch_budget(plan.path, health_options));
-    let pending_budget = pending.as_ref().map(|plan| {
-        build_dispatch_budget(
-            DispatchPath::UpOnly {
-                up_count: plan.polyphony,
-            },
-            health_options,
-        )
-    });
-    let authored_deadline = authored.as_ref().map(|plan| plan.deadline_ticks);
-    let pending_deadline = pending.as_ref().map(|plan| plan.deadline_ticks);
-    let deadline_ticks = match (authored_deadline, pending_deadline) {
-        (Some(authored), Some(pending)) => Some(authored.min(pending)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    };
+    let deadline_ticks = authored.as_ref().map(|plan| plan.deadline_ticks);
     let plan = NextDispatchPlan {
         authored,
         authored_budget,
-        pending,
-        pending_budget,
         deadline_ticks,
     };
     debug_assert!(plan_structure_is_valid(&plan));

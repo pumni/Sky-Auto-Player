@@ -77,14 +77,6 @@ pub(crate) fn dispatch_authored_packet(
             ));
         }
     };
-    local_metrics.timeline_rebase_count = coordinator.timeline_rebase_count();
-    local_metrics.timeline_rebase_total_ticks = coordinator.timeline_rebase_total_ticks();
-    local_metrics.timeline_rebase_max_ticks = coordinator.timeline_rebase_max_ticks();
-    local_metrics.timeline_rebase_last_reason = match coordinator.last_timeline_rebase_reason() {
-        None => 0,
-        Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseRecovery) => 3,
-    };
-
     let Some(prepared_batch) = prepared_batch else {
         return DispatchStep::NoWork;
     };
@@ -375,30 +367,15 @@ fn admit_authored_down(
             match admission {
                 DownAdmission::Allowed => {}
                 DownAdmission::FocusLost => {
-                    runtime.verified_target = None;
-                    let focus_ticks = match qpc_clock.now() {
-                        Ok(ticks) => ticks,
-                        Err(error) => {
-                            return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}")));
-                        }
-                    };
-                    if let Err(error) = suspend_live_input(
+                    return handle_final_focus_loss(
+                        qpc_clock,
                         backend,
                         coordinator,
-                        target_hwnd.load(Ordering::Acquire),
-                    ) {
-                        return Err(DispatchStep::Terminate(format!(
-                            "focus suspension failed: {error}"
-                        )));
-                    }
-                    if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
-                        return Err(DispatchStep::Terminate(format!(
-                            "playback clock failure after final focus check: {error}"
-                        )));
-                    }
-                    progress_clock.publish(clock_state);
-                    runtime.focus_restore_started_ticks = None;
-                    return Ok(AdmissionOutcome::FocusLost);
+                        clock_state,
+                        runtime,
+                        target_hwnd,
+                        progress_clock,
+                    );
                 }
                 DownAdmission::TargetChanged => {
                     runtime.verified_target = None;
@@ -424,6 +401,34 @@ fn admit_authored_down(
         ));
     }
     Ok(AdmissionOutcome::ConflictReject)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_final_focus_loss(
+    qpc_clock: QpcClock,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    target_hwnd: &AtomicIsize,
+    progress_clock: &SharedProgressClock,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    runtime.verified_target = None;
+    let focus_ticks = qpc_clock
+        .now()
+        .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
+    suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
+        .map_err(|error| DispatchStep::Terminate(format!("focus suspension failed: {error}")))?;
+    clock_state
+        .enter_pause("focus", focus_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "playback clock failure after final focus check: {error}"
+            ))
+        })?;
+    progress_clock.publish(clock_state);
+    runtime.focus_restore_started_ticks = None;
+    Ok(AdmissionOutcome::FocusLost)
 }
 
 /// Contstructs the allowed admission from the frozen dispatch budget and the

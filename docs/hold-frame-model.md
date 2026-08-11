@@ -32,7 +32,7 @@ before:
 
 ```text
 release_floor = C + effective_min_hold_us
-effective_release = max(authored_release, release_floor, retry_not_before)
+effective_release = max(authored_release, release_floor)
 ```
 
 The floor is checked in QPC ticks with checked arithmetic. It is a sender-side
@@ -43,10 +43,11 @@ own call duration from shortening the configured hold.
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
-Runtime recovery may defer a release after a slow Down or retry backoff; that
-defer is represented in diagnostics and does not move unrelated future
-authored actions. Strict timing evaluates completion residuals, while normal
-playback preserves the schedule when transport integrity remains valid.
+The coordinator may defer an authored release until this floor after a slow
+Down; that defer does not move unrelated future authored actions. A transport
+zero/partial result is terminal and is handled by fail-closed cleanup; it is not
+retried in production. Strict timing evaluates completion residuals, while
+normal playback preserves the schedule when transport integrity remains valid.
 
 The native observer reports sender-side start, completion, lateness, duration,
 and release-floor evidence. These values are not game-onset or audio-onset

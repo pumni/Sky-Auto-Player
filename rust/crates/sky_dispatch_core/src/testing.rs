@@ -1,4 +1,4 @@
-//! Fake clock and deterministic simulation harness for differential testing.
+//! Fake clock and deterministic authored-packet simulation harness.
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -68,14 +68,13 @@ pub fn simulate_schedule(
     .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
     let mut events = Vec::new();
-    let mut step: u32 = 0;
-    let mut iterations: u32 = 0;
-
-    let mut now_us: u64 = if let Some(batch) = coordinator.schedule.batches.first() {
-        batch.scheduled_us
-    } else {
-        0
-    };
+    let mut step = 0u32;
+    let mut iterations = 0u32;
+    let mut now_us = coordinator
+        .schedule
+        .batches
+        .first()
+        .map_or(0, |batch| batch.scheduled_us);
 
     while !coordinator.is_finished() {
         iterations = iterations.saturating_add(1);
@@ -84,91 +83,31 @@ pub fn simulate_schedule(
                 "simulation step budget exceeded".to_string(),
             ));
         }
-        if coordinator.schedule.batches.len() <= coordinator.cursor
-            && coordinator.pending_mask == 0
-            && coordinator.active_mask != 0
-        {
-            return Err(crate::compile::CompileError::Simulation(
-                "simulation incomplete: active generations remain".to_string(),
-            ));
-        }
-        let current_stale = coordinator
+
+        if let Some(prepared) = coordinator
             .prepare_current_stale_packet()
-            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        let pending_deadline = coordinator
-            .next_pending_release_ticks()
-            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        let pending_plan = pending_deadline.map(|deadline_ticks| PendingDispatchPlan {
-            deadline_ticks,
-            polyphony: 1,
-        });
-        if current_stale.is_none()
-            && let Some(dl) = coordinator
-                .next_deadline_ticks(pending_plan.as_ref())
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
         {
-            now_us = now_us.max(dl.as_u64());
-        }
-
-        // 1. Drain pending releases due
-        let plan = PendingDispatchPlan {
-            deadline_ticks: crate::time::TimelineTicks::from_raw(now_us),
-            polyphony: 1,
-        };
-        let due_pending = coordinator
-            .pop_due_pending_ticks(crate::time::TimelineTicks::from_raw(now_us), &plan)
-            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        if !due_pending.is_empty() {
-            let scan_codes: Vec<u16> = due_pending.iter().map(|p| p.scan_code).collect();
-            let gen_ids: Vec<Option<u64>> =
-                due_pending.iter().map(|p| Some(p.generation_id)).collect();
-            let completed_us = now_us.checked_add(send_latency_us).ok_or_else(|| {
-                crate::compile::CompileError::Simulation(
-                    "simulation timestamp overflow".to_string(),
-                )
-            })?;
-
-            coordinator
-                .complete_releases(&due_pending, &scan_codes)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-
-            events.push(TraceEvent {
-                step,
-                kind: "up".to_string(),
-                scheduled_us: due_pending[0].scheduled_release_us,
-                actual_us: now_us,
-                completed_us,
-                scan_codes,
-                generation_ids: gen_ids,
-                outcome: "released".to_string(),
-            });
-            step += 1;
-            now_us = completed_us;
-            continue;
-        }
-
-        // Stale metadata is never physical work.  Consume exactly one
-        // compiled packet at the current cursor without assigning it an
-        // authored deadline or a physical dispatch path.
-        if let Some(prepared) = current_stale {
             let packet = coordinator
                 .schedule
                 .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)
                 .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            let scan_codes: Vec<u16> = packet
+            let scan_codes = packet
                 .up_intents
                 .iter()
-                .map(|i| {
+                .map(|intent| {
                     packet
                         .registry
-                        .scan_code_for(i.key_slot())
+                        .scan_code_for(intent.key_slot())
                         .expect("compiled stale key slot must belong to key registry")
                 })
                 .collect();
-            let gen_ids: Vec<Option<u64>> = packet
+            let generation_ids = packet
                 .up_intents
                 .iter()
-                .map(|i| (i.generation_id() != NO_GENERATION_ID).then_some(i.generation_id()))
+                .map(|intent| {
+                    (intent.generation_id() != NO_GENERATION_ID).then_some(intent.generation_id())
+                })
                 .collect();
             coordinator
                 .commit_stale_packet(prepared)
@@ -180,114 +119,83 @@ pub fn simulate_schedule(
                 actual_us: now_us,
                 completed_us: now_us,
                 scan_codes,
-                generation_ids: gen_ids,
+                generation_ids,
                 outcome: "suppressed_stale_up".to_string(),
             });
             step += 1;
             continue;
         }
 
-        // 2. Drain authored batch
-        if let Some(batch_index) = coordinator
-            .pop_next_due_authored_ticks(crate::time::TimelineTicks::from_raw(now_us))
+        let Some(deadline) = coordinator
+            .next_uncompensated_deadline_ticks()
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
-        {
-            let batch = coordinator
-                .schedule
-                .try_materialize_batch_authored(batch_index)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            match batch.kind {
-                ActionKind::Down => {
-                    let (playable, conflicts) = coordinator
-                        .split_down_intents(&batch.intents)
-                        .map_err(|error| {
-                            crate::compile::CompileError::Simulation(error.to_string())
-                        })?;
-                    if !playable.is_empty() {
-                        let scan_codes: Vec<u16> = playable.iter().map(|i| i.scan_code).collect();
-                        let gen_ids: Vec<Option<u64>> =
-                            playable.iter().map(|i| i.generation_id).collect();
-                        let completed_us =
-                            now_us.checked_add(send_latency_us).ok_or_else(|| {
-                                crate::compile::CompileError::Simulation(
-                                    "simulation timestamp overflow".to_string(),
-                                )
-                            })?;
-
-                        coordinator
-                            .activate_sent_downs_ticks(
-                                &playable,
-                                &scan_codes,
-                                crate::time::TimelineTicks::from_raw(now_us),
-                                crate::time::TimelineTicks::from_raw(completed_us),
-                            )
-                            .map_err(|error| {
-                                crate::compile::CompileError::Simulation(error.to_string())
-                            })?;
-
-                        events.push(TraceEvent {
-                            step,
-                            kind: "down".to_string(),
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: now_us,
-                            completed_us,
-                            scan_codes,
-                            generation_ids: gen_ids,
-                            outcome: "sent".to_string(),
-                        });
-                        step += 1;
-                        now_us = completed_us;
-                    }
-                    if !conflicts.is_empty() {
-                        let scan_codes: Vec<u16> = conflicts.iter().map(|i| i.scan_code).collect();
-                        let gen_ids: Vec<Option<u64>> =
-                            conflicts.iter().map(|i| i.generation_id).collect();
-                        events.push(TraceEvent {
-                            step,
-                            kind: "down".to_string(),
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: now_us,
-                            completed_us: now_us,
-                            scan_codes,
-                            generation_ids: gen_ids,
-                            outcome: "dropped_conflict".to_string(),
-                        });
-                        step += 1;
-                    }
-                }
-                ActionKind::Up => {
-                    let (requested, suppressed) = coordinator
-                        .request_releases(&batch.intents)
-                        .map_err(|error| {
-                            crate::compile::CompileError::Simulation(error.to_string())
-                        })?;
-                    if !suppressed.is_empty() {
-                        let scan_codes: Vec<u16> = suppressed.iter().map(|i| i.scan_code).collect();
-                        let gen_ids: Vec<Option<u64>> =
-                            suppressed.iter().map(|i| i.generation_id).collect();
-                        events.push(TraceEvent {
-                            step,
-                            kind: "up".to_string(),
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: now_us,
-                            completed_us: now_us,
-                            scan_codes,
-                            generation_ids: gen_ids,
-                            outcome: "suppressed_stale_up".to_string(),
-                        });
-                        step += 1;
-                    }
-                    let _ = requested;
-                }
-            }
-        } else {
-            // Advance time if nothing moved
+        else {
+            break;
+        };
+        now_us = now_us.max(deadline.as_u64());
+        #[cfg(test)]
+        let prepared = coordinator.prepare_next_due_authored(
+            crate::time::TimelineTicks::from_raw(now_us),
+            crate::time::DurationTicks::ZERO,
+        );
+        #[cfg(not(test))]
+        let prepared =
+            coordinator.prepare_next_due_authored(crate::time::TimelineTicks::from_raw(now_us));
+        let Some(prepared) = prepared
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
+        else {
             now_us = now_us.checked_add(100).ok_or_else(|| {
                 crate::compile::CompileError::Simulation(
                     "simulation timestamp overflow".to_string(),
                 )
             })?;
+            continue;
+        };
+        let packet = coordinator
+            .schedule
+            .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+        let mut scan_codes =
+            Vec::with_capacity(packet.up_intents.len() + packet.down_intents.len());
+        let mut generation_ids = Vec::with_capacity(scan_codes.capacity());
+        for intent in packet.up_intents.iter().chain(packet.down_intents.iter()) {
+            scan_codes.push(
+                packet
+                    .registry
+                    .scan_code_for(intent.key_slot())
+                    .expect("compiled key slot must belong to key registry"),
+            );
+            generation_ids.push(
+                (intent.generation_id() != NO_GENERATION_ID).then_some(intent.generation_id()),
+            );
         }
+        let completed_us = now_us.checked_add(send_latency_us).ok_or_else(|| {
+            crate::compile::CompileError::Simulation("simulation timestamp overflow".to_string())
+        })?;
+        coordinator
+            .commit_packet_success(
+                prepared,
+                crate::time::TimelineTicks::from_raw(now_us),
+                crate::time::TimelineTicks::from_raw(completed_us),
+            )
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+        let kind = match prepared.packet_kind {
+            PhysicalPacketKind::UpOnly => "up",
+            PhysicalPacketKind::DownOnly => "down",
+            PhysicalPacketKind::Mixed => "mixed",
+        };
+        events.push(TraceEvent {
+            step,
+            kind: kind.to_string(),
+            scheduled_us: prepared.effective_scheduled_ticks.as_u64(),
+            actual_us: now_us,
+            completed_us,
+            scan_codes,
+            generation_ids,
+            outcome: "sent".to_string(),
+        });
+        step += 1;
+        now_us = completed_us;
     }
 
     Ok(SimulationResult {

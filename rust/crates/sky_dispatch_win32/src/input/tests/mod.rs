@@ -1,9 +1,9 @@
 use super::*;
 
 use super::physical::{
-    InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
-    keyboard_context_for_target, map_instrument_virtual_keys, mask_for_scan_codes,
-    reconcile_release_observation,
+    InstrumentPhysicalState, ReconciledRelease, classify_async_key_states,
+    instrument_physical_state_for_mask, keyboard_context_for_target, map_instrument_virtual_keys,
+    mask_for_scan_codes, reconcile_release_observation,
 };
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, scan_codes_from_mask,
@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 mod cleanup;
 mod recovery;
+mod tracked;
 
 fn scripted_result(requested: usize, inserted: u8, _completed_us: u64) -> PlatformSendResult {
     PlatformSendResult {
@@ -391,7 +392,7 @@ fn physical_verification_masks_are_bounded_and_subset_specific() {
     assert_eq!(mask_for_scan_codes(&[0x15, 0xffff]), None);
     assert_eq!(
         instrument_physical_state_for_mask(0, 0),
-        InstrumentPhysicalState::AllUp
+        InstrumentPhysicalState::Inconclusive
     );
     assert_eq!(
         instrument_physical_state_for_mask(0, FULL_INSTRUMENT_MASK | (1 << 15)),
@@ -413,6 +414,32 @@ fn zero_target_is_inconclusive_for_physical_preflight() {
     assert_eq!(
         TrackedKeyState::new().ensure_instrument_keys_physically_up(0),
         Err(PhysicalKeyPreflightError::VerificationInconclusive)
+    );
+}
+
+#[test]
+fn non_foreground_target_is_inconclusive_for_physical_probe() {
+    assert_eq!(
+        instrument_physical_state_for_mask(isize::MAX, 1),
+        InstrumentPhysicalState::Inconclusive
+    );
+}
+
+#[test]
+fn foreground_without_held_msb_is_all_up_evidence() {
+    assert_eq!(
+        classify_async_key_states(1, &[0; 15]),
+        InstrumentPhysicalState::AllUp
+    );
+}
+
+#[test]
+fn foreground_with_held_msb_reports_held_key() {
+    let mut key_states = [0i16; 15];
+    key_states[0] = i16::MIN;
+    assert_eq!(
+        classify_async_key_states(1, &key_states),
+        InstrumentPhysicalState::Held(smallvec::smallvec![0x15])
     );
 }
 
@@ -444,18 +471,6 @@ fn full_instrument_release_reports_unreleased_keys() {
     assert_eq!(outcome.attempted(), PHYSICAL_INSTRUMENT_SCAN_CODES);
     assert_eq!(outcome.stuck_keys(), PHYSICAL_INSTRUMENT_SCAN_CODES);
     assert_eq!(state.failed_release_mask.count_ones(), 15);
-}
-
-#[test]
-fn partial_transport_plus_physical_all_up_is_verified_success() {
-    let reconciled = reconcile_release_observation(0x0003, 0x0001, InstrumentPhysicalState::AllUp);
-    assert_eq!(reconciled, ReconciledRelease::VerifiedAllUp);
-}
-
-#[test]
-fn zero_progress_plus_physical_all_up_is_verified_success() {
-    let reconciled = reconcile_release_observation(0x0003, 0x0000, InstrumentPhysicalState::AllUp);
-    assert_eq!(reconciled, ReconciledRelease::VerifiedAllUp);
 }
 
 #[test]
@@ -844,30 +859,6 @@ fn cleanup_transport_anomaly_never_forces_verification_inconclusive() {
         "Held is conclusive, not inconclusive"
     );
     assert_eq!(outcome.stuck_keys(), vec![0x15]);
-}
-
-#[test]
-fn cleanup_transport_anomaly_is_aggregated_independently_of_physical_all_up() {
-    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: 0,
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: Some(QpcTicks::ZERO),
-        win32_error: 5,
-        timing_error: None,
-    });
-    // Physical probe sees all keys up despite the transport failure. The two
-    // dimensions are independent: released_successfully=true and
-    // verification_inconclusive=false, but transport_anomaly=true.
-    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
-    state.active_mask = 0x0003;
-
-    let outcome = state.release_all(0);
-    assert!(outcome.released_successfully);
-    assert!(!outcome.verification_inconclusive);
-    assert!(outcome.stuck_keys().is_empty());
-    assert_eq!(outcome.attempts, 1);
-    assert!(outcome.transport_anomaly);
 }
 
 fn test_send_result(requested: u8, inserted: u8, err: u32) -> PlatformSendResult {

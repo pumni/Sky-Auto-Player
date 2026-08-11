@@ -31,16 +31,16 @@ report.
 ## 2. Immutable plan
 
 One outer worker epoch builds one typed plan from the coordinator. The plan
-contains the next authored or pending deadline, physical path, polyphony,
+contains the next authored deadline, physical path, polyphony,
 health budget, and absolute QPC target. The plan is reused by waiting, due
 selection, and physical dispatch. Commands, focus/pause transitions, target
-changes, lease-only wakes, recovery changes, and interrupts invalidate it and
+changes, lease-only wakes, and interrupts invalidate it and
 cause a replan.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
-subtraction. Authored/effective timestamps are used as authored. Pending
-release deadlines include only the completion-anchored hold floor and retry or
-recovery floors. Any remaining lead-shaped arguments are test-only
+subtraction. Authored timestamps are used as authored. Release deadlines
+include only the completion-anchored hold floor. Any remaining lead-shaped
+arguments are test-only
 compatibility seams; production coordinator APIs do not accept a dispatch lead
 and the publication adapter reports the historical applied-lead field as zero.
 
@@ -69,24 +69,26 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 frozen plan
   -> fresh command/target/lease checks
   -> Down target + foreground validation when required
-  -> one QPC started sample
-  -> lease admission using that exact started sample
+  -> one QPC final_admission_qpc sample
+  -> lease admission using that exact admission sample
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
-  -> coordinator ownership commit/recovery
+  -> coordinator ownership commit on clean success
+  -> terminal fail-closed cleanup on transport anomaly
   -> bounded observation enqueue
 ```
 
-The supplied `started` sample is the physical start/admission boundary. The
-sender reports `completed`; production does not subtract a learned send cost
-from the target. Completion is used for diagnostics and release ownership.
+The supplied `final_admission_qpc` sample is the physical admission boundary.
+The transport reports `sendinput_completion_qpc`; production does not subtract
+a learned send cost from the target. Completion is used for diagnostics and
+release ownership.
 
 The primary sender-side timing evidence is the signed start residual:
 
 ```text
-dispatch_start_error_ticks = sender_started_qpc - physical_target_qpc
-send_duration = sender_completed_qpc - sender_started_qpc
-completion_error = sender_completed_qpc - physical_target_qpc  # diagnostic only
+dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc
+admission_to_completion = sendinput_completion_qpc - final_admission_qpc
+completion_error = sendinput_completion_qpc - physical_target_qpc  # diagnostic only
 ```
 
 The start residual is benchmark/observability output only. It is never fed
@@ -94,10 +96,17 @@ back into scheduling or used as adaptive compensation.
 
 Packet construction validates scan-code masks and sends Up entries before Down
 entries in one call. A zero, partial, skipped, mixed, or otherwise inconsistent
-transaction is handled fail-closed. A partial Down/Mixed result is not blindly
-retried. A pending release may requeue only unconfirmed ownership after a
-validated transport result; coordinator disagreement forces full-instrument
-cleanup and termination.
+transaction is handled fail-closed. Production never retries `SendInput` and
+never queues a release for a later transport attempt. Any transport anomaly
+forces full-instrument cleanup and termination.
+
+Cleanup verification keeps transport and physical evidence separate. A
+`VerifiedAllUp` result is possible only when the target HWND is still the
+foreground window, the physical probe observes no held instrument key, and the
+entire requested Up mask is confirmed by the transport. A zero- or partial-
+progress transport result combined with physical all-up is therefore
+inconclusive, never cleanup success. Focus loss also makes the physical probe
+inconclusive; it must not be interpreted as all keys being up.
 
 ## 4. Completion-anchored hold model
 
@@ -112,13 +121,12 @@ Native checked tick arithmetic enforces:
 
 ```text
 release_floor = down_completed + effective_min_hold
-effective_release = max(authored_release, release_floor, retry_not_before)
+effective_release = max(authored_release, release_floor)
 ```
 
 This is a sender-side visibility floor, not game-observed timing. A slow Down
 can defer its own Up; it does not move an unrelated future authored action.
-Recovery and retry state remain coordinator correctness state, not observer
-statistics.
+There is no pending-release or retry state in the coordinator.
 
 ## 5. Wait and interrupt ordering
 
@@ -157,7 +165,7 @@ Every QPC query used for a correctness decision is terminal on failure.
 Coordinator commit follows confirmed transport evidence. Cleanup releases
 active/possibly-active keys and verifies the resulting state before successful
 completion. The ready boundary is published only after startup gates and the
-required physical/recovery state are complete.
+required physical ownership and cleanup state are complete.
 
 Observer failure, telemetry overflow, or metric conversion failure cannot
 rewrite physical ownership. The worker terminates through the normal cleanup
@@ -170,8 +178,8 @@ compatibility; they are ignored by planning and contain no learned state.
 
 ## 8. Verification matrix
 
-- `sky_dispatch_core`: controlled-clock deadline, hold-floor, ownership,
-  recovery, and property tests.
+- `sky_dispatch_core`: controlled-clock deadline, hold-floor, authored
+  ownership, stale/retrigger/mixed-packet, and soak tests.
 - `sky_dispatch_win32`: packet ordering, strict mask validation, QPC/wait,
   focus, and `SendInput` seam tests.
 - `sky_player_rs`: final-gate ordering, completion evidence, observer queue

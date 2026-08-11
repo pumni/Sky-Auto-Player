@@ -54,8 +54,8 @@ pub struct DownTraceObservation {
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub sender_started_ticks: Option<TimelineTicks>,
-    pub sender_completed_ticks: Option<TimelineTicks>,
+    pub final_admission_ticks: Option<TimelineTicks>,
+    pub sendinput_completed_ticks: Option<TimelineTicks>,
     pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
@@ -72,10 +72,10 @@ pub struct DownObservation {
     pub timeline_rebase_total_ticks: DurationTicks,
     pub timeline_rebase_max_ticks: DurationTicks,
     pub timeline_rebase_last_reason: u8,
-    pub sender_started_qpc: QpcTicks,
-    pub sender_completed_qpc: QpcTicks,
+    pub final_admission_qpc: QpcTicks,
+    pub sendinput_completed_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
-    pub sender_duration_ticks: DurationTicks,
+    pub admission_to_completion_ticks: DurationTicks,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
     pub requested_packet: PhysicalPacket,
@@ -153,8 +153,8 @@ pub struct UpTraceObservation {
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub sender_started_ticks: Option<TimelineTicks>,
-    pub sender_completed_ticks: Option<TimelineTicks>,
+    pub final_admission_ticks: Option<TimelineTicks>,
+    pub sendinput_completed_ticks: Option<TimelineTicks>,
     pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
@@ -165,10 +165,10 @@ pub struct UpTraceObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
     pub physical_target_qpc: QpcTicks,
-    pub sender_started_qpc: QpcTicks,
-    pub sender_completed_qpc: QpcTicks,
+    pub final_admission_qpc: QpcTicks,
+    pub sendinput_completed_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
-    pub sender_duration_ticks: DurationTicks,
+    pub admission_to_completion_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
     pub requested_mask: u16,
     pub confirmed_mask: u16,
@@ -234,8 +234,8 @@ pub(super) fn record_down_send_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
-                send_started_ticks: trace.sender_started_ticks,
-                send_completed_ticks: trace.sender_completed_ticks,
+                final_admission_ticks: trace.final_admission_ticks,
+                sendinput_completed_ticks: trace.sendinput_completed_ticks,
                 completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,
@@ -267,12 +267,6 @@ pub(super) fn record_release_telemetry(
     post_send_metrics_available: bool,
 ) -> Result<(), DispatchStep> {
     let trace = observation.trace;
-    #[cfg(any(test, feature = "test-support"))]
-    if super::release::take_release_telemetry_failure(trace.recovery_required) {
-        return Err(DispatchStep::Terminate(
-            "injected release telemetry failure".to_string(),
-        ));
-    }
     let deferred_by_us = qpc_clock
         .duration_to_us(trace.deferred_ticks)
         .map_err(|error| {
@@ -312,8 +306,8 @@ pub(super) fn record_release_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
-                send_started_ticks: trace.sender_started_ticks,
-                send_completed_ticks: trace.sender_completed_ticks,
+                final_admission_ticks: trace.final_admission_ticks,
+                sendinput_completed_ticks: trace.sendinput_completed_ticks,
                 completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,

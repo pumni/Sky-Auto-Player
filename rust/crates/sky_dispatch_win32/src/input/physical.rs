@@ -1,4 +1,5 @@
 use super::scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask};
+use crate::focus::foreground_window_matches;
 use smallvec::SmallVec;
 
 #[cfg(windows)]
@@ -107,7 +108,14 @@ pub(crate) fn reconcile_release_observation(
     physical_state: InstrumentPhysicalState,
 ) -> ReconciledRelease {
     match physical_state {
-        InstrumentPhysicalState::AllUp => ReconciledRelease::VerifiedAllUp,
+        InstrumentPhysicalState::AllUp
+            if transport_confirmed_mask & requested_mask == requested_mask =>
+        {
+            ReconciledRelease::VerifiedAllUp
+        }
+        InstrumentPhysicalState::AllUp => {
+            ReconciledRelease::Inconclusive(requested_mask & !transport_confirmed_mask)
+        }
         InstrumentPhysicalState::Held(held_keys) => {
             let held_mask = mask_for_scan_codes(&held_keys).unwrap_or(0);
             ReconciledRelease::Held(held_mask & requested_mask)
@@ -119,10 +127,50 @@ pub(crate) fn reconcile_release_observation(
     }
 }
 
+pub(crate) fn classify_async_key_states(
+    requested_mask: u16,
+    key_states: &[i16; 15],
+) -> InstrumentPhysicalState {
+    if requested_mask & !FULL_INSTRUMENT_MASK != 0 {
+        return InstrumentPhysicalState::Inconclusive;
+    }
+    let mut held = SmallVec::new();
+    for (index, &state) in key_states.iter().enumerate() {
+        if requested_mask & (1u16 << index) == 0 {
+            continue;
+        }
+        if (state as u16 & 0x8000) != 0 {
+            held.push(PHYSICAL_INSTRUMENT_SCAN_CODES[index]);
+        }
+    }
+    if held.is_empty() {
+        InstrumentPhysicalState::AllUp
+    } else {
+        InstrumentPhysicalState::Held(held)
+    }
+}
+
+fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
+    #[cfg(windows)]
+    {
+        // SAFETY: GetAsyncKeyState accepts the validated virtual-key scalar
+        // and does not retain pointers or transfer ownership.
+        unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(virtual_key) }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (_index, virtual_key);
+        0
+    }
+}
+
 pub(crate) fn instrument_physical_state_for_mask(
     target_hwnd: isize,
     requested_mask: u16,
 ) -> InstrumentPhysicalState {
+    if target_hwnd == 0 || !foreground_window_matches(target_hwnd) {
+        return InstrumentPhysicalState::Inconclusive;
+    }
     if requested_mask == 0 {
         return InstrumentPhysicalState::AllUp;
     }
@@ -131,34 +179,20 @@ pub(crate) fn instrument_physical_state_for_mask(
     }
     #[cfg(windows)]
     {
-        if target_hwnd == 0 {
-            return InstrumentPhysicalState::Inconclusive;
-        }
         let Some(context) = keyboard_context_for_target(target_hwnd) else {
             return InstrumentPhysicalState::Inconclusive;
         };
         let Some(virtual_keys) = map_instrument_virtual_keys(&context, requested_mask) else {
             return InstrumentPhysicalState::Inconclusive;
         };
-        let mut held = SmallVec::new();
+        let mut key_states = [0i16; 15];
         for (index, &virtual_key) in virtual_keys.iter().enumerate() {
             if requested_mask & (1u16 << index) == 0 {
                 continue;
             }
-            // SAFETY: GetAsyncKeyState accepts the validated virtual-key
-            // scalar and does not retain pointers or transfer ownership.
-            let state = unsafe {
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(virtual_key)
-            };
-            if (state as u16 & 0x8000) != 0 {
-                held.push(PHYSICAL_INSTRUMENT_SCAN_CODES[index]);
-            }
+            key_states[index] = query_async_key_state(index, virtual_key);
         }
-        if held.is_empty() {
-            InstrumentPhysicalState::AllUp
-        } else {
-            InstrumentPhysicalState::Held(held)
-        }
+        classify_async_key_states(requested_mask, &key_states)
     }
     #[cfg(not(windows))]
     {

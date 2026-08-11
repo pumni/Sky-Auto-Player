@@ -50,7 +50,7 @@ impl NativeDispatchSessionPy {
         let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
-        let spin_threshold_us = 150;
+        let spin_threshold_us = crate::engine::DEFAULT_SPIN_THRESHOLD_US;
         let parsed_telemetry_mode = if config.telemetry {
             crate::engine::TelemetryMode::Ring
         } else {
@@ -61,7 +61,7 @@ impl NativeDispatchSessionPy {
         let enable_waitable_timer = true;
         let enable_event_wait = true;
         let enable_adaptive_spin = true;
-        let spin_floor_us = 700;
+        let spin_floor_us = crate::engine::DEFAULT_SPIN_FLOOR_US;
         // Compatibility input only: estimator state is intentionally ignored.
         let _deprecated_estimator_state_json = config.estimator_state_json.as_ref();
         let input_path_warn_us = 300;

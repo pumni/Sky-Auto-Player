@@ -14,17 +14,5 @@ serde_json = "1"
 proptest = "1"
 
 [[bench]]
-name = "coordinator_benchmark"
-harness = false
-
-[[bench]]
-name = "drift_benchmark"
-harness = false
-
-[[bench]]
-name = "delivery_proxy_benchmark"
-harness = false
-
-[[bench]]
 name = "soak_benchmark"
 harness = false

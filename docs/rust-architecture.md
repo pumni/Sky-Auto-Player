@@ -34,22 +34,20 @@ Current stable facades and ownership boundaries:
 - `SessionShared` groups those resources by capability (`commands`, `target`,
   `lifecycle`, and `publication`); it does not add nested `Arc` ownership for
   fields that already live for the session.
-- `engine/worker/{admission,cleanup,control,estimator,health,startup,timing,wait}.rs`
-  own focused invariant and phase boundaries. Terminal cleanup, command
-  control, and wait-boundary orchestration currently use narrowly scoped
-  capability inputs; terminal resource extraction and publication are assembled
-  by `Worker::finalize` outside the contained panic loop. The remaining
-  orchestration loop is still being reduced to owner methods. `WorkerCore` owns
-  mutable metrics, runtime, health, timing, error, and dispatch resources
-  outside the panic boundary. Down/Up transaction extraction remains gated on a
-  complete worker-state owner so operation order cannot change.
+- `engine/worker/{admission,cleanup,control,health,orchestration,planning,startup,timing,wait}.rs`
+  own focused invariant and phase boundaries. `engine/worker/dispatch/` owns
+  authored packet admission/commit, typed timing evidence, and the deferred
+  observation producer/consumer boundary. Terminal resource extraction and
+  publication are assembled by `Worker::finalize` outside the contained panic
+  loop. `WorkerCore` owns mutable dispatch/runtime state outside that boundary;
+  the observer thread owns observation health and telemetry materialization.
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
   session, and telemetry code live under `python/`.
 - `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
-  submodules. `input/raw.rs` owns packet/syscall results while
-  `input/{down_transaction,up_transaction}.rs` own bounded transaction policy;
-  tracked masks remain in `input/tracked.rs`. Raw SendInput and timer unsafe
-  boundaries remain platform-owned.
+  submodules. `input/{raw,packet}.rs` own the validated `SendInput` syscall
+  boundaries; `input/tracked/` owns physical ownership, preflight, packet-send,
+  and cleanup state. Raw `SendInput` and timer unsafe boundaries remain
+  platform-owned.
 
 ### State ownership table
 
@@ -62,16 +60,18 @@ Current stable facades and ownership boundaries:
 | Playback clock | `WorkerCore::resources.playback` | worker phases | worker thread only |
 | Backend masks | `TrackedKeyState` | dispatch, cleanup | worker thread only |
 | Coordinator | `WorkerCore::resources.coordinator` | dispatch, cleanup | worker thread only |
-| Telemetry ring | `WorkerCore::resources.telemetry` | worker | worker thread; serialized after finish |
-| Estimator | `WorkerCore::resources.estimator` | dispatch, cleanup | worker thread only |
-| Local health/timing/error state | `WorkerCore::{health,timing,errors}` | worker phases | worker thread only |
+| Observation queue | `PendingObservationQueue` | dispatch producer, observer consumer | bounded nonblocking `ArrayQueue`; drop-new when full |
+| Observer health/telemetry | `ObserverRuntime` | observer | observer thread only; merged after join |
+| Local dispatch timing/error state | `WorkerCore::{timing,errors}` | worker phases | worker thread only |
 
 Adding worker state requires assigning it to one `WorkerCore` capability before
 it is read by a phase. Adding a phase requires documenting the invariant it
 owns, its allowed inputs, and its exact position relative to focus checks,
-preflight, SendInput, coordinator commit, telemetry, and cleanup. Timing-boundary
-changes require a dedicated regression test. Baseline/candidate A/B benchmarks and
-real `SendInput` qualification are optional manual diagnostics, not required CI or release gates.
+preflight, SendInput, coordinator commit, observation enqueue, and cleanup.
+Timing-boundary changes require a dedicated regression test. Changes to the
+wait strategy or observation producer require a paired baseline/candidate
+benchmark. Real `SendInput` qualification remains a manual Windows release
+gate because deterministic mock evidence cannot establish OS delivery tails.
 
 ## Public API Boundaries
 
@@ -87,7 +87,9 @@ The healthy Down/Up dispatch path must not introduce:
 - Lock acquisitions (`Mutex`, `RwLock`).
 - Additional QPC calls or system time requests.
 - Dynamic dispatch (`Box<dyn Trait>`).
-- Cross-thread channel communication on the latency-sensitive path.
+- Blocking or unbounded cross-thread communication. The sole exception is the
+  fixed-capacity, nonblocking `PendingObservationQueue::push` documented in
+  `docs/rt-dispatch-architecture.md`; it must not wait, allocate, or evict.
 - Reference counting clones (`Arc::clone`, `Rc::clone`).
 
 ## Unsafe Boundary
@@ -98,7 +100,7 @@ The healthy Down/Up dispatch path must not introduce:
 - `sky_dispatch_win32/wait/timer.rs`
 - `sky_dispatch_win32/wait/hybrid.rs`
 
-Worker orchestration, estimators, coordinators, and Python boundaries must remain 100% safe Rust. All `unsafe` blocks must be prefixed with a `// SAFETY: ...` explanation.
+Worker orchestration, observer logic, coordinators, and Python boundaries must remain safe Rust except for the separately audited snapshot publication primitive. All `unsafe` blocks must be prefixed with a `// SAFETY: ...` explanation.
 
 ## Test-Support Boundary
 

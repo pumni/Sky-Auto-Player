@@ -2,10 +2,10 @@
 use super::super::create_mock_backend;
 use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
-    PlaybackClockState, QpcClock, QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US,
-    RuntimeDispatchCoordinator, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
-    SharedMetrics, TelemetryCollector, TrackedKeyState, current_process_cpu_time_us,
-    current_thread_cpu_time_us, qpc_frequency_checked,
+    PlaybackClockState, QpcClock, QpcError, QpcTicks, RuntimeDispatchCoordinator,
+    STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector,
+    TrackedKeyState, current_process_cpu_time_us, current_thread_cpu_time_us,
+    qpc_frequency_checked,
 };
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
@@ -177,19 +177,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    let mut retry_backoff_ticks = [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()];
-    for (target, delay_us) in retry_backoff_ticks.iter_mut().zip(RELEASE_RETRY_BACKOFF_US) {
-        *target = match qpc_clock.duration_from_us(delay_us) {
-            Ok(value) => value,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("retry backoff conversion failed: {error:?}"),
-                );
-            }
-        };
-    }
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
@@ -345,7 +332,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         focus_restore_grace_ticks,
         paused_poll_ticks,
         lease_timeout_ticks,
-        retry_backoff_ticks,
         effective_spin_threshold_ticks,
         start_wall_time_us,
         start_thread_cpu_us,

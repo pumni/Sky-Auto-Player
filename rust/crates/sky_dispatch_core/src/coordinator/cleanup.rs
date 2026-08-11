@@ -13,10 +13,8 @@ impl RuntimeDispatchCoordinator {
         // every generation is Released and every clean-completion counter is
         // zero.
         // An authored down may legitimately have no matching up in the input
-        // timeline.  The worker's terminal cleanup owns that case, so do not
-        // wait forever on an active generation that has no pending release.
-        // Failed pending releases are kept alive by `requeue_failed_releases`
-        // until they succeed or recovery aborts the session.
+        // timeline. The worker's terminal cleanup owns that case, so do not
+        // wait forever on an active generation that has no authored release.
         let terminal_count = self.counters.released
             + self.counters.dropped_conflict
             + self.counters.dropped_backend
@@ -24,7 +22,6 @@ impl RuntimeDispatchCoordinator {
             + self.counters.cancelled;
         self.cursor >= self.schedule.batches.len()
             && self.active_mask == 0
-            && self.pending_mask == 0
             && terminal_count == self.schedule.generation_count
     }
 
@@ -39,12 +36,10 @@ impl RuntimeDispatchCoordinator {
         }
 
         let mut active = 0u64;
-        let mut release_pending = 0u64;
         let mut terminal = 0u64;
         for state in &self.generation_states {
             match state {
                 GenerationStatus::Active => active += 1,
-                GenerationStatus::ReleasePending => release_pending += 1,
                 GenerationStatus::Released
                 | GenerationStatus::DroppedConflict
                 | GenerationStatus::DroppedBackend
@@ -59,17 +54,6 @@ impl RuntimeDispatchCoordinator {
                 self.active_mask.count_ones()
             )));
         }
-        if release_pending != u64::from(self.pending_mask.count_ones()) {
-            return Err(CoordinatorInvariantError::Accounting(format!(
-                "pending ledger count {release_pending} != pending mask count {}",
-                self.pending_mask.count_ones()
-            )));
-        }
-        if self.active_mask & self.pending_mask != 0 {
-            return Err(CoordinatorInvariantError::Accounting(
-                "active and pending masks overlap".to_string(),
-            ));
-        }
         if terminal != self.counters.terminal_total() {
             return Err(CoordinatorInvariantError::Accounting(format!(
                 "terminal ledger count {terminal} != counters {}",
@@ -83,32 +67,23 @@ impl RuntimeDispatchCoordinator {
     ///
     /// `check_invariants` proves that the ledger and masks agree; this method
     /// additionally proves that cleanup did not leave a live generation,
-    /// pending slot, blocked slot, or authored cursor behind.
+    /// blocked slot, or authored cursor behind.
     pub fn check_post_cleanup_invariants(&self) -> Result<(), CoordinatorInvariantError> {
         self.check_invariants()?;
-        if self.active_mask != 0 || self.pending_mask != 0 || self.blocked_mask != 0 {
+        if self.active_mask != 0 || self.blocked_mask != 0 {
             return Err(CoordinatorInvariantError::Accounting(
                 "terminal cleanup left a live coordinator mask".to_string(),
             ));
         }
-        if self.active_by_slot.iter().any(Option::is_some)
-            || self.pending_by_slot.iter().any(Option::is_some)
-        {
+        if self.active_by_slot.iter().any(Option::is_some) {
             return Err(CoordinatorInvariantError::Accounting(
                 "terminal cleanup left a live coordinator slot".to_string(),
-            ));
-        }
-        if self.release_recovery_started_ticks.is_some() {
-            return Err(CoordinatorInvariantError::Accounting(
-                "terminal cleanup left release recovery state".to_string(),
             ));
         }
         if self.generation_states.iter().any(|state| {
             matches!(
                 state,
-                GenerationStatus::Scheduled
-                    | GenerationStatus::Active
-                    | GenerationStatus::ReleasePending
+                GenerationStatus::Scheduled | GenerationStatus::Active
             )
         }) {
             return Err(CoordinatorInvariantError::Accounting(
@@ -139,23 +114,12 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn cancel_all(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {
-        let mut cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
+        let cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
             .active_by_slot
             .iter()
             .filter_map(Option::as_ref)
             .map(|active| active.generation_id)
             .collect();
-        for pending_id in self
-            .pending_by_slot
-            .iter()
-            .filter_map(Option::as_ref)
-            .map(|pending| pending.generation_id)
-        {
-            if !cancelled_ids.contains(&pending_id) {
-                cancelled_ids.push(pending_id);
-            }
-        }
-
         let mut sorted_cancelled: Vec<GenerationId> = cancelled_ids.into_vec();
         sorted_cancelled.sort_unstable();
 
@@ -163,9 +127,7 @@ impl RuntimeDispatchCoordinator {
             let state = self.generation_states[index];
             if matches!(
                 state,
-                GenerationStatus::Scheduled
-                    | GenerationStatus::Active
-                    | GenerationStatus::ReleasePending
+                GenerationStatus::Scheduled | GenerationStatus::Active
             ) {
                 let generation_id = u64::try_from(index).map_err(|_| {
                     CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
@@ -178,11 +140,8 @@ impl RuntimeDispatchCoordinator {
         }
 
         self.active_by_slot.fill(None);
-        self.pending_by_slot.fill(None);
         self.active_mask = 0;
         self.blocked_mask = 0;
-        self.pending_mask = 0;
-        self.release_recovery_started_ticks = None;
 
         self.check_invariants()?;
 
@@ -199,13 +158,7 @@ impl RuntimeDispatchCoordinator {
             .generation_states
             .iter()
             .enumerate()
-            .filter_map(|(index, state)| {
-                matches!(
-                    state,
-                    GenerationStatus::Active | GenerationStatus::ReleasePending
-                )
-                .then_some(index)
-            })
+            .filter_map(|(index, state)| matches!(state, GenerationStatus::Active).then_some(index))
             .map(|index| {
                 GenerationId::try_from(index).map_err(|_| {
                     CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
@@ -228,11 +181,8 @@ impl RuntimeDispatchCoordinator {
         }
 
         self.active_by_slot.fill(None);
-        self.pending_by_slot.fill(None);
         self.active_mask = 0;
         self.blocked_mask = 0;
-        self.pending_mask = 0;
-        self.release_recovery_started_ticks = None;
         self.check_invariants()?;
 
         Ok(cancelled_ids.into_vec())

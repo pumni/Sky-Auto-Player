@@ -1,6 +1,6 @@
 use super::{
     ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus, PreparedBatch,
-    PreparedStalePacket, ReleaseRequestResult, RuntimeDispatchCoordinator, physical_packet_kind,
+    PreparedStalePacket, RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
 #[cfg(test)]
@@ -44,22 +44,16 @@ impl RuntimeDispatchCoordinator {
         let batch = &self.schedule.batches[self.cursor];
         let lead = dispatch_lead_us;
         if lead > 0 && self.early_pop_blocked(batch) {
-            return Some(
-                batch
-                    .scheduled_us
-                    .saturating_add(self.recovery_offset_ticks.as_u64()),
-            );
+            return Some(batch.scheduled_us);
         }
-        let effective_scheduled_us = batch
-            .scheduled_us
-            .saturating_add(self.recovery_offset_ticks.as_u64());
+        let effective_scheduled_us = batch.scheduled_us;
         let effective_lead = Self::effective_authored_lead(effective_scheduled_us, lead);
         Some(effective_scheduled_us.saturating_sub(effective_lead))
     }
 
     /// Return the next authored dispatch deadline in the playback tick domain.
-    /// The authored schedule remains immutable; recovery is represented only
-    /// by `recovery_offset_ticks`.
+    /// The authored schedule remains immutable; physical release floors are
+    /// applied only to the current canonical packet.
     pub(crate) fn next_authored_ticks_uncompensated(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
@@ -92,23 +86,14 @@ impl RuntimeDispatchCoordinator {
     /// completion-floor projections.
     ///
     /// Planning uses this projection to classify the interval that will
-    /// actually precede the next physical operation.  Release floors and
-    /// recovery ownership remain part of the projection. Production planning
-    /// never subtracts a dispatch lead.
+    /// actually precede the next physical operation. Release floors are
+    /// represented by authored batch deadlines. Production planning never
+    /// subtracts a dispatch lead or scans recovery state.
     pub fn next_uncompensated_deadline_ticks(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         let authored = self.next_authored_ticks_uncompensated()?;
-        let pending = self.next_pending_release_ticks()?;
-        if self.release_recovery_started_ticks.is_some() {
-            return Ok(pending);
-        }
-        Ok(match (authored, pending) {
-            (Some(authored), Some(pending)) => Some(authored.min(pending)),
-            (Some(authored), None) => Some(authored),
-            (None, Some(pending)) => Some(pending),
-            (None, None) => None,
-        })
+        Ok(authored)
     }
 
     /// Polyphony of the next authored down batch, used to freeze its health
@@ -150,9 +135,7 @@ impl RuntimeDispatchCoordinator {
         let index = self
             .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
             .ok()??;
-        let popped = self
-            .schedule
-            .materialize_batch(index, self.recovery_offset_ticks.as_u64());
+        let popped = self.schedule.materialize_batch(index, 0);
         Some((popped, 0))
     }
 
@@ -176,9 +159,7 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         now: TimelineTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
-        if self.cursor >= self.schedule.batches.len()
-            || self.release_recovery_started_ticks.is_some()
-        {
+        if self.cursor >= self.schedule.batches.len() {
             return Ok(None);
         }
         let index = self.cursor;
@@ -452,14 +433,16 @@ impl RuntimeDispatchCoordinator {
                     ),
                 ));
             }
+            if started < active.release_not_before_ticks {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Up started before release_not_before".to_string(),
+                    ),
+                ));
+            }
             self.transition_generation(
                 generation_id,
                 GenerationStatus::Active,
-                GenerationStatus::ReleasePending,
-            )?;
-            self.transition_generation(
-                generation_id,
-                GenerationStatus::ReleasePending,
                 GenerationStatus::Released,
             )?;
             self.active_by_slot[usize::from(slot)] = None;
@@ -533,49 +516,6 @@ impl RuntimeDispatchCoordinator {
             crate::time::TimeArithmeticError::Overflow,
         ))?;
         Ok(())
-    }
-
-    pub fn commit_up_request(
-        &mut self,
-        prepared: PreparedBatch,
-    ) -> Result<ReleaseRequestResult, CoordinatorError> {
-        if prepared.index != self.cursor {
-            return Err(CoordinatorError::PreparedBatchMismatch {
-                prepared: prepared.index,
-                cursor: self.cursor,
-            });
-        }
-        let packet = self
-            .schedule
-            .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)?;
-        if packet.header.first_batch_index as usize != prepared.index
-            || usize::from(packet.header.batch_count) != prepared.packet_batch_count
-        {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "prepared stale packet metadata changed before commit".to_string(),
-                ),
-            ));
-        }
-        if packet.up_mask() == 0 && packet.down_mask() == 0 {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "physical Up request cannot commit a stale metadata packet".to_string(),
-                ),
-            ));
-        }
-        let mut intents = SmallVec::<[RuntimeKeyIntent; MAX_KEYS]>::new();
-        let batch = self
-            .schedule
-            .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
-            .materialize();
-        intents.extend(batch.intents);
-        let result = self.request_releases(&intents)?;
-        self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
-            crate::time::TimeArithmeticError::Overflow,
-        ))?;
-        self.check_invariants()?;
-        Ok(result)
     }
 
     pub fn pop_next_due_authored_ticks(

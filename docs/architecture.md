@@ -20,7 +20,7 @@ backend, runtime fallback, or low-level Python/Rust input adapter.
 The native crates have fixed responsibilities:
 
 - `sky_dispatch_core`: schedule compilation, generation ownership, authored
-  and release deadlines, minimum-hold floors, recovery, and pure tests.
+  and release deadlines, minimum-hold floors, and pure tests.
 - `sky_dispatch_win32`: QPC, wait strategy, focus validation, priority scope,
   packet validation, and the only `SendInput` implementation.
 - `sky_player_rs`: the session worker, dispatch orchestration, deferred
@@ -48,17 +48,20 @@ Song file
 
 The worker has one physical timing contract. The authored/effective timeline
 deadline is not advanced by a learned send-cost lead. Immediately before an
-allowed physical send, the worker takes one authoritative QPC start sample and
-uses that same sample for the final lease/admission decision and the transport
-boundary. The Win32 sender returns a completion QPC sample. The completion is
-used for release floors, completion diagnostics, and observer records; it is
-not subtracted from future authored timestamps.
+allowed physical send, the worker takes one authoritative
+`final_admission_qpc` sample and uses that same sample for the final
+lease/admission decision and the transport boundary. The Win32 sender returns a
+`sendinput_completion_qpc` sample. The completion is used for release floors,
+completion diagnostics, and observer records; it is not subtracted from future
+authored timestamps. The compatibility `send_started_ticks` and
+`send_completed_ticks` fields refer to these same two boundaries; they do not
+cause an additional production QPC sample.
 
 For a Down completion `C`, a release is not allowed before:
 
 ```text
 release_floor = C + effective_min_hold
-effective_release = max(authored_release, release_floor, retry_not_before)
+effective_release = max(authored_release, release_floor)
 ```
 
 `effective_min_hold` is materialized and validated at the Python/native
@@ -66,10 +69,12 @@ boundary as `max(requested_min_hold_us, ceil(1_000_000 / game_fps) + 500)`.
 The worker receives the resulting floor in its timing configuration and does
 not recompute it from observations.
 
-The worker owns active and pending key masks, stale-Up suppression,
-zero/partial progress handling, release retry, focus-loss release,
-panic/quit/skip cleanup, transport integrity, and terminal decisions. A
-session cannot report successful completion while cleanup residue remains.
+The worker owns active key masks, stale-Up suppression,
+zero/partial progress handling, focus-loss release,
+panic/quit/skip cleanup, transport integrity, and terminal decisions. Any
+sender-duration value is diagnostic evidence only; it does not become a lead,
+estimator, or deadline adjustment. A session cannot report successful
+completion while cleanup residue remains.
 
 ## Deferred observation ownership
 
@@ -98,7 +103,7 @@ generation detail, and compatibility estimator payloads.
 `estimator_state_json` and historical lead fields remain readable for older
 Python callers only. They are deprecated, ignored by production planning,
 and published as zero/`{"deprecated":true}` compatibility values. They must
-not affect deadlines, SendInput admission, release floors, health, or retry
+not affect deadlines, SendInput admission, release floors, health, or transport
 policy.
 
 Focus hints are coarse wake/gate signals, never input authorization. Rust
@@ -118,5 +123,5 @@ diagnostic, not game-observed timing evidence.
 
 Native admission fails closed on import, ABI, schema, free-threaded-runtime,
 or Win32-backend errors. No exception path executes a Python sender. Partial
-or mixed transport outcomes are not blindly retried; ownership is reconciled
-or full cleanup and termination are required.
+or mixed transport outcomes are never retried; full cleanup and termination
+are required.

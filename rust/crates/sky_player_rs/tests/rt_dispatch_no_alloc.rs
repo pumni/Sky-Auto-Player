@@ -21,13 +21,8 @@ use sky_player_rs::engine::dispatch_primitives::{
     ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
     is_clean_dispatch_observation,
 };
-use sky_player_rs::engine::observer_test_hooks::{
-    observer_test_hook_guard, set_release_observer_failure_on_recovery,
-    set_release_telemetry_failure_on_recovery,
-};
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -117,10 +112,10 @@ fn down_observation(n: u64) -> DispatchObservation {
         timeline_rebase_total_ticks: DurationTicks::ZERO,
         timeline_rebase_max_ticks: DurationTicks::ZERO,
         timeline_rebase_last_reason: 0,
-        sender_started_qpc: QpcTicks::ZERO,
-        sender_completed_qpc: QpcTicks::ZERO,
+        final_admission_qpc: QpcTicks::ZERO,
+        sendinput_completed_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
-        sender_duration_ticks: DurationTicks::from_raw(n),
+        admission_to_completion_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_packet: PhysicalPacket::new(0, 1),
         confirmed_mask: 1,
@@ -139,8 +134,8 @@ fn down_observation(n: u64) -> DispatchObservation {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            sender_started_ticks: Some(TimelineTicks::ZERO),
-            sender_completed_ticks: Some(TimelineTicks::ZERO),
+            final_admission_ticks: Some(TimelineTicks::ZERO),
+            sendinput_completed_ticks: Some(TimelineTicks::ZERO),
             dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
@@ -154,10 +149,10 @@ fn down_observation(n: u64) -> DispatchObservation {
 fn up_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Up(UpObservation {
         physical_target_qpc: QpcTicks::ZERO,
-        sender_started_qpc: QpcTicks::ZERO,
-        sender_completed_qpc: QpcTicks::ZERO,
+        final_admission_qpc: QpcTicks::ZERO,
+        sendinput_completed_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
-        sender_duration_ticks: DurationTicks::from_raw(n),
+        admission_to_completion_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_mask: 1,
         confirmed_mask: 1,
@@ -179,8 +174,8 @@ fn up_observation(n: u64) -> DispatchObservation {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            sender_started_ticks: Some(TimelineTicks::ZERO),
-            sender_completed_ticks: Some(TimelineTicks::ZERO),
+            final_admission_ticks: Some(TimelineTicks::ZERO),
+            sendinput_completed_ticks: Some(TimelineTicks::ZERO),
             dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
@@ -575,112 +570,4 @@ fn production_deadline_handoff_up_no_alloc() {
 
     assert_eq!(allocs, 0);
     assert!(matches!(step, DispatchStep::Dispatched));
-}
-
-/// Pending-release production dispatch hard-path makes ZERO heap allocations.
-#[test]
-fn production_pending_release_hard_path_no_alloc() {
-    let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
-
-    // Down A was physically dispatched outside the window. Advance to the
-    // authored Up request, then let the production coordinator create the
-    // pending release outside the measurement window.
-    harness.advance_playback_time_us(10_000);
-    harness.seed_pending_release_for_test();
-
-    enable_counting();
-    let plan = harness.plan_current_dispatch();
-    let pending_plan = plan.pending().expect("pending release plan");
-    let effective_now = harness.current_effective_time();
-    let due_pending = harness.pop_due_pending_for_plan(effective_now, &plan);
-    assert_eq!(
-        due_pending.len(),
-        1,
-        "plan must own one due pending release"
-    );
-    let step = harness.dispatch_pending_release_with_plan(due_pending, Some(pending_plan));
-    let allocs = disable_counting();
-
-    assert_eq!(
-        allocs, 0,
-        "production pending-release hard-path made {allocs} heap allocation(s); expected 0"
-    );
-    assert!(matches!(step, DispatchStep::Dispatched));
-    assert!(!harness.has_active_generation(0x15));
-    assert_eq!(harness.backend_active_mask(), 0);
-    assert_eq!(harness.backend_possibly_active_mask(), 0);
-    assert_eq!(harness.chord_integrity_lost_count(), 0);
-}
-
-fn exhaust_pending_release_recovery(harness: &mut ProductionDispatchTestHarness) -> DispatchStep {
-    let drain_observer = |harness: &mut ProductionDispatchTestHarness| {
-        loop {
-            match harness.drain_observer() {
-                Ok(None) => break Ok(()),
-                Ok(Some(_)) => continue,
-                Err(step) => break Err(step),
-            }
-        }
-    };
-    for _ in 0..=usize::from(sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES) {
-        let plan = harness.plan_current_dispatch();
-        let pending_plan = plan.pending().expect("recovery must retain pending plan");
-        let due_pending =
-            harness.pop_due_pending_for_plan(TimelineTicks::from_raw(u64::MAX), &plan);
-        assert_eq!(
-            due_pending.len(),
-            1,
-            "recovery retry must remain coordinator-owned"
-        );
-        let step = harness.dispatch_pending_release_with_plan(due_pending, Some(pending_plan));
-        if matches!(step, DispatchStep::Terminate(_)) {
-            if let Err(observer_step) = drain_observer(harness) {
-                return observer_step;
-            }
-            return step;
-        }
-        if let Err(step) = drain_observer(harness) {
-            return step;
-        }
-    }
-    panic!("persistent release failure did not exhaust recovery");
-}
-
-#[test]
-fn exhausted_release_recovery_precedes_telemetry_failure() {
-    let _lock = TEST_LOCK.lock();
-    let _hooks = observer_test_hook_guard();
-    set_release_telemetry_failure_on_recovery(true);
-    let calls = Arc::new(AtomicU64::new(0));
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
-    harness.configure_persistent_release_failure(Arc::clone(&calls));
-    harness.advance_playback_time_us(10_000);
-    harness.seed_pending_release_for_test();
-
-    let step = exhaust_pending_release_recovery(&mut harness);
-
-    assert!(matches!(step, DispatchStep::Terminate(message) if message.contains("telemetry")));
-    assert!(harness.full_instrument_release_calls() > 0);
-    assert!(calls.load(Ordering::SeqCst) > 0);
-    assert!(sky_player_rs::engine::observer_test_hooks::release_recovery_completed_before_ready());
-}
-
-#[test]
-fn exhausted_release_recovery_precedes_observer_failure() {
-    let _lock = TEST_LOCK.lock();
-    let _hooks = observer_test_hook_guard();
-    set_release_observer_failure_on_recovery(true);
-    let calls = Arc::new(AtomicU64::new(0));
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
-    harness.configure_persistent_release_failure(Arc::clone(&calls));
-    harness.advance_playback_time_us(10_000);
-    harness.seed_pending_release_for_test();
-
-    let step = exhaust_pending_release_recovery(&mut harness);
-
-    assert!(matches!(step, DispatchStep::Terminate(message) if message.contains("observer")));
-    assert!(harness.full_instrument_release_calls() > 0);
-    assert!(calls.load(Ordering::SeqCst) > 0);
-    assert!(sky_player_rs::engine::observer_test_hooks::release_recovery_completed_before_ready());
 }
