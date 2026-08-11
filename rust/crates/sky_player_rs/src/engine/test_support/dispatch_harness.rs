@@ -26,7 +26,6 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{
     PendingDispatchPlan, PendingRelease, RuntimeDispatchCoordinator, physical_packet_kind,
 };
-use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
@@ -320,7 +319,6 @@ impl ProductionDispatchTestHarness {
         let playback =
             PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
                 .expect("playback");
-        let estimator = DispatchCostEstimator::default();
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
         let scheduling = WorkerSchedulingGuards::create_test_guards();
 
@@ -330,8 +328,7 @@ impl ProductionDispatchTestHarness {
             backend,
             coordinator,
             playback,
-            estimator,
-            telemetry,
+            telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling,
         };
         let progress_clock = SharedProgressClock::default();
@@ -390,9 +387,6 @@ impl ProductionDispatchTestHarness {
     }
     pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
         self.runtime.set_deadline_wake_qpc_for_test(Some(ticks));
-    }
-    pub fn select_startup_dispatch_target_for_test(&mut self, target: QpcTicks) {
-        self.runtime.set_startup_dispatch_target_for_test(target);
     }
     /// Query whether coordinator has active generation for `scan_code`.
     pub fn has_active_generation(&self, scan_code: u16) -> bool {
@@ -582,10 +576,8 @@ impl ProductionDispatchTestHarness {
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
         plan_next_dispatch(
             &self.resources.coordinator,
-            &self.resources.estimator,
             self.resources.clock,
             &self.config.timing,
-            self.config.estimator.enable_dispatch_cost_lead,
         )
         .expect("plan_next_dispatch")
     }
@@ -593,11 +585,7 @@ impl ProductionDispatchTestHarness {
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
         plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
             coordinator: &self.resources.coordinator,
-            estimator: &self.resources.estimator,
-            qpc_clock: self.resources.clock,
-            timing: &self.config.timing,
             health_options: self.health.options,
-            enable_dispatch_cost_lead: self.config.estimator.enable_dispatch_cost_lead,
         })
         .expect("projected dispatch plan")
     }
@@ -836,10 +824,9 @@ impl ProductionDispatchTestHarness {
             let now_ticks = self.resources.clock.now().expect("pending target QPC now");
             self.align_epoch_to_deadline_for_test(plan.deadline_ticks, now_ticks);
         }
-        let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |p| p.lead_ticks);
+        let lead_up_ticks = DurationTicks::ZERO;
         let ctx = PendingReleaseContext {
             due_pending,
-            pending_plan,
             lead_up_ticks,
             physical_target_qpc: pending_plan
                 .map(|plan| {
@@ -874,14 +861,10 @@ impl ProductionDispatchTestHarness {
     pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {
         super::super::worker::drain_one_observer(
             &mut self.observer,
-            &self.config,
             &mut self.health,
             &mut self.local_metrics,
-            &mut self.last_published_error,
             &self.metrics,
-            &mut self.resources.backend,
-            &mut self.resources.estimator,
-            &mut self.resources.telemetry,
+            &mut self.resources.telemetry.lock(),
             self.resources.clock,
             sky_dispatch_win32::clock::QpcTicks::ZERO,
             &mut self.timing,

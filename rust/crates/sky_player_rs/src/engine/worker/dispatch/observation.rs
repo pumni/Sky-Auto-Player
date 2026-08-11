@@ -8,7 +8,7 @@ use super::super::{
     DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, release_runtime_outcome,
     wake_lateness_ticks,
 };
-use super::timing::EstimatorObservationEvidence;
+use super::timing::DispatchObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
@@ -340,9 +340,9 @@ pub(super) const fn up_transport_counts_from_masks(
     )
 }
 
-pub(super) fn up_estimator_evidence(observation: &UpObservation) -> EstimatorObservationEvidence {
+pub(super) fn up_dispatch_evidence(observation: &UpObservation) -> DispatchObservationEvidence {
     let (requested_count, confirmed_count, skipped_count) = up_transport_counts(observation);
-    EstimatorObservationEvidence {
+    DispatchObservationEvidence {
         status: observation.result_status,
         attempts: observation.trace.send_attempts,
         retry_reason: observation.trace.retry_reason,

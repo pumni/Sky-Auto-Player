@@ -12,9 +12,8 @@
 //!   completion errors, strict completion predicates, typed duration
 //!   conversion). It must not import `SharedMetrics`, `TelemetryCollector`,
 //!   `Mutex`, or Python types.
-//! - `observer.rs` owns estimator observation, health observation, the
-//!   telemetry observer stage, worker metric updates, and shared snapshot
-//!   publication.
+//! - `observer.rs` owns health observation, the telemetry observer stage,
+//!   worker metric updates, and shared snapshot publication.
 
 mod authored;
 pub(crate) mod observation;
@@ -83,7 +82,7 @@ pub(crate) use authored::dispatch_authored_packet;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::{
-    PendingObservationQueue, dispatch_stale_packet, drain_one_observer, observer_has_safe_slack,
+    ObserverRuntime, PendingObservationQueue, dispatch_stale_packet, drain_one_observer,
 };
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 #[cfg(test)]

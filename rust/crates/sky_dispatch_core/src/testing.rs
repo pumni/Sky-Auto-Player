@@ -102,9 +102,7 @@ pub fn simulate_schedule(
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
         let pending_plan = pending_deadline.map(|deadline_ticks| PendingDispatchPlan {
             deadline_ticks,
-            lead_ticks: crate::time::DurationTicks::ZERO,
             polyphony: 1,
-            lead_saturated: false,
         });
         if current_stale.is_none()
             && let Some(dl) = coordinator
@@ -117,9 +115,7 @@ pub fn simulate_schedule(
         // 1. Drain pending releases due
         let plan = PendingDispatchPlan {
             deadline_ticks: crate::time::TimelineTicks::from_raw(now_us),
-            lead_ticks: crate::time::DurationTicks::ZERO,
             polyphony: 1,
-            lead_saturated: false,
         };
         let due_pending = coordinator
             .pop_due_pending_ticks(crate::time::TimelineTicks::from_raw(now_us), &plan)

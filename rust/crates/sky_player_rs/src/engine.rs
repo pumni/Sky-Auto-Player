@@ -14,8 +14,8 @@ pub use config::DispatchProfile;
 pub(crate) use config::StartupOrderingHook;
 use config::WorkerConfig;
 pub(crate) use config::{
-    BackendConfig, EstimatorOptions, FocusOptions, NativeSessionOptions, PriorityOptions,
-    TelemetryOptions, TimingOptions, WaitOptions,
+    BackendConfig, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
+    TimingOptions, WaitOptions,
 };
 pub use session::NativeDispatchSession;
 pub use snapshot::{EngineProgressSnapshot, EngineSnapshot};
@@ -51,7 +51,7 @@ pub mod dispatch_primitives {
     };
     pub use super::worker::dispatch::observer::PendingObservationQueue;
     pub use super::worker::dispatch::timing::{
-        EstimatorObservationEvidence, is_clean_estimator_observation,
+        DispatchObservationEvidence, is_clean_dispatch_observation,
     };
     pub use super::worker::health::DispatchPath;
 }
@@ -104,7 +104,6 @@ pub mod observer_test_hooks {
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
-use sky_dispatch_core::estimator::DispatchCostEstimator;
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
@@ -133,7 +132,6 @@ const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
-const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
 #[cfg(test)]

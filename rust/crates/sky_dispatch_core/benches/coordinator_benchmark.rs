@@ -227,9 +227,7 @@ fn run_iteration(
             // Pop due pending and complete
             let pending_plan = PendingDispatchPlan {
                 deadline_ticks: TimelineTicks::from_raw(up_dl),
-                lead_ticks: DurationTicks::ZERO,
                 polyphony,
-                lead_saturated: false,
             };
             let due = coordinator
                 .pop_due_pending_ticks(TimelineTicks::from_raw(up_dl), &pending_plan)

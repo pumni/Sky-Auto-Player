@@ -21,12 +21,12 @@ impl RuntimeDispatchCoordinator {
 
     pub fn next_pending_release_ticks(
         &self,
-        lead_up: DurationTicks,
+        _lead_up: DurationTicks,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .map(|pending| pending.get_effective_release_ticks(lead_up))
+            .map(|pending| pending.get_effective_release_ticks(DurationTicks::ZERO))
             .try_fold(None::<TimelineTicks>, |current, value| {
                 let value = value?;
                 Ok(Some(current.map_or(value, |best| best.min(value))))
@@ -45,53 +45,25 @@ impl RuntimeDispatchCoordinator {
     pub fn pending_count_due_at_ticks(
         &self,
         deadline: TimelineTicks,
-        lead_up: DurationTicks,
+        _lead_up: DurationTicks,
     ) -> Result<usize, CoordinatorError> {
         self.pending_by_slot
             .iter()
             .filter_map(Option::as_ref)
-            .map(|pending| pending.get_effective_release_ticks(lead_up))
+            .map(|pending| pending.get_effective_release_ticks(DurationTicks::ZERO))
             .try_fold(0usize, |count, value| {
                 Ok(count + usize::from(value? <= deadline))
             })
     }
 
-    pub fn plan_pending_dispatch_ticks<F>(
+    pub fn plan_pending_dispatch_ticks(
         &self,
-        lead_for_polyphony: F,
-    ) -> Result<Option<PendingDispatchPlan>, CoordinatorError>
-    where
-        F: Fn(usize) -> Result<(DurationTicks, bool), CoordinatorError>,
-    {
+    ) -> Result<Option<PendingDispatchPlan>, CoordinatorError> {
         if self.pending_mask == 0 {
             return Ok(None);
         }
-        let mut polyphony = 1usize;
-        for _ in 0..=MAX_KEYS {
-            let (lead_ticks, lead_saturated) = lead_for_polyphony(polyphony)?;
-            let deadline_ticks = self
-                .next_pending_release_ticks(lead_ticks)?
-                .ok_or_else(|| {
-                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
-                        "pending mask is set but no pending release exists".to_string(),
-                    ))
-                })?;
-            let next_polyphony = self
-                .pending_count_due_at_ticks(deadline_ticks, lead_ticks)?
-                .clamp(1, MAX_KEYS);
-            if next_polyphony == polyphony {
-                return Ok(Some(PendingDispatchPlan {
-                    deadline_ticks,
-                    lead_ticks,
-                    polyphony,
-                    lead_saturated,
-                }));
-            }
-            polyphony = next_polyphony;
-        }
-        let (lead_ticks, lead_saturated) = lead_for_polyphony(polyphony)?;
         let deadline_ticks = self
-            .next_pending_release_ticks(lead_ticks)?
+            .next_pending_release_ticks(DurationTicks::ZERO)?
             .ok_or_else(|| {
                 CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
                     "pending mask is set but no pending release exists".to_string(),
@@ -99,21 +71,21 @@ impl RuntimeDispatchCoordinator {
             })?;
         Ok(Some(PendingDispatchPlan {
             deadline_ticks,
-            lead_ticks,
-            polyphony,
-            lead_saturated,
+            polyphony: self
+                .pending_count_due_at_ticks(deadline_ticks, DurationTicks::ZERO)?
+                .clamp(1, MAX_KEYS),
         }))
     }
 
     pub fn next_deadline_ticks(
         &self,
-        dispatch_lead: DurationTicks,
+        _dispatch_lead: DurationTicks,
         pending_plan: Option<&PendingDispatchPlan>,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         if self.release_recovery_started_ticks.is_some() {
             return Ok(pending_plan.map(|plan| plan.deadline_ticks));
         }
-        let authored = self.next_authored_ticks(dispatch_lead)?;
+        let authored = self.next_authored_ticks(DurationTicks::ZERO)?;
         let pending = pending_plan.map(|plan| plan.deadline_ticks);
         Ok(match (authored, pending) {
             (Some(a), Some(p)) => Some(a.min(p)),
@@ -123,45 +95,23 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    /// Select the next release cohort by solving the lead/polyphony fixed
-    /// point.  A larger cohort may receive a larger lead and therefore move
-    /// the effective deadline earlier, so the cohort must be re-counted until
-    /// stable.  The bound is tiny because the instrument has at most 15 keys.
+    /// Select the next release cohort without applying a dispatch lead.
+    ///
+    /// The closure remains only as a source-compatible test seam for callers
+    /// from the pre-refactor coordinator tests.  Its result is intentionally
+    /// ignored: physical release deadlines are never advanced by estimation.
     #[cfg(test)]
-    pub fn plan_pending_dispatch<F>(&self, lead_for_polyphony: F) -> Option<PendingDispatchPlan>
+    pub fn plan_pending_dispatch<F>(&self, _lead_for_polyphony: F) -> Option<PendingDispatchPlan>
     where
         F: Fn(usize) -> (u64, bool),
     {
         if self.pending_mask == 0 {
             return None;
         }
-
-        let mut polyphony = 1usize;
-        for _ in 0..=MAX_KEYS {
-            let (lead_us, lead_saturated) = lead_for_polyphony(polyphony);
-            let deadline_us = self.next_pending_release_us(lead_us)?;
-            let next_polyphony = self.pending_count_due_at(deadline_us, lead_us).max(1);
-            let plan = PendingDispatchPlan {
-                deadline_ticks: TimelineTicks::from_raw(deadline_us),
-                lead_ticks: DurationTicks::from_raw(lead_us),
-                polyphony,
-                lead_saturated,
-            };
-            if next_polyphony == polyphony {
-                return Some(plan);
-            }
-            polyphony = next_polyphony.min(MAX_KEYS);
-        }
-
-        // The monotonic estimator should converge within MAX_KEYS steps.  If
-        // a future custom estimator violates that assumption, return the last
-        // bounded plan rather than looping on the real-time worker.
-        let (lead_us, lead_saturated) = lead_for_polyphony(polyphony);
+        let deadline_us = self.next_pending_release_us(0)?;
         Some(PendingDispatchPlan {
-            deadline_ticks: TimelineTicks::from_raw(self.next_pending_release_us(lead_us)?),
-            lead_ticks: DurationTicks::from_raw(lead_us),
-            polyphony,
-            lead_saturated,
+            deadline_ticks: TimelineTicks::from_raw(deadline_us),
+            polyphony: self.pending_count_due_at(deadline_us, 0).clamp(1, MAX_KEYS),
         })
     }
 
@@ -214,10 +164,7 @@ impl RuntimeDispatchCoordinator {
         now_us: u64,
         plan: &PendingDispatchPlan,
     ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
-        self.pop_due_pending_until(
-            now_us.min(plan.deadline_ticks.as_u64()),
-            plan.lead_ticks.as_u64(),
-        )
+        self.pop_due_pending_until(now_us.min(plan.deadline_ticks.as_u64()), 0)
     }
 
     #[cfg(test)]
@@ -269,7 +216,7 @@ impl RuntimeDispatchCoordinator {
         let mut due_with_deadline: SmallVec<[(PendingRelease, TimelineTicks); MAX_KEYS]> =
             SmallVec::new();
         for pending in self.pending_by_slot.iter().filter_map(Option::as_ref) {
-            let deadline = pending.get_effective_release_ticks(plan.lead_ticks)?;
+            let deadline = pending.get_effective_release_ticks(DurationTicks::ZERO)?;
             if deadline <= limit {
                 due_with_deadline.push((pending.clone(), deadline));
             }

@@ -10,7 +10,6 @@ mod dispatch;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod dispatch;
 mod dispatch_loop;
-mod estimator;
 #[cfg(not(any(test, feature = "test-support")))]
 mod health;
 #[cfg(any(test, feature = "test-support"))]
@@ -21,10 +20,13 @@ mod startup;
 mod timing;
 mod wait;
 
+#[cfg(test)]
+pub(crate) use admission::final_control_admission_with_lease;
 pub(crate) use admission::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals, TargetStamp,
-    ensure_preflight_for_target, final_control_admission_with_lease, final_down_target_admission,
-    focus_matches, focus_matches_hwnd, load_target_stamp, target_stamp_still_current,
+    ensure_preflight_for_target, final_control_admission_at, final_control_precheck,
+    final_down_target_admission, focus_matches, focus_matches_hwnd, load_target_stamp,
+    target_stamp_still_current,
 };
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
@@ -38,15 +40,16 @@ use control::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
     CommandControlRuntime, CommandControlSignals, process_command_control,
 };
+pub(crate) use dispatch::ObserverRuntime;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch::drain_one_observer;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases, dispatch_stale_packet, drain_one_observer,
-    observer_has_safe_slack,
+    dispatch_due_pending_releases, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 
-pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_observation};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use health::FrozenDispatchBudget;
 #[cfg(test)]
@@ -55,26 +58,25 @@ pub(crate) use health::HealthWindowPolicy;
 pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
-    HealthWindow, estimator_path_for_dispatch, focus_gate_matches, observe_dispatch_health,
-    observe_wait_health, publish_backend_metrics, record_lateness,
+    HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
+    publish_backend_metrics, record_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
-pub(crate) use planning::startup_lead_for_first_packet;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
 pub(crate) use timing::{
-    adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
-    exact_sender_durations,
+    adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
+    deadline_target_ticks, exact_sender_durations,
 };
 pub(crate) use timing::{
-    anchored_dispatch_target_ticks_typed, derive_spin_threshold_us, lease_bounded_ticks,
-    publish_wake_error_stats, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
-    supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
+    derive_spin_threshold_us, lease_bounded_ticks, publish_wake_error_stats, signed_delta,
+    signed_ticks_to_us, signed_timeline_delta_ticks, supervisor_lease_expired,
+    wait_failure_message, wake_lateness_ticks,
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -84,7 +86,6 @@ pub(crate) use wait::{
 use super::shared::SessionShared;
 use super::*;
 use sky_dispatch_core::model::RuntimeSchedule;
-#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 
 /// Mutable state owned exclusively by the worker thread.
@@ -92,27 +93,9 @@ use std::sync::Arc;
 /// This state deliberately lives outside the panic boundary so the worker's
 /// backend, coordinator, and telemetry can still be finalized after an
 /// injected or unexpected panic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StartupGate {
-    pub(crate) scheduled_ticks: TimelineTicks,
-    pub(crate) lead_ticks: DurationTicks,
-    pub(crate) up_mask: u16,
-    pub(crate) down_mask: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum StartupPrecisionPhase {
-    #[default]
-    PrePrecision,
-    PostPrecision,
-}
-
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
-    pub(crate) startup_precision_phase: StartupPrecisionPhase,
-    startup_gate: Option<StartupGate>,
-    startup_dispatch_target_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     focus_restore_started_ticks: Option<QpcTicks>,
@@ -141,10 +124,6 @@ impl WorkerRuntime {
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
     }
-
-    pub(crate) fn set_startup_dispatch_target_for_test(&mut self, target: QpcTicks) {
-        self.startup_dispatch_target_qpc = Some(target);
-    }
 }
 
 #[derive(Default)]
@@ -165,7 +144,6 @@ pub(crate) struct WorkerTimingState {
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
-    pub(super) observer_guard_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
@@ -185,7 +163,6 @@ impl WorkerTimingState {
             lease_timeout_ticks: DurationTicks::ZERO,
             retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
             effective_spin_threshold_ticks: DurationTicks::ZERO,
-            observer_guard_ticks: DurationTicks::ZERO,
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
             start_process_cpu_us: 0,
@@ -195,12 +172,9 @@ impl WorkerTimingState {
 }
 
 /// Fixed observer guard converted to QPC ticks during worker admission.
-pub(super) const OBSERVER_GUARD_US: u64 = 5_500;
 pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
 
 pub(crate) struct WorkerHealthState {
-    pub(super) down_saturation_positive_streak: u8,
-    pub(super) up_saturation_positive_streak: u8,
     pub(super) options: DispatchHealthOptions,
     pub(super) sendinput_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
     pub(super) core_post_send_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
@@ -208,12 +182,9 @@ pub(crate) struct WorkerHealthState {
     pub(super) wait_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl WorkerHealthState {
     pub(crate) fn new(options: DispatchHealthOptions) -> Self {
         Self {
-            down_saturation_positive_streak: 0,
-            up_saturation_positive_streak: 0,
             options,
             sendinput_window: HealthWindow::default(),
             core_post_send_window: HealthWindow::default(),
@@ -229,8 +200,7 @@ pub(crate) struct WorkerResources {
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) playback: PlaybackClockState,
-    pub(super) estimator: DispatchCostEstimator,
-    pub(super) telemetry: TelemetryCollector,
+    pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,
 }
 
@@ -250,6 +220,7 @@ pub(super) struct WorkerCore {
 #[derive(Default)]
 pub(super) struct WorkerObserverState {
     pub(super) pending: dispatch::PendingObservationQueue,
+    pub(super) runtime: Option<ObserverRuntime>,
 }
 
 pub(super) fn update_deferred_worker_metrics(
@@ -293,7 +264,6 @@ impl<'a> Worker<'a> {
             wait,
             telemetry,
             priority,
-            estimator,
             #[cfg(any(test, feature = "test-support"))]
             startup_ordering_hook,
         } = options;
@@ -313,7 +283,6 @@ impl<'a> Worker<'a> {
                 wait,
                 telemetry,
                 priority,
-                estimator,
             },
             shared,
             core: WorkerCore {

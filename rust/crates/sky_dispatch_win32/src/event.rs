@@ -76,6 +76,12 @@ impl OwnedEvent {
         self.signal_generation.load(Ordering::Acquire)
     }
 
+    /// Cheap polling hint for the bounded spin phase. The final deadline
+    /// admission still uses [`Self::signal_generation`] with Acquire.
+    pub fn signal_generation_relaxed(&self) -> u64 {
+        self.signal_generation.load(Ordering::Relaxed)
+    }
+
     pub fn try_take(&self) -> bool {
         #[cfg(test)]
         self.take_count.fetch_add(1, Ordering::Relaxed);

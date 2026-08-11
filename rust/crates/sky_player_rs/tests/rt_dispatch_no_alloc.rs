@@ -2,9 +2,8 @@
 //!
 //! Verifies that the allocation-free segment of the authored dispatch path
 //! (from plan build through `dispatch_ready` — i.e. coordinator commit and
-//! observer enqueue) makes zero heap allocations.  Observer drain (health,
-//! publish) is explicitly excluded from the counter window per §8.11; direct
-//! estimator query/update allocation proofs are covered below.
+//! observer enqueue) makes zero heap allocations. Observer drain (health,
+//! publish) is explicitly excluded from the counter window per §8.11.
 //!
 //! Uses a counting `GlobalAlloc` wrapper that increments an atomic counter on
 //! every `alloc` call.  The counter is *only* read inside the assertion window;
@@ -14,14 +13,13 @@
 //!   cargo test --manifest-path rust/Cargo.toml -p sky_player_rs \
 //!       --features test-support --test rt_dispatch_no_alloc
 
-use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, DownObservation, DownTraceObservation,
-    EstimatorObservationEvidence, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
+    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep, DownObservation,
+    DownTraceObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
     ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
-    is_clean_estimator_observation,
+    is_clean_dispatch_observation,
 };
 use sky_player_rs::engine::observer_test_hooks::{
     observer_test_hook_guard, set_release_observer_failure_on_recovery,
@@ -195,8 +193,8 @@ fn up_observation(n: u64) -> DispatchObservation {
     })
 }
 
-fn clean_estimator_evidence(requested_count: usize) -> EstimatorObservationEvidence {
-    EstimatorObservationEvidence {
+fn clean_dispatch_evidence(requested_count: usize) -> DispatchObservationEvidence {
+    DispatchObservationEvidence {
         status: SendTransactionStatus::Complete,
         attempts: 1,
         retry_reason: PacketRetryReason::None,
@@ -211,87 +209,50 @@ fn clean_estimator_evidence(requested_count: usize) -> EstimatorObservationEvide
 }
 
 #[test]
-fn estimator_query_no_alloc() {
-    let _lock = TEST_LOCK.lock();
-    let mut estimator = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
-    for _ in 0..5 {
-        estimator
-            .update(SendPath::UpOnly, 2, 700)
-            .expect("seed sample");
-    }
-
-    enable_counting();
-    let estimate = estimator.estimate_lead(SendPath::UpOnly, 2, false);
-    let allocs = disable_counting();
-
-    assert_eq!(estimate.applied_us, 700);
-    assert_eq!(allocs, 0, "estimator query made {allocs} allocation(s)");
-}
-
-#[test]
-fn estimator_update_no_alloc() {
-    let _lock = TEST_LOCK.lock();
-    let mut estimator = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
-    for _ in 0..5 {
-        estimator
-            .update(SendPath::Mixed, 3, 900)
-            .expect("seed sample");
-    }
-
-    enable_counting();
-    estimator
-        .update(SendPath::Mixed, 3, 950)
-        .expect("update sample");
-    let allocs = disable_counting();
-
-    assert_eq!(allocs, 0, "estimator update made {allocs} allocation(s)");
-}
-
-#[test]
-fn canonical_clean_estimator_evidence_requires_every_dimension() {
-    let clean = clean_estimator_evidence(2);
-    assert!(is_clean_estimator_observation(clean));
+fn canonical_clean_dispatch_evidence_requires_every_dimension() {
+    let clean = clean_dispatch_evidence(2);
+    assert!(is_clean_dispatch_observation(clean));
 
     let cases = [
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             status: SendTransactionStatus::PartialProgress,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             attempts: 2,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             retry_reason: PacketRetryReason::ZeroProgress,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             confirmed_count: 1,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             skipped_count: 1,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             timing_valid: false,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             transport_anomaly: true,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             recovery_used: true,
             ..clean
         },
-        EstimatorObservationEvidence {
+        DispatchObservationEvidence {
             chord_integrity_lost: true,
             ..clean
         },
     ];
     for evidence in cases {
-        assert!(!is_clean_estimator_observation(evidence));
+        assert!(!is_clean_dispatch_observation(evidence));
     }
 }
 
@@ -303,7 +264,7 @@ fn canonical_clean_estimator_evidence_requires_every_dimension() {
 #[test]
 fn push_single_down_observation_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
     let obs = down_observation(1);
@@ -323,7 +284,7 @@ fn push_single_down_observation_no_alloc() {
 #[test]
 fn push_pop_cycle_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
 
@@ -347,7 +308,7 @@ fn push_pop_cycle_no_alloc() {
 #[test]
 fn push_up_observation_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
     let obs = up_observation(42);
@@ -362,12 +323,12 @@ fn push_up_observation_no_alloc() {
     );
 }
 
-/// Filling the queue to capacity and triggering the drop-oldest eviction path
-/// does not allocate.
+/// Filling the queue to capacity and dropping a new observation does not
+/// allocate or block the producer.
 #[test]
-fn push_at_capacity_eviction_no_alloc() {
+fn push_at_capacity_drop_new_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
 
@@ -378,35 +339,32 @@ fn push_at_capacity_eviction_no_alloc() {
     assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
     assert_eq!(dropped, 0);
 
-    // One more push should evict the oldest without allocating.
+    // One more push is dropped without allocating or waiting for the consumer.
     enable_counting();
     queue.push(down_observation(999), &mut dropped, &mut high);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
-        "push at capacity (eviction path) made {allocs} heap allocation(s); expected 0"
+        "push at capacity (drop-new path) made {allocs} heap allocation(s); expected 0"
     );
-    assert_eq!(dropped, 1, "eviction must increment dropped counter");
+    assert_eq!(dropped, 1, "overflow must increment dropped counter");
     assert_eq!(
         queue.len(),
         OBSERVATION_QUEUE_CAPACITY,
-        "queue must remain at capacity after eviction"
+        "queue must remain at capacity after drop-new"
     );
 }
 
-/// Queue overflow is a producer-only drop-oldest operation.  The newest raw
-/// record remains queued for deferred processing; no observer materialization
+/// Queue overflow is a producer-only drop-new operation. The existing raw
+/// records remain queued for deferred processing; no observer materialization
 /// or telemetry builder is available on this path.
 #[test]
-fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
+fn overflow_drops_newest_for_down_and_up() {
     let _lock = TEST_LOCK.lock();
 
-    for (newest, expected_marker) in [
-        (down_observation(999), 999_u64),
-        (up_observation(999), 999_u64),
-    ] {
-        let mut queue = PendingObservationQueue::default();
+    for newest in [down_observation(999), up_observation(999)] {
+        let queue = PendingObservationQueue::default();
         let mut dropped = 0_u64;
         let mut high = 0_u64;
         for index in 0..OBSERVATION_QUEUE_CAPACITY {
@@ -415,14 +373,14 @@ fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
 
         queue.push(newest, &mut dropped, &mut high);
 
-        assert_eq!(dropped, 1, "one oldest observation must be evicted");
+        assert_eq!(dropped, 1, "one newest observation must be dropped");
         assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
         let first = queue.pop_front().expect("queue remains non-empty");
         match first {
             DispatchObservation::Down(observation) => {
-                assert_eq!(observation.trace.applied_lead_ticks.as_u64(), 1);
+                assert_eq!(observation.trace.applied_lead_ticks.as_u64(), 0);
             }
-            DispatchObservation::Up(_) => panic!("oldest Down observation was not retained order"),
+            DispatchObservation::Up(_) => panic!("unexpected Up observation in seeded queue"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
         }
 
@@ -434,12 +392,10 @@ fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
             DispatchObservation::Down(observation) => {
                 assert_eq!(
                     observation.trace.applied_lead_ticks.as_u64(),
-                    expected_marker
+                    (OBSERVATION_QUEUE_CAPACITY - 1) as u64
                 )
             }
-            DispatchObservation::Up(observation) => {
-                assert_eq!(observation.lead_up_ticks.as_u64(), expected_marker)
-            }
+            DispatchObservation::Up(_) => panic!("newest Up observation must be dropped"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
         }
     }
@@ -450,7 +406,7 @@ fn overflow_drops_oldest_and_keeps_newest_for_down_and_up() {
 fn burst_push_and_drain_no_alloc() {
     let _lock = TEST_LOCK.lock();
     const BURST: usize = 16;
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
 
@@ -477,7 +433,7 @@ fn burst_push_and_drain_no_alloc() {
 #[test]
 fn pop_empty_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut queue = PendingObservationQueue::default();
+    let queue = PendingObservationQueue::default();
 
     enable_counting();
     let result = queue.pop_front();

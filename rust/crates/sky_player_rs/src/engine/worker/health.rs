@@ -1,6 +1,5 @@
 use super::TrackedKeyState;
 use crate::engine::telemetry::{SharedMetrics, WorkerMetricsLocal};
-use sky_dispatch_core::estimator::DispatchCostEstimator;
 
 pub(crate) const HEALTH_WINDOW_CAPACITY: usize = 64;
 
@@ -90,43 +89,12 @@ impl DispatchPath {
     }
 }
 
-pub(crate) fn estimator_path_for_dispatch(
-    path: DispatchPath,
-) -> sky_dispatch_core::estimator::SendPath {
-    match path {
-        DispatchPath::DownOnly { .. } => sky_dispatch_core::estimator::SendPath::DownOnly,
-        DispatchPath::UpOnly { .. } => sky_dispatch_core::estimator::SendPath::UpOnly,
-        DispatchPath::Mixed { .. } => sky_dispatch_core::estimator::SendPath::Mixed,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrozenDispatchBudget {
     pub(crate) path: DispatchPath,
     pub(crate) event_count: usize,
     pub(crate) send_warn_us: u64,
     pub(crate) core_post_send_warn_us: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DispatchLeadEstimate {
-    pub(crate) applied_us: u64,
-    pub(crate) saturated: bool,
-}
-
-pub(crate) fn estimate_dispatch_path_lead(
-    estimator: &DispatchCostEstimator,
-    path: DispatchPath,
-    strict_timing: bool,
-    max_lead_us: u64,
-) -> DispatchLeadEstimate {
-    let send_path = estimator_path_for_dispatch(path);
-    let count = path.event_count();
-    let value = estimator.estimate_lead(send_path, count, strict_timing);
-    DispatchLeadEstimate {
-        applied_us: value.applied_us.min(max_lead_us),
-        saturated: value.saturated,
-    }
 }
 
 pub(crate) fn build_dispatch_budget(
@@ -147,8 +115,8 @@ pub(crate) fn build_dispatch_budget(
 ///
 /// The ring deliberately stores only the result of comparing an observation
 /// with the budget frozen for that observation. Retaining raw durations would
-/// allow a later estimator/polyphony threshold to reclassify history while it
-/// is being evicted.
+/// allow a later threshold policy to reclassify history while it is being
+/// evicted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HealthWindow<const N: usize> {
     over_budget: [bool; N],

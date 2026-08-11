@@ -92,6 +92,7 @@ fn build_inputs(
 fn send_once(
     packet: PhysicalPacket,
     clock: QpcClock,
+    supplied_started_ticks: Option<QpcTicks>,
 ) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
     #[cfg(windows)]
     {
@@ -100,9 +101,12 @@ fn send_once(
 
         let requested = packet.event_count();
         let (inputs, length) = build_inputs(packet);
-        let started_ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => return Err((None, error, false)),
+        let started_ticks = match supplied_started_ticks {
+            Some(ticks) => ticks,
+            None => match clock.now() {
+                Ok(ticks) => ticks,
+                Err(error) => return Err((None, error, false)),
+            },
         };
         unsafe { SetLastError(0) };
         let inserted = unsafe {
@@ -135,9 +139,12 @@ fn send_once(
     #[cfg(not(windows))]
     {
         let requested = packet.event_count();
-        let started_ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => return Err((None, error, false)),
+        let started_ticks = match supplied_started_ticks {
+            Some(ticks) => ticks,
+            None => match clock.now() {
+                Ok(ticks) => ticks,
+                Err(error) => return Err((None, error, false)),
+            },
         };
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
@@ -163,8 +170,12 @@ enum PacketSendAttempt {
     ClockFailure(Option<QpcTicks>, crate::clock::QpcError, bool),
 }
 
-fn run_send_attempt(packet: PhysicalPacket, clock: QpcClock) -> PacketSendAttempt {
-    match send_once(packet, clock) {
+fn run_send_attempt(
+    packet: PhysicalPacket,
+    clock: QpcClock,
+    supplied_started_ticks: Option<QpcTicks>,
+) -> PacketSendAttempt {
+    match send_once(packet, clock, supplied_started_ticks) {
         Ok(res) => PacketSendAttempt::Outcome(res),
         Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
     }
@@ -451,7 +462,19 @@ pub fn send_physical_packet_once_with_clock(
     packet: PhysicalPacket,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
-    send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock))
+    send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock, None))
+}
+
+/// One packet transaction using a start boundary sampled by the caller after
+/// all control, focus, target, and lease gates have passed.
+pub fn send_physical_packet_once_with_start(
+    packet: PhysicalPacket,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+) -> SendTransactionOutcome {
+    send_physical_packet_once_impl(packet, |packet| {
+        run_send_attempt(packet, clock, Some(started_ticks))
+    })
 }
 
 #[cfg(test)]

@@ -1,26 +1,25 @@
 use super::super::super::{
     DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
-    STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
+    TimelineTicks, TrackedKeyState,
 };
 use super::super::{
     FinalControlAdmission, FinalControlSignals, WorkerConfig, WorkerHealthState,
     WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
-    cancel_coordinator_or_terminal, describe_release_outcome, final_control_admission_with_lease,
-    record_termination_error, release_state_verified, signed_ticks_to_us,
+    cancel_coordinator_or_terminal, describe_release_outcome, final_control_admission_at,
+    final_control_precheck, record_termination_error, release_state_verified, signed_ticks_to_us,
     signed_timeline_delta_ticks,
 };
 use super::DispatchStep;
 use super::observation::{DispatchObservation, UpObservation, UpTraceObservation};
 use super::observer::{PendingObservationQueue, take_deadline_wake_qpc};
-use super::timing::EstimatorObservationEvidence;
-use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
+use super::timing::DispatchObservationEvidence;
+use sky_dispatch_core::coordinator::PendingRelease;
 use sky_dispatch_win32::input::PhysicalPacket;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) due_pending: SmallVec<[PendingRelease; 15]>,
-    pub(crate) pending_plan: Option<&'a PendingDispatchPlan>,
     pub(crate) lead_up_ticks: DurationTicks,
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
@@ -134,8 +133,7 @@ pub(super) struct ReleaseReconciliation {
     pub(super) up_completion_error_ticks: i64,
     pub(super) up_authored_completion_error_ticks: i64,
     pub(super) applied_lead_ticks: DurationTicks,
-    pub(super) applied_lead_saturated: bool,
-    pub(super) estimator_evidence: EstimatorObservationEvidence,
+    pub(super) observation_evidence: DispatchObservationEvidence,
 }
 
 /// Strict/SLO flags computed after the health observation stage; the release
@@ -143,7 +141,6 @@ pub(super) struct ReleaseReconciliation {
 #[derive(Clone, Copy)]
 pub(super) struct ReleaseOutcomeFlags {
     pub(super) strict_up_completion_late: bool,
-    pub(super) saturation_abort: bool,
 }
 
 struct ReleaseRecoveryOutcome {
@@ -216,7 +213,7 @@ pub(crate) fn dispatch_due_pending_releases(
     ctx: PendingReleaseContext<'_>,
     config: &WorkerConfig,
     resources: &mut WorkerResources,
-    health: &mut WorkerHealthState,
+    _health: &mut WorkerHealthState,
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
@@ -227,7 +224,6 @@ pub(crate) fn dispatch_due_pending_releases(
     RELEASE_READY_REACHED.store(false, Ordering::SeqCst);
     let PendingReleaseContext {
         due_pending,
-        pending_plan,
         lead_up_ticks,
         physical_target_qpc,
         frozen_budget,
@@ -285,7 +281,6 @@ pub(crate) fn dispatch_due_pending_releases(
         &due_pending,
         &send,
         lead_up_ticks,
-        pending_plan.is_some_and(|plan| plan.lead_saturated),
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -307,22 +302,9 @@ pub(crate) fn dispatch_due_pending_releases(
         None
     };
 
-    // Preserve applied-plan saturation independently of completion sign.
-    // Positive-at-cap policy uses the effective completion error.
-    let (lead_up_saturated, saturated_positive) = up_saturation_evidence(
-        reconciliation.applied_lead_saturated,
-        reconciliation.up_completion_error_ticks,
-    );
-    health.up_saturation_positive_streak = if saturated_positive {
-        health.up_saturation_positive_streak.saturating_add(1)
-    } else {
-        0
-    };
     let flags = ReleaseOutcomeFlags {
-        saturation_abort: config.timing.strict_timing
-            && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK,
         strict_up_completion_late: config.timing.strict_timing
-            && super::timing::is_clean_estimator_observation(reconciliation.estimator_evidence)
+            && super::timing::is_clean_dispatch_observation(reconciliation.observation_evidence)
             && reconciliation
                 .up_completion_lateness_ticks
                 .is_some_and(|late| late > timing.strict_up_completion_late_ticks),
@@ -358,7 +340,7 @@ pub(crate) fn dispatch_due_pending_releases(
         skipped_mask: send.transport.skipped_mask,
         result_status: send.transport.status,
         lead_up_ticks: reconciliation.applied_lead_ticks,
-        lead_up_saturated,
+        lead_up_saturated: false,
         completed_effective_ticks: send.completed_effective_ticks,
         scheduled_ticks: reconciliation.scheduled_ticks,
         deferred_ticks: reconciliation.deferred_ticks,
@@ -424,13 +406,6 @@ fn release_terminal_step(
             "strict timing completion SLO exceeded for note-off at action {first_action_index}: completion was {completion_error_us}us late"
         ));
     }
-    if flags.saturation_abort {
-        return DispatchStep::Terminate(format!(
-            "strict timing SLO exceeded: note-off lead saturated with positive residual for {} consecutive dispatches",
-            STRICT_SATURATION_ABORT_STREAK
-        ));
-    }
-
     DispatchStep::Dispatched
 }
 
@@ -448,28 +423,34 @@ fn prepare_release_send(
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
 ) -> Result<ReleaseSend, DispatchStep> {
-    let (admission, gate_qpc) = final_control_admission_with_lease(
-        qpc_clock,
-        lease_timeout_ticks,
-        FinalControlSignals {
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            supervisor_heartbeat_ticks,
-        },
-    )
-    .map_err(|error| {
-        DispatchStep::Terminate(format!("release admission QPC failure: {error:?}"))
-    })?;
+    let control_signals = FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    };
+    let admission = final_control_precheck(FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    });
     if !matches!(admission, FinalControlAdmission::Allowed) {
         return Err(DispatchStep::Continue);
     }
-    let Some(started_ticks) = gate_qpc else {
-        return Err(DispatchStep::Terminate(
-            "allowed release admission has no QPC evidence".to_string(),
-        ));
-    };
+    let started_ticks = qpc_clock.now().map_err(|error| {
+        DispatchStep::Terminate(format!("release QPC start failure: {error:?}"))
+    })?;
+    if !matches!(
+        final_control_admission_at(started_ticks, lease_timeout_ticks, control_signals).map_err(
+            |error| DispatchStep::Terminate(format!("release lease failure: {error:?}"))
+        )?,
+        FinalControlAdmission::Allowed
+    ) {
+        return Err(DispatchStep::Continue);
+    }
     let actual_ticks = match clock_state
         .get_elapsed_allow_pre_epoch(started_ticks, runtime.allow_pre_epoch_startup_dispatch)
     {
@@ -480,7 +461,8 @@ fn prepare_release_send(
             )));
         }
     };
-    let result = backend.send_physical_packet(PhysicalPacket::new(release_mask, 0));
+    let result = backend
+        .send_physical_packet_with_start(PhysicalPacket::new(release_mask, 0), started_ticks);
     if let Some(error) = backend.timing_error.take() {
         return Err(DispatchStep::Terminate(format!(
             "QPC failure after note-off: {error:?}"
@@ -560,7 +542,6 @@ fn reconcile_release_recovery(
     due_pending: &SmallVec<[PendingRelease; 15]>,
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
-    lead_up_saturated: bool,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     // The caller has already fail-closed on any backend-skipped disagreement
     // (`force_full_cleanup` + terminate). Confirmed-only reconciliation below
@@ -608,7 +589,6 @@ fn reconcile_release_recovery(
         lead_up_ticks,
         recovery_required,
         recovery_pause_ticks,
-        lead_up_saturated,
     )
 }
 
@@ -621,7 +601,6 @@ fn reconcile_release_outcome(
     lead_up_ticks: DurationTicks,
     recovery_required: bool,
     recovery_pause_ticks: Option<DurationTicks>,
-    lead_up_saturated: bool,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
     let mut first_index: Option<usize> = None;
     let mut first_deadline: Option<TimelineTicks> = None;
@@ -667,12 +646,6 @@ fn reconcile_release_outcome(
             "coordinator returned no release deadline".to_string(),
         ));
     };
-    let (applied_lead_ticks, applied_lead_saturated) = effective_pending_cohort_lead(
-        due_pending,
-        lead_up_ticks,
-        lead_up_saturated,
-        effective_deadline_ticks,
-    );
     let Some(scheduled_ticks) = due_pending
         .iter()
         .map(|pending| pending.scheduled_release_ticks)
@@ -723,7 +696,7 @@ fn reconcile_release_outcome(
                 )));
             }
         };
-    let estimator_evidence = EstimatorObservationEvidence {
+    let observation_evidence = DispatchObservationEvidence {
         status: send.transport.status,
         attempts: send.attempts,
         retry_reason: send.retry_reason,
@@ -746,9 +719,8 @@ fn reconcile_release_outcome(
         up_completion_lateness_ticks,
         up_completion_error_ticks,
         up_authored_completion_error_ticks,
-        applied_lead_ticks,
-        applied_lead_saturated,
-        estimator_evidence,
+        applied_lead_ticks: DurationTicks::ZERO,
+        observation_evidence,
     })
 }
 
@@ -791,13 +763,6 @@ fn finalize_release_recovery(
     }
 }
 
-fn up_saturation_evidence(lead_up_saturated: bool, completion_error_ticks: i64) -> (bool, bool) {
-    (
-        lead_up_saturated,
-        lead_up_saturated && completion_error_ticks > 0,
-    )
-}
-
 #[cfg(test)]
 pub(crate) fn effective_pending_lead(
     pending: &PendingRelease,
@@ -805,82 +770,27 @@ pub(crate) fn effective_pending_lead(
     requested_lead_saturated: bool,
     effective_deadline_ticks: TimelineTicks,
 ) -> (DurationTicks, bool) {
-    let application = pending_lead_application(
+    let _ = (
         pending,
         requested_lead_ticks,
         requested_lead_saturated,
         effective_deadline_ticks,
     );
-    (application.applied_lead_ticks, application.saturated)
+    (DurationTicks::ZERO, false)
 }
 
-#[derive(Clone, Copy)]
-struct PendingLeadApplication {
-    applied_lead_ticks: DurationTicks,
-    lead_controlled: bool,
-    saturated: bool,
-}
-
-fn pending_lead_application(
-    pending: &PendingRelease,
-    requested_lead_ticks: DurationTicks,
-    requested_lead_saturated: bool,
-    effective_deadline_ticks: TimelineTicks,
-) -> PendingLeadApplication {
-    let available_release_ticks = DurationTicks::from_raw(pending.scheduled_release_ticks.as_u64());
-    let effective_requested_lead = requested_lead_ticks.min(available_release_ticks);
-    let lead_deadline = pending
-        .scheduled_release_ticks
-        .checked_sub_duration(effective_requested_lead)
-        .expect("effective pending lead cannot underflow");
-    let floor_controls = pending.release_not_before_ticks >= lead_deadline
-        || pending.next_retry_ticks >= lead_deadline;
-    if floor_controls || effective_deadline_ticks != lead_deadline {
-        return PendingLeadApplication {
-            applied_lead_ticks: DurationTicks::ZERO,
-            lead_controlled: false,
-            saturated: false,
-        };
-    }
-    let applied_lead_ticks = pending
-        .scheduled_release_ticks
-        .checked_duration_since(effective_deadline_ticks)
-        .unwrap_or(DurationTicks::ZERO);
-    PendingLeadApplication {
-        applied_lead_ticks,
-        lead_controlled: true,
-        saturated: requested_lead_saturated && applied_lead_ticks == requested_lead_ticks,
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn effective_pending_cohort_lead(
     due_pending: &SmallVec<[PendingRelease; 15]>,
     requested_lead_ticks: DurationTicks,
     requested_lead_saturated: bool,
     effective_deadline_ticks: TimelineTicks,
 ) -> (DurationTicks, bool) {
-    let mut common_applied_lead: Option<DurationTicks> = None;
-    let mut cohort_saturated = true;
-
-    for pending in due_pending {
-        let application = pending_lead_application(
-            pending,
-            requested_lead_ticks,
-            requested_lead_saturated,
-            effective_deadline_ticks,
-        );
-        if !application.lead_controlled {
-            return (DurationTicks::ZERO, false);
-        }
-        if common_applied_lead.is_some_and(|common| common != application.applied_lead_ticks) {
-            return (DurationTicks::ZERO, false);
-        }
-        common_applied_lead = Some(application.applied_lead_ticks);
-        cohort_saturated &= application.saturated;
-    }
-
-    (
-        common_applied_lead.unwrap_or(DurationTicks::ZERO),
-        cohort_saturated,
-    )
+    let _ = (
+        due_pending,
+        requested_lead_ticks,
+        requested_lead_saturated,
+        effective_deadline_ticks,
+    );
+    (DurationTicks::ZERO, false)
 }

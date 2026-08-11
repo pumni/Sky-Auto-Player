@@ -5,7 +5,7 @@ use super::outcome::{
     PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, ReleaseAllOutcome, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus,
 };
-use super::packet::send_physical_packet_once_with_clock;
+use super::packet::send_physical_packet_once_with_start;
 use super::physical::{
     CleanupVerification, InstrumentPhysicalState, ReconciledRelease,
     instrument_physical_state_for_mask, mask_for_scan_codes, reconcile_release_observation,
@@ -13,7 +13,7 @@ use super::physical::{
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock};
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
 use super::up_transaction::emit_up_once_with;
-use crate::clock::QpcClock;
+use crate::clock::{QpcClock, QpcTicks};
 use smallvec::SmallVec;
 use std::fmt;
 
@@ -466,10 +466,49 @@ impl TrackedKeyState {
     /// authored/release transport: it emits all Up events before all Down
     /// events in one `SendInput` call.
     pub fn send_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
+        let Some(clock) = self.qpc_clock else {
+            return self.send_physical_packet_with_start(packet, QpcTicks::ZERO);
+        };
+        let started_ticks = match clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                self.timing_error = Some(error);
+                return SendTransactionOutcome {
+                    status: SendTransactionStatus::ClockFailureBeforeSend,
+                    evidence: SendEvidence {
+                        requested_mask: packet.up_mask | packet.down_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: 0,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: None,
+                        completed_ticks: None,
+                        timing_error: Some(error),
+                    },
+                };
+            }
+        };
+        self.send_physical_packet_with_start(packet, started_ticks)
+    }
+
+    /// Send one validated physical packet using the caller's authoritative
+    /// QPC start boundary. The timestamp is reused by the transport; it is
+    /// never resampled after the final admission gate.
+    pub fn send_physical_packet_with_start(
+        &mut self,
+        packet: PhysicalPacket,
+        started_ticks: QpcTicks,
+    ) -> SendTransactionOutcome {
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-                emitter(packet)
+                let mut outcome = emitter(packet);
+                outcome.evidence.started_ticks = Some(started_ticks);
+                outcome
             } else {
                 let Some(clock) = self.qpc_clock else {
                     self.last_error = Some("packet sender has no QPC clock".to_string());
@@ -491,7 +530,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_once_with_clock(packet, clock)
+                send_physical_packet_once_with_start(packet, clock, started_ticks)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
@@ -515,7 +554,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_once_with_clock(packet, clock)
+                send_physical_packet_once_with_start(packet, clock, started_ticks)
             }
         };
 

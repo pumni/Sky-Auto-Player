@@ -257,6 +257,7 @@ pub enum TelemetryMode {
     Ring,
 }
 
+#[derive(Debug)]
 pub(crate) struct TelemetryCollector {
     pub(crate) mode: TelemetryMode,
     pub(crate) capacity: usize,

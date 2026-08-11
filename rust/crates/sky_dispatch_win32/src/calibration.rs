@@ -503,7 +503,7 @@ impl CalibrationConfig {
         }
     }
 
-    /// Full calibration preset (tuning estimator / release gate).
+    /// Full calibration preset for timing and release-gate measurements.
     pub fn full() -> Self {
         Self {
             samples_per_hot_bucket: 5_000,

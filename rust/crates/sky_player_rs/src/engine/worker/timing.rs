@@ -126,6 +126,7 @@ pub(crate) fn exact_sender_durations(
     Ok((Some(duration), single_call))
 }
 
+#[cfg(test)]
 pub(crate) fn anchored_dispatch_target_ticks_typed(
     _now_ticks: QpcTicks,
     anchor_ticks: QpcTicks,

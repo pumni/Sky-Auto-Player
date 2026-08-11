@@ -1,133 +1,122 @@
 # System Architecture
 
-Sky Auto Player keeps Python for application work and Rust for the complete
-production input lifecycle. There is no Python dispatch backend, runtime
-fallback, or low-level Python/Rust input adapter.
+Sky Auto Player keeps application and policy work in Python and owns the
+complete production input lifecycle in Rust. There is no Python dispatch
+backend, runtime fallback, or low-level Python/Rust input adapter.
 
 ## Layers
 
-1. `sky_music/domain/` parses songs, resolves authored actions, applies user
-   explicit hold-frame timing, and validates schedule input. It is Windows- and I/O-free.
-2. `sky_music/orchestration/` prepares the song, admits the native extension,
-   creates one `DispatchSession`, forwards commands, polls a small live
-   snapshot, and writes the final native report. `PlaybackEngine` is an
-   application facade, not a scheduler.
-3. `sky_music/infrastructure/` owns application glue such as hotkeys,
-   background workers, focus requests, and native admission diagnostics.
-4. `sky_music/platform/win32/` owns validated window targeting. Keyboard
-   injection itself is implemented only by the Rust Win32 crate through
+1. `sky_music/domain/` parses songs, validates authored actions, resolves the
+   selected hold-frame policy, and remains Windows- and I/O-free.
+2. `sky_music/orchestration/` prepares schedules, admits the native extension,
+   creates one session, forwards commands, polls snapshots, and writes the
+   final native report. It is not a scheduler.
+3. `sky_music/infrastructure/` owns application glue such as hotkeys, focus
+   requests, background workers, and native admission diagnostics.
+4. `sky_music/platform/win32/` owns validated window targeting. Physical
+   keyboard injection is implemented only by the Rust Win32 crate through
    Windows `SendInput`.
 
-Update checking remains pure Python domain/orchestration logic. Applying an
-update is a separate Rust `sky_updater` process; it does not depend on
-`sky_player_rs`, the playback scheduler, or `SendInput`. Python may only stage
-and launch that process, never replace installed application files.
+The native crates have fixed responsibilities:
+
+- `sky_dispatch_core`: schedule compilation, generation ownership, authored
+  and release deadlines, minimum-hold floors, recovery, and pure tests.
+- `sky_dispatch_win32`: QPC, wait strategy, focus validation, priority scope,
+  packet validation, and the only `SendInput` implementation.
+- `sky_player_rs`: the session worker, dispatch orchestration, deferred
+  observation consumer, and deliberately small PyO3 boundary.
+
+The update checker remains Python domain/orchestration logic. Applying an
+update is a separate Rust `sky_updater` process and never depends on the
+playback scheduler or `SendInput`.
 
 ## Production playback
 
 ```text
 Song file
-  -> Python parser and authored KeyAction preparation
-  -> native admission check
+  -> Python validation and authored KeyAction preparation
+  -> native admission and effective hold materialization
   -> PyO3 SessionConfig + DispatchSession
-  -> Rust compile/runtime generation state
-  -> QPC deadline, wait/spin, focus gate, SendInput, retry, cleanup
+  -> Rust coordinator and playback epoch
+  -> absolute QPC target, wait/spin, final control gate
+  -> one packetized SendInput call
+  -> completion-anchored release ownership and deferred observation
   -> snapshot_lite() while playing
-  -> session_report() once after worker termination
+  -> session_report() after worker termination
   -> Python HUD and telemetry writer
 ```
 
-The live progress value is a projection of Rust's authoritative
-`PlaybackClockState`. The worker publishes a small atomic clock anchor only
-when the playback epoch or pause interval changes; `snapshot_lite()` and the
-full snapshot take the supervisor-side QPC sample and derive elapsed time from
-that anchor. Progress therefore continues across long gaps without dispatch,
-telemetry, or observer activity, and the UI does not add work to the realtime
-worker.
+The worker has one physical timing contract. The authored/effective timeline
+deadline is not advanced by a learned send-cost lead. Immediately before an
+allowed physical send, the worker takes one authoritative QPC start sample and
+uses that same sample for the final lease/admission decision and the transport
+boundary. The Win32 sender returns a completion QPC sample. The completion is
+used for release floors, completion diagnostics, and observer records; it is
+not subtracted from future authored timestamps.
 
-The three Rust crates have fixed responsibilities:
+For a Down completion `C`, a release is not allowed before:
 
-- `sky_dispatch_core`: schedule compilation, generation ownership, timing
-  invariants, release floors, recovery, and property tests.
-- `sky_dispatch_win32`: QPC, wait strategy, focus validation, priority scope,
-  and the only keyboard `SendInput` implementation.
-- `sky_player_rs`: the native session worker and the deliberately small PyO3
-  boundary.
+```text
+release_floor = C + effective_min_hold
+effective_release = max(authored_release, release_floor, retry_not_before)
+```
 
-The worker owns the entire lifecycle: active/possibly-active key masks,
-minimum hold, stale-Up suppression, partial/zero-progress handling, release
-retry, focus-loss release, panic/quit/skip cleanup, adaptive lead, telemetry,
-and terminal integrity decisions. A session cannot report successful
-completion while cleanup residue remains.
+`effective_min_hold` is materialized and validated at the Python/native
+boundary as `max(requested_min_hold_us, ceil(1_000_000 / game_fps) + 500)`.
+The worker receives the resulting floor in its timing configuration and does
+not recompute it from observations.
+
+The worker owns active and pending key masks, stale-Up suppression,
+zero/partial progress handling, release retry, focus-loss release,
+panic/quit/skip cleanup, transport integrity, and terminal decisions. A
+session cannot report successful completion while cleanup residue remains.
+
+## Deferred observation ownership
+
+The physical dispatch path performs only bounded, nonblocking observation
+enqueue work after ownership reconciliation. A fixed-capacity
+`crossbeam_queue::ArrayQueue` is shared with one dedicated observer thread.
+The producer never waits, allocates, drains, mutates coordinator state, or
+formats telemetry. When full, the queue drops the new observation and records
+the drop; it does not evict an older observation. The consumer owns health
+windows, telemetry materialization, snapshot publication, and observer metric
+updates. Its local metrics are merged after the consumer stops.
+
+The observer is diagnostic only. It cannot authorize, reorder, retry, or
+commit physical input, and observer failure is terminal only when its own
+integrity contract cannot be completed. The dispatch thread never waits for
+observer slack.
 
 ## Python–Rust contract
 
-The production extension exposes `SessionConfig` with only user/session
-fields: minimum hold, focus requirement, target HWND, telemetry enablement, and
-the native profile. `DispatchSession` accepts authored actions and validates
-them against the native canonical 15-key registry; callers cannot inject an
-external scan-code allowlist. It exposes only lifecycle commands,
-`set_target_hwnd`, the transition-only supervisor `set_focus_hint`, a small
-`snapshot_lite`, and one final `session_report`.
+Python validates user/session fields, the canonical scan-code allowlist, FPS,
+hold selection, and schedule timing before creating a native session. The
+native boundary exposes lifecycle commands, target/focus hints, a small live
+snapshot, and one final report. `snapshot_lite` excludes trace records, maps,
+generation detail, and compatibility estimator payloads.
 
-`snapshot_lite` returns a frozen typed `ProgressSnapshot` with a nested frozen
-`BackendHealthSnapshot`. It contains state, elapsed/total time, completion
-error, active and uncertain-key counts, backend failure counters, health, and
-the control-loop flags needed by the HUD. Correctness-critical fields are
-required by the Python adapter rather than silently defaulted. It does not
-contain trace records, hash maps, build provenance, estimator state, or full
-generation counts. `session_report` remains the one final mapping and is
-materialized only after the worker has stopped; it is the sole source for final
-native telemetry.
+`estimator_state_json` and historical lead fields remain readable for older
+Python callers only. They are deprecated, ignored by production planning,
+and published as zero/`{"deprecated":true}` compatibility values. They must
+not affect deadlines, SendInput admission, release floors, health, or retry
+policy.
 
-Focus has two deliberately separate roles: Python finds and validates the
-target process, sends its HWND with `set_target_hwnd`, and publishes a
-transition-only foreground hint with `set_focus_hint`; Rust uses that hint for
-the coarse loop gate and wake-up. The hint is never input authorization:
-Rust compares the stamped HWND with `GetForegroundWindow()` immediately before
-each Down dispatch.
+Focus hints are coarse wake/gate signals, never input authorization. Rust
+compares the stamped target HWND with `GetForegroundWindow()` immediately
+before each Down dispatch. The supervisor heartbeat is published by the
+Python control loop; if it stops polling, the native lease expires.
 
-The supervisor heartbeat is published by the Python UI/control polling loop.
-There is no separate heartbeat thread. If that loop stops polling, the native
-lease can expire as intended.
+Progress is independent of that heartbeat. Rust publishes a transition-only
+playback clock anchor; supervisor-side snapshots take their own QPC sample and
+project elapsed time without worker or observer activity.
 
-Playback progress is independent of that heartbeat and uses a separate
-transition-only projection of the native `PlaybackClockState`. The worker
-publishes its epoch and pause anchor through a non-blocking atomic seqlock only
-at clock transitions; snapshots sample QPC on the supervisor side and derive
-elapsed time there.
+## Preview, calibration, and failure policy
 
-## Preview and calibration
+Preview never creates a production dispatch session or sends input. Calibration
+is a separate native process and its Raw Input result is a host delivery
+diagnostic, not game-observed timing evidence.
 
-Dry-run is an explicitly named preview path. It never creates a production
-dispatch session, sends input, uses QPC precision scheduling, or acts as a
-timing oracle. It only completes the UI preview flow.
-
-Calibration is separate from playback. The dedicated native calibration
-process performs the host-side `SendInput`/Raw Input measurement and Python
-only validates and publishes its artifact. Calibration state and artifacts
-are not part of `SessionConfig`.
-
-## Failure and rollback policy
-
-Native admission fails closed on import, ABI, schema, free-threaded-runtime, or
-Win32-backend failure. Source development also requires a non-empty native
-build identifier, but does not require release provenance metadata. Frozen
-production additionally requires the generated
-`sky_music._native_build.APP_BUILD_COMMIT` to match the exact lowercase
-40-character `native_build_commit` returned by `sky_player_rs.build_info()`.
-No exception path executes a Python sender. Recovery is performed by rolling
-back the application release, not by selecting a second dispatch engine inside
-the binary.
-
-Admission runs once after the free-threaded runtime check and before song
-discovery or UI startup. The packaged application never runs Git, hashes the
-Rust source tree, checks module mtimes, or accepts an environment override for
-the release contract. Doctor may inspect and report mismatches without
-creating a `DispatchSession`.
-
-Current source and active tests therefore contain no `DispatchLoop`, Python
-`RuntimeDispatchCoordinator`, Python `PlaybackSupervisor`, Python sender
-backend, `RustInputAdapter`, or backend-selection environment flags. Rust's
-native coordinator name remains internal to the native implementation and its
-Rust tests.
+Native admission fails closed on import, ABI, schema, free-threaded-runtime,
+or Win32-backend errors. No exception path executes a Python sender. Partial
+or mixed transport outcomes are not blindly retried; ownership is reconciled
+or full cleanup and termination are required.

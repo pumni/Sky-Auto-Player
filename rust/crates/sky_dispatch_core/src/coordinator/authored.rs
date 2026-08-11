@@ -60,7 +60,7 @@ impl RuntimeDispatchCoordinator {
     /// by `recovery_offset_ticks`.
     pub fn next_authored_ticks(
         &self,
-        dispatch_lead: DurationTicks,
+        _dispatch_lead: DurationTicks,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         let Some(batch) = self.schedule.batches.get(self.cursor) else {
             return Ok(None);
@@ -70,24 +70,17 @@ impl RuntimeDispatchCoordinator {
                 "packet id does not fit in usize".to_string(),
             ))
         })?;
-        let effective = self.packet_effective_deadline_ticks(
-            packet_index,
-            if self.early_pop_blocked(batch) {
-                DurationTicks::ZERO
-            } else {
-                dispatch_lead
-            },
-        )?;
+        let effective = self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
         Ok(Some(effective))
     }
 
-    /// Return the earliest upcoming physical boundary without applying an
-    /// adaptive dispatch lead.
+    /// Return the earliest upcoming physical boundary from the authored and
+    /// completion-floor projections.
     ///
     /// Planning uses this projection to classify the interval that will
     /// actually precede the next physical operation.  Release floors and
-    /// recovery ownership remain part of the projection; only lead
-    /// subtraction is omitted.
+    /// recovery ownership remain part of the projection. Production planning
+    /// never subtracts a dispatch lead.
     pub fn next_uncompensated_deadline_ticks(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
@@ -104,8 +97,8 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    /// Polyphony of the next authored down batch, used to select its lead
-    /// before the batch is popped from the schedule.
+    /// Polyphony of the next authored down batch, used to freeze its health
+    /// budget before the batch is popped from the schedule.
     pub fn next_authored_polyphony(&self) -> usize {
         self.schedule
             .batches
@@ -174,7 +167,7 @@ impl RuntimeDispatchCoordinator {
     pub fn prepare_next_due_authored(
         &mut self,
         now: TimelineTicks,
-        dispatch_lead: DurationTicks,
+        _dispatch_lead: DurationTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         if self.cursor >= self.schedule.batches.len()
             || self.release_recovery_started_ticks.is_some()
@@ -210,12 +203,7 @@ impl RuntimeDispatchCoordinator {
         }
         let effective_scheduled_ticks =
             self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
-        let deadline = self.packet_effective_deadline_ticks(packet_index, dispatch_lead)?;
-        let effective_lead = DurationTicks::from_raw(
-            effective_scheduled_ticks
-                .as_u64()
-                .saturating_sub(deadline.as_u64()),
-        );
+        let deadline = effective_scheduled_ticks;
         if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(&batch)) {
             return Ok(None);
         }
@@ -223,7 +211,6 @@ impl RuntimeDispatchCoordinator {
         Ok(Some(PreparedBatch {
             index,
             effective_scheduled_ticks,
-            effective_lead_ticks: effective_lead,
             packet_index,
             packet_batch_count: usize::from(packet.batch_count),
             packet_kind,
@@ -416,9 +403,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let release_not_before_ticks = completed
-            .checked_add_duration(self.min_hold_ticks)
-            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))?;
+        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
 
         // Apply releases first. Stale Up intents are present for authored
         // diagnostics but deliberately have NO_GENERATION_ID and no physical
@@ -580,6 +565,6 @@ impl RuntimeDispatchCoordinator {
         self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
             crate::time::TimeArithmeticError::Overflow,
         ))?;
-        Ok(Some((prepared.index, prepared.effective_lead_ticks)))
+        Ok(Some((prepared.index, DurationTicks::ZERO)))
     }
 }

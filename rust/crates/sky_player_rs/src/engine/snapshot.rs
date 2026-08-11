@@ -100,7 +100,7 @@ pub struct EngineSnapshot {
     pub wake_to_send_max_us: u64,
     /// Peak deferred-observer drain duration (§8.13).
     pub observer_duration_max_us: u64,
-    /// Observations dropped by the fixed queue's drop-oldest policy (§8.13).
+    /// Observations dropped because the fixed queue was full (§8.13).
     pub observer_dropped_samples: u64,
     /// High-watermark of the fixed observer queue (§8.13).
     pub observer_queue_high_watermark: u64,
@@ -115,7 +115,9 @@ pub struct EngineSnapshot {
 }
 
 /// Allocation-light frequent polling shape. It deliberately excludes final
-/// report maps, release provenance, estimator output, and build metadata.
+/// report maps, release provenance, and build metadata.  The deprecated
+/// estimator compatibility field is intentionally absent from this polling
+/// shape.
 #[derive(Debug, Clone)]
 pub struct EngineProgressSnapshot {
     pub elapsed_us: u64,

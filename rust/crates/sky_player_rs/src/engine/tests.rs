@@ -4,20 +4,20 @@ use super::test_support::command_timing::{
 };
 use super::worker::dispatch::{effective_pending_cohort_lead, effective_pending_lead};
 use super::{
-    BackendConfig, CommandTimingResult, CommandTimingState, DispatchPath, DownAdmission,
-    EstimatorOptions, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
-    FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
-    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
-    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, StartupOrderingHook,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode,
-    TelemetryOptions, TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
-    WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
-    anchored_dispatch_target_ticks, cpu_metrics_sample_due, deadline_target_ticks,
-    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
-    final_control_admission_with_lease, final_down_target_admission, focus_gate_matches,
-    focus_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
-    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-    target_stamp_still_current, trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
+    BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, FaultInjectionScript,
+    FinalControlAdmission, FinalControlSignals, FinalTargetSignals, FocusOptions, HealthWindow,
+    HealthWindowPolicy, InjectedSendOutcome, NativeDispatchSession, NativeSessionOptions,
+    PlatformSendResult, PriorityOptions, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics,
+    StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector,
+    TelemetryMode, TelemetryOptions, TimingOptions, TraceContext, TraceDelivery, TraceTiming,
+    TrackedKeyState, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
+    adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
+    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
+    exact_sender_durations, final_control_admission_with_lease, final_down_target_admission,
+    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
+    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    wake_lateness_ticks,
 };
 use sky_dispatch_core::coordinator::PendingRelease;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -38,10 +38,7 @@ fn test_session_options(
         schedule,
         backend,
         timing: TimingOptions {
-            game_fps: 60,
             min_hold_us: 0,
-            max_lead_us: 2_000,
-            dispatch_lead_us: 0,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
@@ -65,10 +62,6 @@ fn test_session_options(
         },
         priority: PriorityOptions {
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
-        },
-        estimator: EstimatorOptions {
-            state_json: None,
-            enable_dispatch_cost_lead: false,
         },
         startup_ordering_hook: None,
     }
@@ -151,263 +144,8 @@ fn startup_boundary_publishes_after_worker_startup() {
 }
 
 #[test]
-fn adaptive_startup_preserves_sublead_authored_order_in_mock_session() {
+fn stale_metadata_commits_before_first_physical_send() {
     use sky_dispatch_core::compile::compile_runtime_intents;
-    use sky_dispatch_core::estimator::ESTIMATOR_STATE_VERSION;
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
-
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "adaptive-startup-a".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 100,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "adaptive-startup-b".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "adaptive-startup-a-up".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 1_100,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "adaptive-startup-b-up".to_string().into(),
-            },
-        ],
-        &[0x15, 0x16],
-    )
-    .expect("valid adaptive startup schedule");
-
-    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
-    for _ in 0..5 {
-        seeded
-            .update(SendPath::DownOnly, 1, 500)
-            .expect("seed estimator");
-    }
-    let seeded_state = serde_json::to_string(&seeded.export_state()).expect("seeded state JSON");
-    assert!(seeded_state.contains(&format!("\"version\":{ESTIMATOR_STATE_VERSION}")));
-
-    let mut options = test_session_options(
-        schedule,
-        2,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
-        },
-    );
-    options.estimator.state_json = Some(seeded_state);
-    options.estimator.enable_dispatch_cost_lead = true;
-    options.telemetry.capacity = 8;
-    options.wait.supervisor_lease_timeout_us = 3_000_000;
-
-    let session = NativeDispatchSession::new(options).expect("adaptive session admission");
-    session.start().expect("adaptive worker start");
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("adaptive worker join")
-    );
-
-    let snapshot = session.snapshot();
-    assert_eq!(
-        snapshot.outcome,
-        Some("finished".to_string()),
-        "terminal error: {:?}",
-        snapshot.terminal_error
-    );
-    assert_eq!(snapshot.terminal_error, None);
-    assert_eq!(snapshot.keys_dropped, 0);
-    assert_eq!(snapshot.chord_split_events, 0);
-    assert_eq!(snapshot.sendinput_partial_events, 0);
-    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
-    assert_eq!(snapshot.authored_keys_rejected, 0);
-    assert_eq!(snapshot.chord_integrity_lost, 0);
-    assert_eq!(snapshot.active_count, 0);
-    assert_eq!(snapshot.possibly_active_count, 0);
-
-    let telemetry: serde_json::Value =
-        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
-            .expect("valid telemetry JSON");
-    let records = telemetry["records"].as_array().expect("records array");
-    let first = records
-        .iter()
-        .find(|record| record["event_index"].as_u64() == Some(0))
-        .expect("first authored record");
-    let second = records
-        .iter()
-        .find(|record| record["event_index"].as_u64() == Some(1))
-        .expect("second authored record");
-    let clock = QpcClock::initialize().expect("QPC");
-    let second_authored_ticks = clock.duration_from_us(100).expect("100us ticks").as_u64();
-    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
-
-    assert_eq!(first["kind"].as_u64(), Some(0));
-    assert_eq!(second["kind"].as_u64(), Some(0));
-    assert_eq!(first["effective_deadline_ticks"].as_u64(), Some(0));
-    assert_eq!(
-        first["applied_lead_ticks"].as_u64(),
-        Some(startup_lead_ticks)
-    );
-    assert_eq!(
-        second["effective_deadline_ticks"].as_u64(),
-        Some(second_authored_ticks)
-    );
-    assert_ne!(
-        second["effective_deadline_ticks"].as_u64(),
-        first["effective_deadline_ticks"].as_u64()
-    );
-    assert_eq!(second["applied_lead_ticks"].as_u64(), Some(0));
-
-    let exported: serde_json::Value = serde_json::from_str(
-        &session
-            .estimator_state_json()
-            .expect("exported estimator state"),
-    )
-    .expect("valid exported estimator state");
-    assert_eq!(
-        exported["version"].as_u64(),
-        Some(u64::from(ESTIMATOR_STATE_VERSION))
-    );
-}
-
-#[test]
-fn production_startup_nonzero_sublead_dispatches_at_selected_target() {
-    use super::test_support::ProductionDispatchTestHarness;
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
-
-    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 100);
-    harness.config.estimator.enable_dispatch_cost_lead = true;
-    harness.resources.estimator =
-        DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
-    for _ in 0..5 {
-        harness
-            .resources
-            .estimator
-            .update(SendPath::DownOnly, 1, 500)
-            .expect("seed estimator");
-    }
-    let plan = harness.plan_current_dispatch();
-    assert_eq!(
-        plan.authored
-            .as_ref()
-            .expect("authored plan")
-            .lead_ticks
-            .as_u64(),
-        harness
-            .resources
-            .clock
-            .duration_from_us(500)
-            .unwrap()
-            .as_u64()
-    );
-    harness.set_effective_time_for_test(TimelineTicks::ZERO);
-    harness.select_startup_dispatch_target_for_test(
-        harness.resources.clock.now().expect("startup target QPC"),
-    );
-    let calls = harness.configure_send_counter();
-
-    assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&plan),
-        super::worker::DispatchStep::Dispatched
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn adaptive_startup_nonzero_sublead_reports_physical_applied_lead() {
-    use sky_dispatch_core::compile::compile_runtime_intents;
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
-
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "adaptive-startup-nonzero-down".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "adaptive-startup-nonzero-up".to_string().into(),
-            },
-        ],
-        &[0x15],
-    )
-    .expect("valid nonzero startup schedule");
-    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
-    for _ in 0..5 {
-        seeded
-            .update(SendPath::DownOnly, 1, 500)
-            .expect("seed estimator");
-    }
-    let mut options = test_session_options(
-        schedule,
-        1,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
-        },
-    );
-    options.estimator.state_json =
-        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
-    options.estimator.enable_dispatch_cost_lead = true;
-    options.telemetry.capacity = 8;
-    options.wait.supervisor_lease_timeout_us = 3_000_000;
-
-    let session = NativeDispatchSession::new(options).expect("adaptive session admission");
-    session.start().expect("adaptive worker start");
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("adaptive worker join")
-    );
-    let snapshot = session.snapshot();
-    assert_eq!(snapshot.outcome, Some("finished".to_string()));
-    assert_eq!(snapshot.terminal_error, None);
-    assert_eq!(snapshot.keys_dropped, 0);
-    assert_eq!(snapshot.sendinput_partial_events, 0);
-    assert_eq!(snapshot.authored_keys_rejected, 0);
-
-    let telemetry: serde_json::Value =
-        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
-            .expect("valid telemetry JSON");
-    let first = telemetry["records"]
-        .as_array()
-        .expect("records array")
-        .iter()
-        .find(|record| record["event_index"].as_u64() == Some(0))
-        .expect("first authored record");
-    let clock = QpcClock::initialize().expect("QPC");
-    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
-    assert_eq!(
-        first["applied_lead_ticks"].as_u64(),
-        Some(startup_lead_ticks)
-    );
-}
-
-#[test]
-fn stale_metadata_commits_before_precision_wait_and_first_physical_send() {
-    use sky_dispatch_core::compile::compile_runtime_intents;
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 
     let schedule = compile_runtime_intents(
         &[
@@ -443,12 +181,6 @@ fn stale_metadata_commits_before_precision_wait_and_first_physical_send() {
         &[0x15],
     )
     .expect("valid stale-prefix schedule");
-    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
-    for _ in 0..5 {
-        seeded
-            .update(SendPath::DownOnly, 1, 500)
-            .expect("seed estimator");
-    }
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
         schedule,
@@ -459,9 +191,6 @@ fn stale_metadata_commits_before_precision_wait_and_first_physical_send() {
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.estimator.state_json =
-        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
-    options.estimator.enable_dispatch_cost_lead = true;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     options.wait.supervisor_lease_timeout_us = 3_000_000;
 
@@ -474,18 +203,14 @@ fn stale_metadata_commits_before_precision_wait_and_first_physical_send() {
     assert_eq!(
         hook.stale_packet_committed.load(Ordering::SeqCst),
         2,
-        "ordering hook values stale={} precision={} physical={}",
+        "ordering hook values stale={} physical={}",
         hook.stale_packet_committed.load(Ordering::SeqCst),
-        hook.precision_wait_completed.load(Ordering::SeqCst),
         hook.first_physical_send_started.load(Ordering::SeqCst),
     );
+    assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
     assert!(
         hook.stale_packet_committed.load(Ordering::SeqCst)
-            < hook.precision_wait_completed.load(Ordering::SeqCst)
-    );
-    assert!(
-        hook.precision_wait_completed.load(Ordering::SeqCst)
-            < hook.first_physical_send_started.load(Ordering::SeqCst)
+            <= hook.first_physical_send_started.load(Ordering::SeqCst)
     );
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -554,14 +279,7 @@ fn many_leading_stale_packets_are_drained_before_precision_handoff() {
         hook.stale_packet_committed.load(Ordering::SeqCst),
         stale_count as u64
     );
-    assert!(
-        hook.stale_packet_committed.load(Ordering::SeqCst)
-            < hook.precision_wait_completed.load(Ordering::SeqCst)
-    );
-    assert!(
-        hook.precision_wait_completed.load(Ordering::SeqCst)
-            < hook.first_physical_send_started.load(Ordering::SeqCst)
-    );
+    assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
 }
 
 #[test]
@@ -619,14 +337,6 @@ fn run_seeded_adaptive_startup_schedule_with_capacity(
     allowed_count: usize,
     telemetry_capacity: usize,
 ) -> (super::EngineSnapshot, serde_json::Value) {
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
-
-    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("create estimator");
-    for _ in 0..5 {
-        seeded
-            .update(SendPath::DownOnly, 1, 500)
-            .expect("seed estimator");
-    }
     let mut options = test_session_options(
         schedule,
         allowed_count,
@@ -636,9 +346,6 @@ fn run_seeded_adaptive_startup_schedule_with_capacity(
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.estimator.state_json =
-        Some(serde_json::to_string(&seeded.export_state()).expect("seeded state JSON"));
-    options.estimator.enable_dispatch_cost_lead = true;
     options.telemetry.capacity = telemetry_capacity;
     options.wait.supervisor_lease_timeout_us = 3_000_000;
 
@@ -750,13 +457,8 @@ fn assert_stale_leading_up_did_not_send(telemetry: &serde_json::Value, stale_cou
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(down_index))
         .expect("first physical Down record");
-    let clock = QpcClock::initialize().expect("QPC");
-    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
     assert_eq!(down["kind"].as_u64(), Some(0));
-    assert_eq!(
-        down["applied_lead_ticks"].as_u64(),
-        Some(startup_lead_ticks)
-    );
+    assert_eq!(down["applied_lead_ticks"].as_u64(), Some(0));
 }
 
 #[test]
@@ -781,13 +483,8 @@ fn same_timestamp_stale_leading_up_packet_is_suppressed_atomically() {
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(2))
         .expect("first physical Down record");
-    let clock = QpcClock::initialize().expect("QPC");
-    let startup_lead_ticks = clock.duration_from_us(500).expect("500us ticks").as_u64();
     assert_eq!(down["kind"].as_u64(), Some(0));
-    assert_eq!(
-        down["applied_lead_ticks"].as_u64(),
-        Some(startup_lead_ticks)
-    );
+    assert_eq!(down["applied_lead_ticks"].as_u64(), Some(0));
 }
 
 #[test]
@@ -1220,8 +917,6 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
 fn production_startup_matrix_preserves_first_physical_lead() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
-    let clock = QpcClock::initialize().expect("QPC");
-    let startup_lead_ticks = clock.duration_from_us(500).expect("500us").as_u64();
     for scheduled_us in [0, 100, 499, 500, 501] {
         let schedule = compile_runtime_intents(
             &[
@@ -1250,17 +945,13 @@ fn production_startup_matrix_preserves_first_physical_lead() {
             .iter()
             .find(|record| record["event_index"].as_u64() == Some(0))
             .expect("first physical record");
-        assert_eq!(
-            first["applied_lead_ticks"].as_u64(),
-            Some(startup_lead_ticks)
-        );
+        assert_eq!(first["applied_lead_ticks"].as_u64(), Some(0));
     }
 }
 
 #[test]
 fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
     use sky_dispatch_core::compile::compile_runtime_intents;
-    use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 
     let schedule = compile_runtime_intents(
         &[
@@ -1303,15 +994,6 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
         &[0x15, 0x16, 0x17, 0x18],
     )
     .expect("valid bucket schedule");
-    let clock = QpcClock::initialize().expect("QPC");
-    let mut seeded = DispatchCostEstimator::try_new(2_000, 30).expect("estimator");
-    for _ in 0..5 {
-        seeded.update(SendPath::DownOnly, 1, 300).expect("seed x1");
-        seeded.update(SendPath::DownOnly, 2, 700).expect("seed x2");
-        seeded
-            .update(SendPath::DownOnly, 3, 1_100)
-            .expect("seed x3");
-    }
     let mut options = test_session_options(
         schedule,
         4,
@@ -1321,9 +1003,6 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.estimator.state_json =
-        Some(serde_json::to_string(&seeded.export_state()).expect("state JSON"));
-    options.estimator.enable_dispatch_cost_lead = true;
     options.telemetry.capacity = 16;
     options.wait.supervisor_lease_timeout_us = 3_000_000;
     let session = NativeDispatchSession::new(options).expect("session admission");
@@ -1340,11 +1019,7 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
         .find(|record| record["event_index"].as_u64() == Some(3))
         .expect("two-down record");
     assert_eq!(two_down["requested_count"].as_u64(), Some(2));
-    let expected_lead_ticks = clock.duration_from_us(700).expect("700us").as_u64();
-    assert_eq!(
-        two_down["applied_lead_ticks"].as_u64(),
-        Some(expected_lead_ticks)
-    );
+    assert_eq!(two_down["applied_lead_ticks"].as_u64(), Some(0));
 }
 
 fn pending_for_lead_test(
@@ -1386,7 +1061,7 @@ fn pending_floors_suppress_applied_lead_and_saturation() {
         (
             pending_for_lead_test(1_000, 0, 0),
             500,
-            (DurationTicks::from_raw(500), true),
+            (DurationTicks::ZERO, false),
         ),
     ] {
         assert_eq!(
@@ -1652,7 +1327,7 @@ fn native_telemetry_drops_observations_without_blocking_dispatch() {
         .collect();
     assert!(
         indices.iter().copied().max().unwrap_or_default() >= 300,
-        "drop-oldest queue should retain observations near the end of the schedule"
+        "full observer queue should retain its earliest observations"
     );
 }
 
@@ -3409,42 +3084,6 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
 }
 
 #[test]
-fn observer_drain_rebuilds_production_plan_before_mixed_dispatch() {
-    use super::test_support::ProductionDispatchTestHarness;
-
-    let mut harness = ProductionDispatchTestHarness::new_down_then_mixed();
-    harness.config.estimator.enable_dispatch_cost_lead = true;
-    harness.config.timing.dispatch_lead_us = 0;
-
-    let plan_a = harness.plan_current_dispatch_projected();
-    assert!(matches!(
-        plan_a.authored_path(),
-        Some(DispatchPath::Mixed { .. })
-    ));
-    let estimator_a = serde_json::to_string(&harness.resources.estimator.export_state())
-        .expect("estimator state");
-
-    let drain_result = harness.drain_observer().expect("observer drain");
-    assert!(
-        drain_result.is_some(),
-        "draining an observation must invalidate the plan"
-    );
-
-    let plan_b = harness.plan_current_dispatch_projected();
-    let estimator_b = serde_json::to_string(&harness.resources.estimator.export_state())
-        .expect("updated estimator state");
-    assert_ne!(
-        estimator_a, estimator_b,
-        "observer must mutate the estimator"
-    );
-    harness.advance_playback_time_us(2_000);
-    assert!(matches!(
-        harness.dispatch_authored_with_plan(&plan_b),
-        super::worker::DispatchStep::Dispatched
-    ));
-}
-
-#[test]
 fn join_timeout_does_not_poison_running_session() {
     let actions = vec![
         KeyActionInput {
@@ -3526,8 +3165,6 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
     let playback =
         super::PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
             .expect("playback");
-    let estimator =
-        sky_dispatch_core::estimator::DispatchCostEstimator::try_new(2_000, 1).expect("estimator");
     let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
     let waiter = sky_dispatch_win32::wait::HybridWaiter::with_options(true, true);
 
@@ -3537,8 +3174,7 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         backend,
         coordinator,
         playback,
-        estimator,
-        telemetry,
+        telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
         scheduling: guards,
     };
 
@@ -4009,10 +3645,7 @@ fn explicit_release_recovery_may_shift_timeline() {
     let (requested, _) = coordinator.commit_up_request(p_up_a).unwrap();
     assert_eq!(requested.len(), 1);
 
-    let plan = coordinator
-        .plan_pending_dispatch_ticks(|_| Ok((DurationTicks::ZERO, false)))
-        .unwrap()
-        .unwrap();
+    let plan = coordinator.plan_pending_dispatch_ticks().unwrap().unwrap();
     let due = coordinator
         .pop_due_pending_ticks(TimelineTicks::from_raw(20_000), &plan)
         .unwrap();

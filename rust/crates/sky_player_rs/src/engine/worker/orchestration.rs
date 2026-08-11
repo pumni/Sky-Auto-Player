@@ -49,10 +49,10 @@ impl Worker<'_> {
                 backend: resources.backend,
                 coordinator: resources.coordinator,
                 telemetry: resources.telemetry,
-                estimator: resources.estimator,
                 playback: resources.playback,
                 qpc_clock: resources.clock,
                 scheduling: resources.scheduling,
+                observer: core.observer.runtime.take(),
             },
             state: FinalizeState {
                 worker_result,

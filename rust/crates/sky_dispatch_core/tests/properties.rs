@@ -159,7 +159,7 @@ trait LegacyCoordinatorTestApi {
     fn pop_due_pending(
         &mut self,
         now_us: u64,
-        lead_up: u64,
+        _lead_up: u64,
     ) -> smallvec::SmallVec<[sky_dispatch_core::coordinator::PendingRelease; 15]>;
     fn pop_next_due_authored(
         &mut self,
@@ -195,13 +195,11 @@ impl LegacyCoordinatorTestApi for RuntimeDispatchCoordinator {
     fn pop_due_pending(
         &mut self,
         now_us: u64,
-        lead_up: u64,
+        _lead_up: u64,
     ) -> smallvec::SmallVec<[sky_dispatch_core::coordinator::PendingRelease; 15]> {
         let plan = PendingDispatchPlan {
             deadline_ticks: TimelineTicks::from_raw(now_us),
-            lead_ticks: DurationTicks::from_raw(lead_up),
             polyphony: 1,
-            lead_saturated: false,
         };
         self.pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &plan)
             .expect("typed pending pop")
@@ -390,9 +388,7 @@ proptest! {
             .request_releases(&up.intents)
             .expect("valid transition");
         prop_assert!(suppressed.is_empty());
-        let expected_due = up_scheduled_us
-            .saturating_sub(release_lead_us)
-            .max(completed_us + min_hold_us);
+        let expected_due = up_scheduled_us.max(completed_us + min_hold_us);
         prop_assert_eq!(
             coordinator.next_pending_release_us(release_lead_us),
             Some(expected_due)
@@ -476,9 +472,7 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
         .request_releases(&up.intents)
         .expect("valid transition");
     assert!(suppressed.is_empty());
-    let expected_due = up_scheduled_us
-        .saturating_sub(release_lead_us)
-        .max(completed_us + min_hold_us);
+    let expected_due = up_scheduled_us.max(completed_us + min_hold_us);
     let actual_due = coordinator
         .next_pending_release_ticks(DurationTicks::from_raw(release_lead_us))
         .unwrap()
@@ -490,9 +484,7 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
     );
     let plan = PendingDispatchPlan {
         deadline_ticks: actual_due,
-        lead_ticks: DurationTicks::from_raw(release_lead_us),
         polyphony: 1,
-        lead_saturated: false,
     };
     assert!(
         coordinator
@@ -785,16 +777,6 @@ proptest! {
 // ==========================================================================
 
 proptest! {
-    /// Invariant 12: Corrupt estimator cache JSON must not panic.
-    #[test]
-    fn invariant_corrupt_estimator_does_not_panic(
-        raw in ".*",
-    ) {
-        use sky_dispatch_core::estimator::DispatchCostEstimator;
-        let mut estimator = DispatchCostEstimator::try_new(2_000, 30).unwrap();
-        let _ = estimator.import_state(&raw);
-    }
-
     /// Invariant 11: pop_due_pending never returns more entries than pending_count_due_at.
     #[test]
     fn invariant_pop_due_pending_bounded_by_pending_count(

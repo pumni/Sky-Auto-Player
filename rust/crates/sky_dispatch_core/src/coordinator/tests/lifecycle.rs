@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn blocked_authored_deadline_includes_delivery_margin() {
+fn blocked_authored_deadline_uses_completion_plus_min_hold() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -46,28 +46,29 @@ fn blocked_authored_deadline_includes_delivery_margin() {
         crate::time::TimelineTicks::from_raw(100),
     );
 
-    // Effective release floor is completion (100) + min_hold (20,000) + delivery_margin (5,000) = 25,100.
+    // The release floor is completion (100) + min_hold (20,000). The legacy
+    // delivery-margin constructor argument is intentionally non-operative.
     assert!(
         coordinator
             .prepare_next_due_authored(
-                crate::time::TimelineTicks::from_raw(25_099),
+                crate::time::TimelineTicks::from_raw(20_099),
                 crate::time::DurationTicks::ZERO,
             )
             .unwrap()
             .is_none(),
-        "up packet must not be due before min_hold + delivery_margin"
+        "up packet must not be due before completion + min_hold"
     );
 
     let (up, _) = coordinator
-        .pop_next_due_authored(25_100, 0)
+        .pop_next_due_authored(20_100, 0)
         .expect("up is due at release floor");
 
     let _ = coordinator.request_releases(&up.intents);
-    let due_now = coordinator.pop_due_pending(25_100, 0);
+    let due_now = coordinator.pop_due_pending(20_100, 0);
     assert_eq!(
         due_now.len(),
         1,
-        "release must be due at completion + min_hold + delivery_margin"
+        "release must be due at completion + min_hold"
     );
 }
 
@@ -197,10 +198,10 @@ fn pending_plan_uses_the_next_release_cohort_not_all_pending_keys() {
         })
         .expect("pending plan");
     assert_eq!(plan.polyphony, 1);
-    assert_eq!(plan.deadline_ticks.as_u64(), 900);
+    assert_eq!(plan.deadline_ticks.as_u64(), 1_000);
     assert_eq!(
         coordinator.next_deadline_with_pending_plan(0, Some(&plan)),
-        Some(900)
+        Some(1_000)
     );
 
     let due = coordinator.pop_due_pending_with_plan(1_000, &plan);
