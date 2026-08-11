@@ -4,7 +4,7 @@ use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
     PlaybackClockState, QpcClock, QpcError, QpcTicks, RuntimeDispatchCoordinator,
     STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector,
-    TrackedKeyState, current_process_cpu_time_us, current_thread_cpu_time_us,
+    TrackedKeyState, WaitOptions, current_process_cpu_time_us, current_thread_cpu_time_us,
     qpc_frequency_checked,
 };
 use super::{
@@ -13,6 +13,26 @@ use super::{
     initialize_startup, publish_wake_error_stats, release_state_verified, wait_failure_message,
 };
 use std::sync::atomic::Ordering;
+
+fn validate_production_wait_backend(
+    backend_is_production: bool,
+    options: &WaitOptions,
+    initial_failure: Option<sky_dispatch_win32::wait::WaitFailure>,
+) -> Result<(), String> {
+    if !backend_is_production {
+        return Ok(());
+    }
+    if !options.enable_waitable_timer {
+        return Err("production wait backend requires the high-resolution waitable timer".into());
+    }
+    if !options.enable_event_wait {
+        return Err("production wait backend requires event wait to be enabled".into());
+    }
+    if let Some(failure) = initial_failure {
+        return Err(wait_failure_message(failure));
+    }
+    Ok(())
+}
 
 /// Assembles the worker's admission state: backend, coordinator,
 /// timing frame, health window, startup anchor, and resource bundle.
@@ -85,8 +105,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         priority_acquired,
         metrics,
     );
-    core.metrics.power_throttling_disabled = power_throttling_disabled;
     let config = &worker.config;
+    let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
+    if let Err(error) = validate_production_wait_backend(
+        backend_is_production,
+        &config.wait,
+        waiter.initial_failure(),
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+    core.metrics.power_throttling_disabled = power_throttling_disabled;
     // Python materializes the frame-rate floor before crossing the FFI
     // boundary. The worker consumes that effective value verbatim so the
     // authored timestamp and release floor share one contract.
@@ -346,13 +374,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 .now()
                 .err()
                 .map(|error| format!("QPC counter unavailable: {error:?}"))
-        })
-        .or_else(|| {
-            config
-                .timing
-                .strict_timing
-                .then(|| waiter.initial_failure().map(wait_failure_message))
-                .flatten()
         });
     if let Some(error) = qpc_admission_error {
         core.runtime.force_full_cleanup = true;
@@ -430,4 +451,55 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_production_wait_backend;
+    use crate::engine::WaitOptions;
+    use sky_dispatch_win32::wait::WaitFailure;
+
+    fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions {
+        WaitOptions {
+            enable_waitable_timer,
+            enable_event_wait,
+            enable_adaptive_spin: false,
+            supervisor_lease_timeout_us: 0,
+        }
+    }
+
+    #[test]
+    fn production_wait_backend_requires_both_precision_primitives() {
+        assert!(validate_production_wait_backend(true, &options(true, true), None).is_ok());
+        assert!(validate_production_wait_backend(true, &options(false, true), None).is_err());
+        assert!(validate_production_wait_backend(true, &options(true, false), None).is_err());
+    }
+
+    #[test]
+    fn production_wait_backend_rejects_startup_failure() {
+        let result = validate_production_wait_backend(
+            true,
+            &options(true, true),
+            Some(WaitFailure::TimerCreate { win32_error: 5 }),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("initial wait failure must reject production")
+                .contains("high-resolution waitable timer creation failed")
+        );
+    }
+
+    #[test]
+    fn non_production_wait_backend_can_keep_explicit_fallback_support() {
+        assert!(
+            validate_production_wait_backend(
+                false,
+                &options(false, false),
+                Some(WaitFailure::TimerCreate { win32_error: 5 }),
+            )
+            .is_ok()
+        );
+    }
 }

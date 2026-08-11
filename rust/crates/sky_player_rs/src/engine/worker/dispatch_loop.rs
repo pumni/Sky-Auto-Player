@@ -1,6 +1,4 @@
-use super::super::{
-    Duration, DurationTicks, QpcError, TimelineTicks, WaitFailure, WaitOutcome, try_publish_metrics,
-};
+use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
 use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
@@ -8,7 +6,7 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
     focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
     plan_next_dispatch_projected, plan_structure_is_valid, process_command_control,
-    publish_backend_metrics, suspend_live_input, target_stamp_still_current, wait_failure_message,
+    publish_backend_metrics, record_wait_failure, suspend_live_input, target_stamp_still_current,
     wait_for_next_boundary,
 };
 use std::any::Any;
@@ -488,19 +486,13 @@ pub(super) fn dispatch(
                     )
                     .outcome
                 {
-                    if matches!(failure, WaitFailure::Clock) {
-                        core.metrics.wait_clock_failures =
-                            core.metrics.wait_clock_failures.saturating_add(1);
-                    } else {
-                        core.metrics.wait_backend_failures =
-                            core.metrics.wait_backend_failures.saturating_add(1);
-                    }
-                    if config.timing.strict_timing || matches!(failure, WaitFailure::Clock) {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(wait_failure_message(failure));
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_micros(500));
+                    record_wait_failure(
+                        failure,
+                        &mut core.metrics,
+                        &mut core.runtime.force_full_cleanup,
+                        &mut core.runtime.terminal_error,
+                    );
+                    break;
                 }
                 continue;
             }
@@ -654,7 +646,6 @@ pub(super) fn dispatch(
                 signals: WaitSignals {
                     waiter: &resources.waiter,
                     interrupt,
-                    strict_timing: config.timing.strict_timing,
                 },
                 mutable: WaitMutable {
                     local_metrics: &mut core.metrics,

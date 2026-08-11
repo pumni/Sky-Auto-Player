@@ -134,12 +134,20 @@ The worker uses a high-resolution waitable timer, event interruption, and a
 bounded QPC spin. A timer guard may wake early; the final QPC deadline gate
 decides whether to wait again or enter the physical path. A wake that is only
 for lease, command, focus, pause, or interrupt replans and cannot dispatch the
-old plan.
+old plan. The timer is first in the Windows multi-wait handle array so a
+simultaneous timer/event wake enters the QPC classification path. Before the
+physical target, an interrupt returns `Interrupted`; once QPC reaches the
+target, the waiter returns `Deadline`. Final command, target, focus, and lease
+admission remains authoritative after that result and may still reject
+`SendInput`.
 
 The spin path may read an interrupt generation hint with `Relaxed` ordering
 every bounded group (currently 32 iterations). The final generation/deadline
 decision uses the authoritative `Acquire` path. This optimization is only a
-wake hint; it cannot bypass the final gate.
+wake hint; the QPC deadline check runs first and cannot be bypassed by an event.
+Production admission requires the high-resolution waitable timer and event wait
+and terminates on startup or runtime wait failure; it does not degrade to sleep
+timing.
 
 MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
 TimeCritical is not the default and priority setup failure is reported rather

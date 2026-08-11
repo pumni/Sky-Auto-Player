@@ -140,7 +140,7 @@ class PlaybackNoticeLedger:
             runtime.append(
                 PlaybackNotice(
                     code="native-wait-failure",
-                    message="Native wait mechanism reported a failure and used fallback handling.",
+                    message="Native wait mechanism failed; playback is stopping to protect timing integrity.",
                     severity="warning",
                     source="runtime",
                 )
@@ -166,8 +166,8 @@ class PlaybackNoticeLedger:
         if sendinput_path_degraded:
             runtime.append(
                 PlaybackNotice(
-                    code="sendinput-slow",
-                    message="Windows input injection latency is elevated; note timing may be delayed.",
+                    code="native-send-boundary-slow",
+                    message="Native send-boundary time is elevated; scheduling headroom is reduced.",
                     severity="warning",
                     source="runtime",
                 )

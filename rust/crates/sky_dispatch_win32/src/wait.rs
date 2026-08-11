@@ -1,4 +1,4 @@
-//! Interruptible wait strategy with command-event priority.
+//! Interruptible wait strategy with physical-deadline priority.
 
 mod calibration;
 mod spin;
@@ -81,6 +81,17 @@ mod tests {
             ),
             WaitOutcome::Interrupted
         );
+    }
+
+    #[test]
+    fn already_due_target_beats_a_pending_interrupt() {
+        let event = OwnedEvent::new_auto_reset().expect("event");
+        assert!(event.signal());
+        let waiter = HybridWaiter::new();
+        let result = waiter.wait_until_ticks_with_metrics(QpcTicks::ZERO, 200, &event);
+
+        assert_eq!(result.outcome, WaitOutcome::Deadline);
+        assert_eq!(event.take_count(), 0);
     }
 
     #[test]

@@ -79,7 +79,7 @@ pub(crate) use timing::{
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-    wait_for_next_boundary,
+    record_wait_failure, wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;

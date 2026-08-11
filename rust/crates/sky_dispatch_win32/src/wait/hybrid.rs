@@ -150,7 +150,21 @@ impl HybridWaiter {
         spin_threshold_ticks: DurationTicks,
         interrupt: &OwnedEvent,
     ) -> WaitResult {
+        // Interrupts wake/replan only while the physical target is still in
+        // the future. Once QPC reaches the target, this waiter returns
+        // Deadline; final control/target/focus/lease admission decides
+        // whether transport is still allowed.
         let mut spin_started_ticks = None;
+        let first_now_ticks = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(_) => {
+                return WaitResult::failed(WaitFailure::Clock);
+            }
+        };
+        if first_now_ticks >= target_ticks {
+            return deadline_wait_result(None, first_now_ticks);
+        }
+
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
             if interrupt.try_take() {
@@ -167,21 +181,19 @@ impl HybridWaiter {
                 observed_generation = interrupt.signal_generation();
             }
         }
+        let mut next_now_ticks = Some(first_now_ticks);
         loop {
-            let now_ticks = match qpc_clock.now() {
-                Ok(ticks) => ticks,
-                Err(_) => {
-                    return WaitResult::failed(WaitFailure::Clock);
-                }
+            let now_ticks = match next_now_ticks.take() {
+                Some(ticks) => ticks,
+                None => match qpc_clock.now() {
+                    Ok(ticks) => ticks,
+                    Err(_) => {
+                        return WaitResult::failed(WaitFailure::Clock);
+                    }
+                },
             };
             if now_ticks >= target_ticks {
-                return deadline_wait_result(
-                    spin_started_ticks,
-                    now_ticks,
-                    interrupt,
-                    self.event_wait_enabled,
-                    observed_generation,
-                );
+                return deadline_wait_result(spin_started_ticks, now_ticks);
             }
             let remaining_ticks = match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
                 Some(remaining) => remaining,
@@ -192,25 +204,6 @@ impl HybridWaiter {
             if remaining_ticks <= spin_threshold_ticks.as_u64() {
                 let mut spin_iterations = 0_u32;
                 loop {
-                    if self.event_wait_enabled {
-                        if spin_iterations & 31 == 0
-                            && interrupt.signal_generation_relaxed() != observed_generation
-                        {
-                            let completed_ticks = match qpc_clock.now() {
-                                Ok(ticks) => ticks,
-                                Err(_) => {
-                                    return WaitResult::failed(WaitFailure::Clock);
-                                }
-                            };
-                            return wait_result_with_spin(
-                                WaitOutcome::Interrupted,
-                                spin_started_ticks,
-                                completed_ticks,
-                            );
-                        }
-                        spin_iterations = spin_iterations.wrapping_add(1);
-                    }
-
                     let now_ticks = match qpc_clock.now() {
                         Ok(ticks) => ticks,
                         Err(_) => {
@@ -218,13 +211,19 @@ impl HybridWaiter {
                         }
                     };
                     if now_ticks >= target_ticks {
-                        return deadline_wait_result(
-                            spin_started_ticks,
-                            now_ticks,
-                            interrupt,
-                            self.event_wait_enabled,
-                            observed_generation,
-                        );
+                        return deadline_wait_result(spin_started_ticks, now_ticks);
+                    }
+                    if self.event_wait_enabled {
+                        if spin_iterations & 31 == 0
+                            && interrupt.signal_generation_relaxed() != observed_generation
+                        {
+                            return wait_result_with_spin(
+                                WaitOutcome::Interrupted,
+                                spin_started_ticks,
+                                now_ticks,
+                            );
+                        }
+                        spin_iterations = spin_iterations.wrapping_add(1);
                     }
                     let remaining_ticks =
                         match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
@@ -267,18 +266,31 @@ impl HybridWaiter {
                     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
                     use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
-                    // Event is deliberately index 0 so simultaneous readiness
-                    // gives command processing priority over dispatch.
-                    let handles = [interrupt.raw_handle(), timer.raw_handle()];
+                    // The timer wakes the worker at the precision handoff;
+                    // final QPC/control admission still decides whether to
+                    // dispatch when both handles are ready.
+                    let handles = [timer.raw_handle(), interrupt.raw_handle()];
                     // SAFETY: both handles remain live throughout the wait and
                     // the slice provides exactly two valid HANDLE values.
                     let result =
                         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, u32::MAX) };
                     if result == WAIT_OBJECT_0 {
-                        return WaitResult::interrupted();
+                        continue;
                     }
                     if result == WAIT_OBJECT_0 + 1 {
-                        continue;
+                        let wake_ticks = match qpc_clock.now() {
+                            Ok(ticks) => ticks,
+                            Err(_) => {
+                                return WaitResult::failed(WaitFailure::Clock);
+                            }
+                        };
+                        if matches!(
+                            classify_wake(wake_ticks, target_ticks),
+                            WaitOutcome::Deadline
+                        ) {
+                            return deadline_wait_result(spin_started_ticks, wake_ticks);
+                        }
+                        return WaitResult::interrupted();
                     }
                     return WaitResult::failed(WaitFailure::MultiWait {
                         win32_error: unsafe { windows_sys::Win32::Foundation::GetLastError() },
@@ -300,6 +312,15 @@ impl HybridWaiter {
             // Portable/degraded fallback remains bounded so a command cannot
             // be hidden behind a long song gap.
             std::thread::sleep(std::time::Duration::from_micros(kernel_wait_us.min(2_000)));
+            let wake_ticks = match qpc_clock.now() {
+                Ok(ticks) => ticks,
+                Err(_) => {
+                    return WaitResult::failed(WaitFailure::Clock);
+                }
+            };
+            if wake_ticks >= target_ticks {
+                return deadline_wait_result(spin_started_ticks, wake_ticks);
+            }
             if self.event_wait_enabled && interrupt.signal_generation() != observed_generation {
                 if interrupt.try_take() {
                     return WaitResult::interrupted();
@@ -362,6 +383,14 @@ impl HybridWaiter {
     }
 }
 
+fn classify_wake(now_ticks: QpcTicks, target_ticks: QpcTicks) -> WaitOutcome {
+    if now_ticks >= target_ticks {
+        WaitOutcome::Deadline
+    } else {
+        WaitOutcome::Interrupted
+    }
+}
+
 fn percentile_from_sorted(sorted: &[u64], numerator: usize) -> u64 {
     let index = ((sorted.len() * numerator).saturating_add(99) / 100)
         .saturating_sub(1)
@@ -377,7 +406,9 @@ impl Default for HybridWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::percentile_from_sorted;
+    use super::{classify_wake, percentile_from_sorted};
+    use crate::clock::QpcTicks;
+    use crate::wait::WaitOutcome;
 
     #[test]
     fn thirty_two_sample_p95_does_not_promote_one_extreme_maximum() {
@@ -388,5 +419,21 @@ mod tests {
         assert_eq!(samples.len(), 32);
         assert_eq!(percentile_from_sorted(&samples, 95), 300);
         assert_eq!(*samples.last().unwrap(), 50_000);
+    }
+
+    #[test]
+    fn interrupt_before_target_is_classified_as_interrupted() {
+        assert_eq!(
+            classify_wake(QpcTicks::from_raw(10), QpcTicks::from_raw(11)),
+            WaitOutcome::Interrupted
+        );
+    }
+
+    #[test]
+    fn interrupt_at_target_is_classified_as_deadline() {
+        assert_eq!(
+            classify_wake(QpcTicks::from_raw(11), QpcTicks::from_raw(11)),
+            WaitOutcome::Deadline
+        );
     }
 }

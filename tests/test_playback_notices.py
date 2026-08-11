@@ -40,16 +40,33 @@ def test_playback_card_keeps_schedule_warning_across_polls() -> None:
 
     assert "same-key repeat warning" in first
     assert "same-key repeat warning" in second
-    assert "Windows input injection latency is elevated" not in first
-    assert "Windows input injection latency is elevated" not in second
+    assert "Native send-boundary time is elevated" not in first
+    assert "Native send-boundary time is elevated" not in second
 
 
 def test_latency_signals_are_distinct_from_backend_rejection() -> None:
     ledger = PlaybackNoticeLedger()
 
     send = ledger.update(sendinput_path_degraded=True)
-    assert [notice.code for notice in send.runtime_notices] == ["sendinput-slow"]
+    assert [notice.code for notice in send.runtime_notices] == [
+        "native-send-boundary-slow"
+    ]
+    assert send.runtime_notices[0].message == (
+        "Native send-boundary time is elevated; scheduling headroom is reduced."
+    )
+    assert send.runtime_notices[0].severity == "warning"
+    assert send.runtime_notices[0].source == "runtime"
     assert not send.backend_notices
+
+    wait_failure = PlaybackNoticeLedger().update(wait_backend_failures=1)
+    assert [notice.code for notice in wait_failure.runtime_notices] == [
+        "native-wait-failure"
+    ]
+    assert wait_failure.runtime_notices[0].message == (
+        "Native wait mechanism failed; playback is stopping to protect timing integrity."
+    )
+    assert wait_failure.runtime_notices[0].severity == "warning"
+    assert wait_failure.runtime_notices[0].source == "runtime"
 
     wait = PlaybackNoticeLedger().update(wait_path_degraded=True)
     assert [notice.code for notice in wait.runtime_notices] == ["scheduler-wake-slow"]

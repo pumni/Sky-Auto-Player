@@ -6,7 +6,6 @@ use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
 use std::sync::atomic::AtomicU64;
-use std::time::Duration;
 
 pub(crate) enum WaitBoundary {
     Due {
@@ -45,7 +44,6 @@ pub(crate) struct WaitTiming<'a> {
 pub(crate) struct WaitSignals<'a> {
     pub(crate) waiter: &'a HybridWaiter,
     pub(crate) interrupt: &'a OwnedEvent,
-    pub(crate) strict_timing: bool,
 }
 
 pub(crate) struct WaitMutable<'a> {
@@ -59,6 +57,21 @@ pub(crate) struct WaitBoundaryInput<'a> {
     pub(crate) timing: WaitTiming<'a>,
     pub(crate) signals: WaitSignals<'a>,
     pub(crate) mutable: WaitMutable<'a>,
+}
+
+pub(crate) fn record_wait_failure(
+    failure: WaitFailure,
+    local_metrics: &mut WorkerMetricsLocal,
+    force_full_cleanup: &mut bool,
+    terminal_error: &mut Option<String>,
+) {
+    if matches!(failure, WaitFailure::Clock) {
+        local_metrics.wait_clock_failures = local_metrics.wait_clock_failures.saturating_add(1);
+    } else {
+        local_metrics.wait_backend_failures = local_metrics.wait_backend_failures.saturating_add(1);
+    }
+    *force_full_cleanup = true;
+    *terminal_error = Some(wait_failure_message(failure));
 }
 
 fn dispatch_deadline_wake_is_due(bounded_target: QpcTicks, target_qpc: QpcTicks) -> bool {
@@ -83,11 +96,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         lease_timeout_ticks,
         supervisor_heartbeat_ticks,
     } = timing;
-    let WaitSignals {
-        waiter,
-        interrupt,
-        strict_timing,
-    } = signals;
+    let WaitSignals { waiter, interrupt } = signals;
     let WaitMutable {
         local_metrics,
         force_full_cleanup,
@@ -177,20 +186,8 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             },
         },
         WaitOutcome::Failed(failure) => {
-            if matches!(failure, WaitFailure::Clock) {
-                local_metrics.wait_clock_failures =
-                    local_metrics.wait_clock_failures.saturating_add(1);
-            } else {
-                local_metrics.wait_backend_failures =
-                    local_metrics.wait_backend_failures.saturating_add(1);
-            }
-            if strict_timing || matches!(failure, WaitFailure::Clock) {
-                *force_full_cleanup = true;
-                *terminal_error = Some(wait_failure_message(failure));
-                return WaitBoundary::Exit;
-            }
-            std::thread::sleep(Duration::from_micros(500));
-            WaitBoundary::Replan { wait_result }
+            record_wait_failure(failure, local_metrics, force_full_cleanup, terminal_error);
+            WaitBoundary::Exit
         }
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
@@ -204,14 +201,14 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
 mod tests {
     use super::{
         WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-        dispatch_deadline_wake_is_due, wait_for_next_boundary,
+        dispatch_deadline_wake_is_due, record_wait_failure, wait_for_next_boundary,
     };
     use crate::engine::telemetry::WorkerMetricsLocal;
     use sky_dispatch_core::clock::PlaybackClockState;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     use sky_dispatch_win32::event::OwnedEvent;
-    use sky_dispatch_win32::wait::HybridWaiter;
+    use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure};
     use std::sync::atomic::AtomicU64;
 
     #[test]
@@ -224,6 +221,41 @@ mod tests {
             QpcTicks::from_raw(1),
             QpcTicks::from_raw(2)
         ));
+    }
+
+    #[test]
+    fn every_wait_failure_is_terminal_and_counted() {
+        let failures = [
+            (WaitFailure::Clock, true),
+            (WaitFailure::TimerCreate { win32_error: 1 }, false),
+            (WaitFailure::TimerArm { win32_error: 2 }, false),
+            (WaitFailure::TimerWait { win32_error: 3 }, false),
+            (WaitFailure::MultiWait { win32_error: 4 }, false),
+        ];
+
+        for (failure, is_clock_failure) in failures {
+            let mut local_metrics = WorkerMetricsLocal::default();
+            let mut force_full_cleanup = false;
+            let mut terminal_error = None;
+
+            record_wait_failure(
+                failure,
+                &mut local_metrics,
+                &mut force_full_cleanup,
+                &mut terminal_error,
+            );
+
+            assert!(force_full_cleanup);
+            assert!(terminal_error.is_some());
+            assert_eq!(
+                local_metrics.wait_clock_failures,
+                u64::from(is_clock_failure)
+            );
+            assert_eq!(
+                local_metrics.wait_backend_failures,
+                u64::from(!is_clock_failure)
+            );
+        }
     }
 
     #[test]
@@ -260,7 +292,6 @@ mod tests {
             signals: WaitSignals {
                 waiter: &waiter,
                 interrupt: &interrupt,
-                strict_timing: true,
             },
             mutable: WaitMutable {
                 local_metrics: &mut local_metrics,

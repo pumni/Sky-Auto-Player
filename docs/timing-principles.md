@@ -104,6 +104,14 @@ poll it every bounded group of iterations. The final interrupt/deadline gate is
 authoritative and uses `Acquire` ordering. Spin is bounded and cannot replace
 the QPC deadline check.
 
+At the wait layer, an interrupt can invalidate a plan only while the physical
+target remains in the future. Once `QPC_now >= physical_target`, the waiter
+returns `Deadline`, including when an interrupt wake and the target race. The
+final command, target, focus, and lease admission remains authoritative and can
+still reject the physical send. Production admission requires both the
+high-resolution waitable timer and event wait; a missing timer or any runtime
+wait failure is terminal rather than a silent sleep-based fallback.
+
 MMCSS Games/High and power-throttling opt-out remain scoped scheduling aids.
 TimeCritical is not the default. No wait or priority choice changes the
 SendInput-only security boundary.

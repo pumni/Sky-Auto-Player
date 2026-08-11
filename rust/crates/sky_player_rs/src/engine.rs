@@ -108,10 +108,9 @@ pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
 use sky_dispatch_win32::input::TrackedKeyState;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome};
+use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
-use std::time::Duration;
 
 const LIFECYCLE_NEW: u8 = 0;
 const LIFECYCLE_RUNNING: u8 = 1;

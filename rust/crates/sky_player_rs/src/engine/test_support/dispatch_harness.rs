@@ -473,7 +473,6 @@ impl ProductionDispatchTestHarness {
             signals: WaitSignals {
                 waiter: &self.resources.waiter,
                 interrupt: &self.interrupt,
-                strict_timing: self.config.timing.strict_timing,
             },
             mutable: WaitMutable {
                 local_metrics: &mut self.local_metrics,
