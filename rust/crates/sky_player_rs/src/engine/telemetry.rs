@@ -205,6 +205,7 @@ impl NativeTelemetrySummary {
         if !backend_dispatch {
             return;
         }
+        let first_dispatch = self.dispatch_count == 0;
         self.dispatch_count = self.dispatch_count.saturating_add(1);
         match record.kind {
             TRACE_KIND_DOWN => self.down_count = self.down_count.saturating_add(1),
@@ -220,9 +221,13 @@ impl NativeTelemetrySummary {
         self.skipped_key_count = self
             .skipped_key_count
             .saturating_add(u64::from(record.skipped_count));
-        self.max_dispatch_start_error_ticks = self
-            .max_dispatch_start_error_ticks
-            .max(record.dispatch_start_error_ticks);
+        if first_dispatch {
+            self.max_dispatch_start_error_ticks = record.dispatch_start_error_ticks;
+        } else {
+            self.max_dispatch_start_error_ticks = self
+                .max_dispatch_start_error_ticks
+                .max(record.dispatch_start_error_ticks);
+        }
         self.max_dispatch_start_error_abs_ticks = self
             .max_dispatch_start_error_abs_ticks
             .max(record.dispatch_start_error_ticks.unsigned_abs());
@@ -379,6 +384,20 @@ mod tests {
         assert_eq!(summary.up_count, 1);
         assert_eq!(summary.requested_key_count, 2);
         assert_eq!(summary.sent_key_count, 2);
+    }
+
+    #[test]
+    fn signed_start_error_max_preserves_all_negative_samples() {
+        let mut summary = NativeTelemetrySummary::default();
+
+        for (event_index, start_error_ticks) in [(0, -40), (1, -30), (2, -20)] {
+            let mut record = record_with_index(event_index, TRACE_KIND_UP, 1, 1);
+            record.dispatch_start_error_ticks = start_error_ticks;
+            summary.observe(&record);
+        }
+
+        assert_eq!(summary.max_dispatch_start_error_ticks, -20);
+        assert_eq!(summary.max_dispatch_start_error_abs_ticks, 40);
     }
 
     #[test]
