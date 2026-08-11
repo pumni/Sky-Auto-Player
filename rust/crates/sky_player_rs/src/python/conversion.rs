@@ -197,17 +197,13 @@ pub(super) fn parse_schedule_with_allowlist(
 
 pub(super) fn validate_schedule_timing(
     schedule: &RuntimeSchedule,
-    min_hold_us: u64,
-    max_lead_us: u64,
-    dispatch_lead_us: u64,
+    effective_min_hold_us: u64,
 ) -> PyResult<()> {
     schedule
         .batches
         .last()
         .map_or(0, |batch| batch.scheduled_us)
-        .checked_add(min_hold_us)
-        .and_then(|value| value.checked_add(max_lead_us))
-        .and_then(|value| value.checked_add(dispatch_lead_us))
+        .checked_add(effective_min_hold_us)
         .ok_or_else(|| {
             PyValueError::new_err(
                 "schedule and timing configuration exceed supported timestamp range",

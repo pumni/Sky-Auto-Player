@@ -43,7 +43,7 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
-        let metrics = SharedMetrics::default();
+        let metrics = Arc::new(SharedMetrics::default());
         let mut initial_metrics = metrics.snapshot.load();
         initial_metrics.total_us = total_us;
         let _ = metrics.snapshot.try_publish(&initial_metrics);

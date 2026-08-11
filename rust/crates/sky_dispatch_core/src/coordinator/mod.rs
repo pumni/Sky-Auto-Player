@@ -234,50 +234,32 @@ pub struct PendingRelease {
 impl PendingRelease {
     #[allow(dead_code)]
     #[cfg(test)]
-    pub fn get_effective_release_us(&self, lead_up: u64) -> u64 {
-        let effective_lead = self.scheduled_release_us.saturating_sub(lead_up);
+    pub fn get_effective_release_us(&self) -> u64 {
         self.release_not_before_ticks
             .as_u64()
-            .max(effective_lead)
+            .max(self.scheduled_release_us)
             .max(self.next_retry_ticks.as_u64())
     }
 
-    pub fn get_effective_release_ticks(
-        &self,
-        lead_up: DurationTicks,
-    ) -> Result<TimelineTicks, CoordinatorError> {
-        let available_release_ticks =
-            DurationTicks::from_raw(self.scheduled_release_ticks.as_u64());
-        let effective_lead = lead_up.min(available_release_ticks);
-        let led = self
-            .scheduled_release_ticks
-            .checked_sub_duration(effective_lead)?;
+    pub fn get_effective_release_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
         Ok(self
             .release_not_before_ticks
-            .max(led)
+            .max(self.scheduled_release_ticks)
             .max(self.next_retry_ticks))
     }
 }
 
 /// The release cohort selected for one upcoming dispatch.
-///
-/// The worker must use the same lead both when calculating the next deadline
-/// and when popping pending releases.  Keeping the result together prevents
-/// a larger pending population from over-leading an earlier one-key release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingDispatchPlan {
     pub deadline_ticks: TimelineTicks,
-    pub lead_ticks: DurationTicks,
-    /// Telemetry/API compatibility metadata. Scheduling uses the tick fields.
     pub polyphony: usize,
-    pub lead_saturated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedBatch {
     pub index: usize,
     pub effective_scheduled_ticks: TimelineTicks,
-    pub effective_lead_ticks: DurationTicks,
     /// Packet metadata is carried alongside the legacy batch preparation so
     /// the worker can atomically dispatch all authored actions at one
     /// timestamp without maintaining a second cursor.
@@ -322,8 +304,6 @@ pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
     pub min_hold_ticks: DurationTicks,
-    pub delivery_margin_us: u64,
-    pub delivery_margin_ticks: DurationTicks,
     pub batch_scheduled_ticks: Box<[TimelineTicks]>,
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
@@ -360,7 +340,7 @@ impl RuntimeDispatchCoordinator {
     pub fn new<F>(
         schedule: RuntimeSchedule,
         min_hold_us: u64,
-        delivery_margin_us: u64,
+        _delivery_margin_us: u64,
         us_to_ticks: F,
     ) -> Self
     where
@@ -370,22 +350,17 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             DurationTicks::from_raw(us_to_ticks(min_hold_us).as_u64()),
-            delivery_margin_us,
-            DurationTicks::from_raw(us_to_ticks(delivery_margin_us).as_u64()),
             |microseconds| Ok(us_to_ticks(microseconds)),
         )
         .expect("legacy coordinator construction uses an infallible tick converter")
     }
 
     /// Construct the coordinator with all scheduling durations represented in
-    /// the QPC tick domain. The microsecond arguments are retained only as
-    /// immutable telemetry metadata; no deadline is derived from them.
+    /// the QPC tick domain.
     pub fn try_new_ticks<F>(
         schedule: RuntimeSchedule,
         min_hold_us: u64,
         min_hold_ticks: DurationTicks,
-        delivery_margin_us: u64,
-        delivery_margin_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, CoordinatorError>
     where
@@ -449,8 +424,6 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             min_hold_ticks,
-            delivery_margin_us,
-            delivery_margin_ticks,
             batch_scheduled_ticks,
             cursor: 0,
             active_by_slot: std::array::from_fn(|_| None),

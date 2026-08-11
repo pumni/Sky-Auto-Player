@@ -156,8 +156,6 @@ fn run_simulation(
         schedule,
         /*min_hold_us=*/ NOTE_HOLD_US / 2,
         DurationTicks::from_raw(NOTE_HOLD_US / 2),
-        /*delivery_margin_us=*/ 0,
-        DurationTicks::ZERO,
         |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
     )
     .map_err(|error| format!("coordinator construction failed: {error}"))?;
@@ -189,7 +187,7 @@ fn run_simulation(
     while !coordinator.is_finished() {
         // Advance to next coordinator deadline.
         if let Some(dl) = coordinator
-            .next_deadline_ticks(DurationTicks::ZERO, None)
+            .next_deadline_ticks(None)
             .map_err(|error| format!("coordinator deadline failed: {error}"))?
         {
             now_us = now_us.max(dl.as_u64());
@@ -202,9 +200,7 @@ fn run_simulation(
         // Pop pending releases first.
         let pending_plan = PendingDispatchPlan {
             deadline_ticks: TimelineTicks::from_raw(now_us),
-            lead_ticks: DurationTicks::ZERO,
             polyphony: 1,
-            lead_saturated: false,
         };
         let due = coordinator
             .pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &pending_plan)
@@ -221,8 +217,8 @@ fn run_simulation(
         }
 
         // Pop next authored batch.
-        if let Some((batch_index, _lead)) = coordinator
-            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us), DurationTicks::ZERO)
+        if let Some(batch_index) = coordinator
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us))
             .map_err(|error| format!("coordinator authored pop failed: {error}"))?
         {
             let batch = coordinator
@@ -288,9 +284,7 @@ fn run_simulation(
                             .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                         let failure_plan = PendingDispatchPlan {
                             deadline_ticks: TimelineTicks::from_raw(failure_deadline),
-                            lead_ticks: DurationTicks::ZERO,
                             polyphony: 1,
-                            lead_saturated: false,
                         };
                         let due = coordinator
                             .pop_due_pending_ticks(
@@ -326,9 +320,7 @@ fn run_simulation(
                                     .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                                 let retry_plan = PendingDispatchPlan {
                                     deadline_ticks: TimelineTicks::from_raw(retry_deadline),
-                                    lead_ticks: DurationTicks::ZERO,
                                     polyphony: 1,
-                                    lead_saturated: false,
                                 };
                                 let retry = coordinator
                                     .pop_due_pending_ticks(

@@ -190,21 +190,25 @@ impl HybridWaiter {
                 }
             };
             if remaining_ticks <= spin_threshold_ticks.as_u64() {
+                let mut spin_iterations = 0_u32;
                 loop {
-                    if self.event_wait_enabled
-                        && interrupt.signal_generation() != observed_generation
-                    {
-                        let completed_ticks = match qpc_clock.now() {
-                            Ok(ticks) => ticks,
-                            Err(_) => {
-                                return WaitResult::failed(WaitFailure::Clock);
-                            }
-                        };
-                        return wait_result_with_spin(
-                            WaitOutcome::Interrupted,
-                            spin_started_ticks,
-                            completed_ticks,
-                        );
+                    if self.event_wait_enabled {
+                        if spin_iterations & 31 == 0
+                            && interrupt.signal_generation_relaxed() != observed_generation
+                        {
+                            let completed_ticks = match qpc_clock.now() {
+                                Ok(ticks) => ticks,
+                                Err(_) => {
+                                    return WaitResult::failed(WaitFailure::Clock);
+                                }
+                            };
+                            return wait_result_with_spin(
+                                WaitOutcome::Interrupted,
+                                spin_started_ticks,
+                                completed_ticks,
+                            );
+                        }
+                        spin_iterations = spin_iterations.wrapping_add(1);
                     }
 
                     let now_ticks = match qpc_clock.now() {

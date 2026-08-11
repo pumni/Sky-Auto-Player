@@ -126,10 +126,9 @@ impl RuntimeDispatchCoordinator {
         Ok(release_not_before)
     }
 
-    pub fn packet_effective_deadline_ticks(
+    pub(crate) fn packet_effective_deadline_ticks_uncompensated(
         &self,
         packet_index: usize,
-        dispatch_lead: DurationTicks,
     ) -> Result<TimelineTicks, CoordinatorError> {
         let packet = *self
             .schedule
@@ -151,17 +150,23 @@ impl RuntimeDispatchCoordinator {
             .checked_add_duration(self.recovery_offset_ticks)?;
         // Singular release-floor source of truth for the packet's physical Up.
         let release_not_before = self.packet_release_floor_ticks(packet_index)?;
-        // The logical timeline is unsigned.  Only the first startup packet
-        // can use a physical target before the logical epoch; the worker owns
-        // that separate startup anchor.  Later authored packets must not let
-        // an oversized lead collapse distinct timestamps to ZERO.  Suppress
-        // the lead for a sub-lead authored timestamp instead.
-        let effective_lead = if authored < TimelineTicks::from_raw(dispatch_lead.as_u64()) {
-            DurationTicks::ZERO
-        } else {
-            dispatch_lead
-        };
-        let lead_deadline = authored.checked_sub_duration(effective_lead)?;
-        Ok(lead_deadline.max(release_not_before))
+        Ok(authored.max(release_not_before))
+    }
+
+    #[cfg(not(test))]
+    pub fn packet_effective_deadline_ticks(
+        &self,
+        packet_index: usize,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        self.packet_effective_deadline_ticks_uncompensated(packet_index)
+    }
+
+    #[cfg(test)]
+    pub fn packet_effective_deadline_ticks(
+        &self,
+        packet_index: usize,
+        _dispatch_lead: crate::time::DurationTicks,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        self.packet_effective_deadline_ticks_uncompensated(packet_index)
     }
 }

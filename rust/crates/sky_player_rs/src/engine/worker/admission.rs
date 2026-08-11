@@ -1,6 +1,8 @@
 use super::{TrackedKeyState, focus_gate_matches};
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
+#[cfg(test)]
+use sky_dispatch_win32::clock::QpcClock;
+use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -76,9 +78,7 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) target_generation: &'a AtomicU64,
 }
 
-/// Classify control state after the caller has taken its fresh QPC sample.
-/// Command atomics are checked by `final_control_admission_with_lease` before
-/// that sample so an abort path does not perform unnecessary clock work.
+/// Classify lease state from the one authoritative start sample.
 fn classify_final_control(
     now_qpc: QpcTicks,
     lease_timeout_ticks: DurationTicks,
@@ -94,30 +94,51 @@ fn classify_final_control(
     Ok(FinalControlAdmission::Allowed)
 }
 
-/// Authoritative last-mile control gate used by every physical send.
-/// Command state is checked before the fresh QPC sample; lease state is then
-/// evaluated from that sample immediately before transport admission.  A
-/// command rejection has no timestamp evidence, while non-command outcomes
-/// return the QPC sample for downstream timeline conversion.
+pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalControlAdmission {
+    if signals.panic_requested.load(Ordering::Acquire) {
+        return FinalControlAdmission::PanicRequested;
+    }
+    if signals.quit_requested.load(Ordering::Acquire) {
+        return FinalControlAdmission::QuitRequested;
+    }
+    if signals.skip_requested.load(Ordering::Acquire) {
+        return FinalControlAdmission::SkipRequested;
+    }
+    if signals.desired_pause.load(Ordering::Acquire) {
+        return FinalControlAdmission::PauseRequested;
+    }
+    FinalControlAdmission::Allowed
+}
+
+pub(crate) fn final_control_admission_at(
+    started_qpc: QpcTicks,
+    lease_timeout_ticks: DurationTicks,
+    signals: FinalControlSignals<'_>,
+) -> Result<FinalControlAdmission, QpcError> {
+    classify_final_control(started_qpc, lease_timeout_ticks, signals)
+}
+
+/// Compatibility wrapper for test seams and non-physical callers. Production
+/// dispatch uses `final_control_precheck` followed by one caller-owned QPC
+/// sample and `final_control_admission_at`.
+#[cfg(test)]
 pub(crate) fn final_control_admission_with_lease(
     qpc_clock: QpcClock,
     lease_timeout_ticks: DurationTicks,
     signals: FinalControlSignals<'_>,
 ) -> Result<(FinalControlAdmission, Option<QpcTicks>), QpcError> {
-    if signals.panic_requested.load(Ordering::Acquire) {
-        return Ok((FinalControlAdmission::PanicRequested, None));
-    }
-    if signals.quit_requested.load(Ordering::Acquire) {
-        return Ok((FinalControlAdmission::QuitRequested, None));
-    }
-    if signals.skip_requested.load(Ordering::Acquire) {
-        return Ok((FinalControlAdmission::SkipRequested, None));
-    }
-    if signals.desired_pause.load(Ordering::Acquire) {
-        return Ok((FinalControlAdmission::PauseRequested, None));
+    let precheck = final_control_precheck(FinalControlSignals {
+        quit_requested: signals.quit_requested,
+        skip_requested: signals.skip_requested,
+        panic_requested: signals.panic_requested,
+        desired_pause: signals.desired_pause,
+        supervisor_heartbeat_ticks: signals.supervisor_heartbeat_ticks,
+    });
+    if !matches!(precheck, FinalControlAdmission::Allowed) {
+        return Ok((precheck, None));
     }
     let now_qpc = qpc_clock.now()?;
-    let admission = classify_final_control(now_qpc, lease_timeout_ticks, signals)?;
+    let admission = final_control_admission_at(now_qpc, lease_timeout_ticks, signals)?;
     Ok((admission, Some(now_qpc)))
 }
 

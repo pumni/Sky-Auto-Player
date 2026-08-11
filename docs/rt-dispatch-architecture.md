@@ -1,364 +1,181 @@
 # Real-Time Dispatch Architecture
 
-Status: CURRENT. Rust is the only production dispatch implementation.
+This is the normative implementation contract for the Rust playback worker.
+The scheduler remains pure; the platform boundary is the only place that
+touches Windows. All physical input uses `SendInput`.
 
-## Ownership
+## 1. Ownership and thread split
 
-Python prepares an immutable authored `KeyAction` stream, validates the target
-process, creates a native session, forwards user commands, polls the HUD, and
-stores the final report. Python does not compile runtime generations, calculate
-deadlines, wait/spin, estimate send latency, call `SendInput`, or supervise a
-dispatch worker.
+The worker dispatch thread owns the real-time sequence and the coordinator
+owns schedule/generation state. The dispatch thread may read or commit
+coordinator state only at the defined planning and ownership boundaries. It
+must not perform telemetry formatting, unbounded allocation, observer health
+updates, or learned timing estimation on the physical path.
+
+The observer is a separate consumer thread. A bounded
+`crossbeam_queue::ArrayQueue<DispatchObservation>` (production capacity 64) is
+shared between them:
 
 ```text
-Python PlaybackEngine
-  -> sky_player_rs.SessionConfig
-  -> sky_player_rs.DispatchSession
-       -> sky_dispatch_core schedule + generation state
-       -> sky_dispatch_win32 QPC/wait/focus/SendInput
-       -> bounded native telemetry
+dispatch thread --nonblocking push--> ArrayQueue --single consumer--> observer thread
+                                      full: drop new observation
 ```
 
-The Rust worker owns all production timing and cleanup decisions. It remains in
-QPC tick domains for control-path arithmetic and only converts at API or
-telemetry boundaries. Completion timing is measured at the `SendInput` return
-boundary; it is not a claim about game polling, rendering, or audio onset.
+The producer records a drop and continues. It never waits for slack and never
+evicts an older observation. The consumer owns health windows, telemetry
+materialization, shared observer metrics, and its own local timing state. It
+cannot authorize, reorder, retry, or commit physical input. Shutdown signals
+the consumer, joins it, merges its local metrics, and then publishes the final
+report.
 
-The production thread-priority ladder is explicit: `Auto` attempts the
-documented MMCSS `Games` task with `AVRT_PRIORITY_HIGH`, then falls back to
-`THREAD_PRIORITY_HIGHEST`; an explicit `MMCSS` request does not probe unrelated
-task names. RAII restores any thread priority and reverts MMCSS registration.
+## 2. Immutable plan
 
-## Worker module ownership
+One outer worker epoch builds one typed plan from the coordinator. The plan
+contains the next authored or pending deadline, physical path, polyphony,
+health budget, and absolute QPC target. The plan is reused by waiting, due
+selection, and physical dispatch. Commands, focus/pause transitions, target
+changes, lease-only wakes, recovery changes, and interrupts invalidate it and
+cause a replan.
 
-The worker is decomposed by invariant owner, not by call depth. `worker.rs`
-wires the modules; `orchestration.rs` is the loop sequencer and owns
-command/focus/pause transitions, plan creation, the pending/authored/wait
-choice, and the terminal transition.
+Production planning has no adaptive dispatch-cost estimator and no lead
+subtraction. Authored/effective timestamps are used as authored. Pending
+release deadlines include only the completion-anchored hold floor and retry or
+recovery floors. Any remaining lead-shaped arguments are test-only
+compatibility seams; production coordinator APIs do not accept a dispatch lead
+and the publication adapter reports the historical applied-lead field as zero.
 
-- `planning.rs` owns lead selection, the
-  pending-release plan, frozen health budgets, and the next wait deadline.
-  `plan_next_dispatch_projected()` builds exactly one immutable
-  `NextDispatchPlan` per loop epoch from the coordinator's next uncompensated
-  physical boundary and the estimator. It carries the exact physical QPC
-  target through the wait and dispatch paths; it never samples QPC itself,
-  mutates the coordinator, allocates, or formats strings on the success path.
-  The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
-  the wait deadline, so prepare and wait cannot disagree on lead selection.
-- `dispatch/` owns the pending-release and authored-packet backend
-  transactions, transaction-outcome interpretation, coordinator commit, and the
-  dispatch telemetry record. Both note-on and note-off paths first finish
-  physical/coordinator correctness, required recovery, the mandatory terminal
-  SLO decision, and an optional `dispatch_ready_qpc` sample. The sample is
-  captured only when strict timing or non-off telemetry requires post-send
-  metrics. They then enqueue one
-  allocation-free raw `DispatchObservation` (tagged `Down`/`Up`) containing
-  QPC/timeline ticks and physical requested/confirmed/skipped masks into a
-  fixed-capacity (64) worker-owned ring and return. Transport counts are derived
-  from those masks only during drain; no duplicate microsecond lead/count facts
-  are stored in the raw record. Tick-to-microsecond conversion, wake/send/ready
-  deltas, completion errors, trace-record materialization, estimator update,
-  health-window observation, lateness accounting, and diagnostic metric
-  publication are deferred to `observer::drain_one_observer`. If the ring is
-  full, the oldest raw record is dropped in O(1) and the new record is admitted;
-  no observer work runs synchronously to relieve queue pressure.
-  The dispatch loop applies a fixed 5,500 µs-equivalent QPC guard before
-  observer work: fresh QPC → immutable `NextDispatchPlan` → drain at most one
-  observation only when next-deadline slack is at least `observer_guard_ticks`
-  (or no deadline remains) → if drained, discard the plan and rebuild from a
-  fresh QPC sample before wait/admit/dispatch. Observer work never rolls back
-  physical ownership; a deferred observer failure may still terminate the
-  session after that ownership is safe. It returns a closed four-variant
-  `DispatchStep`
-  (`NoWork`, `Dispatched`, `Continue`, `Terminate`) instead of scalar tuples.
-- `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
-  terminal-error aggregation.
-- `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
-  own their single named concern.
+The physical target is derived once from the playback epoch:
 
-A plan is invalidated by an interrupt, command, focus/pause transition, backend
-call, or release-recovery change. A normal waitable-timer deadline wake is
-different: it preserves the immutable plan and hands it directly to the
-dispatch helper, so the worker does not restart the full orchestration epoch
-between the deadline and `SendInput`.
+```text
+physical_target_qpc = playback_epoch_qpc + effective_deadline_ticks
+```
 
-The precision boundary is intentionally short. After control/focus/pause/lease
-admission and before any physical planning or wait decision, the worker drains
-at most one current stale-only compiled packet per outer worker iteration,
-regardless of whether startup is in `PrePrecision` or `PostPrecision`. After
-the first startup precision wait succeeds, the
-frozen physical plan goes through only the final panic/quit/skip/pause,
-supervisor-lease, target-generation, and focus admission required for the
-imminent transport; an `Allowed` result proceeds directly to the backend. No
-stale commit, suffix scan, general replanning, observer drain, unrelated
-telemetry/metrics publication, estimator work, allocation, or arbitrary wait
-may occur between that successful wait and the first physical `SendInput`.
-Estimator, health-window, telemetry materialization, and observer work remain
-deferred after the fixed raw observation enqueue.
+Waitable-timer guard and bounded spin are wake mechanics only. Neither is an
+applied dispatch lead and neither changes the coordinator deadline. The target
+is carried through the final gate and sender; it is not replaced by the wake
+sample or reconstructed after `SendInput`.
 
-Stale-only compiled packets are non-physical metadata at every cursor
-position: leading, midstream, trailing, and all-stale schedules use the same
-dedicated prepare/commit path. Normal authored planning is cursor-local and
-fails closed if a zero-mask stale packet reaches it. The only suffix lookahead
-is startup discovery of the first subsequent physical packet used to construct
-the startup gate. Physical prepared batches always carry a concrete
-`PhysicalPacketKind`; stale packets never acquire a physical path, deadline,
-lead, health budget, estimator sample, or sender boundary. Same-timestamp stale
-batches remain one atomic compiled metadata packet.
+Stale-Up compiler metadata with an empty packet is handled as coordinator
+metadata. It has no physical path, no sender boundary, and does not consume a
+startup or normal physical target. Physical packets are packetized from the
+canonical masks.
 
-Every physical send uses the shared control-and-lease gate with a fresh QPC
-sample. Down-bearing authored traffic then applies the target-generation and
-foreground/focus gate; UpOnly authored traffic and pending releases are
-cleanup traffic and do not require focus or target stability. The control
-atomics are the authoritative last-mile command state. The event's monotonic
-generation is only a spin interruption hint, and an event handle is consumed
-only after a replan outside the precision boundary.
+## 3. Final physical sequence
 
-`SendInput` completion is sender-side evidence. It is not proof that the game
-consumed the event. Any receiver/probe window used for acceptance is an
-app-owned delivery proxy and must not be described as game receipt.
+The Down/Mixed and Up-only paths share the same authoritative transport order.
+Down adds the target/focus checks; Up-only never uses the focus gate.
 
-## Session contract
+```text
+frozen plan
+  -> fresh command/target/lease checks
+  -> Down target + foreground validation when required
+  -> one QPC started sample
+  -> lease admission using that exact started sample
+  -> one packetized SendInput call
+  -> completion QPC and transport-mask validation
+  -> coordinator ownership commit/recovery
+  -> bounded observation enqueue
+```
 
-`SessionConfig` exposes only session/user inputs: the user-selected `game_fps` (15..=240), the
-materialized `min_hold_us` from the selected hold-frame value,
-`require_focus`, `focus_restore_grace_us`, `target_hwnd`, telemetry enablement,
-and the native profile. The final Python session report includes an immutable
-`effective_config` record with requested/effective min-hold values and the
-wired focus/telemetry semantics. Internal wait strategy, priority, retry,
-estimator, telemetry capacity, lease, and strict-completion policy are Rust
-dispatch-mode details.
+The supplied `started` sample is the physical start/admission boundary. The
+sender reports `completed`; production does not subtract a learned send cost
+from the target. Completion is used for diagnostics and release ownership.
 
-The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
-`panic`), `set_target_hwnd`, transition-only `set_focus_hint`,
-`snapshot_lite`, and `session_report`.
+The primary sender-side timing evidence is the signed start residual:
 
-`snapshot_lite` is the frequent control/UI read and returns a frozen typed
-`ProgressSnapshot` with a nested `BackendHealthSnapshot`. It contains state,
-elapsed/total time, completion error, active/possibly-active/release counts,
-and every live backend counter needed by the HUD. Correctness-critical counters
-are part of the native contract; Python must not replace a missing field with a
-zero. It has no trace, hash maps, generation ledger, estimator internals, or
-build provenance. Latency degradation is reported as an input-path health
-signal; the typed snapshot separates `sendinput_path_degraded`,
-`core_post_send_degraded`, `observer_degraded`, and `wait_path_degraded`.
-`input_path_degraded` is the OR of SendInput, core post-send, and wait-path
-health; observer slowdown is an independent domain. SendInput warning
-thresholds use the fixed sender-side floor; core post-send, observer, and wait
-thresholds remain independent. Each path also publishes its degraded-sample
-count and active threshold. UI text must not infer an OS hook, Filter Keys, or
-game-side cause from any of these sender-side signals.
+```text
+dispatch_start_error_ticks = sender_started_qpc - physical_target_qpc
+send_duration = sender_completed_qpc - sender_started_qpc
+completion_error = sender_completed_qpc - physical_target_qpc  # diagnostic only
+```
 
-Each health sample is classified once against its budget frozen before
-dispatch; the rolling health windows retain only that boolean classification,
-not raw durations. SendInput, post-send occupancy, and scheduler wake latency
-have independent fixed-capacity hysteresis windows. The adaptive dispatch-cost
-estimator is separate from health: it records clean sender completion cost in
-fixed path/event-count buckets and never drives the health budget. A single spike
-therefore cannot latch degradation for a session, and a later threshold change
-cannot reclassify history. Backend rejection, partial packets, clock failures,
-and uncertain key state remain immediate session-latched correctness failures.
+The start residual is benchmark/observability output only. It is never fed
+back into scheduling or used as adaptive compensation.
 
-The native final snapshot also reports `post_send_max_us`,
-`dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
-wait failure counters, and timeline-rebase count/duration/reason.  The
-deferred dispatch observer additionally reports
-`core_post_send_max_us` (a typed `dispatch_ready_qpc - sender_completed` QPC
-sample), `observer_duration_max_us`, `observer_dropped_samples`, and
-`observer_queue_high_watermark`.  Authored
-lateness is measured before any recovery rebase. These fields are diagnostic
-evidence owned by the sender; none establishes that the game observed or
-played a note.
+Packet construction validates scan-code masks and sends Up entries before Down
+entries in one call. A zero, partial, skipped, mixed, or otherwise inconsistent
+transaction is handled fail-closed. A partial Down/Mixed result is not blindly
+retried. A pending release may requeue only unconfirmed ownership after a
+validated transport result; coordinator disagreement forces full-instrument
+cleanup and termination.
 
-`session_report` is called once after worker termination. It contains the full
-terminal snapshot, native telemetry, estimator output, cleanup result, and
-build metadata. Python enriches it only with song/application metadata; it does
-not reinterpret native timing.
+## 4. Completion-anchored hold model
 
-The native lifecycle/status domain is separate from UI presentation status:
-`ready`, `playing`, `paused`, `finished`, `quit`, `skipped`, `error`,
-`panicked`, and `poisoned` are native values. A terminal `is_finished` snapshot
-is accepted before live-status validation; Python then joins once, materializes
-`session_report`, parses telemetry and estimator state, and only then surfaces a
-terminal error. Normal completion never invokes panic cleanup.
-`input_path_degraded` remains the aggregate of SendInput, core post-send, and
-wait-path health; observer degradation remains a separate signal.
+Python materializes the fixed floor before native startup:
 
-## Invariants
+```text
+frame_us = ceil(1_000_000 / game_fps)
+effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
+```
 
-- Every valid Down owns a generation; authored same-key overlap is rejected.
-- Actions sharing an authored timestamp compile to one physical packet; one
-  `SendInput` call emits all Up events before all Down events.
-- Stale Up is suppressed and no Up precedes the minimum hold floor.
-- The native worker anchors the physical hold at the actual Down completion,
-  using `max(configured_min_hold_us, frame_period_us + 500us)` as its initial
-  frame-safe floor. It never snaps note-on timestamps to a frame grid.
-- Authored timestamps are immutable; only an actual release-recovery pause may
-  shift the effective epoch, and it preserves later authored spacing.
-- The first startup wait's exact QPC target is carried into the first physical
-  authored send. Later authored timestamps smaller than the requested lead use
-  effective lead zero rather than collapsing to the logical epoch. Applied
-  lead means the lead that actually moved the physical deadline; the first
-  startup observation reports its exact requested physical lead, while release
-  and retry floors can reduce a whole physical cohort to zero. Saturation is
-  counted only when every member of the cohort is lead-controlled.
-  Stale-Up batches with empty physical masks are suppressed without consuming
-  the startup target at every cursor position; a compiled stale packet is
-  consumed atomically across all batches sharing its timestamp. An explicit
-  `StartupPrecisionPhase` is separate from the optional startup gate. After
-  control/focus/pause/lease admission, global stale draining consumes one
-  current compiled packet per outer iteration in both phases, then physical
-  planning proceeds from the current cursor. `startup_gate` is not a phase
-  flag. Startup anchoring alone uses the first subsequent authored packet that
-  contains a physical event.
+Native checked tick arithmetic enforces:
 
-  Stale metadata has no physical path, deadline, sender boundary, estimator or
-  health evidence. It emits at most one diagnostic record per compiled packet,
-  with zero requested/sent events, zero send attempts, no send boundaries,
-  zero dispatch cost, and `applied_lead_ticks = 0`. Same-timestamp stale
-  batches remain one atomic compiled packet even when they contain multiple
-  unmatched Up intents.
-- Pause and focus loss release physical keys before resumable cancellation.
-- Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
-  cleanup. Uncertain cleanup is an error, never a successful finish.
-- Partial `SendInput` is not success; zero progress and recovery are handled
-  by Rust and remain visible in the final report.
-- Normal authored Down/Mixed packets and pending release sends use one
-  immutable physical packet and one low-level `SendInput` attempt. A partial Down/Mixed insertion is terminal
-  chord uncertainty and is never replayed; zero progress is returned as
-  explicit transport evidence rather than immediately retrying the packet.
-  Pending-release retry belongs to the coordinator-owned recovery state
-  machine, while terminal cleanup owns its bounded one-attempt-per-FSM-step
-  retry budget. This prevents nested transport-retry × recovery-FSM behavior.
-- Physical preflight and cleanup verification map the requested instrument
-  scan-code mask through the keyboard layout of the current target window
-  thread using `MapVirtualKeyExW`. Full admission and full terminal cleanup use
-  all 15 allowlisted keys; tracked cleanup and stuck-key retries use only their
-  bounded masks. A zero/invalid target window, unavailable layout, or failed
-  scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
-  emitters remain exempt from host physical-state verification but never invent
-  a physical verdict on their own: without an explicit test-only probe the
-  cleanup FSM resolves Inconclusive and fails closed rather than synthesizing
-  `AllUp`/`Held` from transport confirmation.
-- Cleanup is a single bounded state machine (`TrackedKeyState::release_scope`),
-  never nested cleanup: `release_all_full_instrument` does not call
-  `release_all`. One invocation resolves an unresolved mask, sends key-up,
-  reconciles transport and physical evidence, and retries only the unresolved
-  mask (delays 15/50/100 ms, at most four attempts) with a single coherent
-  `ReleaseAllOutcome`. A physical `AllUp` is the final evidence of success and
-  clears the active/possibly-active/failed-release tracking masks even if the
-  preceding `SendInput` reported partial or zero progress; transport anomalies
-  stay visible in counters but do not fabricate a stuck-key set.
-  `ReconciledRelease::Held` reports only the held subset and `Inconclusive`
-  fails closed to the transport-unconfirmed subset. Transport and physical
-  verification stay independent: `verification_inconclusive` is probe-derived
-  only and is never OR-ed with the transport-anomaly flag. Normal clean-up never
-  sleeps.
-- No Python callback runs in the native real-time worker.
-- A successful terminal result requires no active, pending, possibly-active, or
-  residue key.
+```text
+release_floor = down_completed + effective_min_hold
+effective_release = max(authored_release, release_floor, retry_not_before)
+```
 
-## Focus and liveness
+This is a sender-side visibility floor, not game-observed timing. A slow Down
+can defer its own Up; it does not move an unrelated future authored action.
+Recovery and retry state remain coordinator correctness state, not observer
+statistics.
 
-Python owns process-name validation and target discovery. It sends one HWND
-with `set_target_hwnd` and uses its cheap cached-HWND foreground probe to send
-`set_focus_hint(bool)` only on supervisor-observed transitions. Rust uses this
-hint as a coarse fail-closed loop gate and wake-up, then performs one
-authoritative `GetForegroundWindow()` comparison against the stamped HWND
-immediately before a Down dispatch. A `true` hint never authorizes input.
+## 5. Wait and interrupt ordering
 
-The HWND is also passed directly to preflight and cleanup verification. The
-sender continues to inject the same physical scan codes; the layout-aware VK
-mapping exists only for checking physical state and is not part of the hot
-`SendInput` path. The current 15-key allowlist has no E0/E1 extended scan
-codes.
+The worker uses a high-resolution waitable timer, event interruption, and a
+bounded QPC spin. A timer guard may wake early; the final QPC deadline gate
+decides whether to wait again or enter the physical path. A wake that is only
+for lease, command, focus, pause, or interrupt replans and cannot dispatch the
+old plan.
 
-Physical-key preflight is an admission boundary for every initial playback,
-manual resume, focus restoration, and target-HWND generation. The worker
-stores verification as a typed `(HWND, target-generation)` stamp, and clears
-that stamp at every new manual/focus admission epoch; therefore resuming the
-same HWND still requires a fresh preflight. A target change invalidates the
-previous verification before the worker processes the next chord.
-Cleanup/preflight runs while the playback clock remains paused; only after a
-successful, still-current verification does the worker take a new QPC sample
-and leave the pause. The steady-state loop uses only the focus-tracker atomic
-as its coarse gate. Immediately before a Down, the worker performs one fresh
-focus query against the exact stamped HWND, rechecks the target stamp, and
-gates quit, skip, panic, and pause state before `SendInput`, so a change during
-the Win32 verification window cannot send an unverified chord.
+The spin path may read an interrupt generation hint with `Relaxed` ordering
+every bounded group (currently 32 iterations). The final generation/deadline
+decision uses the authoritative `Acquire` path. This optimization is only a
+wake hint; it cannot bypass the final gate.
 
-Every successful focus-pause transition publishes the progress-clock anchor
-immediately after `enter_pause("focus", ...)`, including the authored early
-unfocused admission and the final last-mile Down admission. This keeps
-`snapshot_lite.is_paused` and elapsed-time freezing correct even when focus is
-lost between supervisor samples or during a long event gap.
+MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
+TimeCritical is not the default and priority setup failure is reported rather
+than silently changing the timing contract.
 
-Each physical-state pass resolves the target thread and keyboard layout once,
-maps only the requested fixed scan-code mask, and then reads the aggregate key
-state. Mapping or state ambiguity remains fail-closed. The resulting layout
-work is therefore limited to admission/cleanup boundaries and is not repeated
-for each healthy chord.
+## 6. Startup and stale work
 
-The UI/control polling loop publishes the supervisor heartbeat. There is no
-separate heartbeat thread: if the control loop stops, native lease liveness
-reflects that failure.
+Startup establishes the playback epoch and waits for the first physical target
+using the same target formula as steady state. There is no adaptive startup
+lead and no startup estimator sample. The first physical call still performs
+the complete final control/lease/target gate. Stale metadata may be committed
+before physical work, but it cannot run after the final precision handoff on
+the physical call stack.
 
-Playback progress uses a separate transition-only projection of the native
-`PlaybackClockState`. The worker publishes its epoch and pause anchor through a
-non-blocking atomic seqlock only at clock transitions; `snapshot_lite()` and the
-full snapshot sample QPC on the supervisor side and derive elapsed time there.
-This projection is independent of SendInput, telemetry, and observer draining,
-so a long event gap does not freeze the HUD and UI polling never adds work to
-the realtime dispatch path.
+The worker may project a pre-epoch deadline for control-loop wake/replan
+bookkeeping, but it never calls `SendInput` before the authoritative physical
+QPC target/epoch gate. This projection distinction must not be used to create
+an early physical send.
 
-Layout acceptance is a Windows manual matrix, not a CI claim: run preflight,
-resume, pause, and panic-release checks under English US, German, and French
-layouts, recording the layout identifier and result. A receiver/probe may
-count scan-code events and QPC order, but its result is host-side evidence and
-does not establish game receipt.
+## 7. Failure and publication boundaries
 
-## Healthy worker path
+Every QPC query used for a correctness decision is terminal on failure.
+Coordinator commit follows confirmed transport evidence. Cleanup releases
+active/possibly-active keys and verifies the resulting state before successful
+completion. The ready boundary is published only after startup gates and the
+required physical/recovery state are complete.
 
-The final wait spin observes an event signal generation and QPC ticks only; it
-does not convert ticks to microseconds or issue a zero-time Win32 event wait on
-each spin iteration. A successful deadline handoff does not consume the event
-handle at all; it revalidates the authoritative command atomics immediately
-before transport. The event handle remains the blocking-wait primitive for
-long waits and is drained only on the non-precision replan path. Estimator
-lead-cache refreshes update the preallocated cache in place, and one clean
-observation refreshes the affected cache once. CPU-time telemetry is sampled
-on a bounded 100 ms interval with a final worker sample, while healthy shared
-metrics publication is rate-limited and anomaly/terminal transitions publish
-immediately. When telemetry is disabled, trace-record construction is not
-performed.
+Observer failure, telemetry overflow, or metric conversion failure cannot
+rewrite physical ownership. The worker terminates through the normal cleanup
+path and preserves the primary and secondary errors.
 
-When adaptive spin is enabled, startup probes exactly 32 wake samples and
-derives the session threshold with the existing safety margin, 700 µs floor,
-and 3,000 µs cap. The production priority policy remains the `Auto` MMCSS
-Games → `THREAD_PRIORITY_HIGHEST` fallback ladder; diagnostic priority modes
-are not production policy.
+The live snapshot is a small projection of authoritative playback state. The
+final report is materialized after worker and observer shutdown. The deprecated
+`estimator_state_json` field and historical lead fields exist only for Python
+compatibility; they are ignored by planning and contain no learned state.
 
-The waiter returns raw `wake_qpc` and `spin_ticks` evidence. The regular worker
-loop stores at most one fixed raw wait observation and hands it to the same
-deferred observer path as dispatch observations; wake lateness, tick-to-
-microsecond conversion, spin counters, and wait-health windows are therefore
-not computed on the wake-to-dispatch handoff. A full observer queue drops the
-wait observation without evicting a physical dispatch observation. Startup
-gating may account for its own spin sample immediately because it is outside
-the steady-state dispatch boundary.
+## 8. Verification matrix
 
-## Preview, calibration, and rollback
-
-Preview is a separate no-input simulation path. It is not a backend, scheduler,
-timing oracle, or fallback. Calibration runs in its dedicated native process
-and is not part of the playback session contract.
-
-Native admission is startup-only and fail-closed. In source development,
-admission validates the native commit is present plus the runtime schema, ABI,
-free-threaded, and Win32 backend metadata; a dirty native commit is allowed.
-In frozen production, admission additionally validates generated
-`APP_BUILD_COMMIT` against the exact lowercase native commit once before
-opening the playback UI. Playback never probes again, runs Git, hashes the
-Rust source tree, or accepts a SHA environment override. Removing or
-invalidating the extension never selects Python. Rollback is an application
-release rollback, not a second dispatch engine in the same binary.
+- `sky_dispatch_core`: controlled-clock deadline, hold-floor, ownership,
+  recovery, and property tests.
+- `sky_dispatch_win32`: packet ordering, strict mask validation, QPC/wait,
+  focus, and `SendInput` seam tests.
+- `sky_player_rs`: final-gate ordering, completion evidence, observer queue
+  overflow, startup/stale handling, cleanup, and no-allocation dispatch tests.
+- Security audit: only the platform crate contains Win32 bindings and
+  `SendInput`; forbidden hook/injection/process-tampering mechanisms remain
+  absent.

@@ -54,7 +54,6 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) wait: WaitOptions,
     pub(crate) telemetry: TelemetryOptions,
     pub(crate) priority: PriorityOptions,
-    pub(crate) estimator: EstimatorOptions,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
 }
@@ -64,7 +63,6 @@ pub(crate) struct NativeSessionOptions {
 pub(crate) struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
-    pub(crate) precision_wait_completed: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
 }
 
@@ -76,11 +74,6 @@ impl StartupOrderingHook {
 
     pub(crate) fn mark_stale_packet_committed(&self) {
         self.stale_packet_committed
-            .store(self.next_sequence(), Ordering::SeqCst);
-    }
-
-    pub(crate) fn mark_precision_wait_completed(&self) {
-        self.precision_wait_completed
             .store(self.next_sequence(), Ordering::SeqCst);
     }
 
@@ -99,7 +92,6 @@ pub(crate) struct WorkerConfig {
     pub(super) wait: WaitOptions,
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
-    pub(super) estimator: EstimatorOptions,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -108,10 +100,7 @@ impl Default for WorkerConfig {
         Self {
             backend: BackendConfig::Production,
             timing: TimingOptions {
-                game_fps: 60,
                 min_hold_us: 10_000,
-                max_lead_us: 5_000,
-                dispatch_lead_us: 0,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -136,19 +125,12 @@ impl Default for WorkerConfig {
             priority: PriorityOptions {
                 mode: PriorityMode::Off,
             },
-            estimator: EstimatorOptions {
-                state_json: None,
-                enable_dispatch_cost_lead: false,
-            },
         }
     }
 }
 
 pub(crate) struct TimingOptions {
-    pub(crate) game_fps: u16,
     pub(crate) min_hold_us: u64,
-    pub(crate) max_lead_us: u64,
-    pub(crate) dispatch_lead_us: u64,
     pub(crate) strict_timing: bool,
     pub(crate) strict_down_completion_late_us: u64,
     pub(crate) strict_up_completion_late_us: u64,
@@ -176,9 +158,4 @@ pub(crate) struct TelemetryOptions {
 
 pub(crate) struct PriorityOptions {
     pub(crate) mode: PriorityMode,
-}
-
-pub(crate) struct EstimatorOptions {
-    pub(crate) state_json: Option<String>,
-    pub(crate) enable_dispatch_cost_lead: bool,
 }

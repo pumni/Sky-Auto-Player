@@ -163,7 +163,7 @@ pub(super) struct SessionLifecycle {
 }
 
 pub(super) struct SessionPublication {
-    pub(super) metrics: SharedMetrics,
+    pub(super) metrics: std::sync::Arc<SharedMetrics>,
     pub(super) progress_clock: SharedProgressClock,
     pub(super) telemetry_output: Mutex<Option<NativeTelemetryOutput>>,
     pub(super) priority_acquired: Mutex<String>,

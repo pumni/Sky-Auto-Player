@@ -5,11 +5,10 @@ use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
     CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
-    anchored_dispatch_target_ticks_typed, ensure_preflight_for_target, focus_matches,
-    focus_matches_hwnd, lease_bounded_ticks, load_target_stamp, plan_next_dispatch_projected,
-    plan_structure_is_valid, process_command_control, publish_backend_metrics,
-    record_termination_error, suspend_live_input, target_stamp_still_current, wait_failure_message,
+    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
+    focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
+    plan_next_dispatch_projected, plan_structure_is_valid, process_command_control,
+    publish_backend_metrics, suspend_live_input, target_stamp_still_current, wait_failure_message,
     wait_for_next_boundary,
 };
 use smallvec::SmallVec;
@@ -27,7 +26,6 @@ fn physical_target_qpc_for_work(
     plan: &super::planning::NextDispatchPlan,
     epoch: sky_dispatch_win32::clock::QpcTicks,
     now: sky_dispatch_win32::clock::QpcTicks,
-    startup_dispatch_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     work: PhysicalWork,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
     let deadline = match work {
@@ -40,12 +38,9 @@ fn physical_target_qpc_for_work(
     let Some(deadline) = deadline else {
         return Ok(None);
     };
-    let target = match (work, startup_dispatch_target_qpc) {
-        (PhysicalWork::Authored, Some(startup_target)) => startup_target,
-        _ => epoch
-            .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-            .map_err(|error| format!("physical target arithmetic failure: {error}"))?,
-    };
+    let target = epoch
+        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+        .map_err(|error| format!("physical target arithmetic failure: {error}"))?;
     Ok((target <= now).then_some(target))
 }
 
@@ -81,7 +76,6 @@ pub(crate) fn dispatch_due_from_plan(
     timing: &super::WorkerTimingState,
     runtime: &mut super::WorkerRuntime,
     local_metrics: &mut super::WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
     secondary_errors: &mut Vec<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
@@ -92,7 +86,6 @@ pub(crate) fn dispatch_due_from_plan(
     desired_pause: &AtomicBool,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    metrics: &crate::engine::telemetry::SharedMetrics,
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: &mut super::dispatch::PendingObservationQueue,
 ) -> super::DispatchStep {
@@ -102,7 +95,6 @@ pub(crate) fn dispatch_due_from_plan(
         );
     }
     let pending_plan = plan.pending.as_ref();
-    let lead_up_ticks = pending_plan.map_or(DurationTicks::ZERO, |pending| pending.lead_ticks);
     let due_pending = match pending_plan {
         Some(pending) => match resources
             .coordinator
@@ -118,17 +110,12 @@ pub(crate) fn dispatch_due_from_plan(
         None => SmallVec::new(),
     };
     if !due_pending.is_empty() {
-        let physical_target_qpc = match physical_target_qpc_for_work(
-            plan,
-            epoch_qpc,
-            now_ticks,
-            None,
-            PhysicalWork::Pending,
-        ) {
-            Ok(Some(target)) => target,
-            Ok(None) => return super::DispatchStep::NoWork,
-            Err(error) => return super::DispatchStep::Terminate(error),
-        };
+        let physical_target_qpc =
+            match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Pending) {
+                Ok(Some(target)) => target,
+                Ok(None) => return super::DispatchStep::NoWork,
+                Err(error) => return super::DispatchStep::Terminate(error),
+            };
         let Some(frozen_budget) = plan.pending_budget.as_ref() else {
             return super::DispatchStep::Terminate(
                 "pending dispatch plan has no health budget".to_string(),
@@ -137,8 +124,6 @@ pub(crate) fn dispatch_due_from_plan(
         match super::dispatch_due_pending_releases(
             super::PendingReleaseContext {
                 due_pending,
-                pending_plan,
-                lead_up_ticks,
                 physical_target_qpc,
                 frozen_budget: *frozen_budget,
                 quit_requested,
@@ -176,18 +161,13 @@ pub(crate) fn dispatch_due_from_plan(
         );
     }
     /* stale authored metadata is drained by the outer global metadata phase */
-    let startup_target_selected = runtime.startup_dispatch_target_qpc.is_some();
-    let physical_target_qpc = match physical_target_qpc_for_work(
-        plan,
-        epoch_qpc,
-        now_ticks,
-        runtime.startup_dispatch_target_qpc,
-        PhysicalWork::Authored,
-    ) {
-        Ok(Some(target)) => target,
-        Ok(None) => return super::DispatchStep::NoWork,
-        Err(error) => return super::DispatchStep::Terminate(error),
-    };
+    let startup_target_selected = false;
+    let physical_target_qpc =
+        match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks, PhysicalWork::Authored) {
+            Ok(Some(target)) => target,
+            Ok(None) => return super::DispatchStep::NoWork,
+            Err(error) => return super::DispatchStep::Terminate(error),
+        };
 
     super::dispatch_authored_packet(
         super::AuthoredPacketContext {
@@ -206,7 +186,6 @@ pub(crate) fn dispatch_due_from_plan(
         timing,
         runtime,
         local_metrics,
-        last_published_error,
         focus_active,
         target_hwnd,
         target_generation,
@@ -214,7 +193,6 @@ pub(crate) fn dispatch_due_from_plan(
         skip_requested,
         panic_requested,
         desired_pause,
-        metrics,
         progress_clock,
         observer,
     )
@@ -240,7 +218,7 @@ pub(super) fn dispatch(
     #[cfg(any(test, feature = "test-support"))]
     let command_timing = &shared.commands.command_timing;
 
-    let mut timing = *core.timing.as_ref().expect("worker timing initialized");
+    let timing = *core.timing.as_ref().expect("worker timing initialized");
     let qpc_clock = core
         .resources
         .as_ref()
@@ -325,7 +303,7 @@ pub(super) fn dispatch(
                 break;
             }
 
-            let mut now_ticks = qpc_ticks_or_terminal!();
+            let now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
             let manual_pause = desired_pause.load(Ordering::Acquire);
             #[cfg(any(test, feature = "test-support"))]
@@ -343,7 +321,6 @@ pub(super) fn dispatch(
             }
 
             if !focus_ok {
-                core.runtime.startup_dispatch_target_qpc = None;
                 core.runtime.verified_target = None;
                 core.runtime.focus_restore_started_ticks = None;
                 if !resources.playback.has_pause_reason("focus") {
@@ -399,7 +376,6 @@ pub(super) fn dispatch(
                         &mut resources.coordinator,
                         preflight_target.hwnd,
                     ) {
-                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -427,7 +403,6 @@ pub(super) fn dispatch(
                         target_generation,
                         preflight_target,
                     ) {
-                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
                         continue;
@@ -445,7 +420,6 @@ pub(super) fn dispatch(
                         .progress_clock
                         .publish(&resources.playback);
                     if desired_pause.load(Ordering::Acquire) {
-                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                     }
                     core.runtime.focus_restore_started_ticks = None;
@@ -460,7 +434,6 @@ pub(super) fn dispatch(
             }
 
             if manual_pause && !resources.playback.has_pause_reason("manual") {
-                core.runtime.startup_dispatch_target_qpc = None;
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
                     if let Err(error) = suspend_live_input(
@@ -499,7 +472,6 @@ pub(super) fn dispatch(
                         preflight_target,
                         &mut core.runtime.verified_target,
                     ) {
-                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(format!(
@@ -516,7 +488,6 @@ pub(super) fn dispatch(
                         target_generation,
                         preflight_target,
                     ) {
-                        core.runtime.startup_dispatch_target_qpc = None;
                         core.runtime.verified_target = None;
                         continue;
                     }
@@ -624,7 +595,9 @@ pub(super) fn dispatch(
                     match super::dispatch_stale_packet(
                         prepared,
                         &mut resources.coordinator,
-                        &mut resources.telemetry,
+                        &core.observer.pending,
+                        &mut core.metrics.observer_dropped_samples,
+                        &mut core.metrics.observer_queue_high_watermark,
                         stale_now,
                     ) {
                         super::DispatchStep::Dispatched => {
@@ -658,199 +631,13 @@ pub(super) fn dispatch(
                 }
             }
 
-            // Freeze the physical plan before the precision wait.  Once that
-            // wait succeeds, the handoff below may perform only final safety
-            // admission and physical transport.
-            let mut precision_plan = if matches!(
-                core.runtime.startup_precision_phase,
-                super::StartupPrecisionPhase::PrePrecision
-            ) && core.runtime.startup_gate.is_some()
-            {
-                Some(
-                    match plan_next_dispatch_projected(PlanningInput {
-                        coordinator: &resources.coordinator,
-                        estimator: &resources.estimator,
-                        qpc_clock,
-                        timing: &config.timing,
-                        health_options: core
-                            .health
-                            .as_ref()
-                            .expect("worker health initialized")
-                            .options,
-                        enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
-                    }) {
-                        Ok(plan) => plan,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error =
-                                Some(format!("startup planning failure: {error}"));
-                            break;
-                        }
-                    },
-                )
-            } else {
-                None
-            };
-
-            if let Some(startup_gate) = core.runtime.startup_gate {
-                if !matches!(
-                    core.runtime.startup_precision_phase,
-                    super::StartupPrecisionPhase::PrePrecision
-                ) {
-                    core.runtime.startup_gate = None;
-                } else {
-                    let current_physical = resources.coordinator.next_physical_authored_packet();
-                    if current_physical
-                        != Some((
-                            startup_gate.scheduled_ticks,
-                            startup_gate.up_mask,
-                            startup_gate.down_mask,
-                        ))
-                    {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(
-                            "startup gate no longer identifies the current physical packet"
-                                .to_string(),
-                        );
-                        break;
-                    }
-                    let Some(plan) = precision_plan.as_ref() else {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some("startup gate has no frozen physical dispatch plan".to_string());
-                        break;
-                    };
-                    if plan.pending.is_some()
-                        || plan
-                            .authored
-                            .as_ref()
-                            .map(|authored| authored.path)
-                            .is_none()
-                    {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(
-                            "startup precision plan contains non-authored physical work"
-                                .to_string(),
-                        );
-                        break;
-                    }
-                    if plan
-                        .authored
-                        .as_ref()
-                        .is_some_and(|authored| authored.lead_ticks != startup_gate.lead_ticks)
-                    {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some("startup gate lead differs from frozen physical plan".to_string());
-                        break;
-                    }
-                }
-            }
-
-            if matches!(
-                core.runtime.startup_precision_phase,
-                super::StartupPrecisionPhase::PrePrecision
-            ) && core.runtime.startup_gate.is_some()
-            {
-                let startup_gate = core.runtime.startup_gate.expect("startup gate checked");
-                let target_sample_ticks = match qpc_clock.now() {
-                    Ok(ticks) => ticks,
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("QPC failure before startup wait: {error:?}"));
-                        break;
-                    }
-                };
-                let target_qpc = match anchored_dispatch_target_ticks_typed(
-                    target_sample_ticks,
-                    resources.playback.epoch,
-                    startup_gate.scheduled_ticks,
-                    startup_gate.lead_ticks,
-                ) {
-                    Ok(target) => target,
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("startup deadline failure: {error:?}"));
-                        break;
-                    }
-                };
-                core.runtime.startup_dispatch_target_qpc = Some(target_qpc);
-                if target_sample_ticks < target_qpc {
-                    let bounded_target_qpc = match lease_bounded_ticks(
-                        target_qpc,
-                        timing.lease_timeout_ticks,
-                        supervisor_heartbeat_ticks,
-                    ) {
-                        Ok(target) => target,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error =
-                                Some(format!("lease deadline failure: {error:?}"));
-                            break;
-                        }
-                    };
-                    let wait_result = resources.waiter.wait_until_ticks_with_metrics_typed(
-                        qpc_clock,
-                        bounded_target_qpc,
-                        timing.effective_spin_threshold_ticks,
-                        interrupt,
-                    );
-                    let spin_us = match qpc_clock.duration_to_us(wait_result.spin_ticks) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error =
-                                Some(format!("startup wait spin conversion failure: {error:?}"));
-                            break;
-                        }
-                    };
-                    core.metrics.idle_wake_count = core.metrics.idle_wake_count.saturating_add(1);
-                    core.metrics.spin_time_us = core.metrics.spin_time_us.saturating_add(spin_us);
-                    match wait_result.outcome {
-                        WaitOutcome::Interrupted => continue,
-                        WaitOutcome::Deadline if bounded_target_qpc == target_qpc => {}
-                        WaitOutcome::Deadline => continue,
-                        WaitOutcome::Failed(failure) => {
-                            if matches!(failure, WaitFailure::Clock) {
-                                core.metrics.wait_clock_failures =
-                                    core.metrics.wait_clock_failures.saturating_add(1);
-                            } else {
-                                core.metrics.wait_backend_failures =
-                                    core.metrics.wait_backend_failures.saturating_add(1);
-                            }
-                            if config.timing.strict_timing || matches!(failure, WaitFailure::Clock)
-                            {
-                                core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error = Some(wait_failure_message(failure));
-                                break;
-                            }
-                            std::thread::sleep(Duration::from_micros(500));
-                            continue;
-                        }
-                    }
-                }
-                core.runtime.startup_precision_phase = super::StartupPrecisionPhase::PostPrecision;
-                #[cfg(any(test, feature = "test-support"))]
-                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                    hook.mark_precision_wait_completed();
-                }
-                core.runtime.startup_gate = None;
-                core.runtime.allow_pre_epoch_startup_dispatch = true;
-                now_ticks = qpc_ticks_or_terminal!();
-            }
-
-            let mut effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
-                && now_ticks < resources.playback.epoch
-            {
+            let effective_now_ticks = if now_ticks < resources.playback.epoch {
                 TimelineTicks::ZERO
             } else {
-                core.runtime.allow_pre_epoch_startup_dispatch = false;
-                match resources.playback.get_elapsed_allow_pre_epoch(
-                    now_ticks,
-                    core.runtime.allow_pre_epoch_startup_dispatch,
-                ) {
+                match resources
+                    .playback
+                    .get_elapsed_allow_pre_epoch(now_ticks, false)
+                {
                     Ok(ticks) => ticks,
                     Err(error) => {
                         core.runtime.force_full_cleanup = true;
@@ -860,116 +647,30 @@ pub(super) fn dispatch(
                     }
                 }
             };
-            // §8.7: fresh QPC → immutable plan → inspect slack → maybe drain
-            // one observation → if drained, discard plan and rebuild from a
-            // fresh QPC sample before any admit/dispatch/wait.  A startup
-            // precision plan was frozen before its wait and must bypass this
-            // general observer/planning path after the wait succeeds.
-            let precision_plan_frozen = precision_plan.is_some();
-            if !precision_plan_frozen
-                && let Some(wait_observation) = core.runtime.pending_wait_observation.take()
-            {
-                core.observer.pending.push_wait(wait_observation);
+            // Wait evidence is also deferred through the nonblocking producer
+            // path. The observer consumer owns all conversion and health work.
+            if let Some(wait_observation) = core.runtime.pending_wait_observation.take() {
+                core.observer.pending.push_wait(
+                    wait_observation,
+                    &mut core.metrics.observer_dropped_samples,
+                    &mut core.metrics.observer_queue_high_watermark,
+                );
             }
-            let mut dispatch_plan = match precision_plan.take() {
-                Some(plan) => plan,
-                None => match plan_next_dispatch_projected(PlanningInput {
-                    coordinator: &resources.coordinator,
-                    estimator: &resources.estimator,
-                    qpc_clock,
-                    timing: &config.timing,
-                    health_options: core
-                        .health
-                        .as_ref()
-                        .expect("worker health initialized")
-                        .options,
-                    enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
-                }) {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("planning failure: {error}"));
-                        break;
-                    }
-                },
-            };
-            if !precision_plan_frozen
-                && !core.observer.pending.is_empty()
-                && super::observer_has_safe_slack(
-                    dispatch_plan.deadline_ticks,
-                    effective_now_ticks,
-                    timing.observer_guard_ticks,
-                )
-            {
-                let drain_result = match super::drain_one_observer(
-                    &mut core.observer.pending,
-                    config,
-                    core.health.as_mut().unwrap(),
-                    &mut core.metrics,
-                    &mut core.errors.last_published,
-                    metrics,
-                    &mut resources.backend,
-                    &mut resources.estimator,
-                    &mut resources.telemetry,
-                    qpc_clock,
-                    now_ticks,
-                    &mut timing,
-                ) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("observer drain failed: {error:?}"));
-                        break;
-                    }
-                };
-                if observer_drain_requires_replan(drain_result) {
-                    let drain_us = drain_result.expect("Some drain result must carry duration");
-                    core.metrics.observer_duration_max_us =
-                        core.metrics.observer_duration_max_us.max(drain_us);
-                    // Observer work invalidates the plan. Rebuild from fresh QPC.
-                    now_ticks = qpc_ticks_or_terminal!();
-                    effective_now_ticks = if core.runtime.allow_pre_epoch_startup_dispatch
-                        && now_ticks < resources.playback.epoch
-                    {
-                        TimelineTicks::ZERO
-                    } else {
-                        core.runtime.allow_pre_epoch_startup_dispatch = false;
-                        match resources.playback.get_elapsed_allow_pre_epoch(
-                            now_ticks,
-                            core.runtime.allow_pre_epoch_startup_dispatch,
-                        ) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error =
-                                    Some(format!("playback clock failure: {error}"));
-                                break;
-                            }
-                        }
-                    };
-                    dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
-                        coordinator: &resources.coordinator,
-                        estimator: &resources.estimator,
-                        qpc_clock,
-                        timing: &config.timing,
-                        health_options: core
-                            .health
-                            .as_ref()
-                            .expect("worker health initialized")
-                            .options,
-                        enable_dispatch_cost_lead: config.estimator.enable_dispatch_cost_lead,
-                    }) {
-                        Ok(plan) => plan,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error =
-                                Some(format!("planning failure: {error}"));
-                            break;
-                        }
-                    };
+            let dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
+                coordinator: &resources.coordinator,
+                health_options: core
+                    .health
+                    .as_ref()
+                    .expect("worker health initialized")
+                    .options,
+            }) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error = Some(format!("planning failure: {error}"));
+                    break;
                 }
-            }
+            };
             let authored_step = dispatch_due_from_plan(
                 &dispatch_plan,
                 effective_now_ticks,
@@ -982,7 +683,6 @@ pub(super) fn dispatch(
                 &timing,
                 &mut core.runtime,
                 &mut core.metrics,
-                &mut core.errors.last_published,
                 &mut core.errors.secondary,
                 focus_active,
                 target_hwnd,
@@ -993,20 +693,11 @@ pub(super) fn dispatch(
                 desired_pause,
                 supervisor_heartbeat_ticks,
                 timing.lease_timeout_ticks,
-                metrics,
                 &shared.publication.progress_clock,
                 &mut core.observer.pending,
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
-                super::DispatchStep::NoWork if precision_plan_frozen => {
-                    core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error = Some(
-                        "startup precision handoff found no physical work at the selected target"
-                            .to_string(),
-                    );
-                    break;
-                }
                 super::DispatchStep::NoWork => {}
                 super::DispatchStep::Terminate(err) => {
                     core.runtime.force_full_cleanup = true;
@@ -1022,7 +713,10 @@ pub(super) fn dispatch(
                     deadline_ticks,
                     qpc_clock,
                     clock_state: &mut resources.playback,
-                    allow_pre_epoch_startup_dispatch: core.runtime.allow_pre_epoch_startup_dispatch,
+                    // The clock projection may clamp the startup wake to the
+                    // epoch; physical target admission still requires QPC >=
+                    // epoch and therefore cannot send pre-epoch.
+                    allow_pre_epoch_startup_dispatch: true,
                 },
                 timing: WaitTiming {
                     effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
@@ -1061,9 +755,7 @@ pub(super) fn dispatch(
                             spin_ticks: wait_result.spin_ticks,
                             deadline_ticks: wait_deadline_ticks,
                             epoch_qpc: resources.playback.epoch,
-                            allow_pre_epoch_startup_dispatch: core
-                                .runtime
-                                .allow_pre_epoch_startup_dispatch,
+                            allow_pre_epoch_startup_dispatch: true,
                         });
                     }
                     let dispatch_now_ticks = match qpc_clock.now() {
@@ -1075,20 +767,19 @@ pub(super) fn dispatch(
                             break;
                         }
                     };
-                    let dispatch_effective_now =
-                        match resources.playback.get_elapsed_allow_pre_epoch(
-                            dispatch_now_ticks,
-                            core.runtime.allow_pre_epoch_startup_dispatch,
-                        ) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error = Some(format!(
-                                    "playback clock failure after deadline wake: {error}"
-                                ));
-                                break;
-                            }
-                        };
+                    let dispatch_effective_now = match resources
+                        .playback
+                        .get_elapsed_allow_pre_epoch(dispatch_now_ticks, true)
+                    {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(format!(
+                                "playback clock failure after deadline wake: {error}"
+                            ));
+                            break;
+                        }
+                    };
                     match dispatch_due_from_plan(
                         &dispatch_plan,
                         dispatch_effective_now,
@@ -1101,7 +792,6 @@ pub(super) fn dispatch(
                         &timing,
                         &mut core.runtime,
                         &mut core.metrics,
-                        &mut core.errors.last_published,
                         &mut core.errors.secondary,
                         focus_active,
                         target_hwnd,
@@ -1112,7 +802,6 @@ pub(super) fn dispatch(
                         desired_pause,
                         supervisor_heartbeat_ticks,
                         timing.lease_timeout_ticks,
-                        metrics,
                         &shared.publication.progress_clock,
                         &mut core.observer.pending,
                     ) {
@@ -1139,9 +828,7 @@ pub(super) fn dispatch(
                         spin_ticks: wait_result.spin_ticks,
                         deadline_ticks: wait_deadline_ticks,
                         epoch_qpc: resources.playback.epoch,
-                        allow_pre_epoch_startup_dispatch: core
-                            .runtime
-                            .allow_pre_epoch_startup_dispatch,
+                        allow_pre_epoch_startup_dispatch: true,
                     });
                     // Event consumption is intentionally outside the
                     // precision boundary.  A signal racing this drain is
@@ -1152,92 +839,27 @@ pub(super) fn dispatch(
                 WaitBoundary::Exit => break,
             }
         }
-        // A terminal transition can end the coordinator loop immediately
-        // after a successful physical send.  Drain the fixed raw queue before
-        // finalization so deferred telemetry is not lost, while keeping this
-        // work outside the normal dispatch critical section.
-        while !core.observer.pending.is_empty() {
-            let now_ticks = match qpc_clock.now() {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    core.runtime.force_full_cleanup = true;
-                    record_termination_error(
-                        &mut core.runtime.terminal_error,
-                        &mut core.errors.secondary,
-                        format!("observer finalization QPC failure: {error:?}"),
-                    );
-                    break;
-                }
-            };
-            let drain_result = match super::drain_one_observer(
-                &mut core.observer.pending,
-                config,
-                core.health.as_mut().unwrap(),
-                &mut core.metrics,
-                &mut core.errors.last_published,
-                metrics,
-                &mut resources.backend,
-                &mut resources.estimator,
-                &mut resources.telemetry,
-                qpc_clock,
-                now_ticks,
-                &mut timing,
-            ) {
-                Ok(value) => value,
-                Err(error) => {
-                    core.runtime.force_full_cleanup = true;
-                    record_termination_error(
-                        &mut core.runtime.terminal_error,
-                        &mut core.errors.secondary,
-                        format!("observer finalization failed: {error:?}"),
-                    );
-                    break;
-                }
-            };
-            if let Some(drain_us) = drain_result {
-                core.metrics.observer_duration_max_us =
-                    core.metrics.observer_duration_max_us.max(drain_us);
-            }
-        }
     }))
-}
-
-#[inline]
-fn observer_drain_requires_replan(result: Option<u64>) -> bool {
-    result.is_some()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysicalWork, observer_drain_requires_replan, physical_target_qpc_for_work};
-    use crate::engine::worker::dispatch::timing::AuthoredDispatchPlan;
+    use super::{PhysicalWork, physical_target_qpc_for_work};
     use crate::engine::worker::health::DispatchPath;
-    use crate::engine::worker::planning::NextDispatchPlan;
+    use crate::engine::worker::planning::{AuthoredDispatchPlan, NextDispatchPlan};
     use sky_dispatch_core::coordinator::PendingDispatchPlan;
-    use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-
-    #[test]
-    fn zero_microsecond_observer_drain_still_invalidates_the_plan() {
-        assert!(observer_drain_requires_replan(Some(0)));
-        assert!(observer_drain_requires_replan(Some(7)));
-        assert!(!observer_drain_requires_replan(None));
-    }
+    use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 
     fn plan_with_deadlines(authored: u64, pending: u64) -> NextDispatchPlan {
         NextDispatchPlan {
             authored: Some(AuthoredDispatchPlan {
                 path: DispatchPath::DownOnly { down_count: 1 },
-                lead_us: 0,
-                lead_ticks: DurationTicks::ZERO,
-                lead_saturated: false,
                 deadline_ticks: TimelineTicks::from_raw(authored),
             }),
             authored_budget: None,
             pending: Some(PendingDispatchPlan {
                 deadline_ticks: TimelineTicks::from_raw(pending),
-                lead_ticks: DurationTicks::ZERO,
                 polyphony: 1,
-                lead_saturated: false,
             }),
             pending_budget: None,
             deadline_ticks: Some(TimelineTicks::from_raw(authored.min(pending))),
@@ -1254,7 +876,6 @@ mod tests {
                 &plan,
                 epoch,
                 QpcTicks::from_raw(1_200),
-                None,
                 PhysicalWork::Pending
             )
             .expect("pending target")
@@ -1266,7 +887,6 @@ mod tests {
                 &plan,
                 epoch,
                 QpcTicks::from_raw(1_200),
-                None,
                 PhysicalWork::Authored
             )
             .expect("authored target")
@@ -1282,7 +902,6 @@ mod tests {
             &plan,
             QpcTicks::ZERO,
             QpcTicks::from_raw(1_200),
-            None,
             PhysicalWork::Pending,
         )
         .expect("pending target")
@@ -1299,7 +918,6 @@ mod tests {
             &plan,
             epoch,
             QpcTicks::from_raw(1_500),
-            None,
             PhysicalWork::Pending,
         )
         .expect("pending target")
@@ -1308,7 +926,6 @@ mod tests {
             &plan,
             epoch,
             QpcTicks::from_raw(1_500),
-            None,
             PhysicalWork::Authored,
         )
         .expect("authored target")
@@ -1319,26 +936,17 @@ mod tests {
     }
 
     #[test]
-    fn startup_target_is_preserved_through_physical_target_selection() {
+    fn startup_target_cannot_precede_the_playback_epoch() {
         let plan = plan_with_deadlines(0, 1_000);
         let target = physical_target_qpc_for_work(
             &plan,
             QpcTicks::from_raw(10_000),
             QpcTicks::from_raw(9_540),
-            Some(QpcTicks::from_raw(9_500)),
             PhysicalWork::Authored,
         )
-        .expect("startup target")
-        .expect("startup target is due");
+        .expect("target arithmetic");
 
-        assert_eq!(target, QpcTicks::from_raw(9_500));
-        assert_eq!(
-            QpcTicks::from_raw(9_700)
-                .checked_duration_since(target)
-                .expect("completion follows exact startup target")
-                .as_u64(),
-            200
-        );
+        assert_eq!(target, None);
     }
 
     #[test]
@@ -1348,7 +956,6 @@ mod tests {
             &plan,
             QpcTicks::ZERO,
             QpcTicks::from_raw(900),
-            None,
             PhysicalWork::Authored,
         )
         .expect("target arithmetic");

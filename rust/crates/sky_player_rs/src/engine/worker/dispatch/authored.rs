@@ -1,18 +1,18 @@
 use super::super::super::{
     ActionKind, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PlaybackClockState, QpcClock,
-    QpcTicks, RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SharedMetrics,
-    TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TrackedKeyState,
-    try_publish_metrics,
+    QpcTicks, RuntimeDispatchCoordinator, TRACE_KIND_DOWN, TRACE_KIND_UP, TimelineTicks,
+    TrackedKeyState,
 };
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
-    WorkerTimingState, ensure_preflight_for_target, final_control_admission_with_lease,
-    final_down_target_admission, focus_matches, load_target_stamp, signed_ticks_to_us,
-    suspend_live_input, target_stamp_still_current,
+    WorkerTimingState, ensure_preflight_for_target, final_control_admission_at,
+    final_control_precheck, final_down_target_admission, focus_matches, load_target_stamp,
+    signed_ticks_to_us, suspend_live_input, target_stamp_still_current,
 };
-use super::observer::{publisher_down_send_outcome, record_blocked_unfocused_telemetry};
-use super::timing::{interpret_down_send_timing, prepare_authored_batch_view, read_qpc_us};
+use super::observation::BlockedUnfocusedObservation;
+use super::observer::publisher_down_send_outcome;
+use super::timing::{interpret_down_send_timing, prepare_authored_batch_view};
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
@@ -27,7 +27,6 @@ pub(crate) fn dispatch_authored_packet(
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
@@ -35,7 +34,6 @@ pub(crate) fn dispatch_authored_packet(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
-    metrics: &SharedMetrics,
     progress_clock: &SharedProgressClock,
     observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
@@ -55,15 +53,10 @@ pub(crate) fn dispatch_authored_packet(
         backend,
         coordinator,
         playback: clock_state,
-        telemetry,
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
 
-    let (requested_lead_saturated, requested_lead_ticks) = match dispatch_plan.authored.as_ref() {
-        Some(authored) => (authored.lead_saturated, authored.lead_ticks),
-        None => (false, DurationTicks::ZERO),
-    };
     let Some(frozen_budget) = dispatch_plan.authored_budget.as_ref() else {
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
@@ -76,15 +69,14 @@ pub(crate) fn dispatch_authored_packet(
             .as_ref()
             .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
     );
-    let prepared_batch =
-        match coordinator.prepare_next_due_authored(prepare_now_ticks, requested_lead_ticks) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "coordinator authored-prepare failure: {error}"
-                ));
-            }
-        };
+    let prepared_batch = match coordinator.prepare_next_due_authored(prepare_now_ticks) {
+        Ok(value) => value,
+        Err(error) => {
+            return DispatchStep::Terminate(format!(
+                "coordinator authored-prepare failure: {error}"
+            ));
+        }
+    };
     local_metrics.timeline_rebase_count = coordinator.timeline_rebase_count();
     local_metrics.timeline_rebase_total_ticks = coordinator.timeline_rebase_total_ticks();
     local_metrics.timeline_rebase_max_ticks = coordinator.timeline_rebase_max_ticks();
@@ -103,12 +95,6 @@ pub(crate) fn dispatch_authored_packet(
         Err(step) => return step,
     };
 
-    let (applied_lead_ticks, applied_lead_saturated) = applied_authored_lead(
-        startup_target_selected,
-        requested_lead_ticks,
-        view.prepared_batch.effective_lead_ticks,
-        requested_lead_saturated,
-    );
     commit_down_send_outcome(
         &view,
         config,
@@ -116,7 +102,6 @@ pub(crate) fn dispatch_authored_packet(
         timing,
         runtime,
         local_metrics,
-        last_published_error,
         focus_active,
         target_hwnd,
         target_generation,
@@ -124,17 +109,13 @@ pub(crate) fn dispatch_authored_packet(
         skip_requested,
         panic_requested,
         desired_pause,
-        metrics,
         progress_clock,
         qpc_clock,
         backend,
         coordinator,
         clock_state,
-        telemetry,
         effective_now_ticks,
         now_ticks,
-        applied_lead_saturated,
-        applied_lead_ticks,
         physical_target_qpc,
         startup_target_selected,
         focus_loss_fault,
@@ -145,34 +126,15 @@ pub(crate) fn dispatch_authored_packet(
     )
 }
 
-fn applied_authored_lead(
-    startup_target_selected: bool,
-    requested_lead_ticks: DurationTicks,
-    effective_lead_ticks: DurationTicks,
-    requested_lead_saturated: bool,
-) -> (DurationTicks, bool) {
-    if startup_target_selected {
-        return (requested_lead_ticks, requested_lead_saturated);
-    }
-    (
-        effective_lead_ticks,
-        requested_lead_saturated && effective_lead_ticks == requested_lead_ticks,
-    )
-}
-
 fn authored_prepare_now_ticks(
     effective_now_ticks: TimelineTicks,
-    startup_target_selected: bool,
-    authored_deadline_ticks: TimelineTicks,
+    _startup_target_selected: bool,
+    _authored_deadline_ticks: TimelineTicks,
 ) -> TimelineTicks {
-    if startup_target_selected {
-        effective_now_ticks.max(authored_deadline_ticks)
-    } else {
-        effective_now_ticks
-    }
+    effective_now_ticks
 }
 
-/// Admission gate + SendInput call + telemetry + estimator update + health
+/// Admission gate + SendInput call + telemetry + health
 /// observation for an authored Down/Mixed batch.  Owns the physical send
 /// boundary; the orchestrator only sees a `DispatchStep` outcome.
 #[allow(clippy::too_many_arguments)]
@@ -183,7 +145,6 @@ fn commit_down_send_outcome(
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
@@ -191,19 +152,15 @@ fn commit_down_send_outcome(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
-    metrics: &SharedMetrics,
     progress_clock: &SharedProgressClock,
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
-    applied_lead_saturated: bool,
-    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
-    startup_target_selected: bool,
+    _startup_target_selected: bool,
     focus_loss_fault: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     supervisor_heartbeat_ticks: &AtomicU64,
@@ -218,10 +175,8 @@ fn commit_down_send_outcome(
         backend,
         coordinator,
         clock_state,
-        telemetry,
         runtime,
         local_metrics,
-        last_published_error,
         focus_active,
         target_hwnd,
         target_generation,
@@ -229,24 +184,20 @@ fn commit_down_send_outcome(
         skip_requested,
         panic_requested,
         desired_pause,
-        metrics,
         progress_clock,
         effective_now_ticks,
         now_ticks,
-        applied_lead_ticks,
         timing,
         has_conflicts,
         focus_loss_fault,
         frozen_budget,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        observer,
     ) {
         Ok(admission) => admission,
         Err(step) => return step,
     };
-    if startup_target_selected {
-        runtime.startup_dispatch_target_qpc = None;
-    }
     record_down_send_outcome(
         view,
         config,
@@ -259,8 +210,6 @@ fn commit_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        applied_lead_saturated,
-        applied_lead_ticks,
         physical_target_qpc,
         &admission,
         observer,
@@ -274,6 +223,7 @@ enum AdmissionOutcome {
     Allowed {
         frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
         trace_kind: u8,
+        started_qpc: QpcTicks,
     },
     BlockedUnfocused,
     FocusLost,
@@ -283,8 +233,9 @@ enum AdmissionOutcome {
 }
 
 /// Pre-send admission gate: focus, preflight, hard-late abort, conflict
-/// detection, and final down-admission.  Performs short-circuit telemetry +
-/// metric publish for the unfocused path.  Does not call `SendInput`.
+/// detection, and final down-admission.  The unfocused path commits pause
+/// state and enqueues fixed observation evidence; the observer materializes
+/// telemetry and publication.  Does not call `SendInput`.
 #[allow(clippy::too_many_arguments)]
 fn admit_authored_down(
     view: &AuthoredBatchView,
@@ -293,10 +244,8 @@ fn admit_authored_down(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    telemetry: &mut TelemetryCollector,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
@@ -304,17 +253,16 @@ fn admit_authored_down(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
-    metrics: &SharedMetrics,
     progress_clock: &SharedProgressClock,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
-    applied_lead_ticks: DurationTicks,
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    observer: &PendingObservationQueue,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let trace_kind = trace_kind_for_view(view);
     let has_down_events = view
@@ -337,15 +285,19 @@ fn admit_authored_down(
         }
         progress_clock.publish(clock_state);
         runtime.focus_restore_started_ticks = None;
-        record_blocked_unfocused_telemetry(
-            telemetry,
-            view,
-            effective_now_ticks,
-            applied_lead_ticks,
-        )?;
-        super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-        let current_us = read_qpc_us(qpc_clock, clock_state)?;
-        try_publish_metrics(local_metrics, metrics, current_us, true);
+        observer.push(
+            super::observation::DispatchObservation::BlockedUnfocused(
+                BlockedUnfocusedObservation {
+                    event_index: view.batch_source_action_index,
+                    authored_ticks: view.authored_batch_scheduled_ticks,
+                    effective_deadline_ticks: view.batch_scheduled_ticks,
+                    effective_now_ticks,
+                    polyphony: view.batch_intent_count,
+                },
+            ),
+            &mut local_metrics.observer_dropped_samples,
+            &mut local_metrics.observer_queue_high_watermark,
+        );
         return Ok(AdmissionOutcome::BlockedUnfocused);
     }
     if has_down_events && focus_loss_fault && !runtime.focus_loss_fault_injected {
@@ -393,20 +345,20 @@ fn admit_authored_down(
         )));
     }
     if has_physical_packet {
-        let (control_admission, _) = final_control_admission_with_lease(
-            qpc_clock,
-            lease_timeout_ticks,
-            FinalControlSignals {
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                desired_pause,
-                supervisor_heartbeat_ticks,
-            },
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
-        })?;
+        let control_signals = FinalControlSignals {
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            supervisor_heartbeat_ticks,
+        };
+        let control_admission = final_control_precheck(FinalControlSignals {
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            supervisor_heartbeat_ticks,
+        });
         if !matches!(control_admission, FinalControlAdmission::Allowed) {
             runtime.verified_target = None;
             return Ok(AdmissionOutcome::ControlRejected);
@@ -446,14 +398,6 @@ fn admit_authored_down(
                     }
                     progress_clock.publish(clock_state);
                     runtime.focus_restore_started_ticks = None;
-                    super::publish_backend_metrics(
-                        backend,
-                        local_metrics,
-                        metrics,
-                        last_published_error,
-                    );
-                    let current_us = read_qpc_us(qpc_clock, clock_state)?;
-                    try_publish_metrics(local_metrics, metrics, current_us, true);
                     return Ok(AdmissionOutcome::FocusLost);
                 }
                 DownAdmission::TargetChanged => {
@@ -462,7 +406,22 @@ fn admit_authored_down(
                 }
             }
         }
-        return Ok(finalize_allowed_admission(frozen_budget, trace_kind));
+        let started_qpc = qpc_clock.now().map_err(|error| {
+            DispatchStep::Terminate(format!("QPC send-start failure: {error:?}"))
+        })?;
+        let lease_admission =
+            final_control_admission_at(started_qpc, lease_timeout_ticks, control_signals).map_err(
+                |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
+            )?;
+        if !matches!(lease_admission, FinalControlAdmission::Allowed) {
+            runtime.verified_target = None;
+            return Ok(AdmissionOutcome::ControlRejected);
+        }
+        return Ok(finalize_allowed_admission(
+            frozen_budget,
+            trace_kind,
+            started_qpc,
+        ));
     }
     Ok(AdmissionOutcome::ConflictReject)
 }
@@ -481,10 +440,12 @@ fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
 fn finalize_allowed_admission(
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
+    started_qpc: QpcTicks,
 ) -> AdmissionOutcome {
     AdmissionOutcome::Allowed {
         frozen_budget: *frozen_budget,
         trace_kind,
+        started_qpc,
     }
 }
 
@@ -501,8 +462,6 @@ fn record_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    applied_lead_saturated: bool,
-    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
     admission: &AdmissionOutcome,
     observer: &mut PendingObservationQueue,
@@ -510,6 +469,7 @@ fn record_down_send_outcome(
     let AdmissionOutcome::Allowed {
         frozen_budget,
         trace_kind,
+        started_qpc,
     } = admission
     else {
         return DispatchStep::Continue;
@@ -523,7 +483,7 @@ fn record_down_send_outcome(
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
-    let result = backend.send_physical_packet(packet);
+    let result = backend.send_physical_packet_with_start(packet, *started_qpc);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
@@ -561,8 +521,6 @@ fn record_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
-        applied_lead_saturated,
-        applied_lead_ticks,
         physical_target_qpc,
         frozen_budget,
         trace_kind,
@@ -592,8 +550,6 @@ fn finalize_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
-    applied_lead_saturated: bool,
-    applied_lead_ticks: DurationTicks,
     physical_target_qpc: QpcTicks,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
@@ -629,7 +585,6 @@ fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
-        applied_lead_saturated,
     ) {
         Ok(value) => value,
         Err(step) => return step,
@@ -641,8 +596,6 @@ fn finalize_down_send_outcome(
         local_metrics,
         qpc_clock,
         effective_now_ticks,
-        applied_lead_saturated,
-        applied_lead_ticks,
         physical_target_qpc,
         config.timing.strict_timing
             || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off),
@@ -664,7 +617,7 @@ pub(super) fn resolve_slo_terminal_step(
     result_chord_integrity_lost: bool,
     retry_late_abort: bool,
     strict_completion_late: bool,
-    saturation_abort: bool,
+    _saturation_abort: bool,
     qpc_clock: QpcClock,
     completion_error_ticks: i64,
     view: &AuthoredBatchView,
@@ -710,17 +663,6 @@ pub(super) fn resolve_slo_terminal_step(
             view.batch_source_action_index, completion_error_us
         ));
     }
-    if saturation_abort {
-        let timing_label = if matches!(view.dispatch_path, DispatchPath::UpOnly { .. }) {
-            "note-off"
-        } else {
-            "note-on"
-        };
-        return DispatchStep::Terminate(format!(
-            "strict timing SLO exceeded: {timing_label} lead saturated with positive residual for {} consecutive dispatches",
-            STRICT_SATURATION_ABORT_STREAK
-        ));
-    }
     DispatchStep::Dispatched
 }
 
@@ -737,7 +679,6 @@ mod tests {
             prepared_batch: PreparedBatch {
                 index: 0,
                 effective_scheduled_ticks: TimelineTicks::ZERO,
-                effective_lead_ticks: DurationTicks::ZERO,
                 packet_kind: PhysicalPacketKind::DownOnly,
                 packet_batch_count: 1,
                 packet_index: 0,
@@ -769,36 +710,10 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_authored_lead_cannot_report_positive_saturation() {
-        let (applied_lead, saturated) = applied_authored_lead(
-            false,
-            DurationTicks::from_raw(500),
-            DurationTicks::ZERO,
-            true,
-        );
-
-        assert_eq!(applied_lead, DurationTicks::ZERO);
-        assert!(!saturated);
-    }
-
-    #[test]
-    fn startup_physical_target_reports_requested_applied_lead() {
-        let (applied_lead, saturated) = applied_authored_lead(
-            true,
-            DurationTicks::from_raw(500),
-            DurationTicks::ZERO,
-            true,
-        );
-
-        assert_eq!(applied_lead, DurationTicks::from_raw(500));
-        assert!(saturated);
-    }
-
-    #[test]
-    fn startup_prepare_now_reaches_nonzero_sublead_deadline() {
+    fn prepare_now_does_not_apply_dispatch_lead() {
         assert_eq!(
             authored_prepare_now_ticks(TimelineTicks::ZERO, true, TimelineTicks::from_raw(100),),
-            TimelineTicks::from_raw(100)
+            TimelineTicks::ZERO
         );
         assert_eq!(
             authored_prepare_now_ticks(
@@ -815,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_physical_target_matrix_preserves_requested_lead() {
+    fn anchored_target_math_supports_explicit_offset() {
         let anchor = QpcTicks::from_raw(10_000);
         let lead = DurationTicks::from_raw(500);
         for (scheduled, expected_target) in [
@@ -833,10 +748,6 @@ mod tests {
             )
             .expect("startup target");
             assert_eq!(target, QpcTicks::from_raw(expected_target));
-            assert_eq!(
-                applied_authored_lead(true, lead, DurationTicks::ZERO, false,),
-                (lead, false)
-            );
         }
     }
 }

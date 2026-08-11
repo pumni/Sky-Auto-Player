@@ -1,6 +1,6 @@
 //! Pure timing projection for the authored note-on path: resolves the QPC
 //! evidence into typed timeline values, flags, and deferred observation data used by
-//! telemetry, estimator updates, and the terminal SLO decision.
+//! telemetry and the terminal SLO decision.
 //!
 //! Structural ownership: this module must not import `SharedMetrics`,
 //! `TelemetryCollector`, `Mutex`, or any Python type.  It stays pure and
@@ -9,58 +9,18 @@
 
 use super::super::super::{
     ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
-    STRICT_SATURATION_ABORT_STREAK, TimelineTicks,
+    TimelineTicks,
 };
-use super::super::health::{DispatchLeadEstimate, estimate_dispatch_path_lead};
 use super::super::{
     DispatchPath, WorkerConfig, WorkerHealthState, WorkerRuntime, WorkerTimingState,
     signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
-use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{
     CoordinatorError, CoordinatorInvariantError, PreparedBatch, physical_packet_kind,
 };
-use sky_dispatch_core::estimator::{DispatchCostEstimator, SendPath};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
-
-/// Snapshot of the next authored packet's dispatch path and lead.
-///
-/// Built once per worker loop epoch and reused for both
-/// `prepare_next_due_authored` and wait-boundary planning.  The deadline is
-/// the physical target for this authored work; `NextDispatchPlan::deadline_ticks`
-/// may be earlier when a pending release is also present.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuthoredDispatchPlan {
-    pub(crate) path: DispatchPath,
-    pub(crate) lead_us: u64,
-    pub(crate) lead_ticks: DurationTicks,
-    pub(crate) lead_saturated: bool,
-    pub(crate) deadline_ticks: TimelineTicks,
-}
-
-/// Resolve the path-aware lead for one authored packet without reading QPC.
-pub(crate) fn resolve_authored_lead(
-    estimator: &DispatchCostEstimator,
-    path: DispatchPath,
-    timing: &TimingOptions,
-    enable_dispatch_cost_lead: bool,
-) -> DispatchLeadEstimate {
-    if timing.dispatch_lead_us > 0 {
-        return DispatchLeadEstimate {
-            applied_us: timing.dispatch_lead_us,
-            saturated: false,
-        };
-    }
-    if !enable_dispatch_cost_lead {
-        return DispatchLeadEstimate {
-            applied_us: 0,
-            saturated: false,
-        };
-    }
-    estimate_dispatch_path_lead(estimator, path, timing.strict_timing, timing.max_lead_us)
-}
 
 fn dispatch_path_from_masks(
     up_mask: u16,
@@ -96,61 +56,12 @@ pub(crate) fn current_authored_physical_path(
     dispatch_path_from_masks(up_mask, down_mask).map(Some)
 }
 
-/// Find the first subsequent physical packet for startup gate construction.
-/// This is the only authored suffix-lookahead path.
-pub(crate) fn startup_first_physical_path(
-    coordinator: &RuntimeDispatchCoordinator,
-) -> Option<DispatchPath> {
-    coordinator
-        .next_physical_authored_packet()
-        .and_then(|(_, up_mask, down_mask)| dispatch_path_from_masks(up_mask, down_mask).ok())
-}
-
-pub(crate) fn pending_lead_for_polyphony(
-    estimator: &DispatchCostEstimator,
-    qpc_clock: QpcClock,
-    polyphony: usize,
-    timing: &TimingOptions,
-    enable_dispatch_cost_lead: bool,
-) -> Result<(DurationTicks, bool), sky_dispatch_win32::clock::TimeConversionError> {
-    let (lead_us, saturated) = if timing.dispatch_lead_us > 0 {
-        (timing.dispatch_lead_us, false)
-    } else if enable_dispatch_cost_lead {
-        let estimate = estimator.estimate_lead(SendPath::UpOnly, polyphony, timing.strict_timing);
-        (estimate.applied_us, estimate.saturated)
-    } else {
-        (0, false)
-    };
-    qpc_clock
-        .duration_from_us(lead_us)
-        .map(|ticks| (ticks, saturated))
-}
-
-/// Resolve the path-aware lead used to anchor the startup wait before the
-/// first main-loop `NextDispatchPlan` is built.
-///
-/// The normal loop derives lead from the next authored packet's path; startup
-/// must use the same policy instead of a hard-coded Down lead, otherwise a
-/// first authored `UpOnly`/`Mixed` packet anchors its physical boundary with
-/// the wrong directional lead.
-pub(crate) fn startup_lead_for_first_packet(
-    coordinator: &RuntimeDispatchCoordinator,
-    estimator: &DispatchCostEstimator,
-    timing: &TimingOptions,
-    enable_dispatch_cost_lead: bool,
-) -> u64 {
-    let path = startup_first_physical_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
-        down_count: coordinator.next_authored_polyphony().max(1),
-    });
-    resolve_authored_lead(estimator, path, timing, enable_dispatch_cost_lead).applied_us
-}
-
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
-/// estimator observations.  The observer applies the one canonical predicate
+/// dispatch observations.  The observer applies the one canonical predicate
 /// after the hard dispatch-ready boundary; dispatch code only constructs this
 /// immutable evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EstimatorObservationEvidence {
+pub struct DispatchObservationEvidence {
     pub status: SendTransactionStatus,
     pub attempts: u8,
     pub retry_reason: PacketRetryReason,
@@ -163,9 +74,9 @@ pub struct EstimatorObservationEvidence {
     pub chord_integrity_lost: bool,
 }
 
-/// Canonical clean estimator eligibility.  Every transport direction uses
+/// Canonical clean dispatch eligibility. Every transport direction uses
 /// this exact predicate, including Mixed, with no weaker UpOnly shortcut.
-pub fn is_clean_estimator_observation(evidence: EstimatorObservationEvidence) -> bool {
+pub fn is_clean_dispatch_observation(evidence: DispatchObservationEvidence) -> bool {
     evidence.status == SendTransactionStatus::Complete
         && evidence.attempts == 1
         && evidence.retry_reason == PacketRetryReason::None
@@ -287,28 +198,25 @@ pub(crate) fn prepare_authored_batch_view(
     }))
 }
 
-/// Timing-derived evidence captured from the note-on SendInput call:
-/// projections used across telemetry, estimator update, and the terminal
-/// SLO decision.
+/// Timing-derived evidence captured from the note-on SendInput call.
 pub(crate) struct DownSendTiming {
     pub(crate) sender_started_qpc: QpcTicks,
     pub(crate) sender_completed_qpc: QpcTicks,
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
     pub(crate) sender_duration_ticks: DurationTicks,
+    pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) authored_completion_error_ticks_value: i64,
-    pub(crate) estimator_evidence: EstimatorObservationEvidence,
+    pub(crate) observation_evidence: DispatchObservationEvidence,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
     pub(crate) strict_completion_late: bool,
     pub(crate) retry_late_abort: bool,
-    pub(crate) saturation_abort: bool,
-    pub(crate) saturation_streak: u8,
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, and computes the
-/// boundary values shared by the SLO flags, telemetry, and the estimator.
+/// boundary values shared by the SLO flags and telemetry.
 /// Mutates `coordinator` (commit) and `runtime` (last-send boundary).
 #[allow(clippy::too_many_arguments)]
 fn resolve_send_boundaries(
@@ -396,9 +304,8 @@ fn resolve_send_boundaries(
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, computes timing
-/// SLO flags and the saturation-observation value.  Mutates `coordinator`
-/// (commit) and `runtime` (last-send boundary), but does not mutate health,
-/// record telemetry, or call the estimator.
+/// SLO flags. Mutates `coordinator` (commit) and `runtime` (last-send
+/// boundary), but does not mutate health or record telemetry.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interpret_down_send_timing(
     view: &AuthoredBatchView,
@@ -408,7 +315,7 @@ pub(crate) fn interpret_down_send_timing(
     _qpc_clock: QpcClock,
     physical_target_qpc: QpcTicks,
     coordinator: &mut RuntimeDispatchCoordinator,
-    health: &WorkerHealthState,
+    _health: &WorkerHealthState,
     timing: &WorkerTimingState,
     result_success: bool,
     result_status: SendTransactionStatus,
@@ -420,7 +327,6 @@ pub(crate) fn interpret_down_send_timing(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
-    lead_down_saturated: bool,
 ) -> Result<DownSendTiming, DispatchStep> {
     if let Some(completed_qpc) = result_completed_ticks
         && completed_qpc
@@ -449,6 +355,15 @@ pub(crate) fn interpret_down_send_timing(
     // `resolve_send_boundaries`.
     let sender_started_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
     let sender_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
+    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
+        TimelineTicks::from_raw(sender_started_qpc.as_u64()),
+        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on dispatch-start timing conversion failure: {error}"
+        ))
+    })?;
     let completion_error_ticks_value =
         match signed_timeline_delta_ticks(completed_effective_ticks, view.batch_scheduled_ticks) {
             Ok(value) => value,
@@ -487,7 +402,7 @@ pub(crate) fn interpret_down_send_timing(
         && result_success
         && completion_lateness_ticks.is_some_and(|late| late > timing.retry_late_threshold_ticks);
     let retry_late_abort = config.timing.strict_timing && recovered_retry_late;
-    let estimator_evidence = EstimatorObservationEvidence {
+    let observation_evidence = DispatchObservationEvidence {
         status: result_status,
         attempts: result_send_attempts,
         retry_reason: result_retry_reason,
@@ -499,9 +414,9 @@ pub(crate) fn interpret_down_send_timing(
         recovery_used: !matches!(result_retry_reason, PacketRetryReason::None),
         chord_integrity_lost: result_chord_integrity_lost,
     };
-    let clean_estimator_sample = is_clean_estimator_observation(estimator_evidence);
+    let clean_dispatch_sample = is_clean_dispatch_observation(observation_evidence);
     let strict_completion_late = config.timing.strict_timing
-        && clean_estimator_sample
+        && clean_dispatch_sample
         && completion_lateness_ticks.is_some_and(|late| {
             late > match view.dispatch_path {
                 DispatchPath::UpOnly { .. } => timing.strict_up_completion_late_ticks,
@@ -510,85 +425,30 @@ pub(crate) fn interpret_down_send_timing(
                 }
             }
         });
-    let saturation_positive =
-        is_positive_saturation_residual(lead_down_saturated, completion_error_ticks_value);
-    let saturation_streak = match view.dispatch_path {
-        DispatchPath::UpOnly { .. } => {
-            if saturation_positive {
-                health.up_saturation_positive_streak.saturating_add(1)
-            } else {
-                0
-            }
-        }
-        DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
-            if saturation_positive {
-                health.down_saturation_positive_streak.saturating_add(1)
-            } else {
-                0
-            }
-        }
-    };
-    let saturation_abort =
-        config.timing.strict_timing && saturation_streak >= STRICT_SATURATION_ABORT_STREAK;
     Ok(DownSendTiming {
         sender_started_qpc,
         sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,
         sender_duration_ticks,
+        dispatch_start_error_ticks,
         completion_error_ticks_value,
         authored_completion_error_ticks_value,
-        estimator_evidence,
+        observation_evidence,
         recovered_partial_up,
         recovered_retry_late,
         strict_completion_late,
         retry_late_abort,
-        saturation_abort,
-        saturation_streak,
     })
-}
-
-#[inline]
-fn is_positive_saturation_residual(lead_saturated: bool, completion_error_ticks: i64) -> bool {
-    lead_saturated && completion_error_ticks > 0
-}
-
-pub(crate) fn read_qpc_us(
-    qpc_clock: QpcClock,
-    clock_state: &PlaybackClockState,
-) -> Result<u64, DispatchStep> {
-    match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => Ok(us),
-                Err(error) => Err(DispatchStep::Terminate(format!(
-                    "QPC us conversion failure: {error:?}"
-                ))),
-            }
-        }
-        Err(error) => Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        EstimatorObservationEvidence, is_clean_estimator_observation,
-        is_positive_saturation_residual, physical_event_counts,
+        DispatchObservationEvidence, is_clean_dispatch_observation, physical_event_counts,
     };
     use crate::engine::worker::DispatchPath;
     use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
-
-    #[test]
-    fn down_saturation_requires_strictly_positive_residual() {
-        assert!(!is_positive_saturation_residual(true, -1));
-        assert!(!is_positive_saturation_residual(true, 0));
-        assert!(is_positive_saturation_residual(true, 1));
-        assert!(!is_positive_saturation_residual(false, 1));
-    }
 
     #[test]
     fn mixed_retrigger_retains_directional_event_cardinality() {
@@ -609,19 +469,17 @@ mod tests {
             ),
             (2, 2)
         );
-        assert!(is_clean_estimator_observation(
-            EstimatorObservationEvidence {
-                status: SendTransactionStatus::Complete,
-                attempts: 1,
-                retry_reason: PacketRetryReason::None,
-                requested_count: 2,
-                confirmed_count: 2,
-                skipped_count: 0,
-                timing_valid: true,
-                transport_anomaly: false,
-                recovery_used: false,
-                chord_integrity_lost: false,
-            }
-        ));
+        assert!(is_clean_dispatch_observation(DispatchObservationEvidence {
+            status: SendTransactionStatus::Complete,
+            attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            requested_count: 2,
+            confirmed_count: 2,
+            skipped_count: 0,
+            timing_valid: true,
+            transport_anomaly: false,
+            recovery_used: false,
+            chord_integrity_lost: false,
+        }));
     }
 }

@@ -6,7 +6,6 @@
 pub mod clock;
 pub mod compile;
 pub mod coordinator;
-pub mod estimator;
 pub mod model;
 pub mod testing;
 pub mod time;

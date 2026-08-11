@@ -18,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 10
+NATIVE_TELEMETRY_SCHEMA_VERSION = 11
 
 
 def _optional_int(value: Any) -> int | None:
@@ -53,6 +53,7 @@ _CSV_FIELDS: list[str] = [
     "wake_ticks",
     "send_started_ticks",
     "send_completed_ticks",
+    "dispatch_start_error_ticks",
     "completion_error_ticks",
     "authored_completion_error_ticks",
     "native_requested_count",
@@ -101,6 +102,7 @@ _CSV_FIELDS: list[str] = [
     "send_started_us",
     "send_completed_us",
     "sender_completion_error_us",
+    "dispatch_start_error_us",
     "send_operation_duration_us",
     "sender_started_us",
     "sender_completed_us",
@@ -127,6 +129,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "wake_ticks",
         "send_started_ticks",
         "send_completed_ticks",
+        "dispatch_start_error_ticks",
         "completion_error_ticks",
         "authored_completion_error_ticks",
         "native_requested_count",
@@ -159,6 +162,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_started_us",
         "send_completed_us",
         "sender_completion_error_us",
+        "dispatch_start_error_us",
         "send_operation_duration_us",
         "sender_started_us",
         "sender_completed_us",
@@ -192,9 +196,12 @@ class TelemetryRecord:
         "dispatch_cost_us",
         "dispatch_id",
         "dispatch_lateness_us",
+        "dispatch_start_error_ticks",
+        "dispatch_start_error_us",
         "effective_deadline_ticks",
         "effective_deadline_us",
         "event_index",
+        "evidence_scope",
         "first_win32_error",
         "generation_ids",
         "head_of_line_delay_us",
@@ -299,6 +306,7 @@ class TelemetryRecord:
         wake_ticks: int = 0,
         send_started_ticks: int = 0,
         send_completed_ticks: int = 0,
+        dispatch_start_error_ticks: int = 0,
         completion_error_ticks: int = 0,
         applied_lead_ticks: int = 0,
         win32_error: int = 0,
@@ -308,6 +316,8 @@ class TelemetryRecord:
         native_skipped_count: int | None = None,
         post_send_metrics_available: bool = False,
         authored_completion_error_ticks: int = 0,
+        dispatch_start_error_us: int | None = None,
+        evidence_scope: str = "sender_completion",
     ) -> None:
         self._dict = None
         self.authored_ticks = authored_ticks
@@ -315,8 +325,11 @@ class TelemetryRecord:
         self.wake_ticks = wake_ticks
         self.send_started_ticks = send_started_ticks
         self.send_completed_ticks = send_completed_ticks
+        self.dispatch_start_error_ticks = dispatch_start_error_ticks
         self.completion_error_ticks = completion_error_ticks
         self.authored_completion_error_ticks = authored_completion_error_ticks
+        self.dispatch_start_error_us = dispatch_start_error_us
+        self.evidence_scope = evidence_scope
         self.applied_lead_ticks = applied_lead_ticks
         self.win32_error = win32_error
         # Native compact telemetry carries polyphony, but it intentionally is
@@ -419,6 +432,7 @@ class TelemetryRecord:
                 "wake_ticks": self.wake_ticks,
                 "send_started_ticks": self.send_started_ticks,
                 "send_completed_ticks": self.send_completed_ticks,
+                "dispatch_start_error_ticks": self.dispatch_start_error_ticks,
                 "completion_error_ticks": self.completion_error_ticks,
                 "authored_completion_error_ticks": self.authored_completion_error_ticks,
                 "native_requested_count": self.native_requested_count,
@@ -430,7 +444,7 @@ class TelemetryRecord:
                 if self.dispatch_id is None
                 else self.dispatch_id,
                 "packet_id": 0 if self.packet_id is None else self.packet_id,
-                "evidence_scope": "sender_completion",
+                "evidence_scope": self.evidence_scope,
                 "kind": self.kind,
                 "scheduled_us": self.scheduled_us,
                 "scheduled_timeline_us": self.scheduled_timeline_us,
@@ -477,6 +491,7 @@ class TelemetryRecord:
                 "send_started_us": self.send_started_us,
                 "send_completed_us": self.send_completed_us,
                 "sender_completion_error_us": self.sender_completion_error_us,
+                "dispatch_start_error_us": self.dispatch_start_error_us,
                 "send_operation_duration_us": self.send_operation_duration_us,
                 "sender_started_us": self.sender_started_us,
                 "sender_completed_us": self.sender_completed_us,
@@ -538,10 +553,12 @@ def materialize_native_trace(
     values; callers must not expect them in the native JSON envelope.
     """
 
-    # Schemas 7–9 remain readable for historical native artifacts; Rust emits
-    # only the current schema 10.
-    if output.get("schema_version") not in (7, 8, 9, NATIVE_TELEMETRY_SCHEMA_VERSION):
+    # Schemas 7–10 remain readable for historical native artifacts; Rust emits
+    # only the current schema 11.
+    schema_version = output.get("schema_version")
+    if schema_version not in (7, 8, 9, 10, NATIVE_TELEMETRY_SCHEMA_VERSION):
         raise ValueError("unsupported native telemetry schema version")
+    has_start_error = schema_version >= NATIVE_TELEMETRY_SCHEMA_VERSION
     records = output.get("records")
     if not isinstance(records, list):
         raise ValueError("invalid native telemetry envelope")
@@ -566,7 +583,7 @@ def materialize_native_trace(
         outcome_code = _required_nonnegative_int(row.get("outcome"), "outcome")
         polyphony = _required_nonnegative_int(row.get("polyphony"), "polyphony")
         _required_nonnegative_int(row.get("flags"), "flags")
-        if kind_code not in (0, 1) or not 0 <= polyphony <= 15:
+        if kind_code not in (0, 1, 2) or not 0 <= polyphony <= 15:
             raise ValueError("native telemetry record has invalid kind/polyphony")
         outcome = _NATIVE_TRACE_OUTCOMES.get(outcome_code)
         if outcome is None:
@@ -584,6 +601,12 @@ def materialize_native_trace(
         )
         completed_ticks = _required_nonnegative_int(
             row.get("send_completed_ticks"), "send_completed_ticks"
+        )
+        dispatch_start_error_ticks = _required_signed_int64(
+            row.get("dispatch_start_error_ticks")
+            if has_start_error
+            else row.get("dispatch_start_error_ticks", 0),
+            "dispatch_start_error_ticks",
         )
         core_post_send_duration_us = _required_nonnegative_int(
             row.get("core_post_send_duration_us"), "core_post_send_duration_us"
@@ -633,6 +656,7 @@ def materialize_native_trace(
         started_us = ticks_to_us(started_ticks, "send_started_ticks")
         completed_us = ticks_to_us(completed_ticks, "send_completed_ticks")
         sender_completion_error_us = signed_ticks_to_us(completion_error_ticks)
+        dispatch_start_error_us = signed_ticks_to_us(dispatch_start_error_ticks)
         authored_completion_error_us = signed_ticks_to_us(authored_completion_error_ticks)
         send_duration_us = (
             max(0, completed_us - started_us) if started_us is not None else 0
@@ -641,7 +665,7 @@ def materialize_native_trace(
             TelemetryRecord(
                 song_name=song_name,
                 event_index=event_index,
-                kind="up" if kind_code else "down",
+                kind={0: "down", 1: "up", 2: "mixed"}[kind_code],
                 scheduled_us=authored_us,
                 actual_us=wake_us,
                 lateness_us=wake_us - effective_us,
@@ -686,6 +710,11 @@ def materialize_native_trace(
                 send_completed_ticks=completed_ticks,
                 completion_error_ticks=completion_error_ticks,
                 authored_completion_error_ticks=authored_completion_error_ticks,
+                dispatch_start_error_ticks=dispatch_start_error_ticks,
+                dispatch_start_error_us=dispatch_start_error_us,
+                evidence_scope=(
+                    "sender_start_error" if has_start_error else "sender_completion"
+                ),
                 applied_lead_ticks=lead_ticks,
                 win32_error=win32_error,
                 native_polyphony=polyphony,
@@ -1255,6 +1284,11 @@ class TelemetryLogger:
             r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records
         ]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
+        dispatch_start_errors = [
+            value if isinstance(value, int) else 0
+            for r in dispatch_records
+            for value in (r.get("dispatch_start_error_us", 0),)
+        ]
         send_durations_pure = [
             r.get("send_duration_pure_us", 0) for r in dispatch_records
         ]
@@ -1531,7 +1565,9 @@ class TelemetryLogger:
             },
             "timing_semantics": {
                 "clock": "perf_counter_ns_us_quantized",
-                "onset_definition": "sendinput_return",
+                "onset_definition": "sendinput_start",
+                "primary_metric": "dispatch_start_error_us",
+                "completion_metric": "sender_completion_error_us_diagnostic_only",
                 "visible_lateness_means": "send_completed_us - scheduled_us (sender proxy)",
                 "game_phase_locked": False,
                 "game_observed_available": False,
@@ -1618,6 +1654,7 @@ class TelemetryLogger:
             "lateness_us": _stats(latenesses, thresholds=True),
             "visible_lateness_us": _stats(visible_latenesses, thresholds=True),
             "dispatch_lateness_us": _stats(dispatch_latenesses, thresholds=True),
+            "dispatch_start_error_us": _stats(dispatch_start_errors),
             "send_duration_us": _stats(send_durations),
             "send_duration_pure_us": _stats(send_durations_pure),
             "bookkeeping_us": _stats(bookkeeping_durations),

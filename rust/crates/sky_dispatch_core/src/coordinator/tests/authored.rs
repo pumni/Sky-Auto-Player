@@ -65,20 +65,20 @@ fn sublead_authored_batches_keep_distinct_deadlines() {
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
 
     let (first, _) = coordinator
-        .pop_next_due_authored(0, 500)
+        .pop_next_due_authored(0, 0)
         .expect("first action is due");
     assert_eq!(first.scheduled_us, 0);
-    assert_eq!(coordinator.next_authored_us(500), Some(500));
-    assert!(coordinator.pop_next_due_authored(0, 500).is_none());
+    assert_eq!(coordinator.next_authored_us(0), Some(1_000));
+    assert!(coordinator.pop_next_due_authored(0, 0).is_none());
 
     let (second, _) = coordinator
-        .pop_next_due_authored(500, 500)
+        .pop_next_due_authored(1_000, 0)
         .expect("second action keeps its authored ordering");
     assert_eq!(second.scheduled_us, 1_000);
 }
 
 #[test]
-fn production_ticks_preserve_later_sublead_deadline_and_applied_lead() {
+fn production_ticks_preserve_authored_deadlines_without_dispatch_lead() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -108,7 +108,6 @@ fn production_ticks_preserve_later_sublead_deadline_and_applied_lead() {
         .unwrap()
         .expect("first startup packet is due at the logical epoch");
     assert_eq!(first.effective_scheduled_ticks, TimelineTicks::ZERO);
-    assert_eq!(first.effective_lead_ticks, DurationTicks::ZERO);
     coordinator
         .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::ZERO)
         .unwrap();
@@ -128,14 +127,15 @@ fn production_ticks_preserve_later_sublead_deadline_and_applied_lead() {
         .unwrap()
         .expect("later sublead packet keeps its authored deadline");
     assert_eq!(second.effective_scheduled_ticks.as_u64(), 100);
-    assert_eq!(second.effective_lead_ticks, DurationTicks::ZERO);
+    assert_eq!(
+        second.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]
-fn production_ticks_apply_lead_only_at_or_after_authored_timestamp() {
-    for (scheduled, expected_deadline, expected_lead) in
-        [(500, 0, 500), (499, 499, 0), (501, 1, 500)]
-    {
+fn production_ticks_do_not_advance_authored_deadlines() {
+    for scheduled in [500, 499, 501] {
         let schedule = compile_runtime_intents(
             &[KeyActionInput {
                 source_action_index: 0,
@@ -153,14 +153,14 @@ fn production_ticks_apply_lead_only_at_or_after_authored_timestamp() {
 
         assert_eq!(
             coordinator.next_authored_ticks(lead).unwrap(),
-            Some(TimelineTicks::from_raw(expected_deadline))
+            Some(TimelineTicks::from_raw(scheduled))
         );
         let prepared = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(expected_deadline), lead)
+            .prepare_next_due_authored(TimelineTicks::from_raw(scheduled), lead)
             .unwrap()
             .expect("deadline is due");
         assert_eq!(prepared.effective_scheduled_ticks.as_u64(), scheduled);
-        assert_eq!(prepared.effective_lead_ticks.as_u64(), expected_lead);
+        assert_eq!(prepared.effective_scheduled_ticks.as_u64(), scheduled);
     }
 }
 

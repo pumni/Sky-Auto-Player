@@ -1,22 +1,20 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
 use super::super::{
-    BackendConfig, CoordinatorError, DispatchCostEstimator, DurationTicks,
-    HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US, PlaybackClockState, QpcClock, QpcError, QpcTicks,
-    RELEASE_RETRY_BACKOFF_US, RuntimeDispatchCoordinator, STARTUP_WAKE_GUARD_US,
-    STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector, TrackedKeyState,
-    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
+    BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
+    PlaybackClockState, QpcClock, QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US,
+    RuntimeDispatchCoordinator, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
+    SharedMetrics, TelemetryCollector, TrackedKeyState, current_process_cpu_time_us,
+    current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::{
-    DispatchHealthOptions, HealthWindow, OBSERVER_GUARD_US, StartupResources, Worker,
-    WorkerHealthState, WorkerResources, WorkerTimingState, derive_spin_threshold_us,
-    describe_release_outcome, initialize_startup, publish_wake_error_stats, release_state_verified,
-    startup_lead_for_first_packet, wait_failure_message,
+    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
+    WorkerResources, WorkerTimingState, derive_spin_threshold_us, describe_release_outcome,
+    initialize_startup, publish_wake_error_stats, release_state_verified, wait_failure_message,
 };
-use sky_dispatch_win32::input::MAX_PACKET_EVENTS;
 use std::sync::atomic::Ordering;
 
-/// Assembles the worker's admission state: backend, estimator, coordinator,
+/// Assembles the worker's admission state: backend, coordinator,
 /// timing frame, health window, startup anchor, and resource bundle.
 ///
 /// Returns a non-zero code only for hard admission errors (the shared
@@ -89,26 +87,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     );
     core.metrics.power_throttling_disabled = power_throttling_disabled;
     let config = &worker.config;
-    let estimator_event_capacity = MAX_PACKET_EVENTS;
-    let mut estimator =
-        match DispatchCostEstimator::try_new(config.timing.max_lead_us, estimator_event_capacity) {
-            Ok(estimator) => estimator,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("invalid estimator configuration: {error}"),
-                );
-            }
-        };
-    if let Some(raw) = &config.estimator.state_json {
-        let _ = estimator.import_state(raw);
-    }
-    let frame_period_us = 1_000_000u64.div_ceil(u64::from(config.timing.game_fps));
-    let effective_min_hold_us = config
-        .timing
-        .min_hold_us
-        .max(frame_period_us.saturating_add(500));
+    // Python materializes the frame-rate floor before crossing the FFI
+    // boundary. The worker consumes that effective value verbatim so the
+    // authored timestamp and release floor share one contract.
+    let effective_min_hold_us = config.timing.min_hold_us;
     let min_hold_ticks = match qpc_clock.duration_from_us(effective_min_hold_us) {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -208,13 +190,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             }
         };
     }
-    let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
         min_hold_ticks,
-        0,
-        delivery_margin_ticks,
         |us| {
             qpc_clock
                 .timeline_from_us(us)
@@ -251,7 +230,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let telemetry = TelemetryCollector::new(config.telemetry.mode, config.telemetry.capacity);
+    let telemetry = std::sync::Arc::new(parking_lot::Mutex::new(TelemetryCollector::new(
+        config.telemetry.mode,
+        config.telemetry.capacity,
+    )));
     core.errors.abort_counts.reserve(6);
     let mut effective_spin_threshold_us = config.timing.spin_threshold_us;
     let interrupt = &shared.commands.interrupt;
@@ -301,19 +283,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         wait_warn_us: config.timing.input_path_warn_us,
         ..DispatchHealthOptions::default()
     };
-    let observer_guard_ticks = match qpc_clock.duration_from_us(OBSERVER_GUARD_US) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("observer guard conversion failed: {error:?}"),
-            );
-        }
-    };
     core.health = Some(WorkerHealthState {
-        down_saturation_positive_streak: 0,
-        up_saturation_positive_streak: 0,
         options: health_options,
         sendinput_window: HealthWindow::default(),
         core_post_send_window: HealthWindow::default(),
@@ -324,22 +294,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
-    let startup_lead_us = startup_lead_for_first_packet(
-        &coordinator,
-        &estimator,
-        &config.timing,
-        config.estimator.enable_dispatch_cost_lead,
-    );
-    let startup_lead_ticks = match qpc_clock.duration_from_us(startup_lead_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("startup lead conversion failed: {error:?}"),
-            );
-        }
-    };
     let startup_guard_ticks: Result<DurationTicks, String> = (|| {
         let wake_guard = qpc_clock
             .duration_from_us(STARTUP_WAKE_GUARD_US)
@@ -359,10 +313,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let startup_anchor_ticks = match initial_now_ticks
-        .checked_add_duration(startup_guard_ticks)
-        .and_then(|ticks| ticks.checked_add_duration(startup_lead_ticks))
-    {
+    let startup_anchor_ticks = match initial_now_ticks.checked_add_duration(startup_guard_ticks) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
@@ -383,16 +334,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    core.runtime.startup_precision_phase = super::StartupPrecisionPhase::PrePrecision;
-    core.runtime.startup_gate =
-        coordinator
-            .next_physical_authored_packet()
-            .map(|(scheduled_ticks, up_mask, down_mask)| super::StartupGate {
-                scheduled_ticks,
-                lead_ticks: startup_lead_ticks,
-                up_mask,
-                down_mask,
-            });
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
@@ -406,7 +347,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         lease_timeout_ticks,
         retry_backoff_ticks,
         effective_spin_threshold_ticks,
-        observer_guard_ticks,
         start_wall_time_us,
         start_thread_cpu_us,
         start_process_cpu_us,
@@ -437,13 +377,21 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         core.runtime.terminal_error = Some("wait failure injected".to_string());
     }
 
+    let observer_timing = core.timing.expect("worker timing initialized");
+    core.observer.runtime = Some(super::ObserverRuntime::start(
+        core.observer.pending.clone(),
+        qpc_clock,
+        std::sync::Arc::clone(&shared.publication.metrics),
+        std::sync::Arc::clone(&telemetry),
+        observer_timing,
+        health_options,
+    ));
     core.resources = Some(WorkerResources {
         clock: qpc_clock,
         waiter,
         backend,
         coordinator,
         playback: clock_state,
-        estimator,
         telemetry,
         scheduling,
     });

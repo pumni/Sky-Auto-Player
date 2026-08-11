@@ -125,8 +125,6 @@ fn run_iteration(
         schedule,
         /*min_hold_us=*/ 50,
         DurationTicks::from_raw(50),
-        /*delivery_margin_us=*/ 0,
-        DurationTicks::ZERO,
         |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
     )
     .map_err(|error| format!("coordinator construction failed: {error}"))?;
@@ -136,13 +134,13 @@ fn run_iteration(
         ActionKind::Down => {
             // ── Measure Down pop + activate ───────────────────────────────────
             let deadline = coordinator
-                .next_deadline_ticks(DurationTicks::ZERO, None)
+                .next_deadline_ticks(None)
                 .map_err(|error| format!("coordinator deadline failed: {error}"))?
                 .ok_or("no down deadline")?
                 .as_u64();
             let t_pop = Instant::now();
-            let (batch_index, _lead) = coordinator
-                .pop_next_due_authored_ticks(TimelineTicks::from_raw(deadline), DurationTicks::ZERO)
+            let batch_index = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(deadline))
                 .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no down batch due")?;
             let batch = coordinator
@@ -177,12 +175,12 @@ fn run_iteration(
         ActionKind::Up => {
             // ── First do the Down (required for Up to be meaningful) ──────────
             let down_dl = coordinator
-                .next_deadline_ticks(DurationTicks::ZERO, None)
+                .next_deadline_ticks(None)
                 .map_err(|error| format!("coordinator deadline failed: {error}"))?
                 .ok_or("no down deadline")?
                 .as_u64();
-            let (down_index, _) = coordinator
-                .pop_next_due_authored_ticks(TimelineTicks::from_raw(down_dl), DurationTicks::ZERO)
+            let down_index = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(down_dl))
                 .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no down batch")?;
             let down_batch = coordinator
@@ -202,13 +200,13 @@ fn run_iteration(
 
             // ── Measure Up pop + request_releases ────────────────────────────
             let up_dl = coordinator
-                .next_authored_ticks(DurationTicks::ZERO)
+                .next_authored_ticks()
                 .map_err(|error| format!("coordinator deadline failed: {error}"))?
                 .ok_or("no up deadline")?
                 .as_u64();
             let t_pop = Instant::now();
-            let (up_index, _lead) = coordinator
-                .pop_next_due_authored_ticks(TimelineTicks::from_raw(up_dl), DurationTicks::ZERO)
+            let up_index = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(up_dl))
                 .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no up batch due")?;
             let up_batch = coordinator
@@ -227,9 +225,7 @@ fn run_iteration(
             // Pop due pending and complete
             let pending_plan = PendingDispatchPlan {
                 deadline_ticks: TimelineTicks::from_raw(up_dl),
-                lead_ticks: DurationTicks::ZERO,
                 polyphony,
-                lead_saturated: false,
             };
             let due = coordinator
                 .pop_due_pending_ticks(TimelineTicks::from_raw(up_dl), &pending_plan)

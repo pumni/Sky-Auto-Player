@@ -63,8 +63,6 @@ pub fn simulate_schedule(
         schedule,
         min_hold_us,
         crate::time::DurationTicks::from_raw(min_hold_us),
-        0,
-        crate::time::DurationTicks::ZERO,
         |microseconds| Ok(crate::time::TimelineTicks::from_raw(microseconds)),
     )
     .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
@@ -98,17 +96,15 @@ pub fn simulate_schedule(
             .prepare_current_stale_packet()
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
         let pending_deadline = coordinator
-            .next_pending_release_ticks(crate::time::DurationTicks::ZERO)
+            .next_pending_release_ticks()
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
         let pending_plan = pending_deadline.map(|deadline_ticks| PendingDispatchPlan {
             deadline_ticks,
-            lead_ticks: crate::time::DurationTicks::ZERO,
             polyphony: 1,
-            lead_saturated: false,
         });
         if current_stale.is_none()
             && let Some(dl) = coordinator
-                .next_deadline_ticks(crate::time::DurationTicks::ZERO, pending_plan.as_ref())
+                .next_deadline_ticks(pending_plan.as_ref())
                 .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
         {
             now_us = now_us.max(dl.as_u64());
@@ -117,9 +113,7 @@ pub fn simulate_schedule(
         // 1. Drain pending releases due
         let plan = PendingDispatchPlan {
             deadline_ticks: crate::time::TimelineTicks::from_raw(now_us),
-            lead_ticks: crate::time::DurationTicks::ZERO,
             polyphony: 1,
-            lead_saturated: false,
         };
         let due_pending = coordinator
             .pop_due_pending_ticks(crate::time::TimelineTicks::from_raw(now_us), &plan)
@@ -194,11 +188,8 @@ pub fn simulate_schedule(
         }
 
         // 2. Drain authored batch
-        if let Some((batch_index, _lead)) = coordinator
-            .pop_next_due_authored_ticks(
-                crate::time::TimelineTicks::from_raw(now_us),
-                crate::time::DurationTicks::ZERO,
-            )
+        if let Some(batch_index) = coordinator
+            .pop_next_due_authored_ticks(crate::time::TimelineTicks::from_raw(now_us))
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
         {
             let batch = coordinator

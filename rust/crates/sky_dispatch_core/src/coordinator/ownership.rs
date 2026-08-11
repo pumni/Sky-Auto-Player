@@ -106,9 +106,8 @@ impl RuntimeDispatchCoordinator {
         dispatch_completed: TimelineTicks,
         excluded_mask: u16,
     ) -> Result<(), CoordinatorError> {
-        let release_not_before_ticks = dispatch_completed
-            .checked_add_duration(self.min_hold_ticks)
-            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))?;
+        let release_not_before_ticks =
+            dispatch_completed.checked_add_duration(self.min_hold_ticks)?;
         let batch = self
             .schedule
             .batches
@@ -180,9 +179,8 @@ impl RuntimeDispatchCoordinator {
         dispatch_started_ticks: TimelineTicks,
         dispatch_completed_ticks: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        let release_not_before_ticks = dispatch_completed_ticks
-            .checked_add_duration(self.min_hold_ticks)
-            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))?;
+        let release_not_before_ticks =
+            dispatch_completed_ticks.checked_add_duration(self.min_hold_ticks)?;
 
         if sent_scan_codes.len() == 1 {
             let only_sent = sent_scan_codes[0];

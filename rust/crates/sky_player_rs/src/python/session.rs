@@ -2,8 +2,8 @@ use super::conversion::*;
 use super::snapshot::ProgressSnapshotPy;
 use super::*;
 use crate::engine::{
-    EstimatorOptions, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
-    TimingOptions, WaitOptions,
+    FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
+    WaitOptions,
 };
 
 #[pyclass(name = "DispatchSession", frozen)]
@@ -48,8 +48,6 @@ impl NativeDispatchSessionPy {
         let min_hold_us = config.min_hold_us;
         let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
         let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
-        let max_lead_us = 2_000;
-        let dispatch_lead_us = 0;
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
         let spin_threshold_us = 150;
@@ -64,8 +62,8 @@ impl NativeDispatchSessionPy {
         let enable_event_wait = true;
         let enable_adaptive_spin = true;
         let spin_floor_us = 700;
-        let estimator_state_json = config.estimator_state_json.clone();
-        let enable_dispatch_cost_lead = true;
+        // Compatibility input only: estimator state is intentionally ignored.
+        let _deprecated_estimator_state_json = config.estimator_state_json.as_ref();
         let input_path_warn_us = 300;
         let strict_timing = parsed_profile.strict_timing();
         let strict_down_completion_late_us = 2_000;
@@ -76,19 +74,13 @@ impl NativeDispatchSessionPy {
                 "min_hold_us must be at most 60000000",
             ));
         }
-        if max_lead_us > 10_000 {
-            return Err(PyValueError::new_err("max_lead_us must be at most 10000"));
-        }
         let schedule = parse_schedule(py_actions)?;
-        validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
+        validate_schedule_timing(&schedule, effective_min_hold_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Production,
             timing: TimingOptions {
-                game_fps,
-                min_hold_us,
-                max_lead_us,
-                dispatch_lead_us,
+                min_hold_us: effective_min_hold_us,
                 strict_timing,
                 strict_down_completion_late_us,
                 strict_up_completion_late_us,
@@ -112,10 +104,6 @@ impl NativeDispatchSessionPy {
             },
             priority: PriorityOptions {
                 mode: priority_mode,
-            },
-            estimator: EstimatorOptions {
-                state_json: estimator_state_json,
-                enable_dispatch_cost_lead,
             },
             #[cfg(any(test, feature = "test-support"))]
             startup_ordering_hook: None,
@@ -519,6 +507,7 @@ impl TestDispatchSessionPy {
         enable_dispatch_cost_lead: bool,
         fault_mode: &str,
     ) -> PyResult<Self> {
+        let _ = enable_dispatch_cost_lead;
         let min_hold_us = min_hold_us.0;
         let game_fps = u16::try_from(game_fps.0)
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
@@ -527,7 +516,7 @@ impl TestDispatchSessionPy {
         }
         let mock_latency_base_us = mock_latency_base_us.0;
         let mock_latency_per_key_us = mock_latency_per_key_us.0;
-        let dispatch_lead_us = dispatch_lead_us.0;
+        let _dispatch_lead_us = dispatch_lead_us.0;
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         if min_hold_us > 60_000_000 {
@@ -538,11 +527,6 @@ impl TestDispatchSessionPy {
         if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
             return Err(PyValueError::new_err(
                 "mock latency values must be at most 1000000 microseconds",
-            ));
-        }
-        if dispatch_lead_us > 10_000 {
-            return Err(PyValueError::new_err(
-                "dispatch_lead_us must be at most 10000",
             ));
         }
         if telemetry_capacity == 0 || telemetry_capacity > 4_096 {
@@ -574,10 +558,11 @@ impl TestDispatchSessionPy {
                 ));
             }
         };
-        let max_lead_us = 2_000;
+        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
+        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
         let (schedule, _allowed_scan_codes) =
             parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
-        validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
+        validate_schedule_timing(&schedule, effective_min_hold_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Mock {
@@ -586,10 +571,7 @@ impl TestDispatchSessionPy {
                 fault_script,
             },
             timing: TimingOptions {
-                game_fps,
-                min_hold_us,
-                max_lead_us,
-                dispatch_lead_us,
+                min_hold_us: effective_min_hold_us,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -613,10 +595,6 @@ impl TestDispatchSessionPy {
             },
             priority: PriorityOptions {
                 mode: priority_mode,
-            },
-            estimator: EstimatorOptions {
-                state_json: None,
-                enable_dispatch_cost_lead,
             },
             #[cfg(any(test, feature = "test-support"))]
             startup_ordering_hook: None,
