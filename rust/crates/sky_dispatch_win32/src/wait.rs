@@ -91,7 +91,7 @@ mod tests {
         let result = waiter.wait_until_ticks_with_metrics(QpcTicks::ZERO, 200, &event);
 
         assert_eq!(result.outcome, WaitOutcome::Deadline);
-        assert_eq!(event.take_count(), 0);
+        assert_eq!(event.take_count(), 1);
     }
 
     #[test]

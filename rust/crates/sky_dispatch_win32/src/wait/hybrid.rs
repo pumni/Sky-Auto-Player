@@ -155,20 +155,10 @@ impl HybridWaiter {
         // Deadline; final control/target/focus/lease admission decides
         // whether transport is still allowed.
         let mut spin_started_ticks = None;
-        let first_now_ticks = match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(_) => {
-                return WaitResult::failed(WaitFailure::Clock);
-            }
-        };
-        if first_now_ticks >= target_ticks {
-            return deadline_wait_result(None, first_now_ticks);
-        }
-
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
             if interrupt.try_take() {
-                return WaitResult::interrupted();
+                return classify_interrupt_with_fresh_qpc(qpc_clock, None, target_ticks, false);
             }
             // Close the handoff race between the first event consume and the
             // generation sample. A signal after this second consume is seen
@@ -176,21 +166,17 @@ impl HybridWaiter {
             let after_take = interrupt.signal_generation();
             if after_take != observed_generation {
                 if interrupt.try_take() {
-                    return WaitResult::interrupted();
+                    return classify_interrupt_with_fresh_qpc(qpc_clock, None, target_ticks, false);
                 }
                 observed_generation = interrupt.signal_generation();
             }
         }
-        let mut next_now_ticks = Some(first_now_ticks);
         loop {
-            let now_ticks = match next_now_ticks.take() {
-                Some(ticks) => ticks,
-                None => match qpc_clock.now() {
-                    Ok(ticks) => ticks,
-                    Err(_) => {
-                        return WaitResult::failed(WaitFailure::Clock);
-                    }
-                },
+            let now_ticks = match qpc_clock.now() {
+                Ok(ticks) => ticks,
+                Err(_) => {
+                    return WaitResult::failed(WaitFailure::Clock);
+                }
             };
             if now_ticks >= target_ticks {
                 return deadline_wait_result(spin_started_ticks, now_ticks);
@@ -217,10 +203,11 @@ impl HybridWaiter {
                         if spin_iterations & 31 == 0
                             && interrupt.signal_generation_relaxed() != observed_generation
                         {
-                            return wait_result_with_spin(
-                                WaitOutcome::Interrupted,
+                            return classify_interrupt_with_fresh_qpc(
+                                qpc_clock,
                                 spin_started_ticks,
-                                now_ticks,
+                                target_ticks,
+                                true,
                             );
                         }
                         spin_iterations = spin_iterations.wrapping_add(1);
@@ -278,19 +265,12 @@ impl HybridWaiter {
                         continue;
                     }
                     if result == WAIT_OBJECT_0 + 1 {
-                        let wake_ticks = match qpc_clock.now() {
-                            Ok(ticks) => ticks,
-                            Err(_) => {
-                                return WaitResult::failed(WaitFailure::Clock);
-                            }
-                        };
-                        if matches!(
-                            classify_wake(wake_ticks, target_ticks),
-                            WaitOutcome::Deadline
-                        ) {
-                            return deadline_wait_result(spin_started_ticks, wake_ticks);
-                        }
-                        return WaitResult::interrupted();
+                        return classify_interrupt_with_fresh_qpc(
+                            qpc_clock,
+                            spin_started_ticks,
+                            target_ticks,
+                            false,
+                        );
                     }
                     return WaitResult::failed(WaitFailure::MultiWait {
                         win32_error: unsafe { windows_sys::Win32::Foundation::GetLastError() },
@@ -323,7 +303,12 @@ impl HybridWaiter {
             }
             if self.event_wait_enabled && interrupt.signal_generation() != observed_generation {
                 if interrupt.try_take() {
-                    return WaitResult::interrupted();
+                    return classify_interrupt_with_fresh_qpc(
+                        qpc_clock,
+                        spin_started_ticks,
+                        target_ticks,
+                        false,
+                    );
                 }
                 observed_generation = interrupt.signal_generation();
             }
@@ -383,6 +368,44 @@ impl HybridWaiter {
     }
 }
 
+fn classify_interrupt_with_fresh_qpc(
+    qpc_clock: QpcClock,
+    spin_started_ticks: Option<QpcTicks>,
+    target_ticks: QpcTicks,
+    include_spin_evidence: bool,
+) -> WaitResult {
+    let completed_ticks = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(_) => {
+            return WaitResult::failed(WaitFailure::Clock);
+        }
+    };
+    classify_interrupt_after_refresh(
+        spin_started_ticks,
+        target_ticks,
+        completed_ticks,
+        include_spin_evidence,
+    )
+}
+
+fn classify_interrupt_after_refresh(
+    spin_started_ticks: Option<QpcTicks>,
+    target_ticks: QpcTicks,
+    completed_ticks: QpcTicks,
+    include_spin_evidence: bool,
+) -> WaitResult {
+    match classify_wake(completed_ticks, target_ticks) {
+        WaitOutcome::Deadline => deadline_wait_result(spin_started_ticks, completed_ticks),
+        WaitOutcome::Interrupted if include_spin_evidence => wait_result_with_spin(
+            WaitOutcome::Interrupted,
+            spin_started_ticks,
+            completed_ticks,
+        ),
+        WaitOutcome::Interrupted => WaitResult::interrupted(),
+        WaitOutcome::Failed(failure) => WaitResult::failed(failure),
+    }
+}
+
 fn classify_wake(now_ticks: QpcTicks, target_ticks: QpcTicks) -> WaitOutcome {
     if now_ticks >= target_ticks {
         WaitOutcome::Deadline
@@ -406,7 +429,7 @@ impl Default for HybridWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_wake, percentile_from_sorted};
+    use super::{classify_interrupt_after_refresh, classify_wake, percentile_from_sorted};
     use crate::clock::QpcTicks;
     use crate::wait::WaitOutcome;
 
@@ -435,5 +458,43 @@ mod tests {
             classify_wake(QpcTicks::from_raw(11), QpcTicks::from_raw(11)),
             WaitOutcome::Deadline
         );
+    }
+
+    #[test]
+    fn interrupt_classification_uses_fresh_qpc_after_stale_precheck() {
+        let stale_ticks = QpcTicks::from_raw(10);
+        let target_ticks = QpcTicks::from_raw(11);
+        let refreshed_ticks = QpcTicks::from_raw(12);
+
+        assert_eq!(
+            classify_wake(stale_ticks, target_ticks),
+            WaitOutcome::Interrupted
+        );
+        let result = classify_interrupt_after_refresh(None, target_ticks, refreshed_ticks, false);
+
+        assert_eq!(result.outcome, WaitOutcome::Deadline);
+        assert_eq!(result.wake_qpc, Some(refreshed_ticks));
+    }
+
+    #[test]
+    fn final_spin_interrupt_classification_uses_fresh_qpc_for_spin_evidence() {
+        let stale_ticks = QpcTicks::from_raw(10);
+        let target_ticks = QpcTicks::from_raw(11);
+        let refreshed_ticks = QpcTicks::from_raw(10);
+
+        assert_eq!(
+            classify_wake(stale_ticks, target_ticks),
+            WaitOutcome::Interrupted
+        );
+        let result = classify_interrupt_after_refresh(
+            Some(QpcTicks::from_raw(9)),
+            target_ticks,
+            refreshed_ticks,
+            true,
+        );
+
+        assert_eq!(result.outcome, WaitOutcome::Interrupted);
+        assert_eq!(result.wake_qpc, Some(refreshed_ticks));
+        assert_eq!(result.spin_ticks, crate::clock::DurationTicks::from_raw(1));
     }
 }
