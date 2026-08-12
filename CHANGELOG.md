@@ -4,10 +4,33 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.0] - 2026-08-12
 
-Development continues toward v3.3.0. The latest supported public stable
-release remains v3.1.0; v3.2.x is retained as withdrawn historical evidence.
+Sky Auto Player v3.3.0 delivers the native update path and the simplified
+real-time playback architecture developed after the withdrawn v3.2.x line.
+
+### Added
+
+- Added the native Rust **Update and Restart** flow as the primary update path.
+- Added transactional update replacement with exact release verification,
+  rollback, and recovery behavior.
+- Preserved `config.json`, `.env`, `songs/**`, and `logs/**` during updates.
+
+### Changed
+
+- Simplified real-time dispatch scheduling and state ownership.
+- Improved focus-loss pause and recovery handling.
+- Reduced automatic refocus behavior after startup.
+- Hardened release integrity and provenance verification for packaged builds.
+
+### Removed
+
+- Removed BAT/PowerShell updater artifacts from the public package.
+- Removed the legacy `Sky-Player.exe` release asset and compatibility path.
+- Removed the legacy adaptive dispatch state from the active real-time path.
+
+Updates remain explicit user actions; the native updater does not run
+automatically in the background.
 
 ## [3.2.1] - 2026-08-10 — Withdrawn before publication
 
