@@ -16,7 +16,7 @@ from sky_music.orchestration.native_dispatch import (
 from sky_music.orchestration.native_models import PlaybackOutcome
 
 
-def _live(status: str, *, finished: bool) -> SimpleNamespace:
+def _live(status: str, *, finished: bool, paused: bool = False) -> SimpleNamespace:
     health = SimpleNamespace(
         active_count=0,
         possibly_active_count=0,
@@ -45,7 +45,7 @@ def _live(status: str, *, finished: bool) -> SimpleNamespace:
         release_late_2ms=0,
         recent_latencies_us=(),
         is_finished=finished,
-        is_paused=False,
+        is_paused=paused,
         input_path_degraded=False,
         sendinput_path_degraded=False,
         core_post_send_degraded=False,
@@ -60,8 +60,6 @@ def _runtime(session: Any) -> RustDispatchRuntime:
     runtime._session = session
     runtime._controls = None
     runtime._focus_guard = SimpleNamespace()
-    runtime._auto_refocus_attempted = False
-    runtime._focus_loss_started_at = None
     runtime._has_played = False
     runtime._last_focus_active = None
     runtime._last_hwnd = None
@@ -76,14 +74,23 @@ def _runtime(session: Any) -> RustDispatchRuntime:
 
 
 class FakeFocusGuard:
-    def __init__(self, *, result: bool = False, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        result: bool = False,
+        error: Exception | None = None,
+        event_log: list[str] | None = None,
+    ) -> None:
         self.result = result
         self.error = error
+        self.event_log = event_log
         self.focus_calls = 0
         self.on_focus: Callable[[], None] | None = None
 
     def focus(self) -> bool:
         self.focus_calls += 1
+        if self.event_log is not None:
+            self.event_log.append("focus")
         if self.on_focus is not None:
             self.on_focus()
         if self.error is not None:
@@ -119,19 +126,36 @@ def _focus_runtime(
 
 
 class FakeSession:
-    def __init__(self, snapshots: list[SimpleNamespace], report_snapshot: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        snapshots: list[SimpleNamespace],
+        report_snapshot: dict[str, Any],
+        *,
+        event_log: list[str] | None = None,
+    ) -> None:
         self._snapshots = snapshots
         self._last_snapshot = snapshots[-1]
         self._report_snapshot = report_snapshot
+        self.event_log = event_log if event_log is not None else []
         self.join_calls = 0
         self.report_calls = 0
         self.panic_calls = 0
         self.quit_calls = 0
+        self.start_calls = 0
+        self.pause_calls = 0
+        self.resume_calls = 0
         self.target_hwnd_calls: list[int] = []
         self.focus_hint_calls: list[bool] = []
 
     def start(self) -> None:
-        return None
+        self.start_calls += 1
+        self.event_log.append("start")
+
+    def pause(self) -> None:
+        self.pause_calls += 1
+
+    def resume(self) -> None:
+        self.resume_calls += 1
 
     def snapshot_lite(self) -> SimpleNamespace:
         if self._snapshots:
@@ -193,36 +217,98 @@ def test_normal_finish_consumes_terminal_snapshot_without_cleanup_race() -> None
     assert session.quit_calls == 0
 
 
-def test_playback_observation_arms_auto_refocus_without_renderer(
+def test_startup_focus_happens_once_before_native_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sky_music.platform.win32 import window_target
-
-    session = FakeSession(
-        [_live("playing", finished=False), _live("finished", finished=True)],
-        _report("finished"),
-    )
-    runtime = _runtime(session)
-    runtime._require_focus = True
-    guard = FakeFocusGuard()
-    runtime._focus_guard = guard
-    state: dict[str, object] = {"focused": True, "hwnd": 123}
-    monkeypatch.setattr(window_target, "reset_window_cache", lambda: None)
-    monkeypatch.setattr(window_target, "is_sky_window_valid", lambda: True)
-    monkeypatch.setattr(window_target, "cached_target_hwnd", lambda: state["hwnd"])
-    monkeypatch.setattr(
-        window_target,
-        "is_foreground_cached_hwnd",
-        lambda: bool(state["focused"]),
-    )
+    runtime, _guard, _state = _focus_runtime(monkeypatch)
+    session = cast(FakeSession, runtime._session)
+    startup_guard = FakeFocusGuard(event_log=session.event_log)
+    runtime._focus_guard = startup_guard
 
     runtime.run()
 
-    assert runtime._has_played is True
-    state["focused"] = False
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
+    assert startup_guard.focus_calls == 1
+    assert session.start_calls == 1
+    assert session.event_log.index("focus") < session.event_log.index("start")
+
+
+def test_require_focus_false_skips_startup_focus() -> None:
+    session = FakeSession([_live("finished", finished=True)], _report("finished"))
+    runtime = _runtime(session)
+    guard = FakeFocusGuard()
+    runtime._focus_guard = guard
+
+    runtime.run()
+
+    assert guard.focus_calls == 0
+    assert session.start_calls == 1
+
+
+def test_initial_focus_denial_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, _state = _focus_runtime(monkeypatch)
+    guard.result = False
+
+    runtime.run()
+    for _ in range(10):
+        runtime._publish_focus()
+
     assert guard.focus_calls == 1
+    assert cast(FakeSession, runtime._session).start_calls == 1
+
+
+def test_initial_focus_exception_does_not_retry_or_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, _state = _focus_runtime(monkeypatch)
+    guard.error = RuntimeError("foreground denied")
+
+    runtime.run()
+    for _ in range(10):
+        runtime._publish_focus()
+
+    assert guard.focus_calls == 1
+    assert cast(FakeSession, runtime._session).start_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("focus_result", "actual_foreground"),
+    [(True, False), (False, True)],
+)
+def test_initial_focus_publishes_actual_foreground(
+    monkeypatch: pytest.MonkeyPatch,
+    focus_result: bool,
+    actual_foreground: bool,
+) -> None:
+    runtime, guard, state = _focus_runtime(monkeypatch)
+    guard.result = focus_result
+    state["focused"] = actual_foreground
+
+    runtime._set_initial_target()
+    runtime._attempt_initial_focus()
+
+    assert guard.focus_calls == 1
+    assert runtime._last_focus_active is actual_foreground
+
+
+def test_initial_focus_refreshes_changed_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, state = _focus_runtime(monkeypatch)
+
+    def change_target() -> None:
+        state["hwnd"] = 456
+        state["focused"] = True
+
+    guard.on_focus = change_target
+    runtime._set_initial_target()
+    runtime._attempt_initial_focus()
+
+    assert guard.focus_calls == 1
+    assert runtime._last_hwnd == 456
+    assert runtime._last_focus_active is True
+    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 456
 
 
 def test_terminal_error_report_is_materialized_before_error() -> None:
@@ -266,6 +352,18 @@ def test_unknown_live_status_has_native_contract_error() -> None:
         _runtime(session).run()
 
 
+def test_has_played_updates_without_renderer() -> None:
+    session = FakeSession(
+        [_live("playing", finished=False), _live("finished", finished=True)],
+        _report("finished"),
+    )
+    runtime = _runtime(session)
+
+    runtime.run()
+
+    assert runtime._has_played is True
+
+
 def test_focus_hint_publishes_foreground_transition_when_hwnd_is_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -294,104 +392,86 @@ def test_focus_hint_publishes_foreground_transition_when_hwnd_is_unchanged(
     assert session.focus_hint_calls == [False]
 
 
-def test_auto_refocus_does_not_run_before_playback_has_started(
+def test_publish_focus_is_foreground_mutation_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime, guard, _state = _focus_runtime(monkeypatch, has_played=False)
+    runtime, guard, state = _focus_runtime(monkeypatch)
+    guard.error = AssertionError("_publish_focus must not call focus")
 
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
+    for focused in (False, True, False, True):
+        state["focused"] = focused
+        runtime._publish_focus()
 
     assert guard.focus_calls == 0
-    assert runtime._auto_refocus_attempted is False
 
 
-def test_auto_refocus_is_debounced_and_one_shot(
+def test_focus_loss_after_startup_never_auto_refocuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, _state = _focus_runtime(monkeypatch)
 
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.099)
-    assert guard.focus_calls == 0
-
-    runtime._publish_focus(now=0.100)
-    runtime._publish_focus(now=0.250)
+    runtime._attempt_initial_focus()
+    _state["focused"] = False
+    for _ in range(10):
+        runtime._publish_focus()
 
     assert guard.focus_calls == 1
-    assert runtime._auto_refocus_attempted is True
-    assert runtime._last_focus_active is False
 
 
-def test_auto_refocus_uses_actual_foreground_not_api_return(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime, guard, state = _focus_runtime(monkeypatch)
-    guard.result = True
-
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
-
-    assert guard.focus_calls == 1
-    assert runtime._last_focus_active is False
-
-    state["focused"] = True
-    guard.result = False
-    runtime._publish_focus(now=0.200)
-    assert runtime._last_focus_active is True
-    assert runtime._focus_loss_started_at is None
-    assert runtime._auto_refocus_attempted is False
-
-
-def test_auto_refocus_resets_for_a_new_focus_loss_episode(
+def test_repeated_focus_loss_episodes_never_auto_refocus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, state = _focus_runtime(monkeypatch)
 
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
+    runtime._attempt_initial_focus()
+    for focused in (False, True, False, True, False):
+        state["focused"] = focused
+        runtime._publish_focus()
+        runtime._publish_focus()
+
     assert guard.focus_calls == 1
 
-    state["focused"] = True
-    runtime._publish_focus(now=0.200)
-    state["focused"] = False
-    runtime._publish_focus(now=0.300)
-    runtime._publish_focus(now=0.400)
+
+def test_pause_and_resume_do_not_auto_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, _state = _focus_runtime(monkeypatch)
+
+    runtime._attempt_initial_focus()
+    runtime._handle_command("pause")
+    runtime._handle_command("pause")
+
+    assert guard.focus_calls == 1
+    session = cast(FakeSession, runtime._session)
+    assert session.pause_calls == 1
+    assert session.resume_calls == 1
+
+
+def test_manual_refocus_remains_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, _state = _focus_runtime(monkeypatch)
+
+    runtime._attempt_initial_focus()
+    runtime._handle_command("refocus")
 
     assert guard.focus_calls == 2
 
 
-def test_manual_pause_suppresses_auto_refocus_but_manual_command_bypasses_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime, guard, _state = _focus_runtime(monkeypatch)
-    runtime._manual_paused = True
-
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
-    assert guard.focus_calls == 0
-
-    runtime._manual_paused = False
-    runtime._auto_refocus_attempted = True
-    runtime._handle_command("refocus")
-    assert guard.focus_calls == 1
-
-
-def test_auto_refocus_exception_spends_token_without_call_storm(
+def test_manual_refocus_works_after_failed_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, _state = _focus_runtime(monkeypatch)
     guard.error = RuntimeError("foreground denied")
 
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
-    runtime._publish_focus(now=0.250)
+    runtime._attempt_initial_focus()
+    guard.error = None
+    runtime._handle_command("refocus")
 
-    assert guard.focus_calls == 1
-    assert runtime._auto_refocus_attempted is True
+    assert guard.focus_calls == 2
 
 
-def test_auto_refocus_refreshes_changed_target_before_publishing_focus(
+def test_manual_refocus_refreshes_changed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, state = _focus_runtime(monkeypatch)
@@ -401,10 +481,9 @@ def test_auto_refocus_refreshes_changed_target_before_publishing_focus(
         state["focused"] = True
 
     guard.on_focus = restore_target
-    runtime._publish_focus(now=0.0)
-    runtime._publish_focus(now=0.100)
+    runtime._handle_command("refocus")
 
     assert guard.focus_calls == 1
     assert runtime._last_hwnd == 456
     assert runtime._last_focus_active is True
-    assert cast(Any, runtime._session).target_hwnd_calls[-1] == 456
+    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 456

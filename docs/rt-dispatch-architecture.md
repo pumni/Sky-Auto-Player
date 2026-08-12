@@ -143,12 +143,13 @@ identity changes after cleanup, the worker clears the restore marker and stays
 paused for another attempt. A manual pause remains independent; restoring
 focus never clears it.
 
-The Python supervisor may make one minimal `ShowWindow(SW_RESTORE)` plus
-`SetForegroundWindow` attempt after 100 ms of an eligible focus-loss episode
-that has already begun playback. It refreshes the cached target and actual
-foreground state afterward, performs no retry storm, and treats an OS refusal
-as an ordinary non-terminal outcome. Explicit manual refocus remains the
-user-controlled retry path.
+When focus is required, the Python supervisor makes one minimal
+`ShowWindow(SW_RESTORE)` plus `SetForegroundWindow` attempt at playback
+startup, before the native worker starts. It refreshes the cached target and
+actual foreground state afterward and treats an OS refusal as an ordinary
+non-terminal outcome. After startup, focus polling only publishes observed
+state; it never reclaims foreground focus automatically. Explicit manual
+refocus remains the user-controlled retry path.
 
 ## 4. Completion-anchored hold model
 

@@ -31,7 +31,6 @@ from sky_music.orchestration.native_models import (
     parse_native_session_status,
 )
 
-AUTO_REFOCUS_DEBOUNCE_S = 0.100
 FOCUS_PLATFORM_ERRORS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
 
 
@@ -103,10 +102,8 @@ class RustDispatchRuntime:
     """Supervisor-side adapter; never participates in the real-time hot path."""
 
     __slots__ = (
-        "_auto_refocus_attempted",
         "_controls",
         "_focus_guard",
-        "_focus_loss_started_at",
         "_has_played",
         "_last_focus_active",
         "_last_hwnd",
@@ -177,24 +174,23 @@ class RustDispatchRuntime:
         self._last_focus_active: bool | None = None
         self._last_hwnd: int | None = None
         self._has_played = False
-        self._focus_loss_started_at: float | None = None
-        self._auto_refocus_attempted = False
 
     def _attempt_refocus_and_refresh(self) -> None:
         with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
             self._focus_guard.focus()
         self._set_initial_target()
-        self._publish_focus(allow_auto_refocus=False)
+        self._publish_focus()
 
-    def _publish_focus(
-        self,
-        *,
-        now: float | None = None,
-        allow_auto_refocus: bool = True,
-    ) -> None:
+    def _attempt_initial_focus(self) -> None:
         if not self._require_focus:
             return
-        observed_at = time.monotonic() if now is None else now
+        with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
+            self._focus_guard.focus()
+        self._publish_focus()
+
+    def _publish_focus(self) -> None:
+        if not self._require_focus:
+            return
         try:
             from sky_music.platform.win32 import window_target
 
@@ -209,22 +205,6 @@ class RustDispatchRuntime:
         if focus_active != self._last_focus_active:
             cast(NativeFocusHintProtocol, self._session).set_focus_hint(focus_active)
             self._last_focus_active = focus_active
-        if focus_active:
-            self._focus_loss_started_at = None
-            self._auto_refocus_attempted = False
-            return
-        if self._focus_loss_started_at is None:
-            self._focus_loss_started_at = observed_at
-        if (
-            not allow_auto_refocus
-            or not self._has_played
-            or self._manual_paused
-            or self._auto_refocus_attempted
-            or observed_at - self._focus_loss_started_at < AUTO_REFOCUS_DEBOUNCE_S
-        ):
-            return
-        self._auto_refocus_attempted = True
-        self._attempt_refocus_and_refresh()
 
     def _set_initial_target(self) -> None:
         if not self._require_focus:
@@ -335,7 +315,7 @@ class RustDispatchRuntime:
                 if callable(start_controls):
                     start_controls()
             self._set_initial_target()
-            self._publish_focus()
+            self._attempt_initial_focus()
             self._session.start()
             started = True
 

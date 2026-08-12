@@ -118,10 +118,12 @@ again and the restore grace has elapsed, the worker reloads the target stamp,
 performs full-instrument release and physical preflight, rechecks fresh focus
 and target identity, and only then exits the focus pause. Cleanup or preflight
 failure is terminal; a focus or target race keeps playback paused for retry.
-The Python supervisor may make one minimal, debounced auto-refocus attempt per
-focus-loss episode after playback begins. That attempt is outside the worker,
-does not authorize input, and trusts only a fresh foreground observation;
-manual refocus remains available.
+At playback startup, when focus is required, the Python supervisor makes one
+best-effort minimal focus attempt before starting the native worker. That
+attempt is outside the worker, does not authorize input, and trusts only a
+fresh foreground observation. After startup, focus loss is observation and
+publication only; the native worker remains authoritative for the recoverable
+focus pause and restore sequence. Manual refocus remains available.
 
 Progress is independent of that heartbeat. Rust publishes a transition-only
 playback clock anchor; supervisor-side snapshots take their own QPC sample and

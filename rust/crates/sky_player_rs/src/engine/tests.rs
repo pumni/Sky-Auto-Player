@@ -2351,9 +2351,10 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
     session.set_focus_hint(false);
     wait_for_focus_pause(&session);
 
+    let first_restore_started = Instant::now();
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
-    let first_restore_deadline = Instant::now() + Duration::from_millis(30);
+    let first_restore_deadline = first_restore_started + Duration::from_millis(30);
     while Instant::now() < first_restore_deadline {
         session.heartbeat().expect("heartbeat during first restore");
         std::thread::sleep(Duration::from_millis(1));
@@ -2361,20 +2362,54 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
 
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
     session.set_focus_hint(false);
+    let focus_loss_observation_deadline = Instant::now() + Duration::from_millis(20);
+    while Instant::now() < focus_loss_observation_deadline {
+        session
+            .heartbeat()
+            .expect("heartbeat while observing focus bounce loss");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     wait_for_focus_pause(&session);
-    let bounce_deadline = Instant::now() + Duration::from_millis(130);
-    while Instant::now() < bounce_deadline {
-        session.heartbeat().expect("heartbeat after focus bounce");
+
+    let second_restore_started = Instant::now();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let old_grace_deadline = first_restore_started + Duration::from_millis(100);
+    let new_grace_deadline = second_restore_started + Duration::from_millis(100);
+    assert!(
+        old_grace_deadline + Duration::from_millis(5) < new_grace_deadline,
+        "test timing window collapsed: first={first_restore_started:?}, second={second_restore_started:?}"
+    );
+    while Instant::now() < old_grace_deadline + Duration::from_millis(5) {
+        session
+            .heartbeat()
+            .expect("heartbeat during second restore");
         std::thread::sleep(Duration::from_millis(1));
     }
 
     let snapshot = session.snapshot_lite();
     assert!(
         snapshot.is_paused,
-        "focus bounce resumed playback: {snapshot:?}"
+        "focus bounce resumed at the old grace deadline: {snapshot:?}"
     );
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
     assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+
+    let resume_deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while snapshot.is_paused && Instant::now() < resume_deadline {
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for second restore grace");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        !snapshot.is_paused,
+        "second restore grace did not resume playback: {snapshot:?}"
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
 
     session.quit().expect("quit bounced session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
