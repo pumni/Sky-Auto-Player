@@ -251,17 +251,6 @@ pub(super) fn dispatch(
                 core.runtime.verified_target = None;
                 core.runtime.focus_restore_started_ticks = None;
                 if !resources.playback.has_pause_reason("focus") {
-                    core.runtime.verified_target = None;
-                    if let Err(error) = suspend_live_input(
-                        &mut resources.backend,
-                        &mut resources.coordinator,
-                        target_hwnd.load(Ordering::Acquire),
-                    ) {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("focus suspension failed: {error}"));
-                        break;
-                    }
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
                     if let Err(error) = resources.playback.enter_pause("focus", now_ticks) {
                         core.runtime.force_full_cleanup = true;

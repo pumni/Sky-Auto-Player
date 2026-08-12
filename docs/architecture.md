@@ -70,7 +70,7 @@ The worker receives the resulting floor in its timing configuration and does
 not recompute it from observations.
 
 The worker owns active key masks, stale-Up suppression,
-zero/partial progress handling, focus-loss release,
+zero/partial progress handling, focus-loss pause and restore safety release,
 panic/quit/skip cleanup, transport integrity, and terminal decisions. Any
 sender-duration value is diagnostic evidence only; it does not become a lead,
 estimator, or deadline adjustment. A session cannot report successful
@@ -110,6 +110,18 @@ Focus hints are coarse wake/gate signals, never input authorization. Rust
 compares the stamped target HWND with `GetForegroundWindow()` immediately
 before each Down dispatch. The supervisor heartbeat is published by the
 Python control loop; if it stops polling, the native lease expires.
+
+Focus loss enters a native pause without physical cleanup while the target is
+unfocused: the worker clears the verified target and restore marker, publishes
+the pause, and keeps the session non-terminal. After the target is foreground
+again and the restore grace has elapsed, the worker reloads the target stamp,
+performs full-instrument release and physical preflight, rechecks fresh focus
+and target identity, and only then exits the focus pause. Cleanup or preflight
+failure is terminal; a focus or target race keeps playback paused for retry.
+The Python supervisor may make one minimal, debounced auto-refocus attempt per
+focus-loss episode after playback begins. That attempt is outside the worker,
+does not authorize input, and trusts only a fresh foreground observation;
+manual refocus remains available.
 
 Progress is independent of that heartbeat. Rust publishes a transition-only
 playback clock anchor; supervisor-side snapshots take their own QPC sample and

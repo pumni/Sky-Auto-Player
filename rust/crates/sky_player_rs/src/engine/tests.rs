@@ -1969,6 +1969,199 @@ fn authored_focus_pause_publishes_progress_anchor() {
 }
 
 #[test]
+fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
+    struct ForegroundOverrideReset;
+
+    impl Drop for ForegroundOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        }
+    }
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-loss-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-loss-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid focus-loss schedule");
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = ForegroundOverrideReset;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.set_target_hwnd(123);
+    session.set_focus_hint(true);
+    session.start().expect("worker start");
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while snapshot.recent_latencies_us.is_empty()
+        && !snapshot.is_finished
+        && Instant::now() < deadline
+    {
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for Down");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        !snapshot.recent_latencies_us.is_empty(),
+        "Down did not complete: {snapshot:?}"
+    );
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
+        session.heartbeat().expect("heartbeat while focus is lost");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+
+    assert!(
+        snapshot.is_paused,
+        "focus loss did not enter pause: {snapshot:?}"
+    );
+    assert!(
+        !snapshot.is_finished,
+        "focus loss became terminal: {snapshot:?}"
+    );
+    assert!(!snapshot.has_terminal_error);
+
+    force_inconclusive_probe.store(false, Ordering::Release);
+    session.set_focus_hint(true);
+    session.quit().expect("quit paused session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_restore_after_grace_releases_and_resumes() {
+    struct ForegroundOverrideReset;
+
+    impl Drop for ForegroundOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        }
+    }
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-restore-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-restore-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid focus-restore schedule");
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = ForegroundOverrideReset;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.set_target_hwnd(123);
+    session.start().expect("worker start");
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while snapshot.recent_latencies_us.is_empty()
+        && !snapshot.is_finished
+        && Instant::now() < deadline
+    {
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for Down");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(!snapshot.recent_latencies_us.is_empty());
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
+        session.heartbeat().expect("heartbeat while focus is lost");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        snapshot.is_paused,
+        "focus loss did not enter pause: {snapshot:?}"
+    );
+    assert!(!snapshot.has_terminal_error);
+
+    force_inconclusive_probe.store(false, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let restore_deadline = Instant::now() + Duration::from_secs(2);
+    while snapshot.is_paused && !snapshot.is_finished && Instant::now() < restore_deadline {
+        session
+            .heartbeat()
+            .expect("heartbeat while focus is restored");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        !snapshot.is_paused,
+        "stable focus did not resume after grace: {snapshot:?}"
+    );
+    assert!(!snapshot.is_finished);
+    assert!(!snapshot.has_terminal_error);
+
+    session.quit().expect("quit restored session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
 fn authored_up_only_is_not_blocked_by_target_change() {
     use super::test_support::ProductionDispatchTestHarness;
 

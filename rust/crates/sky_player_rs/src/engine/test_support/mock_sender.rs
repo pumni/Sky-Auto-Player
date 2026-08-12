@@ -144,8 +144,14 @@ pub(crate) fn create_mock_backend(
     // synthesized-verification semantics while retaining the V3-1 guarantee
     // that a bespoke test probe must be explicit rather than invented by the
     // emitter itself.
-    backend.set_probe(|unresolved_mask, confirmed_mask| {
-        if confirmed_mask == unresolved_mask {
+    let probe_control = script.force_inconclusive_probe.clone();
+    backend.set_probe(move |unresolved_mask, confirmed_mask| {
+        if probe_control
+            .as_ref()
+            .is_some_and(|force| force.load(Ordering::Acquire))
+        {
+            InstrumentPhysicalState::Inconclusive
+        } else if confirmed_mask == unresolved_mask {
             InstrumentPhysicalState::AllUp
         } else {
             InstrumentPhysicalState::Held(scan_codes_from_mask(unresolved_mask & !confirmed_mask))

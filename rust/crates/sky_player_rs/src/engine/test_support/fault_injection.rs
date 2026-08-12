@@ -1,5 +1,8 @@
 #![cfg(any(test, feature = "test-support"))]
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
 ///
@@ -43,6 +46,10 @@ pub struct FaultInjectionScript {
     pub per_key_latency_ticks: u64,
     pub focus_loss_after_due_before_send: bool,
     pub wait_failure: bool,
+    /// When set, the mock physical probe returns Inconclusive while the flag
+    /// is true. This models target-dependent proof being unavailable during a
+    /// focus-loss episode without changing production probe semantics.
+    pub force_inconclusive_probe: Option<Arc<AtomicBool>>,
 }
 
 impl FaultInjectionScript {

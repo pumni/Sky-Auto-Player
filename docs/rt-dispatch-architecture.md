@@ -108,6 +108,48 @@ progress transport result combined with physical all-up is therefore
 inconclusive, never cleanup success. Focus loss also makes the physical probe
 inconclusive; it must not be interpreted as all keys being up.
 
+## Focus pause and recovery
+
+The supervisor's focus hint is a coarse wake/gate signal. The worker's outer
+focus-loss transition is a pause edge, not a cleanup edge:
+
+```text
+focus invalid
+  -> clear verified target and restore marker
+  -> increment focus_lost once on entry
+  -> enter focus pause and publish progress
+  -> perform no physical release or preflight while unfocused
+```
+
+This keeps an unfocused physical probe `Inconclusive` rather than treating it
+as evidence that all instrument keys are up. No Down can be admitted while the
+focus pause is active, and the fresh foreground HWND check remains the final
+physical Down authority.
+
+After focus is observed again, the worker waits for the configured restore
+grace and then performs the safety sequence below:
+
+```text
+load current target stamp
+  -> clear verified target
+  -> suspend_live_input
+  -> physical preflight
+  -> fresh foreground HWND and target-stamp checks
+  -> exit focus pause
+```
+
+Cleanup or preflight failure is terminal and fail-closed. If focus or target
+identity changes after cleanup, the worker clears the restore marker and stays
+paused for another attempt. A manual pause remains independent; restoring
+focus never clears it.
+
+The Python supervisor may make one minimal `ShowWindow(SW_RESTORE)` plus
+`SetForegroundWindow` attempt after 100 ms of an eligible focus-loss episode
+that has already begun playback. It refreshes the cached target and actual
+foreground state afterward, performs no retry storm, and treats an OS refusal
+as an ordinary non-terminal outcome. Explicit manual refocus remains the
+user-controlled retry path.
+
 ## 4. Completion-anchored hold model
 
 Python materializes the fixed floor before native startup:
