@@ -193,6 +193,38 @@ def test_normal_finish_consumes_terminal_snapshot_without_cleanup_race() -> None
     assert session.quit_calls == 0
 
 
+def test_playback_observation_arms_auto_refocus_without_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sky_music.platform.win32 import window_target
+
+    session = FakeSession(
+        [_live("playing", finished=False), _live("finished", finished=True)],
+        _report("finished"),
+    )
+    runtime = _runtime(session)
+    runtime._require_focus = True
+    guard = FakeFocusGuard()
+    runtime._focus_guard = guard
+    state: dict[str, object] = {"focused": True, "hwnd": 123}
+    monkeypatch.setattr(window_target, "reset_window_cache", lambda: None)
+    monkeypatch.setattr(window_target, "is_sky_window_valid", lambda: True)
+    monkeypatch.setattr(window_target, "cached_target_hwnd", lambda: state["hwnd"])
+    monkeypatch.setattr(
+        window_target,
+        "is_foreground_cached_hwnd",
+        lambda: bool(state["focused"]),
+    )
+
+    runtime.run()
+
+    assert runtime._has_played is True
+    state["focused"] = False
+    runtime._publish_focus(now=0.0)
+    runtime._publish_focus(now=0.100)
+    assert guard.focus_calls == 1
+
+
 def test_terminal_error_report_is_materialized_before_error() -> None:
     report = _report("error", "error")
     report["terminal_error"] = "native failure"

@@ -19,9 +19,13 @@ pub(crate) fn create_mock_backend(
 ) -> TrackedKeyState {
     let script = Arc::new(fault_script);
     let call_index = Arc::new(AtomicU64::new(0));
+    let send_call_count = script.send_call_count.clone();
     let script_emitter = Arc::clone(&script);
     let call_index_emitter = Arc::clone(&call_index);
     let mut backend = TrackedKeyState::with_emitter(move |codes, _key_up| {
+        if let Some(counter) = &send_call_count {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
         let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
 
         let base_latency_us =
@@ -125,9 +129,19 @@ pub(crate) fn create_mock_backend(
             }
         }
     });
+    if let Some(counter) = script.full_instrument_release_calls.clone() {
+        backend.set_full_instrument_release_counter(counter);
+    }
+    if let Some(flag) = script.force_preflight_failure.clone() {
+        backend.set_force_preflight_failure(flag);
+    }
     let script_packet = Arc::clone(&script);
     let call_index_packet = Arc::clone(&call_index);
+    let send_call_count_packet = script.send_call_count.clone();
     backend.set_packet_emitter(move |packet| {
+        if let Some(counter) = &send_call_count_packet {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
         let idx = call_index_packet.fetch_add(1, Ordering::Relaxed) as usize;
         physical_packet_outcome(
             qpc_clock,

@@ -310,6 +310,10 @@ pub(super) fn dispatch(
                         ));
                         break;
                     }
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
+                        hook(focus_active, target_hwnd, target_generation);
+                    }
                     if !focus_matches_hwnd(
                         config.focus.require_focus,
                         focus_active,

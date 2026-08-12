@@ -1,7 +1,7 @@
 #![cfg(any(test, feature = "test-support"))]
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
@@ -50,6 +50,12 @@ pub struct FaultInjectionScript {
     /// is true. This models target-dependent proof being unavailable during a
     /// focus-loss episode without changing production probe semantics.
     pub force_inconclusive_probe: Option<Arc<AtomicBool>>,
+    /// Shared test-only count of mock physical send invocations.
+    pub send_call_count: Option<Arc<AtomicU64>>,
+    /// Shared test-only count of full-instrument cleanup calls.
+    pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
+    /// Makes mock preflight fail closed when set.
+    pub force_preflight_failure: Option<Arc<AtomicBool>>,
 }
 
 impl FaultInjectionScript {

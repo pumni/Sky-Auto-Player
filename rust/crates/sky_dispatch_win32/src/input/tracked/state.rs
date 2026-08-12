@@ -123,6 +123,22 @@ impl TrackedKeyState {
         self.custom_probe = Some(Box::new(probe));
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_full_instrument_release_counter(
+        &mut self,
+        counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        self.full_instrument_release_counter = Some(counter);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_force_preflight_failure(
+        &mut self,
+        flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        self.force_preflight_failure = Some(flag);
+    }
+
     pub fn with_qpc_clock(clock: QpcClock) -> Self {
         Self {
             qpc_clock: Some(clock),

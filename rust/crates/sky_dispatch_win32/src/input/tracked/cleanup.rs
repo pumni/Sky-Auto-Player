@@ -160,6 +160,9 @@ impl TrackedKeyState {
         {
             self.full_instrument_release_calls =
                 self.full_instrument_release_calls.saturating_add(1);
+            if let Some(counter) = &self.full_instrument_release_counter {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
         self.release_scope(ReleaseScope::FullInstrument, target_hwnd)
     }

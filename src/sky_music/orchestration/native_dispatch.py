@@ -340,6 +340,8 @@ class RustDispatchRuntime:
             started = True
 
             live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
+            if not live.is_paused:
+                self._has_played = True
 
             while True:
                 if live.is_finished:
@@ -354,6 +356,8 @@ class RustDispatchRuntime:
                 self._publish_focus()
                 self._session.heartbeat()
                 live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
+                if not live.is_paused:
+                    self._has_played = True
 
                 now = time.monotonic()
                 if self._renderer is not None and now >= next_render_at:
@@ -381,7 +385,6 @@ class RustDispatchRuntime:
                         )
                     else:
                         status = "playing"
-                        self._has_played = True
                     self._renderer.render(
                         live.elapsed_us / 1_000_000,
                         max(self._total_us, 1) / 1_000_000,

@@ -9,10 +9,13 @@ pub(crate) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &AtomicIsize, &AtomicU64) + Send + Sync>;
 
 /// Deliberate session profiles. The profile owns backend/policy selection so
 /// callers do not compose a contradictory matrix of booleans.
@@ -60,6 +63,8 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) priority: PriorityOptions,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) restore_race_hook: Option<RestoreRaceHook>,
 }
 
 #[cfg(any(test, feature = "test-support"))]

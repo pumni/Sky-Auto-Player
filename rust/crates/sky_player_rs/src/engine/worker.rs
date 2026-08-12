@@ -97,6 +97,8 @@ pub(crate) struct WorkerRuntime {
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
@@ -264,10 +266,13 @@ impl<'a> Worker<'a> {
             priority,
             #[cfg(any(test, feature = "test-support"))]
             startup_ordering_hook,
+            #[cfg(any(test, feature = "test-support"))]
+            restore_race_hook,
         } = options;
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
             startup_ordering_hook,
+            restore_race_hook,
             ..WorkerRuntime::default()
         };
         #[cfg(not(any(test, feature = "test-support")))]

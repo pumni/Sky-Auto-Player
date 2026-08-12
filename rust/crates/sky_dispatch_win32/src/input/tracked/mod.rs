@@ -22,6 +22,11 @@ pub type CustomPacketEmitterFn = Box<
 pub type CustomProbeFn =
     Box<dyn Fn(u16, u16) -> super::physical::InstrumentPhysicalState + Send + Sync>;
 
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicBool, AtomicU64};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReleaseScope {
     Tracked,
@@ -90,5 +95,9 @@ pub struct TrackedKeyState {
     pub(crate) custom_probe: Option<CustomProbeFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub full_instrument_release_calls: u64,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) full_instrument_release_counter: Option<Arc<AtomicU64>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) force_preflight_failure: Option<Arc<AtomicBool>>,
     qpc_clock: Option<crate::clock::QpcClock>,
 }

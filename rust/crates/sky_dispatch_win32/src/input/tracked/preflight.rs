@@ -8,6 +8,14 @@ impl TrackedKeyState {
         &self,
         target_hwnd: isize,
     ) -> Result<(), PhysicalKeyPreflightError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if self
+            .force_preflight_failure
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(PhysicalKeyPreflightError::VerificationInconclusive);
+        }
         if self.uses_custom_emitter() {
             return Ok(());
         }

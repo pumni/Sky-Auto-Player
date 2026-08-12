@@ -61,6 +61,7 @@ fn test_session_options(
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
         startup_ordering_hook: None,
+        restore_race_hook: None,
     }
 }
 
@@ -1729,6 +1730,7 @@ fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
 
 #[test]
 fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let focus_active = AtomicBool::new(true);
     let target = AtomicIsize::new(123);
@@ -1774,6 +1776,7 @@ fn final_down_admission_rejects_target_change_before_send() {
 
 #[test]
 fn final_down_target_admission_checks_target_before_focus() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let target = AtomicIsize::new(123);
     let generation = AtomicU64::new(1);
     let focus_active = AtomicBool::new(false);
@@ -1968,6 +1971,115 @@ fn authored_focus_pause_publishes_progress_anchor() {
     );
 }
 
+struct FocusOverrideResetGuard;
+
+impl Drop for FocusOverrideResetGuard {
+    fn drop(&mut self) {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    }
+}
+
+fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+    sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-recovery-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-recovery-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-recovery-sentinel".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid focus-recovery schedule")
+}
+
+fn start_focus_recovery_session(
+    fault_script: FaultInjectionScript,
+    restore_race_hook: Option<super::config::RestoreRaceHook>,
+) -> NativeDispatchSession {
+    let mut options = test_session_options(
+        focus_recovery_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+    options.restore_race_hook = restore_race_hook;
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.set_target_hwnd(123);
+    session.set_focus_hint(true);
+    session.start().expect("worker start");
+    session
+}
+
+fn wait_for_focus_down(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while snapshot.recent_latencies_us.is_empty()
+        && !snapshot.is_finished
+        && Instant::now() < deadline
+    {
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for Down");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        !snapshot.recent_latencies_us.is_empty(),
+        "Down did not complete: {snapshot:?}"
+    );
+    snapshot
+}
+
+fn wait_for_focus_pause(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
+        session.heartbeat().expect("heartbeat while focus is lost");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        snapshot.is_paused,
+        "focus loss did not enter pause: {snapshot:?}"
+    );
+    snapshot
+}
+
+fn wait_for_focus_finish(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut snapshot = session.snapshot_lite();
+    while !snapshot.is_finished && Instant::now() < deadline {
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for terminal state");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(snapshot.is_finished, "session did not finish: {snapshot:?}");
+    snapshot
+}
+
 #[test]
 fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
     struct ForegroundOverrideReset;
@@ -1999,8 +2111,10 @@ fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
     )
     .expect("valid focus-loss schedule");
     let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     let mut options = test_session_options(
         schedule,
         1,
@@ -2054,6 +2168,7 @@ fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
         "focus loss became terminal: {snapshot:?}"
     );
     assert!(!snapshot.has_terminal_error);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     force_inconclusive_probe.store(false, Ordering::Release);
     session.set_focus_hint(true);
@@ -2087,13 +2202,24 @@ fn focus_restore_after_grace_releases_and_resumes() {
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-restore-up".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-restore-sentinel".to_string().into(),
+            },
         ],
-        &[0x15],
+        &[0x15, 0x16],
     )
     .expect("valid focus-restore schedule");
     let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let full_release_count = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     let mut options = test_session_options(
         schedule,
         1,
@@ -2154,10 +2280,295 @@ fn focus_restore_after_grace_releases_and_resumes() {
         !snapshot.is_paused,
         "stable focus did not resume after grace: {snapshot:?}"
     );
-    assert!(!snapshot.is_finished);
+    assert!(
+        !snapshot.is_finished,
+        "restore finished before assertions: lite={snapshot:?}, full={:?}",
+        session.snapshot()
+    );
     assert!(!snapshot.has_terminal_error);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
 
     session.quit().expect("quit restored session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_restore_before_grace_keeps_pause_without_cleanup_or_dispatch() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    wait_for_focus_down(&session);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let grace_deadline = Instant::now() + Duration::from_millis(30);
+    while Instant::now() < grace_deadline {
+        session.heartbeat().expect("heartbeat during restore grace");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let snapshot = session.snapshot_lite();
+    assert!(
+        snapshot.is_paused,
+        "restore grace ended too early: {snapshot:?}"
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+
+    session.quit().expect("quit paused session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_bounce_resets_restore_grace_without_cleanup() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    wait_for_focus_down(&session);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let first_restore_deadline = Instant::now() + Duration::from_millis(30);
+    while Instant::now() < first_restore_deadline {
+        session.heartbeat().expect("heartbeat during first restore");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+    let bounce_deadline = Instant::now() + Duration::from_millis(130);
+    while Instant::now() < bounce_deadline {
+        session.heartbeat().expect("heartbeat after focus bounce");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let snapshot = session.snapshot_lite();
+    assert!(
+        snapshot.is_paused,
+        "focus bounce resumed playback: {snapshot:?}"
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+
+    session.quit().expect("quit bounced session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_restore_cleanup_verification_failure_is_terminal() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    wait_for_focus_down(&session);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    force_inconclusive_probe.store(true, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    wait_for_focus_finish(&session);
+
+    let snapshot = session.snapshot();
+    assert!(snapshot.is_finished);
+    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
+        error.starts_with("focus restoration failed: release verification failed:")
+    }));
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_restore_preflight_failure_is_terminal() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let force_preflight_failure = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_preflight_failure = Some(Arc::clone(&force_preflight_failure));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    wait_for_focus_down(&session);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    force_preflight_failure.store(true, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    wait_for_focus_finish(&session);
+
+    let snapshot = session.snapshot();
+    assert!(snapshot.is_finished);
+    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
+        error.starts_with("instrument key preflight failed during focus restoration;")
+    }));
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn focus_restore_race_after_validation_does_not_resume() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let raced = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let race_hook: super::config::RestoreRaceHook = {
+        let raced = Arc::clone(&raced);
+        Arc::new(move |focus_active, target_hwnd, target_generation| {
+            if !raced.swap(true, Ordering::SeqCst) {
+                focus_active.store(false, Ordering::Release);
+                target_hwnd.store(456, Ordering::Release);
+                target_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        })
+    };
+    let session = start_focus_recovery_session(fault_script, Some(race_hook));
+
+    wait_for_focus_down(&session);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let race_deadline = Instant::now() + Duration::from_millis(300);
+    while !raced.load(Ordering::Acquire) && Instant::now() < race_deadline {
+        session.heartbeat().expect("heartbeat during restore race");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        raced.load(Ordering::Acquire),
+        "restore race hook did not run"
+    );
+    let settle_deadline = Instant::now() + Duration::from_millis(30);
+    while Instant::now() < settle_deadline {
+        session.heartbeat().expect("heartbeat after restore race");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let snapshot = session.snapshot();
+    assert!(
+        snapshot.is_paused,
+        "restore race resumed playback: {snapshot:?}"
+    );
+    assert!(
+        !snapshot.is_finished,
+        "manual resume finished unexpectedly: lite={snapshot:?}, full={:?}",
+        session.snapshot()
+    );
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+
+    session.quit().expect("quit raced session");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn manual_and_focus_pauses_compose_without_auto_resume() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    wait_for_focus_down(&session);
+    session.pause().expect("manual pause");
+    let manual_pause_deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
+    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < manual_pause_deadline {
+        session.heartbeat().expect("heartbeat during manual pause");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        snapshot.is_paused,
+        "manual pause did not apply: {snapshot:?}"
+    );
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let restore_deadline = Instant::now() + Duration::from_millis(150);
+    while Instant::now() < restore_deadline {
+        session
+            .heartbeat()
+            .expect("heartbeat during composed pause");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    snapshot = session.snapshot_lite();
+    assert!(
+        snapshot.is_paused,
+        "manual pause was cleared by focus restore: {snapshot:?}"
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+
+    session.resume().expect("manual resume");
+    let resume_deadline = Instant::now() + Duration::from_secs(1);
+    while snapshot.is_paused && !snapshot.is_finished && Instant::now() < resume_deadline {
+        session.heartbeat().expect("heartbeat during manual resume");
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(
+        !snapshot.is_paused,
+        "manual reason did not clear: {snapshot:?}"
+    );
+    assert!(
+        !snapshot.is_finished,
+        "manual resume finished unexpectedly: {snapshot:?}"
+    );
+
+    session.quit().expect("quit composed session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 }
 
