@@ -310,29 +310,33 @@ pub(super) fn dispatch(
                 };
                 if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
+                    let manual_pause_active =
+                        manual_pause || resources.playback.has_pause_reason("manual");
                     core.runtime.verified_target = None;
-                    if let Err(error) = suspend_live_input(
-                        &mut resources.backend,
-                        &mut resources.coordinator,
-                        preflight_target.hwnd,
-                    ) {
-                        core.runtime.verified_target = None;
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("focus restoration failed: {error}"));
-                        break;
-                    }
-                    if let Err(error) = ensure_preflight_for_target(
-                        &resources.backend,
-                        preflight_target,
-                        &mut core.runtime.verified_target,
-                    ) {
-                        core.runtime.verified_target = None;
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!(
-                            "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
-                        ));
-                        break;
+                    if !manual_pause_active {
+                        if let Err(error) = suspend_live_input(
+                            &mut resources.backend,
+                            &mut resources.coordinator,
+                            preflight_target.hwnd,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("focus restoration failed: {error}"));
+                            break;
+                        }
+                        if let Err(error) = ensure_preflight_for_target(
+                            &resources.backend,
+                            preflight_target,
+                            &mut core.runtime.verified_target,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(format!(
+                                "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
+                            ));
+                            break;
+                        }
                     }
                     #[cfg(any(test, feature = "test-support"))]
                     if let Some(hook) = core.runtime.restore_race_hook.as_ref() {

@@ -127,7 +127,11 @@ focus pause is active, and the fresh foreground HWND check remains the final
 physical Down authority.
 
 After focus is observed again, the worker waits for the configured restore
-grace and then performs the safety sequence below:
+grace and validates the current foreground/target identity. If a manual pause
+is already active, it clears only the focus pause; it does not release or
+preflight physical input a second time. The manual-resume path owns the one
+preflight required before playback continues. Without an active manual pause,
+the worker performs the safety sequence below:
 
 ```text
 load current target stamp
