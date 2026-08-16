@@ -76,6 +76,12 @@ sender-duration value is diagnostic evidence only; it does not become a lead,
 estimator, or deadline adjustment. A session cannot report successful
 completion while cleanup residue remains.
 
+The coordinator also owns a fixed per-key pending-release table. When a
+completion-anchored hold floor defers one Up, the worker can dispatch an
+unrelated authored Down chord at its own boundary and later dispatch the
+pending Up independently. Same-key retriggers whose physical floor is
+infeasible fail closed; no retry or catch-up burst is emitted.
+
 ## Deferred observation ownership
 
 The physical dispatch path performs only bounded, nonblocking observation

@@ -126,13 +126,17 @@ pub fn simulate_schedule(
             continue;
         }
 
-        let Some(deadline) = coordinator
-            .next_uncompensated_deadline_ticks()
+        // The deterministic simulator advances directly to the frozen
+        // physical deadline. Production planning keeps authored and physical
+        // targets separate; this test harness must use the latter so a
+        // minimum-hold floor is not approximated by 100us polling steps.
+        let Some(prepared_deadline) = coordinator
+            .prepare_current_authored_packet()
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
         else {
             break;
         };
-        now_us = now_us.max(deadline.as_u64());
+        now_us = now_us.max(prepared_deadline.effective_scheduled_ticks.as_u64());
         #[cfg(test)]
         let prepared = coordinator.prepare_next_due_authored(
             crate::time::TimelineTicks::from_raw(now_us),

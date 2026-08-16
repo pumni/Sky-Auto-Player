@@ -63,6 +63,7 @@ pub(crate) use health::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
+pub(crate) use planning::TargetProof;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
@@ -76,9 +77,9 @@ pub(crate) use timing::{
     deadline_target_ticks, exact_sender_durations,
 };
 pub(crate) use timing::{
-    derive_spin_threshold_us, lease_bounded_ticks, publish_wake_error_stats, signed_delta,
-    signed_ticks_to_us, signed_timeline_delta_ticks, supervisor_lease_expired,
-    wait_failure_message, wake_lateness_ticks,
+    derive_spin_threshold_us, lease_bounded_ticks, signed_delta, signed_ticks_to_us,
+    signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
+    wake_lateness_ticks,
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -159,6 +160,9 @@ pub(crate) struct WorkerRuntime {
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
+    /// Last successfully transported physical boundary. A later overdue
+    /// boundary is a missed schedule, not a catch-up burst opportunity.
+    pub(crate) last_physical_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
@@ -229,9 +233,6 @@ impl WorkerTimingState {
 }
 
 /// Fixed observer guard converted to QPC ticks during worker admission.
-pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
-    crate::engine::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
-
 pub(crate) struct WorkerHealthState {
     pub(super) options: DispatchHealthOptions,
     pub(super) sendinput_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,

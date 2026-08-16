@@ -14,10 +14,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 fn physical_target_qpc_for_work(
-    plan: &super::planning::NextDispatchPlan,
+    target: Option<sky_dispatch_win32::clock::QpcTicks>,
     now: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
-    let Some(target) = plan.physical_target_qpc else {
+    let Some(target) = target else {
         return Ok(None);
     };
     Ok((target <= now).then_some(target))
@@ -30,11 +30,10 @@ pub(crate) fn preflight_prepared_plan(
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
 ) -> Result<bool, super::DispatchStep> {
-    let has_down_events = plan
-        .authored_view
-        .as_ref()
-        .and_then(|view| view.packet_masks)
-        .is_some_and(|packet| packet.down_mask != 0);
+    let Some(physical) = plan.physical_mut() else {
+        return Ok(true);
+    };
+    let has_down_events = physical.authored_view.packet_masks.down_mask != 0;
     if !has_down_events {
         return Ok(true);
     }
@@ -52,7 +51,7 @@ pub(crate) fn preflight_prepared_plan(
         runtime.verified_target = None;
         return Ok(false);
     }
-    plan.preflight_target = Some(target);
+    physical.target_proof = super::TargetProof::Verified(target);
     Ok(true)
 }
 
@@ -101,26 +100,50 @@ pub(crate) fn dispatch_due_from_plan(
 ) -> super::DispatchStep {
     if !plan_structure_is_valid(plan) {
         return super::DispatchStep::Terminate(
-            "dispatch plan has inconsistent physical-work budgets".to_string(),
+            "dispatch plan has inconsistent prepared physical state".to_string(),
         );
     }
-    if plan.authored.is_none() {
+    if let super::planning::NextDispatchPlan::Metadata(metadata) = plan {
+        if metadata.physical_target_qpc > now_ticks {
+            return super::DispatchStep::NoWork;
+        }
+        return resources
+            .coordinator
+            .commit_authored_frame_metadata(metadata.frame)
+            .map(|()| super::DispatchStep::Dispatched)
+            .unwrap_or_else(|error| {
+                super::DispatchStep::Terminate(format!(
+                    "coordinator authored metadata commit failure: {error}"
+                ))
+            });
+    }
+    if !matches!(plan, super::planning::NextDispatchPlan::Physical(_)) {
         return super::DispatchStep::NoWork;
-    }
-    if plan.authored_budget.is_none() {
-        return super::DispatchStep::Terminate(
-            "authored dispatch plan has no health budget".to_string(),
-        );
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
-    let physical_target_qpc = match physical_target_qpc_for_work(plan, now_ticks) {
-        Ok(Some(target)) => target,
-        Ok(None) => return super::DispatchStep::NoWork,
-        Err(error) => return super::DispatchStep::Terminate(error),
-    };
+    let physical_target_qpc =
+        match physical_target_qpc_for_work(plan.physical_target_qpc(), now_ticks) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                runtime.last_physical_target_qpc = None;
+                return super::DispatchStep::NoWork;
+            }
+            Err(error) => return super::DispatchStep::Terminate(error),
+        };
 
-    super::dispatch_authored_packet(
+    let arrived_via_deadline_wait = runtime.last_dispatch_deadline_wake_qpc.is_some();
+    if runtime
+        .last_physical_target_qpc
+        .is_some_and(|_| physical_target_qpc <= now_ticks)
+        && !arrived_via_deadline_wait
+    {
+        return super::DispatchStep::Terminate(
+            "physical deadline infeasible: refusing overdue catch-up burst".to_string(),
+        );
+    }
+
+    let step = super::dispatch_authored_packet(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
@@ -146,7 +169,11 @@ pub(crate) fn dispatch_due_from_plan(
         desired_pause,
         progress_clock,
         observer,
-    )
+    );
+    if matches!(step, super::DispatchStep::Dispatched) {
+        runtime.last_physical_target_qpc = Some(physical_target_qpc);
+    }
+    step
 }
 
 pub(super) fn dispatch(
@@ -601,11 +628,6 @@ pub(super) fn dispatch(
             let mut dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
                 coordinator: &resources.coordinator,
                 epoch_qpc: resources.playback.epoch,
-                health_options: core
-                    .health
-                    .as_ref()
-                    .expect("worker health initialized")
-                    .options,
                 preparation_probe: &core.runtime.preparation_probe,
             }) {
                 Ok(plan) => plan,
@@ -670,17 +692,12 @@ pub(super) fn dispatch(
                 }
             }
 
-            let deadline_ticks = dispatch_plan.deadline_ticks;
+            let deadline_ticks = dispatch_plan.deadline_ticks();
 
             match wait_for_next_boundary(WaitBoundaryInput {
                 deadline: WaitDeadline {
-                    deadline_ticks,
+                    physical_target_qpc: dispatch_plan.physical_target_qpc(),
                     qpc_clock,
-                    clock_state: &mut resources.playback,
-                    // The clock projection may clamp the startup wake to the
-                    // epoch; physical target admission still requires QPC >=
-                    // epoch and therefore cannot send pre-epoch.
-                    allow_pre_epoch_startup_dispatch: true,
                 },
                 timing: WaitTiming {
                     effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
@@ -700,6 +717,7 @@ pub(super) fn dispatch(
                 WaitBoundary::Due {
                     wait_result,
                     target_qpc,
+                    dispatch_qpc,
                 } => {
                     // This is the global wait boundary only. Physical target
                     // attribution is resolved from the selected work below.
@@ -721,15 +739,7 @@ pub(super) fn dispatch(
                             allow_pre_epoch_startup_dispatch: true,
                         });
                     }
-                    let dispatch_now_ticks = match qpc_clock.now() {
-                        Ok(ticks) => ticks,
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error =
-                                Some(format!("QPC failure after deadline wake: {error:?}"));
-                            break;
-                        }
-                    };
+                    let dispatch_now_ticks = dispatch_qpc;
                     let dispatch_effective_now = match resources
                         .playback
                         .get_elapsed_allow_pre_epoch(dispatch_now_ticks, true)
@@ -806,51 +816,37 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::physical_target_qpc_for_work;
-    use crate::engine::worker::health::DispatchPath;
-    use crate::engine::worker::planning::{AuthoredDispatchPlan, NextDispatchPlan};
-    use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
-
-    fn authored_plan(deadline: u64) -> NextDispatchPlan {
-        NextDispatchPlan {
-            authored: Some(AuthoredDispatchPlan {
-                path: DispatchPath::DownOnly { down_count: 1 },
-                deadline_ticks: TimelineTicks::from_raw(deadline),
-            }),
-            authored_budget: None,
-            deadline_ticks: Some(TimelineTicks::from_raw(deadline)),
-            physical_target_qpc: Some(QpcTicks::from_raw(deadline)),
-            authored_view: None,
-            preflight_target: None,
-        }
-    }
+    use sky_dispatch_core::time::QpcTicks;
 
     #[test]
     fn authored_overdue_work_uses_its_physical_target() {
-        let plan = authored_plan(1_000);
-
         assert_eq!(
-            physical_target_qpc_for_work(&plan, QpcTicks::from_raw(1_200))
-                .expect("authored target")
-                .expect("authored deadline"),
+            physical_target_qpc_for_work(
+                Some(QpcTicks::from_raw(1_000)),
+                QpcTicks::from_raw(1_200),
+            )
+            .expect("authored target")
+            .expect("authored deadline"),
             QpcTicks::from_raw(1_000)
         );
     }
 
     #[test]
     fn startup_target_cannot_precede_the_playback_epoch() {
-        let mut plan = authored_plan(0);
-        plan.physical_target_qpc = Some(QpcTicks::from_raw(10_000));
-        let target = physical_target_qpc_for_work(&plan, QpcTicks::from_raw(9_540))
-            .expect("target arithmetic");
+        let target = physical_target_qpc_for_work(
+            Some(QpcTicks::from_raw(10_000)),
+            QpcTicks::from_raw(9_540),
+        )
+        .expect("target arithmetic");
 
         assert_eq!(target, None);
     }
 
     #[test]
     fn future_selected_target_is_not_replaced_with_now() {
-        let plan = authored_plan(1_000);
         let target =
-            physical_target_qpc_for_work(&plan, QpcTicks::from_raw(900)).expect("prepared target");
+            physical_target_qpc_for_work(Some(QpcTicks::from_raw(1_000)), QpcTicks::from_raw(900))
+                .expect("prepared target");
 
         assert_eq!(target, None);
     }

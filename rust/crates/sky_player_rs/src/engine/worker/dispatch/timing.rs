@@ -15,8 +15,8 @@ use super::super::{
     DispatchPath, DispatchPreparationProbe, WorkerConfig, WorkerHealthState, WorkerRuntime,
     WorkerTimingState, signed_timeline_delta_ticks,
 };
-use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
-use sky_dispatch_core::coordinator::PreparedBatch;
+use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit};
+use sky_dispatch_core::coordinator::{PreparedAuthoredFrame, PreparedBatch};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
@@ -53,14 +53,12 @@ pub fn is_clean_dispatch_observation(evidence: DispatchObservationEvidence) -> b
 
 #[inline]
 fn physical_event_counts(
-    packet_masks: Option<PhysicalPacket>,
-    dispatch_path: DispatchPath,
+    packet_masks: PhysicalPacket,
+    _dispatch_path: DispatchPath,
     result_success: bool,
     result_confirmed_mask: u16,
 ) -> (usize, usize) {
-    let requested_count = packet_masks
-        .map(PhysicalPacket::event_count)
-        .map_or_else(|| dispatch_path.event_count(), usize::from);
+    let requested_count = usize::from(packet_masks.event_count());
     let confirmed_count = if result_success {
         // A Complete transaction confirms every event in the packet.  Keep
         // directional packet identity here: a union mask cannot represent a
@@ -72,10 +70,8 @@ fn physical_event_counts(
     (requested_count, confirmed_count)
 }
 
-/// Project the prepared authored batch into a snapshot used by admission, send,
-/// and telemetry.  Built once per epoch so the worker does not re-query the
-/// coordinator schedule across multiple invariants within a single loop epoch
-/// (D1 — one immutable dispatch plan per epoch).
+#[cfg(any(test, feature = "test-support"))]
+#[allow(dead_code)]
 pub(crate) fn prepare_authored_batch_view(
     coordinator: &RuntimeDispatchCoordinator,
     prepared_batch: PreparedBatch,
@@ -159,18 +155,29 @@ pub(crate) fn prepare_authored_batch_view(
         )
     };
     preparation_probe.record_input_build();
-    let prepared_packet = match packet_masks
-        .map(sky_dispatch_win32::input::PreparedPhysicalPacket::try_new)
-        .transpose()
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "physical packet preparation failure: {error}"
-            )));
+    let packet_masks = match packet_masks {
+        Some(value) => value,
+        None => {
+            return Err(DispatchStep::Terminate(
+                "physical packet preparation received an empty packet".to_string(),
+            ));
         }
     };
+    let prepared_packet =
+        match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(packet_masks) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "physical packet preparation failure: {error}"
+                )));
+            }
+        };
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
+    let authored_ticks = coordinator
+        .effective_batch_scheduled_ticks(batch_index)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("authored frame timing failure: {error}"))
+        })?;
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
@@ -185,6 +192,184 @@ pub(crate) fn prepare_authored_batch_view(
         up_intents,
         down_intents,
         prepared_packet,
+        commit: PhysicalCommit::Authored(PreparedAuthoredFrame {
+            first_batch_index: prepared_batch.index,
+            packet_index: prepared_batch.packet_index,
+            packet_batch_count: prepared_batch.packet_batch_count,
+            authored_ticks,
+            immediate_up_mask: packet_masks.up_mask,
+            deferred_up_mask: 0,
+            down_mask: packet_masks.down_mask,
+            stale_up_count: 0,
+        }),
+    }))
+}
+
+/// Build a physical view from the coordinator's per-key frame classification.
+/// Deferred unrelated releases are intentionally absent from the packet.
+pub(crate) fn prepare_authored_frame_view(
+    coordinator: &RuntimeDispatchCoordinator,
+    frame: PreparedAuthoredFrame,
+    preparation_probe: &DispatchPreparationProbe,
+) -> BatchViewResult {
+    prepare_authored_frame_view_with_pending(
+        coordinator,
+        frame,
+        0,
+        frame.authored_ticks,
+        preparation_probe,
+    )
+}
+
+pub(crate) fn prepare_authored_frame_view_with_pending(
+    coordinator: &RuntimeDispatchCoordinator,
+    frame: PreparedAuthoredFrame,
+    pending_release_mask: u16,
+    pending_due_ticks: TimelineTicks,
+    preparation_probe: &DispatchPreparationProbe,
+) -> BatchViewResult {
+    let packet = coordinator
+        .schedule
+        .view_packet_ticks(frame.packet_index, frame.authored_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("runtime packet view failure: {error}"))
+        })?;
+    let selected_up_mask = frame.immediate_up_mask | pending_release_mask;
+    let selected_down_mask = frame.down_mask;
+    let selected_packet = PhysicalPacket::new(selected_up_mask, selected_down_mask);
+    let packet_kind =
+        sky_dispatch_core::coordinator::physical_packet_kind(selected_up_mask, selected_down_mask)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("physical packet kind failure: {error}"))
+            })?;
+    preparation_probe.record_packet_view();
+    preparation_probe.record_conflict();
+    let conflict_mask =
+        coordinator.check_packet_down_conflicts(selected_up_mask, selected_down_mask);
+    let up_intents = packet
+        .up_intents
+        .iter()
+        .copied()
+        .filter(|intent| {
+            intent.generation_id() != sky_dispatch_core::model::NO_GENERATION_ID
+                && selected_up_mask & (1u16 << intent.key_slot()) != 0
+        })
+        .collect();
+    let down_intents = packet.down_intents.iter().copied().collect();
+    let down_source_action_index = packet.header.down_source_action_index;
+    let batch_source_action_index = down_source_action_index
+        .or_else(|| {
+            coordinator
+                .schedule
+                .batches
+                .get(packet.header.first_batch_index as usize)
+                .map(|batch| batch.source_action_index)
+        })
+        .unwrap_or(0);
+    preparation_probe.record_input_build();
+    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(
+        selected_packet,
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!("physical packet preparation failure: {error}"))
+    })?;
+    let up_count = selected_up_mask.count_ones() as usize;
+    let down_count = selected_down_mask.count_ones() as usize;
+    let dispatch_path = match packet_kind {
+        sky_dispatch_core::model::PhysicalPacketKind::UpOnly => DispatchPath::UpOnly { up_count },
+        sky_dispatch_core::model::PhysicalPacketKind::DownOnly => {
+            DispatchPath::DownOnly { down_count }
+        }
+        sky_dispatch_core::model::PhysicalPacketKind::Mixed => DispatchPath::Mixed {
+            up_count,
+            down_count,
+        },
+    };
+    let prepared_batch = PreparedBatch {
+        index: frame.first_batch_index,
+        effective_scheduled_ticks: frame.authored_ticks,
+        packet_index: frame.packet_index,
+        packet_batch_count: frame.packet_batch_count,
+        packet_kind,
+    };
+    Ok(Some(AuthoredBatchView {
+        prepared_batch,
+        batch_source_action_index,
+        down_source_action_index,
+        batch_intent_count: up_count + down_count,
+        batch_kind: if down_count != 0 {
+            ActionKind::Down
+        } else {
+            ActionKind::Up
+        },
+        batch_scheduled_ticks: frame.authored_ticks,
+        authored_batch_scheduled_ticks: frame.authored_ticks,
+        conflict_mask,
+        dispatch_path,
+        packet_masks: selected_packet,
+        up_intents,
+        down_intents,
+        prepared_packet,
+        commit: if pending_release_mask == 0 {
+            PhysicalCommit::Authored(frame)
+        } else {
+            PhysicalCommit::Coalesced {
+                frame,
+                release_mask: pending_release_mask,
+                due_ticks: pending_due_ticks,
+            }
+        },
+    }))
+}
+
+pub(crate) fn prepare_pending_release_view(
+    coordinator: &RuntimeDispatchCoordinator,
+    release_mask: u16,
+    due_ticks: TimelineTicks,
+    preparation_probe: &DispatchPreparationProbe,
+) -> BatchViewResult {
+    if release_mask == 0 {
+        return Err(DispatchStep::Terminate(
+            "pending release view has an empty mask".to_string(),
+        ));
+    }
+    let packet = PhysicalPacket::new(release_mask, 0);
+    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(packet)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "pending release packet preparation failure: {error}"
+            ))
+        })?;
+    preparation_probe.record_input_build();
+    let count = release_mask.count_ones() as usize;
+    let source_action_index = coordinator
+        .pending_release_source_action_index(release_mask)
+        .unwrap_or(0);
+    let prepared_batch = PreparedBatch {
+        index: 0,
+        effective_scheduled_ticks: due_ticks,
+        packet_index: 0,
+        packet_batch_count: 1,
+        packet_kind: sky_dispatch_core::model::PhysicalPacketKind::UpOnly,
+    };
+    Ok(Some(AuthoredBatchView {
+        prepared_batch,
+        batch_source_action_index: source_action_index,
+        down_source_action_index: None,
+        batch_intent_count: count,
+        batch_kind: ActionKind::Up,
+        batch_scheduled_ticks: due_ticks,
+        authored_batch_scheduled_ticks: due_ticks,
+        conflict_mask: 0,
+        dispatch_path: DispatchPath::UpOnly { up_count: count },
+        packet_masks: packet,
+        up_intents: smallvec::SmallVec::new(),
+        down_intents: smallvec::SmallVec::new(),
+        prepared_packet,
+        commit: PhysicalCommit::PendingRelease {
+            release_mask,
+            due_ticks,
+        },
     }))
 }
 
@@ -272,14 +457,51 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let commit_result = coordinator.commit_prepared_packet_success_parts(
-        view.prepared_batch,
-        &view.up_intents,
-        &view.down_intents,
-        view.down_source_action_index,
-        final_admission_effective_ticks,
-        completed_effective_ticks,
-    );
+    let commit_result = match view.commit {
+        PhysicalCommit::Authored(prepared) => coordinator.commit_prepared_authored_frame_success(
+            prepared,
+            &view.up_intents,
+            &view.down_intents,
+            view.down_source_action_index,
+            final_admission_effective_ticks,
+            completed_effective_ticks,
+        ),
+        PhysicalCommit::PendingRelease {
+            release_mask,
+            due_ticks,
+        } => {
+            if final_admission_effective_ticks < due_ticks {
+                return Err(DispatchStep::Terminate(
+                    "pending release started before its due boundary".to_string(),
+                ));
+            }
+            coordinator
+                .commit_pending_release_success(release_mask, final_admission_effective_ticks)
+        }
+        PhysicalCommit::Coalesced {
+            frame,
+            release_mask,
+            due_ticks,
+        } => {
+            if final_admission_effective_ticks < due_ticks {
+                return Err(DispatchStep::Terminate(
+                    "coalesced pending release started before its due boundary".to_string(),
+                ));
+            }
+            coordinator
+                .commit_pending_release_success(release_mask, final_admission_effective_ticks)
+                .and_then(|_| {
+                    coordinator.commit_prepared_authored_frame_success(
+                        frame,
+                        &view.up_intents,
+                        &view.down_intents,
+                        view.down_source_action_index,
+                        final_admission_effective_ticks,
+                        completed_effective_ticks,
+                    )
+                })
+        }
+    };
     if let Err(error) = commit_result {
         return Err(DispatchStep::Terminate(format!(
             "coordinator activation failure: {error}"
@@ -452,7 +674,7 @@ mod tests {
         assert_eq!(three_events.event_count(), 3);
         assert_eq!(
             physical_event_counts(
-                Some(same_key),
+                same_key,
                 DispatchPath::Mixed {
                     up_count: 1,
                     down_count: 1,

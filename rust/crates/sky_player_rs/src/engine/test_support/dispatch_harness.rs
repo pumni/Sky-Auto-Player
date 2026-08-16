@@ -130,6 +130,38 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// A deferred release for key A shares an authored timestamp with an
+    /// unrelated Down chord on keys B/C. Production must send B/C at their
+    /// authored boundary and retain A as an independent pending release.
+    pub fn new_deferred_release_with_unrelated_down() -> Self {
+        Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "deferred-seed".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "deferred-release".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16, 0x17].into(),
+                    reason: "unrelated-chord".into(),
+                },
+            ],
+            10_000,
+        )
+    }
+
     /// Seed a Down observation while leaving a future Mixed packet for the
     /// planner.  This keeps the observer-drain replan test on the production
     /// authored path instead of testing only the boolean drain helper.
@@ -247,6 +279,10 @@ impl ProductionDispatchTestHarness {
     }
 
     fn create_harness(actions: &[KeyActionInput]) -> Self {
+        Self::create_harness_with_min_hold(actions, 0)
+    }
+
+    fn create_harness_with_min_hold(actions: &[KeyActionInput], min_hold_us: u64) -> Self {
         let mut scan_codes: Vec<u16> = actions
             .iter()
             .flat_map(|action| action.scan_codes.iter().copied())
@@ -256,8 +292,15 @@ impl ProductionDispatchTestHarness {
         let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
             .expect("schedule");
         let qpc_clock = QpcClock::initialize().expect("qpc_clock");
-        let coordinator =
-            RuntimeDispatchCoordinator::try_new_ticks(schedule, 0, DurationTicks::ZERO, |us| {
+        let min_hold_ticks = qpc_clock
+            .duration_from_us(min_hold_us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .expect("test min-hold conversion");
+        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+            schedule,
+            min_hold_us,
+            min_hold_ticks,
+            |us| {
                 qpc_clock
                     .duration_from_us(us)
                     .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
@@ -266,8 +309,9 @@ impl ProductionDispatchTestHarness {
                             "{error:?}"
                         ))
                     })
-            })
-            .expect("coordinator");
+            },
+        )
+        .expect("coordinator");
         let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
         backend.set_test_emitters();
         let waiter = HybridWaiter::new();
@@ -437,6 +481,7 @@ impl ProductionDispatchTestHarness {
     }
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
+        self.align_epoch_to_selected_boundary_before_planning();
         let mut plan = plan_next_dispatch(
             &self.resources.coordinator,
             self.resources.playback.epoch,
@@ -453,20 +498,15 @@ impl ProductionDispatchTestHarness {
             &self.target_generation,
         )
         .expect("preflight prepared dispatch plan");
-        self.align_epoch_to_selected_target_for_test(
-            &plan,
-            self.effective_now_ticks,
-            self.resources.clock.now().expect("qpc now"),
-        );
         self.refresh_physical_target_for_test(&mut plan);
         plan
     }
 
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
+        self.align_epoch_to_selected_boundary_before_planning();
         let mut plan = plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
             coordinator: &self.resources.coordinator,
             epoch_qpc: self.resources.playback.epoch,
-            health_options: self.health.options,
             preparation_probe: &self.runtime.preparation_probe,
         })
         .expect("projected dispatch plan");
@@ -478,11 +518,6 @@ impl ProductionDispatchTestHarness {
             &self.target_generation,
         )
         .expect("preflight prepared projected plan");
-        self.align_epoch_to_selected_target_for_test(
-            &plan,
-            self.effective_now_ticks,
-            self.resources.clock.now().expect("qpc now"),
-        );
         self.refresh_physical_target_for_test(&mut plan);
         plan
     }
@@ -502,10 +537,8 @@ impl ProductionDispatchTestHarness {
     ) -> Result<DispatchStep, String> {
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
-                deadline_ticks: plan.deadline_ticks,
+                physical_target_qpc: plan.physical_target_qpc(),
                 qpc_clock: self.resources.clock,
-                clock_state: &mut self.resources.playback,
-                allow_pre_epoch_startup_dispatch: false,
             },
             timing: WaitTiming {
                 effective_spin_threshold_ticks: self.timing.effective_spin_threshold_ticks,
@@ -525,14 +558,20 @@ impl ProductionDispatchTestHarness {
         let wait_result = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
+                dispatch_qpc,
                 ..
-            } => wait_result,
+            } => {
+                self.runtime
+                    .set_deadline_wake_qpc_for_test(Some(dispatch_qpc));
+                wait_result
+            }
             WaitBoundary::Due {
                 wait_result: None, ..
             } => {
                 return Err(format!(
                     "benchmark deadline was already due without a blocking wait: deadline={:?}, effective_now={:?}",
-                    plan.deadline_ticks, self.effective_now_ticks
+                    plan.deadline_ticks(),
+                    self.effective_now_ticks
                 ));
             }
             WaitBoundary::Replan { .. } => {
@@ -549,11 +588,12 @@ impl ProductionDispatchTestHarness {
         self.last_wait_result = Some(wait_result);
         self.runtime
             .set_deadline_wake_qpc_for_test(wait_result.wake_qpc);
-        let now_ticks = self
-            .resources
-            .clock
-            .now()
-            .map_err(|error| format!("benchmark send QPC: {error:?}"))?;
+        let now_ticks = wait_result.wake_qpc.unwrap_or(
+            self.resources
+                .clock
+                .now()
+                .map_err(|error| format!("benchmark send QPC: {error:?}"))?,
+        );
         let effective_now_ticks = self
             .resources
             .playback
@@ -575,29 +615,31 @@ impl ProductionDispatchTestHarness {
             self.resources.playback.epoch = QpcTicks::from_raw(raw);
         }
     }
-    fn align_epoch_to_selected_target_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        effective_now_ticks: TimelineTicks,
-        now_ticks: QpcTicks,
-    ) {
-        let selected_deadline = plan
-            .authored
-            .as_ref()
-            .map(|authored| authored.deadline_ticks)
-            .filter(|deadline| effective_now_ticks >= *deadline);
+    fn align_epoch_to_selected_boundary_before_planning(&mut self) {
+        let authored = self
+            .resources
+            .coordinator
+            .prepare_current_authored_frame()
+            .expect("authored frame")
+            .map(|frame| frame.authored_ticks);
+        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let selected_deadline = match (authored, pending) {
+            (Some(authored), Some(pending)) => Some(authored.min(pending)),
+            (Some(authored), None) => Some(authored),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        }
+        .filter(|deadline| self.effective_now_ticks >= *deadline);
         if let Some(deadline) = selected_deadline {
-            self.align_epoch_to_deadline_for_test(deadline, now_ticks);
+            self.align_epoch_to_deadline_for_test(
+                deadline,
+                self.resources.clock.now().expect("qpc now"),
+            );
         }
     }
-    fn refresh_physical_target_for_test(&self, plan: &mut NextDispatchPlan) {
-        plan.physical_target_qpc = plan.authored.as_ref().map(|authored| {
-            self.resources
-                .playback
-                .epoch
-                .checked_add_duration(DurationTicks::from_raw(authored.deadline_ticks.as_u64()))
-                .expect("physical target QPC")
-        });
+    fn refresh_physical_target_for_test(&self, _plan: &mut NextDispatchPlan) {
+        // The production plan owns one frozen absolute QPC target. Tests may
+        // align the synthetic epoch, but must not reconstruct that target.
     }
     fn dispatch_plan_at(
         &mut self,
@@ -606,7 +648,6 @@ impl ProductionDispatchTestHarness {
         now_ticks: QpcTicks,
     ) -> DispatchStep {
         self.effective_now_ticks = effective_now_ticks;
-        self.align_epoch_to_selected_target_for_test(plan, effective_now_ticks, now_ticks);
         dispatch_due_from_plan(
             plan,
             effective_now_ticks,
@@ -662,25 +703,11 @@ impl ProductionDispatchTestHarness {
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
-        if let Some(authored) = plan.authored.as_ref() {
-            self.align_epoch_to_deadline_for_test(authored.deadline_ticks, now_ticks);
-        }
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
-            physical_target_qpc: plan
-                .authored
-                .as_ref()
-                .map(|authored| authored.deadline_ticks)
-                .map(|deadline| {
-                    self.resources
-                        .playback
-                        .epoch
-                        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-                        .expect("physical target QPC")
-                })
-                .expect("authored physical target"),
+            physical_target_qpc: plan.physical_target_qpc().expect("physical target QPC"),
             startup_target_selected: false,
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,

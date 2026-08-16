@@ -2,7 +2,7 @@ use super::telemetry::TelemetryMode;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
-pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 150;
+pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 700;
 pub(crate) const DEFAULT_SPIN_FLOOR_US: u64 = 700;
 pub(crate) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
 
@@ -144,7 +144,9 @@ pub(crate) struct TimingOptions {
     pub(crate) strict_down_completion_late_us: u64,
     pub(crate) strict_up_completion_late_us: u64,
     pub(crate) input_path_warn_us: u64,
+    #[allow(dead_code)]
     pub(crate) spin_threshold_us: u64,
+    #[allow(dead_code)]
     pub(crate) spin_floor_us: u64,
 }
 
@@ -156,6 +158,7 @@ pub(crate) struct FocusOptions {
 pub(crate) struct WaitOptions {
     pub(crate) enable_waitable_timer: bool,
     pub(crate) enable_event_wait: bool,
+    #[allow(dead_code)]
     pub(crate) enable_adaptive_spin: bool,
     pub(crate) supervisor_lease_timeout_us: u64,
 }

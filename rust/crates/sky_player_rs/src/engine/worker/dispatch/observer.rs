@@ -3,6 +3,7 @@ use super::super::super::{
     TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
     TraceContext, TraceDelivery, TraceTiming, trace_outcome_code, try_publish_metrics,
 };
+use super::super::health::build_dispatch_budget;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, WorkerHealthState,
@@ -63,7 +64,6 @@ pub(crate) fn publisher_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
     capture_dispatch_ready_qpc: bool,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
     result_confirmed_mask: u16,
     result_skipped_mask: u16,
@@ -74,11 +74,7 @@ pub(crate) fn publisher_down_send_outcome(
     observer: &mut PendingObservationQueue,
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
-    let Some(requested_packet) = view.packet_masks else {
-        return DispatchStep::Terminate(
-            "authored physical dispatch has no canonical packet evidence".to_string(),
-        );
-    };
+    let requested_packet = view.packet_masks;
     let DownSendTiming {
         final_admission_qpc,
         sendinput_completed_qpc,
@@ -109,7 +105,7 @@ pub(crate) fn publisher_down_send_outcome(
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
     let observation = DownObservation {
-        path: frozen_budget.path,
+        path: view.dispatch_path,
         physical_target_qpc,
         timeline_rebase_count: local_metrics.timeline_rebase_count,
         timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
@@ -124,8 +120,6 @@ pub(crate) fn publisher_down_send_outcome(
         confirmed_mask: result_confirmed_mask,
         skipped_mask: result_skipped_mask,
         completed_effective_ticks,
-        send_warn_us: frozen_budget.send_warn_us,
-        core_post_send_warn_us: frozen_budget.core_post_send_warn_us,
         trace: DownTraceObservation {
             event_index: view.batch_source_action_index,
             trace_kind,
@@ -287,18 +281,17 @@ impl PendingObservationQueue {
         &self,
         observation: DispatchObservation,
         dropped_samples: &mut u64,
-        high_watermark: &mut u64,
+        _high_watermark: &mut u64,
     ) {
         if self.queue.push(observation).is_err() {
             *dropped_samples = dropped_samples.saturating_add(1);
         }
-        *high_watermark = (*high_watermark).max(self.queue.len() as u64);
     }
     pub fn push_wait(
         &self,
         observation: WaitObservation,
         dropped_samples: &mut u64,
-        high_watermark: &mut u64,
+        _high_watermark: &mut u64,
     ) {
         if self
             .queue
@@ -307,7 +300,6 @@ impl PendingObservationQueue {
         {
             *dropped_samples = dropped_samples.saturating_add(1);
         }
-        *high_watermark = (*high_watermark).max(self.queue.len() as u64);
     }
     pub fn pop_front(&self) -> Option<DispatchObservation> {
         self.queue.pop()
@@ -501,6 +493,9 @@ pub(crate) fn drain_down_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
+    let health_budget = build_dispatch_budget(observation.path, health.options);
+    let send_warn_us = health_budget.send_warn_us;
+    let core_post_send_warn_us = health_budget.core_post_send_warn_us;
     let (_requested_count, _confirmed_count, _skipped_count, _observation_evidence) =
         down_observer_evidence(observation);
     let admission_to_completion_us = qpc_clock
@@ -572,18 +567,18 @@ pub(crate) fn drain_down_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on wake conversion failure: {error:?}"))
         })?;
-    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
-    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    local_metrics.sendinput_warn_threshold_us = send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
     match observation.path {
         DispatchPath::DownOnly { .. } => {
-            local_metrics.send_down_warn_threshold_us = observation.send_warn_us;
+            local_metrics.send_down_warn_threshold_us = send_warn_us;
         }
         DispatchPath::UpOnly { .. } => {
-            local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
+            local_metrics.send_up_warn_threshold_us = send_warn_us;
         }
         DispatchPath::Mixed { .. } => {
-            local_metrics.send_mixed_warn_threshold_us = observation.send_warn_us;
+            local_metrics.send_mixed_warn_threshold_us = send_warn_us;
         }
     }
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
@@ -628,8 +623,8 @@ pub(crate) fn drain_down_send_outcome(
             post_send_duration_us: core_post_send_us,
             post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
             path: observation.path,
-            send_warn_us: observation.send_warn_us,
-            core_post_send_warn_us: observation.core_post_send_warn_us,
+            send_warn_us,
+            core_post_send_warn_us,
             elapsed_us: completed_effective_us,
         },
         health.options.window_policy(),
@@ -650,6 +645,14 @@ pub(crate) fn drain_up_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
 ) -> Result<(), DispatchStep> {
+    let health_budget = build_dispatch_budget(
+        DispatchPath::UpOnly {
+            up_count: observation.requested_mask.count_ones() as usize,
+        },
+        health.options,
+    );
+    let send_warn_us = health_budget.send_warn_us;
+    let core_post_send_warn_us = health_budget.core_post_send_warn_us;
     let (scan_count, _sent_count, _skipped_count) = up_transport_counts(observation);
     let admission_to_completion_us = qpc_clock
         .duration_to_us(observation.admission_to_completion_ticks)
@@ -724,10 +727,10 @@ pub(crate) fn drain_up_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off wake conversion failure: {error:?}"))
         })?;
-    local_metrics.sendinput_warn_threshold_us = observation.send_warn_us;
-    local_metrics.core_post_send_warn_threshold_us = observation.core_post_send_warn_us;
+    local_metrics.sendinput_warn_threshold_us = send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
-    local_metrics.send_up_warn_threshold_us = observation.send_warn_us;
+    local_metrics.send_up_warn_threshold_us = send_warn_us;
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
     record_release_telemetry(
         telemetry,
@@ -762,8 +765,8 @@ pub(crate) fn drain_up_send_outcome(
             path: DispatchPath::UpOnly {
                 up_count: scan_count,
             },
-            send_warn_us: observation.send_warn_us,
-            core_post_send_warn_us: observation.core_post_send_warn_us,
+            send_warn_us,
+            core_post_send_warn_us,
             elapsed_us: completed_effective_us,
         },
         health.options.window_policy(),

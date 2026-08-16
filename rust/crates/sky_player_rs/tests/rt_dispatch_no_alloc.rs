@@ -121,8 +121,6 @@ fn down_observation(n: u64) -> DispatchObservation {
         confirmed_mask: 1,
         skipped_mask: 0,
         completed_effective_ticks: TimelineTicks::from_raw(n),
-        send_warn_us: 0,
-        core_post_send_warn_us: 0,
         trace: DownTraceObservation {
             event_index: 0,
             trace_kind: 0,
@@ -162,8 +160,6 @@ fn up_observation(n: u64) -> DispatchObservation {
         scheduled_ticks: TimelineTicks::ZERO,
         deferred_ticks: DurationTicks::ZERO,
         up_completion_error_ticks: 0,
-        send_warn_us: 0,
-        core_post_send_warn_us: 0,
         recovery_pause_ticks: None,
         trace: UpTraceObservation {
             event_index: 0,
@@ -426,7 +422,9 @@ fn burst_push_and_drain_no_alloc() {
     );
     assert_eq!(drained, BURST);
     assert_eq!(dropped, 0);
-    assert_eq!(high, BURST as u64);
+    // Producer paths no longer call queue.len(); high-watermark is an
+    // observer-side diagnostic and remains zero on this hard path.
+    assert_eq!(high, 0);
 }
 
 /// pop_front on an empty queue does not allocate.

@@ -9,8 +9,8 @@ use super::super::{
 };
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
-    WorkerResources, WorkerTimingState, derive_spin_threshold_us, describe_release_outcome,
-    initialize_startup, publish_wake_error_stats, release_state_verified, wait_failure_message,
+    WorkerResources, WorkerTimingState, describe_release_outcome, initialize_startup,
+    release_state_verified, wait_failure_message,
 };
 use std::sync::atomic::Ordering;
 
@@ -100,6 +100,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         power_throttling_disabled,
     } = initialize_startup(
         worker.config.priority.mode,
+        matches!(&worker.config.backend, &BackendConfig::Production),
         worker.config.wait.enable_waitable_timer,
         worker.config.wait.enable_event_wait,
         priority_acquired,
@@ -250,17 +251,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         config.telemetry.capacity,
     )));
     core.errors.abort_counts.reserve(6);
-    let mut effective_spin_threshold_us = config.timing.spin_threshold_us;
+    // Production dispatch uses one fixed QPC spin handoff.  Wake probing and
+    // adaptive lead control are diagnostic-only and cannot alter this path.
+    let effective_spin_threshold_us = super::super::config::DEFAULT_SPIN_THRESHOLD_US;
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
-    if config.wait.enable_adaptive_spin
-        && let Some(stats) =
-            waiter.probe_wake_error_stats(qpc_clock, interrupt, super::ADAPTIVE_SPIN_PROBE_SAMPLES)
-    {
-        publish_wake_error_stats(stats, &mut core.metrics);
-        effective_spin_threshold_us =
-            derive_spin_threshold_us(stats.p95_us, config.timing.spin_floor_us);
-    }
     core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     let initial_now_ticks = match qpc_clock.now() {
         Ok(now) => now,

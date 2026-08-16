@@ -1,6 +1,7 @@
 use super::{
-    ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus, PreparedBatch,
-    PreparedStalePacket, RuntimeDispatchCoordinator, physical_packet_kind,
+    ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
+    PendingRelease, PreparedAuthoredFrame, PreparedBatch, PreparedStalePacket,
+    RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
 #[cfg(test)]
@@ -58,16 +59,10 @@ impl RuntimeDispatchCoordinator {
     pub(crate) fn next_authored_ticks_uncompensated(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
-        let Some(batch) = self.schedule.batches.get(self.cursor) else {
+        if self.schedule.batches.get(self.cursor).is_none() {
             return Ok(None);
-        };
-        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
-            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
-                "packet id does not fit in usize".to_string(),
-            ))
-        })?;
-        let effective = self.packet_effective_deadline_ticks_uncompensated(packet_index)?;
-        Ok(Some(effective))
+        }
+        Ok(Some(self.effective_batch_scheduled_ticks(self.cursor)?))
     }
 
     #[cfg(not(test))]
@@ -111,6 +106,564 @@ impl RuntimeDispatchCoordinator {
         let batch = self.schedule.batches.get(self.cursor)?;
         let packet = self.schedule.packets.get(batch.packet_id as usize)?;
         Some((packet.up_mask, packet.down_mask))
+    }
+
+    fn packet_intent_source_action_index(
+        &self,
+        packet: &CompiledPacket,
+        intent_index: usize,
+        kind: ActionKind,
+    ) -> Result<u32, CoordinatorError> {
+        let first_batch = usize::try_from(packet.first_batch_index).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet first batch index does not fit in usize".into(),
+            ))
+        })?;
+        let batch_count = usize::from(packet.batch_count);
+        let last_batch = first_batch
+            .checked_add(batch_count)
+            .ok_or(CoordinatorError::Time(
+                crate::time::TimeArithmeticError::Overflow,
+            ))?;
+        for batch in self
+            .schedule
+            .batches
+            .get(first_batch..last_batch)
+            .ok_or(CoordinatorError::InvalidBatchIndex { index: first_batch })?
+        {
+            if batch.kind != kind {
+                continue;
+            }
+            let start = usize::try_from(batch.intent_start).map_err(|_| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                    "intent start does not fit in usize".into(),
+                ))
+            })?;
+            let end =
+                start
+                    .checked_add(usize::from(batch.intent_len))
+                    .ok_or(CoordinatorError::Time(
+                        crate::time::TimeArithmeticError::Overflow,
+                    ))?;
+            if (start..end).contains(&intent_index) {
+                return Ok(batch.source_action_index);
+            }
+        }
+        Err(CoordinatorError::Invariant(
+            CoordinatorInvariantError::Accounting(
+                "packet intent is not owned by its expected action kind".into(),
+            ),
+        ))
+    }
+
+    /// Classify the current immutable authored frame without mutating state.
+    ///
+    /// Release floors are evaluated per generation/key.  An unrelated
+    /// deferred Up therefore does not change the authored target of a Down
+    /// chord.  A deferred release required by that chord is structurally
+    /// impossible and fails closed before any physical send.
+    pub fn prepare_current_authored_frame(
+        &self,
+    ) -> Result<Option<PreparedAuthoredFrame>, CoordinatorError> {
+        let Some(batch) = self.schedule.batches.get(self.cursor) else {
+            return Ok(None);
+        };
+        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet id does not fit in usize".into(),
+            ))
+        })?;
+        let packet = *self
+            .schedule
+            .packets
+            .get(packet_index)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIndex {
+                    index: packet_index,
+                },
+            ))?;
+        if packet.first_batch_index as usize != self.cursor {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "packet first batch does not match coordinator cursor".into(),
+                ),
+            ));
+        }
+        let authored_ticks = self.effective_batch_scheduled_ticks(self.cursor)?;
+        let up_start = usize::try_from(packet.up_intent_start).map_err(|_| {
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: packet_index,
+            })
+        })?;
+        let up_end = up_start
+            .checked_add(usize::from(packet.up_intent_len))
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: packet_index,
+                },
+            ))?;
+        let up_intents =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: packet_index,
+                    },
+                ))?;
+
+        let mut immediate_up_mask = 0u16;
+        let mut deferred_up_mask = 0u16;
+        let mut stale_up_count = 0u8;
+        for (offset, compact) in up_intents.iter().copied().enumerate() {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                stale_up_count = stale_up_count.saturating_add(1);
+                continue;
+            }
+            let slot = compact.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            let Some(active) = self.active_for_slot(slot) else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Up has no active generation".into(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Up generation does not own its key slot".into(),
+                    ),
+                ));
+            }
+            if active.release_not_before_ticks <= authored_ticks {
+                immediate_up_mask |= bit;
+            } else {
+                deferred_up_mask |= bit;
+            }
+            if up_start.checked_add(offset).is_none() {
+                return Err(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ));
+            }
+        }
+
+        let pending_blocked_mask = self
+            .pending_release_by_slot
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, pending)| {
+                pending.filter(|release| {
+                    release.due_ticks > authored_ticks
+                        && packet.down_mask & Self::bit_for_slot(slot as KeySlot) != 0
+                })
+            })
+            .fold(0u16, |mask, pending| {
+                mask | Self::bit_for_slot(pending.key_slot)
+            });
+        let blocked_mask = (deferred_up_mask | pending_blocked_mask) & packet.down_mask;
+        if blocked_mask != 0 {
+            let latest_required_release_ticks = self
+                .pending_release_by_slot
+                .iter()
+                .flatten()
+                .filter(|pending| blocked_mask & Self::bit_for_slot(pending.key_slot) != 0)
+                .map(|pending| pending.due_ticks)
+                .chain(up_intents.iter().filter_map(|compact| {
+                    let slot = compact.key_slot();
+                    if blocked_mask & Self::bit_for_slot(slot) == 0 {
+                        return None;
+                    }
+                    self.active_for_slot(slot)
+                        .map(|active| active.release_not_before_ticks)
+                }))
+                .max()
+                .unwrap_or(authored_ticks);
+            return Err(CoordinatorError::PhysicalDeadlineInfeasible {
+                authored_ticks,
+                blocked_mask,
+                latest_required_release_ticks,
+            });
+        }
+
+        Ok(Some(PreparedAuthoredFrame {
+            first_batch_index: self.cursor,
+            packet_index,
+            packet_batch_count: usize::from(packet.batch_count),
+            authored_ticks,
+            immediate_up_mask,
+            deferred_up_mask,
+            down_mask: packet.down_mask,
+            stale_up_count,
+        }))
+    }
+
+    fn register_deferred_releases(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        let packet = *self.schedule.packets.get(prepared.packet_index).ok_or(
+            CoordinatorError::InvalidBatchIndex {
+                index: prepared.packet_index,
+            },
+        )?;
+        let up_start = usize::try_from(packet.up_intent_start).map_err(|_| {
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: prepared.packet_index,
+            })
+        })?;
+        let up_end = up_start
+            .checked_add(usize::from(packet.up_intent_len))
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: prepared.packet_index,
+                },
+            ))?;
+        let up_intents = self
+            .schedule
+            .intents
+            .get(up_start..up_end)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: prepared.packet_index,
+                },
+            ))?
+            .iter()
+            .copied()
+            .collect::<SmallVec<[_; MAX_KEYS]>>();
+
+        for (offset, compact) in up_intents.into_iter().enumerate() {
+            let generation_id = compact.generation_id();
+            let slot = compact.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            if generation_id == NO_GENERATION_ID || prepared.deferred_up_mask & bit == 0 {
+                continue;
+            }
+            let active = self
+                .active_for_slot(slot)
+                .cloned()
+                .ok_or(CoordinatorError::PendingReleaseOwnershipMismatch { slot })?;
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::PendingReleaseOwnershipMismatch { slot });
+            }
+            if self.pending_release_by_slot[usize::from(slot)].is_some() {
+                return Err(CoordinatorError::PendingReleaseAlreadyRegistered { slot });
+            }
+            let source_action_index = self.packet_intent_source_action_index(
+                &packet,
+                up_start.checked_add(offset).ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?,
+                ActionKind::Up,
+            )?;
+            self.pending_release_by_slot[usize::from(slot)] = Some(PendingRelease {
+                generation_id,
+                key_slot: slot,
+                authored_release_ticks: prepared.authored_ticks,
+                due_ticks: active.release_not_before_ticks.max(prepared.authored_ticks),
+                source_action_index,
+            });
+            self.pending_release_mask |= bit;
+        }
+        Ok(())
+    }
+
+    /// Consume an authored frame that has no immediate physical work.
+    /// Deferred releases are registered independently so later authored frames
+    /// are not held behind this metadata boundary.
+    pub fn commit_authored_frame_metadata(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.immediate_up_mask != 0 || prepared.down_mask != 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "metadata commit contains physical authored work".into(),
+                ),
+            ));
+        }
+        let current = self.prepare_current_authored_frame()?.ok_or(
+            CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            },
+        )?;
+        if current != prepared {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        self.register_deferred_releases(prepared)?;
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
+    pub fn earliest_pending_release_ticks(&self) -> Option<TimelineTicks> {
+        self.pending_release_by_slot
+            .iter()
+            .flatten()
+            .map(|pending| pending.due_ticks)
+            .min()
+    }
+
+    pub fn pending_release_mask_due_at(&self, target: TimelineTicks) -> u16 {
+        self.pending_release_by_slot
+            .iter()
+            .flatten()
+            .filter(|pending| pending.due_ticks == target)
+            .fold(0u16, |mask, pending| {
+                mask | Self::bit_for_slot(pending.key_slot)
+            })
+    }
+
+    pub fn pending_release_source_action_index(&self, release_mask: u16) -> Option<u32> {
+        self.pending_release_by_slot
+            .iter()
+            .flatten()
+            .filter(|pending| release_mask & Self::bit_for_slot(pending.key_slot) != 0)
+            .map(|pending| pending.source_action_index)
+            .min()
+    }
+
+    /// Commit pending releases at one exact due boundary.  The caller may
+    /// coalesce this mask with an authored Down transaction, but the logical
+    /// Up transition must happen before the new Down transition.
+    pub fn commit_pending_release_success(
+        &mut self,
+        release_mask: u16,
+        started: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let mut mask = release_mask;
+        while mask != 0 {
+            let slot = mask.trailing_zeros() as KeySlot;
+            mask &= mask - 1;
+            let bit = Self::bit_for_slot(slot);
+            let pending = self
+                .pending_release_for_slot(slot)
+                .ok_or(CoordinatorError::PendingReleaseOwnershipMismatch { slot })?;
+            let active = self
+                .active_for_slot(slot)
+                .ok_or(CoordinatorError::PendingReleaseOwnershipMismatch { slot })?;
+            if active.generation_id != pending.generation_id || started < pending.due_ticks {
+                return Err(CoordinatorError::PendingReleaseOwnershipMismatch { slot });
+            }
+            self.transition_generation(
+                pending.generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::Released,
+            )?;
+            self.active_by_slot[usize::from(slot)] = None;
+            self.active_mask &= !bit;
+            self.blocked_mask &= !bit;
+            self.pending_release_by_slot[usize::from(slot)] = None;
+            self.pending_release_mask &= !bit;
+        }
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
+    /// Commit one classified authored frame after its selected physical
+    /// packet completed successfully.  Immediate releases are sent now;
+    /// unrelated deferred releases are registered in the fixed pending table
+    /// and never hold the frame's Down chord hostage.
+    pub fn commit_prepared_authored_frame_success(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+        immediate_up_intents: &[CompactIntent],
+        down_intents: &[CompactIntent],
+        down_source_action_index: Option<u32>,
+        started: TimelineTicks,
+        completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        let current = self.prepare_current_authored_frame()?.ok_or(
+            CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            },
+        )?;
+        if current != prepared {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        let packet = *self.schedule.packets.get(prepared.packet_index).ok_or(
+            CoordinatorError::InvalidBatchIndex {
+                index: prepared.packet_index,
+            },
+        )?;
+        if packet.first_batch_index as usize != prepared.first_batch_index
+            || usize::from(packet.batch_count) != prepared.packet_batch_count
+            || packet.down_source_action_index != down_source_action_index
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared authored frame metadata changed before commit".into(),
+                ),
+            ));
+        }
+        let up_start = usize::try_from(packet.up_intent_start).map_err(|_| {
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: prepared.packet_index,
+            })
+        })?;
+        let up_end = up_start
+            .checked_add(usize::from(packet.up_intent_len))
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: prepared.packet_index,
+                },
+            ))?;
+        let down_start = usize::try_from(packet.down_intent_start).map_err(|_| {
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: prepared.packet_index,
+            })
+        })?;
+        let down_end = down_start
+            .checked_add(usize::from(packet.down_intent_len))
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: prepared.packet_index,
+                },
+            ))?;
+        let current_up =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        let current_down =
+            self.schedule
+                .intents
+                .get(down_start..down_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        let expected_up: SmallVec<[_; MAX_KEYS]> = current_up
+            .iter()
+            .copied()
+            .filter(|intent| {
+                let generation_id = intent.generation_id();
+                generation_id != NO_GENERATION_ID
+                    && prepared.immediate_up_mask & Self::bit_for_slot(intent.key_slot()) != 0
+            })
+            .collect();
+        if expected_up.as_slice() != immediate_up_intents
+            || current_down != down_intents
+            || prepared.down_mask != packet.down_mask
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared authored frame intents changed before commit".into(),
+                ),
+            ));
+        }
+        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
+
+        for compact in immediate_up_intents.iter().copied() {
+            let generation_id = compact.generation_id();
+            let slot = compact.key_slot();
+            let Some(active) = self.active_for_slot(slot).cloned() else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored immediate Up has no active generation".into(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id || started < active.release_not_before_ticks {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored immediate Up violates generation ownership or hold floor".into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::Released,
+            )?;
+            let bit = Self::bit_for_slot(slot);
+            self.active_by_slot[usize::from(slot)] = None;
+            self.active_mask &= !bit;
+            self.blocked_mask &= !bit;
+        }
+
+        self.register_deferred_releases(prepared)?;
+
+        for compact in down_intents.iter().copied() {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            if self.active_by_slot[usize::from(slot)].is_some()
+                || self.active_mask & bit != 0
+                || self.blocked_mask & bit != 0
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Down would overwrite an active or blocked key slot".into(),
+                    ),
+                ));
+            }
+            let scan_code = self
+                .schedule
+                .key_registry
+                .scan_code_for(slot)
+                .ok_or(CoordinatorError::InvalidKeySlot { slot })?;
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            )?;
+            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
+                generation_id,
+                scan_code,
+                key_slot: slot,
+                source_action_index: down_source_action_index.unwrap_or(0),
+                scheduled_down_ticks: prepared.authored_ticks,
+                down_dispatch_started_ticks: started,
+                down_dispatch_completed_ticks: completed,
+                release_not_before_ticks,
+            });
+            self.active_mask |= bit;
+            self.blocked_mask |= bit;
+        }
+
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.validate_local_slot_masks()?;
+        Ok(())
     }
 
     /// Return the first authored packet at or after the cursor that has a
@@ -616,7 +1169,20 @@ impl RuntimeDispatchCoordinator {
     /// transitions.  The full generation-ledger verifier remains reserved for
     /// explicit cleanup and test validation, never for a stale or physical
     /// packet deadline path.
+    #[inline]
     fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.validate_local_slot_masks_full()
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            Ok(())
+        }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn validate_local_slot_masks_full(&self) -> Result<(), CoordinatorError> {
         for slot in 0..MAX_KEYS {
             let bit = Self::bit_for_slot(slot as KeySlot);
             match self.active_by_slot[slot].as_ref() {

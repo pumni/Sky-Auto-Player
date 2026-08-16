@@ -1,9 +1,8 @@
-use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
-use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
+use sky_dispatch_win32::wait::WaitFailure;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) fn lease_bounded_ticks(
@@ -199,16 +198,6 @@ pub(crate) fn deadline_target_ticks(
     QpcTicks::from_raw(now_ticks.as_u64().saturating_add(
         qpc_us_to_ticks(deadline_us.saturating_sub(logical_now_us)).expect("test QPC conversion"),
     ))
-}
-
-pub(crate) fn publish_wake_error_stats(
-    stats: WakeErrorStats,
-    local_metrics: &mut WorkerMetricsLocal,
-) {
-    local_metrics.wake_error_p50_us = stats.p50_us;
-    local_metrics.wake_error_p95_us = stats.p95_us;
-    local_metrics.wake_error_p99_us = stats.p99_us;
-    local_metrics.wake_error_max_us = stats.max_us;
 }
 
 pub(crate) fn wait_failure_message(failure: WaitFailure) -> String {

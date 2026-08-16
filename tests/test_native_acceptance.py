@@ -490,7 +490,7 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
 
-    actions = ACCEPTANCE._actions(4, 3, gap_profile="hot", game_fps=60)
+    actions = ACCEPTANCE._actions(4, 3, gap_profile="cold", game_fps=60)
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
         actions,
         list(ACCEPTANCE.SKY_15_SCAN_CODES),

@@ -85,8 +85,6 @@ pub struct DownObservation {
     pub confirmed_mask: u16,
     pub skipped_mask: u16,
     pub completed_effective_ticks: TimelineTicks,
-    pub send_warn_us: u64,
-    pub core_post_send_warn_us: u64,
     pub trace: DownTraceObservation,
 }
 
@@ -181,8 +179,6 @@ pub struct UpObservation {
     pub scheduled_ticks: TimelineTicks,
     pub deferred_ticks: DurationTicks,
     pub up_completion_error_ticks: i64,
-    pub send_warn_us: u64,
-    pub core_post_send_warn_us: u64,
     pub trace: UpTraceObservation,
     pub recovery_pause_ticks: Option<DurationTicks>,
 }

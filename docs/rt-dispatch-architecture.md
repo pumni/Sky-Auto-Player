@@ -30,12 +30,13 @@ report.
 
 ## 2. Immutable plan
 
-One outer worker epoch builds one typed plan from the coordinator. The plan
-contains the next authored deadline, physical path, polyphony,
-health budget, and absolute QPC target. The plan is reused by waiting, due
-selection, and physical dispatch. Commands, focus/pause transitions, target
-changes, lease-only wakes, and interrupts invalidate it and
-cause a replan.
+One outer worker epoch builds one typed plan from the coordinator. The plan is
+`NoWork`, a metadata boundary, or a physical boundary. A physical plan carries
+one prepared authored/pending view, its commit proof, and one absolute QPC
+target. Observer health budgets are not physical-plan inputs. The plan is
+reused by waiting, due selection, and physical dispatch. Commands,
+focus/pause transitions, target changes, lease-only wakes, and interrupts
+invalidate it and cause a replan.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored timestamps are used as authored. Release deadlines
@@ -173,12 +174,17 @@ effective_release = max(authored_release, release_floor)
 
 This is a sender-side visibility floor, not game-observed timing. A slow Down
 can defer its own Up; it does not move an unrelated future authored action.
-There is no pending-release or retry state in the coordinator.
+Deferred releases are stored in a fixed `[Option; 15]` per-key table with a
+mask and generation ownership. A pending release is selected independently,
+and cannot head-of-line block an unrelated authored Down chord. If the same
+key is retriggered before its floor, planning fails closed with physical
+deadline infeasibility. There is no transport retry state.
 
 ## 5. Wait and interrupt ordering
 
 The worker uses a high-resolution waitable timer, event interruption, and a
-bounded QPC spin. A timer guard may wake early; the final QPC deadline gate
+bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
+the final QPC deadline gate
 decides whether to wait again or enter the physical path. A wake that is only
 for lease, command, focus, pause, or interrupt replans and cannot dispatch the
 old plan. The timer is first in the Windows multi-wait handle array so a
@@ -194,7 +200,9 @@ decision uses the authoritative `Acquire` path. This optimization is only a
 wake hint; the QPC deadline check runs first and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
-timing.
+timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
+the dispatch path does not take a redundant QPC sample or reconstruct the
+physical target from wake time.
 
 MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
 TimeCritical is not the default and priority setup failure is reported rather
@@ -213,6 +221,10 @@ The worker may project a pre-epoch deadline for control-loop wake/replan
 bookkeeping, but it never calls `SendInput` before the authoritative physical
 QPC target/epoch gate. This projection distinction must not be used to create
 an early physical send.
+
+After a successful physical boundary, an overdue replan without a deadline-wait
+handoff is a missed schedule. The worker terminates rather than emitting an
+overdue catch-up burst.
 
 ## 7. Failure and publication boundaries
 

@@ -84,6 +84,34 @@ def test_dispatch_constructor_rejects_the_removed_external_allowlist() -> None:
         sky_player_rs.DispatchSession([], list(SKY_15_SCAN_CODES))  # type: ignore[attr-defined]
 
 
+def test_native_constructor_rejects_same_key_hold_below_effective_floor() -> None:
+    with pytest.raises(ValueError, match="same-key hold too short"):
+        sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+            [
+                (0, "down", 0, [SKY_15_SCAN_CODES[0]], "down"),
+                (1, "up", 100, [SKY_15_SCAN_CODES[0]], "up"),
+            ],
+            config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                game_fps=240,
+                min_hold_us=100,
+            ),
+        )
+
+
+def test_native_constructor_accepts_exact_effective_hold_boundary() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [SKY_15_SCAN_CODES[0]], "down"),
+            (1, "up", 4_667, [SKY_15_SCAN_CODES[0]], "up"),
+        ],
+        config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            game_fps=240,
+            min_hold_us=4_667,
+        ),
+    )
+    assert session is not None
+
+
 def test_session_reports_lite_progress_then_one_final_report() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [],

@@ -199,15 +199,6 @@ pub(super) fn validate_schedule_timing(
     schedule: &RuntimeSchedule,
     effective_min_hold_us: u64,
 ) -> PyResult<()> {
-    schedule
-        .batches
-        .last()
-        .map_or(0, |batch| batch.scheduled_us)
-        .checked_add(effective_min_hold_us)
-        .ok_or_else(|| {
-            PyValueError::new_err(
-                "schedule and timing configuration exceed supported timestamp range",
-            )
-        })?;
-    Ok(())
+    sky_dispatch_core::validation::validate_min_hold_feasibility(schedule, effective_min_hold_us)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
