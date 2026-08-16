@@ -134,6 +134,9 @@ impl ProductionDispatchTestHarness {
     /// unrelated Down chord on keys B/C. Production must send B/C at their
     /// authored boundary and retain A as an independent pending release.
     pub fn new_deferred_release_with_unrelated_down() -> Self {
+        // Leave enough slack for direct-dispatch tests to exercise ordering
+        // without racing worker-startup wall clock. The overdue guard has
+        // separate controlled-clock coverage.
         Self::create_harness_with_min_hold(
             &[
                 KeyActionInput {
@@ -146,19 +149,19 @@ impl ProductionDispatchTestHarness {
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Up,
-                    scheduled_us: 100,
+                    scheduled_us: 50_000,
                     scan_codes: vec![0x15].into(),
                     reason: "deferred-release".into(),
                 },
                 KeyActionInput {
                     source_action_index: 2,
                     kind: ActionKind::Down,
-                    scheduled_us: 100,
+                    scheduled_us: 50_000,
                     scan_codes: vec![0x16, 0x17].into(),
                     reason: "unrelated-chord".into(),
                 },
             ],
-            10_000,
+            100_000,
         )
     }
 

@@ -2685,15 +2685,13 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
     assert_eq!(harness.backend_active_mask() & 0b001, 0b001);
 
     let authored_chord_plan = harness.plan_current_dispatch();
-    harness.set_deadline_wake_for_test(
-        authored_chord_plan
-            .physical_target_qpc()
-            .expect("authored chord physical target"),
+    let authored_chord_step = harness
+        .wait_and_dispatch_current_plan(&authored_chord_plan)
+        .expect("wait for unrelated authored chord");
+    assert!(
+        matches!(authored_chord_step, super::worker::DispatchStep::Dispatched),
+        "unrelated chord step: {authored_chord_step:?}"
     );
-    assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&authored_chord_plan),
-        super::worker::DispatchStep::Dispatched
-    ));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
     assert_eq!(harness.backend_active_mask() & 0b110, 0b110);
@@ -2726,15 +2724,13 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
     ));
 
     let authored_plan = harness.plan_current_dispatch();
-    harness.set_deadline_wake_for_test(
-        authored_plan
-            .physical_target_qpc()
-            .expect("authored chord physical target"),
+    let authored_step = harness
+        .wait_and_dispatch_current_plan(&authored_plan)
+        .expect("wait for authored chord");
+    assert!(
+        matches!(authored_step, super::worker::DispatchStep::Dispatched),
+        "unrelated chord packet step: {authored_step:?}"
     );
-    assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&authored_plan),
-        super::worker::DispatchStep::Dispatched
-    ));
 
     let pending_plan = harness.plan_current_dispatch();
     assert!(matches!(
