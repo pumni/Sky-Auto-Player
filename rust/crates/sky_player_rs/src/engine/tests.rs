@@ -969,6 +969,10 @@ fn production_startup_matrix_preserves_first_physical_lead() {
 fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
+    // Keep the physical boundaries outside normal worker-startup jitter.  The
+    // overdue-catch-up guard is tested deterministically below; this test is
+    // about the event-count bucket after stale metadata, not about racing a
+    // 500-us wall-clock schedule during thread startup.
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -981,28 +985,28 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 500,
+                scheduled_us: 50_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "bucket-release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
-                scheduled_us: 1_000,
+                scheduled_us: 100_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "bucket-stale".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Down,
-                scheduled_us: 1_500,
+                scheduled_us: 150_000,
                 scan_codes: smallvec::smallvec![0x17, 0x18],
                 reason: "bucket-two-down".into(),
             },
             KeyActionInput {
                 source_action_index: 4,
                 kind: ActionKind::Up,
-                scheduled_us: 2_500,
+                scheduled_us: 250_000,
                 scan_codes: smallvec::smallvec![0x17, 0x18],
                 reason: "bucket-cleanup".into(),
             },
