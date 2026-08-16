@@ -23,6 +23,14 @@ use std::time::Instant;
 const DEFAULT_ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
 
+fn due_us() -> u64 {
+    std::env::var("RT_HANDOFF_BENCH_DUE_US")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &u64| (1..=60_000).contains(value))
+        .unwrap_or(DUE_US)
+}
+
 fn iterations() -> usize {
     std::env::var("RT_HANDOFF_BENCH_ITERATIONS")
         .ok()
@@ -306,7 +314,8 @@ fn plan_projected(
 fn run_down(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
-        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, DUE_US);
+        let mut harness =
+            ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -336,7 +345,7 @@ fn run_up(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let mut harness =
-            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, DUE_US);
+            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -369,7 +378,7 @@ fn run_mixed(event_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let mut harness =
-            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, DUE_US);
+            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -596,7 +605,7 @@ fn main() {
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
         "iterations": iterations(),
-        "deadline_us": DUE_US,
+        "deadline_us": due_us(),
         "transport": "deterministic_mock",
         "observation_enqueue_ab": observation_enqueue_ab,
         "modes": mode_reports,
