@@ -13,6 +13,11 @@ effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
 ```
 
 The default margin is `500 µs`; calibration may provide a validated margin.
+The validated host-delivery calibration uses only paired Down/Up evidence from
+the six required `1/5/15 × hot/cold` buckets, with at least 100 clean pairs in
+each bucket. Its recommended margin is the global positive p99 hold shrink plus
+`100 µs`, clamped to `300–2,000 µs`; cache v1 or incomplete/dirty evidence
+falls back to the unchanged `500 µs` default.
 The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. It does not learn or subtract SendInput cost.
 

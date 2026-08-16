@@ -7,8 +7,8 @@
 
 use sky_dispatch_win32::calibration::{
     CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, CALIBRATION_SCHEMA_VERSION, CalibrationConfig,
-    CalibrationFailureReport, MEASUREMENT_PROTOCOL_VERSION, PacketKind, SampleClass,
-    run_calibration_bucket_json, run_calibration_json,
+    CalibrationFailureReport, MEASUREMENT_PROTOCOL_VERSION, SampleClass, run_calibration_json,
+    run_calibration_pair_bucket_json,
 };
 
 fn parse_u8(value: Option<String>, name: &str) -> Result<u8, String> {
@@ -25,14 +25,6 @@ fn parse_u64(value: Option<String>, name: &str) -> Result<u64, String> {
         .map_err(|_| format!("{name} must be a non-negative integer"))
 }
 
-fn parse_kind(value: &str) -> Result<PacketKind, String> {
-    match value {
-        "down" => Ok(PacketKind::Down),
-        "up" => Ok(PacketKind::Up),
-        _ => Err("--kind must be down or up".to_string()),
-    }
-}
-
 fn parse_class(value: &str) -> Result<SampleClass, String> {
     match value {
         "hot" => Ok(SampleClass::Hot),
@@ -43,7 +35,6 @@ fn parse_class(value: &str) -> Result<SampleClass, String> {
 
 fn main() -> Result<(), String> {
     let mut mode = String::from("quick");
-    let mut kind = None;
     let mut class = None;
     let mut polyphony = None;
     let mut samples = None;
@@ -64,12 +55,10 @@ fn main() -> Result<(), String> {
                     return Err("--mode must be quick, full, or bucket".to_string());
                 }
             }
+            // Accepted only for a clear migration error. Protocol v4 has no
+            // independent directional bucket.
             "--kind" => {
-                kind = Some(parse_kind(
-                    &args
-                        .next()
-                        .ok_or_else(|| "--kind requires down or up".to_string())?,
-                )?)
+                return Err("--kind is retired; protocol v4 measures Down/Up pairs".to_string());
             }
             "--class" => {
                 class =
@@ -115,7 +104,7 @@ fn main() -> Result<(), String> {
             "--metadata" => metadata = true,
             "--help" => {
                 println!(
-                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--hot-gap-target-us N] [--cold-threshold-us N] [--cold-idle-gap-us N] [--budget-seconds 6..120]"
+                    "usage: native_calibration --mode bucket --class hot|cold --polyphony N --samples N [--warmup-samples N] [--hot-gap-target-us N] [--cold-threshold-us N] [--cold-idle-gap-us N] [--budget-seconds 6..120]"
                 );
                 return Ok(());
             }
@@ -149,7 +138,6 @@ fn main() -> Result<(), String> {
     }
 
     if mode == "bucket" {
-        let kind = kind.ok_or_else(|| "--kind is required in bucket mode".to_string())?;
         let class = class.ok_or_else(|| "--class is required in bucket mode".to_string())?;
         let polyphony =
             polyphony.ok_or_else(|| "--polyphony is required in bucket mode".to_string())?;
@@ -173,7 +161,7 @@ fn main() -> Result<(), String> {
         if let Some(value) = cold_idle_gap_us {
             config.cold_idle_gap_us = value;
         }
-        let result = run_calibration_bucket_json(&config, kind, class);
+        let result = run_calibration_pair_bucket_json(&config, class);
         match result {
             Ok(output) => {
                 println!("{output}");
@@ -185,7 +173,7 @@ fn main() -> Result<(), String> {
                         *report
                     }
                     other => CalibrationFailureReport {
-                        kind: format!("{kind:?}").to_lowercase(),
+                        kind: "pair".to_string(),
                         class: format!("{class:?}").to_lowercase(),
                         polyphony,
                         sample_index: 0,

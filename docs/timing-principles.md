@@ -47,6 +47,33 @@ The release floor is a sender-side contract. A completion sample does not prove
 kernel delivery or game observation. A slow Down can defer its own release but
 cannot shift unrelated future authored actions.
 
+## 2.1 Host delivery calibration
+
+Calibration is a separate native, app-owned Raw Input proxy. It measures
+`SendInput` completion to `WM_INPUT` receipt, not game polling, rendering,
+audio, or network latency. The sender boundary is measured as:
+
+```text
+validate/build/tag packet -> arm sequence -> SetLastError(0)
+-> start_qpc -> SendInput -> completion_qpc -> validate receipt
+```
+
+The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
+Up packets must both match their direction, sequence, and scan code. A clean
+pair computes signed per-key values:
+
+```text
+D = down_receipt_qpc - down_completion_qpc
+U = up_receipt_qpc - up_completion_qpc
+shrink = D - U
+```
+
+The publishable matrix has six buckets (`1/5/15 × hot/cold`) with at least
+100 clean pairs in each. The selected static margin is the positive global
+bucket p99 plus a 100 µs guard, clamped to 300–2,000 µs. This margin is
+applied only to the hold floor; it never leads the playback target or claims
+game-observed timing.
+
 ## 3. Planning and physical target
 
 Each worker epoch freezes one typed plan. It contains the current authored

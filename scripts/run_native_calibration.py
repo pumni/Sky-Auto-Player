@@ -17,7 +17,6 @@ from sky_music.platform.win32.native_calibration import (
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("diagnostic", "quick", "full"), default="quick")
-    parser.add_argument("--kind", choices=("down", "up"))
     parser.add_argument("--class", dest="class_name", choices=("hot", "cold"))
     parser.add_argument("--polyphony", type=int)
     parser.add_argument("--samples", type=int)
@@ -49,7 +48,7 @@ def main() -> int:
         "--cache",
         type=Path,
         default=Path(".cache/input_latency.json"),
-        help="validated legacy margin cache written after native cleanup succeeds",
+        help="validated paired margin cache written after native cleanup succeeds",
     )
     parser.add_argument(
         "--failure-report",
@@ -67,7 +66,6 @@ def main() -> int:
             timeout_seconds=args.timeout_seconds,
             checkpoint_dir=args.checkpoint_dir,
             resume=args.resume,
-            kind=args.kind,
             class_name=args.class_name,
             polyphony=args.polyphony,
             samples=args.samples,
@@ -82,8 +80,8 @@ def main() -> int:
             {
                 "evidence_kind": result["evidence_kind"],
                 "version": result["version"],
-                "measured_attempted": result["measured_attempted"],
-                "measured_anomalous": result["measured_anomalous"],
+                "measured_attempted": result.get("measured_attempted", result.get("attempted_pairs", 0)),
+                "measured_anomalous": result.get("measured_anomalous", result.get("pair_bucket", {}).get("anomaly_count", 0)),
                 "artifact": str(
                     args.output if args.mode != "full" else args.checkpoint_dir
                 ),

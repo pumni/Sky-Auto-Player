@@ -1312,11 +1312,11 @@ class PickerScreen(Screen[SongPickerResult]):
             PickerOption("no", "Cancel"),
         ]
         text = (
-            "This measures host-side injected Raw Input delivery, not Sky polling, rendering, or audio onset.\n\n"
-            "1. A separate Windows window will open.\n"
-            "2. Keep that window focused (click/tap it if needed).\n"
-            "3. The app will simulate 200 keypresses to measure latency.\n"
-            "4. Cache is saved to .cache/input_latency.json.\n\n"
+            "This measures the host-side injected Raw Input delivery proxy; it does not measure Sky polling, rendering, or audio latency.\n\n"
+            "1. A separate Windows calibration window will open.\n"
+            "2. Keep that window focused and avoid pressing keys until it completes.\n"
+            "3. A bounded series of Down/Up calibration pairs will be sent across the required polyphony and hot/cold buckets.\n"
+            "4. The result is saved only after correlation, cleanup, and evidence gates pass.\n\n"
             "Would you like to proceed?"
         )
         
@@ -1391,18 +1391,17 @@ class PickerScreen(Screen[SongPickerResult]):
         self._replace_metadata_coordinator()
 
         self.app.push_screen(
-            InfoModal(
-                "Input Latency Calibration Complete",
-                f"Device margin: {published.margin_us} \u00b5s\n"
-                f"Source: {published.source}\n"
-                f"Cache: {published.cache_path}\n\n"
-                f"Down latency (\u00b5s): p50={published.down_us.p50}, "
-                f"p90={published.down_us.p90}, p99={published.down_us.p99}\n"
-                f"Up latency   (\u00b5s): p50={published.up_us.p50}, "
-                f"p90={published.up_us.p90}, p99={published.up_us.p99}\n\n"
-                f"Evidence: {published.evidence_kind} (SendInput \u2192 app-owned WM_INPUT).",
-                theme_name=self.active_theme,
-            )
+                InfoModal(
+                    "Input Latency Calibration Complete",
+                    f"Host delivery hold-shrink p99: {published.global_shrink_p99_us} \u00b5s\n"
+                    f"Worst measured bucket: {published.worst_bucket}\n"
+                    f"Calibrated device margin: {published.margin_us} \u00b5s\n"
+                    f"Policy guard: {published.guard_us} \u00b5s\n"
+                    f"Clean pairs per required bucket: {published.sample_count}\n"
+                    f"Evidence: {published.evidence_kind}\n"
+                    f"Cache: {published.cache_path}",
+                    theme_name=self.active_theme,
+                )
         )
 
 

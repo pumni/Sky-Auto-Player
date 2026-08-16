@@ -41,17 +41,21 @@ def run_doctor_command(
             return 1
         
         print("Creating calibration window. Please keep the window focused.")
-        print("Injecting down/up keystrokes and measuring host-side Raw Input delivery...")
+        print("Injecting balanced Down/Up pairs and measuring host-side Raw Input delivery...")
         print("This is a SendInput -> app-owned WM_INPUT delivery proxy, not game/audio onset truth.")
         try:
             from sky_music.platform.win32.native_calibration import (
-                run_native_calibration,
+                run_published_native_calibration,
             )
 
-            res = run_native_calibration()
+            res = run_published_native_calibration()
             print("Calibration complete successfully!")
-            print(f"Sampled Down Latency (us): p50={res['down_us']['p50']}, p90={res['down_us']['p90']}, p99={res['down_us']['p99']}")
-            print(f"Sampled Up Latency   (us): p50={res['up_us']['p50']}, p90={res['up_us']['p90']}, p99={res['up_us']['p99']}")
+            print(
+                "Host hold-shrink p99 (us): "
+                f"{res.global_shrink_p99_us} (worst bucket: {res.worst_bucket})"
+            )
+            print(f"Recommended margin (us): {res.margin_us}")
+            print(f"Clean pairs per bucket: {res.sample_count}")
             print("Calibration saved to .cache/input_latency.json")
         except Exception as exc:
             print(f"Calibration failed: {exc}")

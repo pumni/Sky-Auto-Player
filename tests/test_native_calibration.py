@@ -1,165 +1,89 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
+from sky_music.infrastructure import calibration_loader as loader
 from sky_music.platform.win32 import native_calibration
 
 
-def _native_result(
-    *, clean: int = 64, cleanup_success: bool = True
-) -> dict[str, object]:
-    def bucket() -> dict[str, object]:
-        return {
-            "attempted": clean,
-            "clean_sample_count": clean,
-            "clean": clean,
-            "rejected": 0,
-            "sample_count": clean,
-            "partial_send": 0,
-            "error_count": 0,
-            "timeout_count": 0,
-            "anomaly_count": 0,
-            "class_mismatch_count": 0,
-            "first_receipt_us": {"p50": 10, "p90": 20, "p95": 30, "p99": 40},
-        }
-
-    measured = clean * 4
-    setup_attempted = 20
-    warmup_attempted = 10
+def _quantiles(p99: int = 6) -> dict[str, int]:
+    if p99 < 0:
+        return {"min": p99 - 6, "p50": p99 - 4, "p90": p99 - 3, "p95": p99 - 2, "p99": p99, "max": p99 + 2, "mean": p99 - 3}
     return {
-        "version": 8,
-        "measurement_protocol_version": 3,
+        "min": -4,
+        "p50": -1,
+        "p90": 1,
+        "p95": 3,
+        "p99": p99,
+        "max": p99 + 2,
+        "mean": 0,
+    }
+
+
+def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> dict[str, object]:
+    total = clean if attempted is None else attempted
+    rejected = total - clean
+    return {
+        "attempted": total,
+        "clean": clean,
+        "clean_sample_count": clean,
+        "rejected": rejected,
+        "sample_count": total,
+        "timeout_count": 0,
+        "anomaly_count": 0,
+        "class_mismatch_count": 0,
+        "partial_send": 0,
+        "error_count": 0,
+        "call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
+        "first_receipt_us": _quantiles(),
+        "last_receipt_us": _quantiles(),
+        "intra_chord_spread_us": None,
+        "pair_worst_shrink_us": _quantiles(p99),
+        "down_receipt_us": _quantiles(),
+        "up_receipt_us": _quantiles(),
+    }
+
+
+def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 120) -> dict[str, object]:
+    return {
+        "polyphonies": polyphonies,
+        "samples_per_hot_bucket": samples,
+        "samples_per_cold_bucket": samples,
+        "warmup_samples": 4,
+        "receipt_timeout_ms": 200,
+        "hot_gap_target_us": 5_000,
+        "cold_threshold_us": 20_000,
+        "cold_idle_gap_us": 25_000,
+        "budget_seconds": budget,
+    }
+
+
+def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
+    return {
+        "version": 9,
+        "measurement_protocol_version": 4,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
         "dirty_worktree": False,
         "native_source_fingerprint": "test-fingerprint",
-        "rustc_version": "rustc 1.97.1",
-        "host_fingerprint": {
-            "qpc_frequency_hz": 10_000_000,
-            "win32_build": "Windows 11 test build",
-            "sampled_at_us": 123_456,
-        },
-        "configuration": {
-            "polyphonies": [1],
-            "samples_per_hot_bucket": clean,
-            "samples_per_cold_bucket": clean,
-            "warmup_samples": warmup_attempted,
-            "receipt_timeout_ms": 200,
-            "hot_gap_target_us": 5_000,
-            "cold_idle_gap_us": 25_000,
-            "cold_threshold_us": 20_000,
-            "budget_seconds": 120,
-        },
-        "warmup_attempted": warmup_attempted,
-        "measured_attempted": measured,
-        "setup_attempted": setup_attempted,
-        "measured_anomalous": 0,
-        "warmup_anomalous": 1,
-        "setup_anomalous": 0,
-        "measured_class_mismatch": 0,
-        "total_anomalous": 1,
-        "warmup_timed_out": 0,
-        "measured_timed_out": 0,
-        "setup_timed_out": 0,
-        "total_attempted": warmup_attempted + measured + setup_attempted,
-        "total_timed_out": 0,
-        "buckets": {
-            "down": {"1": {"hot": bucket(), "cold": bucket()}},
-            "up": {"1": {"hot": bucket(), "cold": bucket()}},
-        },
-        "cleanup": {
-            "cleanup_success": cleanup_success,
-            "cleanup_verification_inconclusive": False,
-            "raw_input_restore_failed": False,
-            "pump_thread_failed": False,
-        },
-    }
-
-
-def _native_bucket_result(
-    *,
-    kind: str,
-    class_name: str,
-    polyphony: int,
-    samples: int = 20,
-    warmup_samples: int = 4,
-    budget_seconds: int = 120,
-) -> dict[str, object]:
-    base = _native_result(clean=samples)
-    base_bucket = base["buckets"]["down"]["1"]["hot"]  # type: ignore[index]
-    assert isinstance(base_bucket, dict)
-    setup = samples + warmup_samples if kind == "up" else 0
-    sample = {
-        "clean": True,
-        "call_duration_us": 1,
-        "first_receipt_us": 10,
-        "last_receipt_us": 10,
-        "intra_chord_spread_us": 0,
-        "receipt_count": polyphony,
-        "expected_receipt_count": polyphony,
-        "win32_error": None,
-        "anomalies": {
-            "duplicate_receipt": False,
-            "reordered_receipt": False,
-            "unexpected_scan_code": False,
-            "timeout": False,
-            "partial_send": False,
-            "class_mismatch": False,
-        },
-    }
-    return {
-        "version": 8,
-        "measurement_protocol_version": 3,
-        "evidence_kind": "injected_raw_input_delivery_proxy",
-        "source_git_sha": "test-sha",
-        "native_build_id": "test-sha",
-        "dirty_worktree": False,
-        "native_source_fingerprint": "test-fingerprint",
-        "rustc_version": "rustc 1.97.1",
-        "host_fingerprint": {
-            "qpc_frequency_hz": 10_000_000,
-            "win32_build": "Windows 11 test build",
-            "sampled_at_us": 123_456,
-        },
-        "configuration": {
-            "polyphonies": [polyphony],
-            "samples_per_hot_bucket": samples,
-            "samples_per_cold_bucket": samples,
-            "warmup_samples": warmup_samples,
-            "receipt_timeout_ms": 200,
-            "hot_gap_target_us": 5_000,
-            "cold_idle_gap_us": 25_000,
-            "cold_threshold_us": 20_000,
-            "budget_seconds": budget_seconds,
-        },
-        "kind": kind,
+        "rustc_version": "rustc test",
+        "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+        "configuration": _configuration(polyphonies=[polyphony], samples=samples),
         "class": class_name,
         "polyphony": polyphony,
-        "attempted": samples,
-        "setup_attempted": setup,
-        "setup_anomalous": 0,
-        "setup_timed_out": 0,
-        "warmup_attempted": warmup_samples,
-        "warmup_anomalous": 0,
-        "warmup_timed_out": 0,
-        "total_attempted": samples + setup + warmup_samples,
-        "total_anomalous": 0,
-        "total_timed_out": 0,
-        "bucket": base_bucket,
-        "worst_samples": [sample.copy()],
-        "anomalous_samples": [],
+        "attempted_pairs": samples,
+        "warmup_pairs": 4,
+        "warmup_rejected": 0,
+        "pair_bucket": _bucket(clean=samples),
+        "worst_pairs": [],
+        "anomalous_pairs": [],
         "cleanup": {
-            "cleanup_attempted": True,
             "cleanup_success": True,
-            "cleanup_stuck_keys": [],
             "cleanup_verification_inconclusive": False,
             "raw_input_restore_failed": False,
             "pump_thread_failed": False,
@@ -167,857 +91,162 @@ def _native_bucket_result(
     }
 
 
-def _native_quick_result(*, budget_seconds: int = 120) -> dict[str, object]:
-    result = _native_result(clean=20)
-    configuration = result["configuration"]
-    assert isinstance(configuration, dict)
-    configuration.update(
-        {
-            "polyphonies": [1, 5, 15],
-            "warmup_samples": 4,
-            "budget_seconds": budget_seconds,
+def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, object]:
+    p99_by_key = p99_by_key or {}
+    pair_buckets = {
+        str(polyphony): {
+            class_name: _bucket(p99=p99_by_key.get(f"{polyphony}/{class_name}", 6))
+            for class_name in ("hot", "cold")
         }
-    )
-    base_buckets = result["buckets"]
-    assert isinstance(base_buckets, dict)
-    base_down = base_buckets["down"]["1"]
-    base_up = base_buckets["up"]["1"]
-    assert isinstance(base_down, dict)
-    assert isinstance(base_up, dict)
-    result["buckets"] = {
-        kind: {
-            str(polyphony): {
-                "hot": json.loads(json.dumps(source["hot"])),
-                "cold": json.loads(json.dumps(source["cold"])),
-            }
-            for polyphony in (1, 5, 15)
-        }
-        for kind, source in (("down", base_down), ("up", base_up))
+        for polyphony in (1, 5, 15)
     }
-    result["warmup_attempted"] = 24
-    result["measured_attempted"] = 240
-    result["setup_attempted"] = 20
-    result["total_attempted"] = 284
-    return result
+    return {
+        "version": 9,
+        "measurement_protocol_version": 4,
+        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "source_git_sha": "test-sha",
+        "native_build_id": "test-sha",
+        "dirty_worktree": False,
+        "native_source_fingerprint": "test-fingerprint",
+        "rustc_version": "rustc test",
+        "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+        "configuration": _configuration(polyphonies=[1, 5, 15]),
+        "pair_buckets": pair_buckets,
+        "measured_attempted": 600,
+        "setup_attempted": 0,
+        "setup_anomalous": 0,
+        "setup_timed_out": 0,
+        "warmup_attempted": 24,
+        "warmup_anomalous": 0,
+        "warmup_timed_out": 0,
+        "measured_anomalous": 0,
+        "measured_timed_out": 0,
+        "measured_class_mismatch": 0,
+        "total_attempted": 624,
+        "total_anomalous": 0,
+        "total_timed_out": 0,
+        "cleanup": {
+            "cleanup_success": True,
+            "cleanup_verification_inconclusive": False,
+            "raw_input_restore_failed": False,
+            "pump_thread_failed": False,
+        },
+    }
 
 
-class _FakePopen:
-    def __init__(self, _args, *, stdout, stderr, **_kwargs):
-        stdout.write(json.dumps(self.result).encode("utf-8"))
-        stderr.write(b"diagnostic on stderr\n")
-
-    result: dict[str, object] = {}
-    return_code = 0
-    wait_timeouts: list[float | None] = []
-
-    def wait(self, *, timeout: float | None = None) -> int:
-        self.wait_timeouts.append(timeout)
-        assert timeout is None or timeout > 0
-        return self.return_code
-
-    def kill(self) -> None:
-        self.return_code = -9
+def test_protocol_v4_native_result_accepts_signed_pair_matrix() -> None:
+    result = native_calibration._validate_result(_native_result())
+    assert result["version"] == 9
+    assert result["measurement_protocol_version"] == 4
 
 
-def test_native_bucket_uses_immutable_gap_configuration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_native_result_rejects_missing_required_bucket() -> None:
+    result = _native_result()
+    del result["pair_buckets"]["15"]["cold"]  # type: ignore[index]
+    with pytest.raises(native_calibration.NativeCalibrationError, match="incomplete"):
+        native_calibration._validate_result(result)
+
+
+def test_native_result_rejects_schema_v1() -> None:
+    result = _native_result()
+    result["version"] = 8
+    with pytest.raises(native_calibration.NativeCalibrationError, match="schema"):
+        native_calibration._validate_result(result)
+
+
+def test_native_pair_bucket_command_has_no_directional_kind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    payload = _pair_bucket_result(polyphony=5, class_name="cold")
     captured: dict[str, object] = {}
-    result = _native_bucket_result(kind="down", class_name="hot", polyphony=5)
 
-    def run(command, **kwargs):  # type: ignore[no-untyped-def]
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         captured["command"] = command
-        captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, json.dumps(result))
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
 
     monkeypatch.setattr(native_calibration.subprocess, "run", run)
-    parsed = native_calibration._execute_native_bucket(
+    result = native_calibration._execute_native_bucket(
         tmp_path / "native.exe",
-        kind="down",
-        class_name="hot",
+        class_name="cold",
         polyphony=5,
-        samples=20,
+        samples=100,
         warmup_samples=4,
         budget_seconds=120,
         timeout_seconds=120.0,
         progress=False,
     )
-
-    assert parsed == result
-    command = captured["command"]
-    assert isinstance(command, list)
-    assert command[-6:] == [
-        "--hot-gap-target-us",
-        "5000",
-        "--cold-threshold-us",
-        "20000",
-        "--cold-idle-gap-us",
-        "25000",
-    ]
-    assert captured["timeout"] == 120.0
+    assert result == payload
+    assert "--kind" not in captured["command"]  # type: ignore[operator]
 
 
-@pytest.mark.parametrize("native_output", [None, "partial"])
-def test_native_bucket_timeout_does_not_wait_for_a_newline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_output: str | None
-) -> None:
-    def run(command, **kwargs):  # type: ignore[no-untyped-def]
-        raise subprocess.TimeoutExpired(
-            command, kwargs["timeout"], output=native_output
-        )
-
-    monkeypatch.setattr(native_calibration.subprocess, "run", run)
-    with pytest.raises(native_calibration.NativeCalibrationError, match="timed out"):
+def test_directional_execution_is_rejected() -> None:
+    with pytest.raises(native_calibration.NativeCalibrationError, match="directional"):
         native_calibration._execute_native_bucket(
-            tmp_path / "native.exe",
+            Path("native.exe"),
             kind="down",
             class_name="hot",
             polyphony=1,
-            samples=20,
+            samples=100,
             warmup_samples=4,
-            budget_seconds=1,
-            timeout_seconds=0.1,
+            budget_seconds=120,
+            timeout_seconds=120.0,
             progress=False,
         )
 
 
-@pytest.mark.parametrize("remaining", [10.9])
-def test_native_child_budget_reserves_cleanup_time(remaining: float) -> None:
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="cleanup reserve"
-    ):
-        native_calibration._native_child_budget(100.0, 100.0 - remaining)
+def test_cache_v2_uses_max_positive_p99_and_preserves_signed_values() -> None:
+    result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
+    cache = native_calibration._cache_v2(result)
+    summary = loader.parse_calibration_cache_summary(cache)
+    assert summary.global_shrink_p99_us == 42
+    assert summary.worst_bucket == "15/cold"
+    assert summary.margin_us == 300
+    assert summary.pair_buckets["5/hot"].pair_worst_shrink_us.p99 == -8
 
 
-def test_native_child_budget_uses_floor_and_float_timeout() -> None:
-    budget, timeout = native_calibration._native_child_budget(100.0, 89.0)
-    assert budget == 6
-    assert timeout == 6.0
-
-    budget, timeout = native_calibration._native_child_budget(100.0, 88.1)
-    assert budget == 6
-    assert timeout == pytest.approx(6.9)
-
-    budget, timeout = native_calibration._native_child_budget(100.0, 88.0)
-    assert budget == 7
-    assert timeout == 7.0
+def test_cache_v1_is_rejected_and_falls_back() -> None:
+    old = {"version": 1, "n": 20, "down_us": {"p50": 1, "p90": 2, "p99": 3}, "up_us": {"p50": 1, "p90": 2, "p99": 3}}
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(old)
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["warmup_samples", "receipt_timeout_ms", "budget_seconds"],
-)
-def test_native_bucket_rejects_configuration_provenance_mismatch(field: str) -> None:
-    result = _native_bucket_result(
-        kind="down",
-        class_name="hot",
-        polyphony=1,
-        samples=20,
-        warmup_samples=1,
-        budget_seconds=7,
-    )
-    configuration = result["configuration"]
-    assert isinstance(configuration, dict)
-    configuration[field] = {
-        "warmup_samples": 2,
-        "receipt_timeout_ms": 100,
-        "budget_seconds": 8,
-    }[field]
-
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="configuration"
-    ):
-        native_calibration._validate_bucket_result(
-            result,
-            kind="down",
-            class_name="hot",
-            polyphony=1,
-            samples=20,
-            warmup_samples=1,
-            budget_seconds=7,
-        )
+def test_cache_requires_100_clean_pairs_per_cell() -> None:
+    cache = native_calibration._cache_v2(_native_result())
+    cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
+    cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
+    with pytest.raises(ValueError, match="clean pairs"):
+        loader.parse_calibration_cache_summary(cache)
 
 
-def test_native_calibration_writes_cache_only_after_valid_clean_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_diagnostic_run_writes_report_but_never_production_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    result = _native_quick_result()
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    _FakePopen.result = result
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
-
-    artifact = tmp_path / "calibration-native.json"
+    payload = _pair_bucket_result(polyphony=1, class_name="hot", samples=5)
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(native_calibration, "_execute_native_bucket", lambda *args, **kwargs: payload)
+    report = tmp_path / "diagnostic.json"
     cache = tmp_path / "input_latency.json"
-    returned = native_calibration.run_native_calibration(
-        output_path=artifact, cache_path=cache
+    result = native_calibration.run_diagnostic_calibration(
+        class_name="hot", polyphony=1, samples=5, output_path=report
     )
-
-    assert returned == result
-    assert json.loads(artifact.read_text(encoding="utf-8")) == result
-    legacy = json.loads(cache.read_text(encoding="utf-8"))
-    assert legacy["evidence_kind"] == result["evidence_kind"]
-    assert legacy["n"] == 20
-    assert legacy["down_us"] == {"p50": 10, "p90": 20, "p99": 40}
+    assert result["acceptance_eligible"] is False
+    assert report.is_file()
+    assert not cache.exists()
 
 
-@pytest.mark.parametrize(
-    ("mode", "expected_timeout"),
-    [
-        ("quick", native_calibration.QUICK_CALIBRATION_TIMEOUT_SECONDS),
-    ],
-)
-def test_native_calibration_uses_mode_specific_default_timeout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
-    expected_timeout: float,
+def test_invalid_quick_result_leaves_existing_cache_untouched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    _FakePopen.result = _native_quick_result()
-    _FakePopen.wait_timeouts = []
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
-
-    native_calibration.run_native_calibration(
-        mode=mode,
-        output_path=tmp_path / f"{mode}.json",
-        cache_path=tmp_path / f"{mode}-cache.json",
-    )
-
-    assert _FakePopen.wait_timeouts == [expected_timeout]
-
-
-def test_native_calibration_full_timeout_is_not_quick_timeout() -> None:
-    assert native_calibration.FULL_CALIBRATION_TIMEOUT_SECONDS != 1_800.0
-
-
-def test_native_calibration_timeout_override_is_forwarded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    _FakePopen.result = _native_quick_result(budget_seconds=12)
-    _FakePopen.wait_timeouts = []
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
-
-    native_calibration.run_native_calibration(
-        output_path=tmp_path / "override.json",
-        cache_path=tmp_path / "override-cache.json",
-        timeout_seconds=12.5,
-    )
-
-    assert _FakePopen.wait_timeouts == [12.5]
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "budget_seconds",
-        "receipt_timeout_ms",
-        "warmup_samples",
-        "samples_per_hot_bucket",
-        "samples_per_cold_bucket",
-        "polyphonies",
-        "hot_gap_target_us",
-        "cold_threshold_us",
-        "cold_idle_gap_us",
-    ],
-)
-def test_quick_calibration_rejects_exact_configuration_mismatch_before_writes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    field: str,
-) -> None:
-    result = _native_quick_result(budget_seconds=12)
-    configuration = result["configuration"]
-    assert isinstance(configuration, dict)
-    configuration[field] = {
-        "budget_seconds": 11,
-        "receipt_timeout_ms": 201,
-        "warmup_samples": 3,
-        "samples_per_hot_bucket": 19,
-        "samples_per_cold_bucket": 19,
-        "polyphonies": [1, 5],
-        "hot_gap_target_us": 4_999,
-        "cold_threshold_us": 19_999,
-        "cold_idle_gap_us": 24_999,
-    }[field]
-    _FakePopen.result = result
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
-    output = tmp_path / "quick.json"
-    cache = tmp_path / "cache.json"
-    output.write_text("output sentinel\n", encoding="utf-8")
-    cache.write_text("cache sentinel\n", encoding="utf-8")
-
-    with pytest.raises(native_calibration.NativeCalibrationError, match=field):
-        native_calibration.run_native_calibration(
-            output_path=output,
-            cache_path=cache,
-            timeout_seconds=12.5,
-        )
-
-    assert output.read_text(encoding="utf-8") == "output sentinel\n"
-    assert cache.read_text(encoding="utf-8") == "cache sentinel\n"
-
-
-def test_calibration_cli_forwards_timeout_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    script_path = Path(__file__).parents[1] / "scripts" / "run_native_calibration.py"
-    spec = importlib.util.spec_from_file_location(
-        "run_native_calibration_cli_under_test", script_path
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    calibration_cli: ModuleType = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(calibration_cli)
-
-    captured: dict[str, object] = {}
-
-    def fake_run_native_calibration(**kwargs: object) -> dict[str, object]:
-        captured.update(kwargs)
-        return {
-            "evidence_kind": "test",
-            "version": 6,
-            "measured_attempted": 0,
-            "measured_anomalous": 0,
-        }
-
-    monkeypatch.setattr(
-        calibration_cli, "run_native_calibration", fake_run_native_calibration
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "run_native_calibration.py",
-            "--mode",
-            "full",
-            "--timeout-seconds",
-            "12.5",
-        ],
-    )
-
-    assert calibration_cli.main() == 0
-    assert captured["mode"] == "full"
-    assert captured["timeout_seconds"] == 12.5
-
-
-class _TimeoutPopen:
-    def __init__(self, _args, *, stdout, stderr, **_kwargs):
-        self.killed = False
-        self.reaped = False
-
-    def wait(self, *, timeout: float | None = None) -> int:
-        if timeout is not None:
-            raise subprocess.TimeoutExpired("native.exe", timeout)
-        self.reaped = True
-        return -9
-
-    def kill(self) -> None:
-        self.killed = True
-
-
-def test_native_calibration_timeout_kills_and_reaps_without_writing_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    process_instances: list[_TimeoutPopen] = []
-
-    def popen_factory(*args, **kwargs) -> _TimeoutPopen:
-        process = _TimeoutPopen(*args, **kwargs)
-        process_instances.append(process)
-        return process
-
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", popen_factory)
-    artifact = tmp_path / "raw.json"
-    cache = tmp_path / "input_latency.json"
-    artifact.write_text("raw sentinel\n", encoding="utf-8")
-    cache.write_text("cache sentinel\n", encoding="utf-8")
-
-    with pytest.raises(native_calibration.NativeCalibrationError, match="timed out"):
-        native_calibration.run_native_calibration(
-            output_path=artifact,
-            cache_path=cache,
-            timeout_seconds=6.0,
-        )
-
-    assert len(process_instances) == 1
-    assert process_instances[0].killed is True
-    assert process_instances[0].reaped is True
-    assert artifact.read_text(encoding="utf-8") == "raw sentinel\n"
-    assert cache.read_text(encoding="utf-8") == "cache sentinel\n"
-
-
-def test_native_calibration_rejects_budget_without_measurement_allowance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration,
-        "_find_binary",
-        lambda: pytest.fail("native child must not be created"),
-    )
-
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="at least 6s"
-    ):
-        native_calibration.run_native_calibration(
-            output_path=tmp_path / "raw.json",
-            cache_path=tmp_path / "cache.json",
-            timeout_seconds=5.9,
-        )
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        _native_result(clean=1),
-        _native_result(cleanup_success=False),
-    ],
-)
-def test_native_calibration_rejects_untrusted_result_without_mutating_cache(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    result: dict[str, object],
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    _FakePopen.result = result
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
     cache = tmp_path / "input_latency.json"
     cache.write_text("sentinel\n", encoding="utf-8")
-
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: {"version": 9})
     with pytest.raises(native_calibration.NativeCalibrationError):
-        native_calibration.run_native_calibration(
-            output_path=tmp_path / "raw.json", cache_path=cache
-        )
-
-    assert cache.read_text(encoding="utf-8") == "sentinel\n"
-
-
-def test_native_calibration_nonzero_process_exit_is_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-
-    class _FailedPopen(_FakePopen):
-        return_code = 7
-
-        def __init__(self, _args, *, stdout, stderr, **_kwargs):
-            stderr.write(b"cleanup failed")
-
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FailedPopen)
-
-    with pytest.raises(native_calibration.NativeCalibrationError, match="7"):
-        native_calibration.run_native_calibration(
-            output_path=tmp_path / "raw.json", cache_path=tmp_path / "cache.json"
-        )
-
-
-@pytest.mark.parametrize(
-    "timeout", [float("nan"), float("inf"), float("-inf"), 0, -1, True, False]
-)
-def test_native_calibration_rejects_nonfinite_or_nonpositive_timeout(
-    timeout: object,
-) -> None:
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="finite positive"
-    ):
-        native_calibration.run_native_calibration(timeout_seconds=timeout)  # pyright: ignore[reportArgumentType]
-
-
-def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    result = _native_quick_result()
-    result["version"] = 4
-    _FakePopen.result = result
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
-    cache = tmp_path / "input_latency.json"
-    cache.write_text("sentinel\n", encoding="utf-8")
-
-    with pytest.raises(native_calibration.NativeCalibrationError, match="schema"):
         native_calibration.run_native_calibration(cache_path=cache)
-
     assert cache.read_text(encoding="utf-8") == "sentinel\n"
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda result: result["buckets"]["down"]["1"].pop("cold"),
-        lambda result: result["buckets"]["up"].pop("1"),
-        lambda result: result["buckets"]["down"]["1"].update({"warm": {}}),
-        lambda result: result.__setitem__("measured_attempted", 999),
-        lambda result: result.__setitem__("measured_timed_out", 1),
-        lambda result: result.__setitem__("measured_class_mismatch", 1),
-        lambda result: result["buckets"]["down"]["1"]["hot"].__setitem__(
-            "sample_count", 0
-        ),
-        lambda result: result.__setitem__("dirty_worktree", True),
-        lambda result: result.__setitem__("native_build_id", "other-sha"),
-        lambda result: result["host_fingerprint"].__setitem__("win32_build", ""),
-    ],
-    ids=[
-        "missing-cold",
-        "missing-polyphony",
-        "extra-class",
-        "attempt-total-mismatch",
-        "timeout-total-mismatch",
-        "class-mismatch-total-mismatch",
-        "sample-count-mismatch",
-        "dirty-artifact",
-        "source-build-sha-mismatch",
-        "missing-windows-build",
-    ],
-)
-def test_native_calibration_rejects_incomplete_or_untrusted_evidence(
-    mutate,
-) -> None:
-    result = _native_quick_result()
-    mutate(result)
-    with pytest.raises(native_calibration.NativeCalibrationError):
-        native_calibration._validate_result(result)
-
-
-def test_native_calibration_accepts_complete_matrix() -> None:
-    result = _native_result()
-    assert native_calibration._validate_result(result) == result
-
-
-def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_execute_native_bucket",
-        lambda *args, **kwargs: _native_bucket_result(
-            kind=kwargs["kind"],
-            class_name=kwargs["class_name"],
-            polyphony=kwargs["polyphony"],
-            samples=kwargs["samples"],
-            warmup_samples=kwargs["warmup_samples"],
-            budget_seconds=kwargs["budget_seconds"],
-        ),
-    )
-    cache = tmp_path / "input_latency.json"
-    cache.write_text("sentinel\n", encoding="utf-8")
-    artifact = native_calibration.run_diagnostic_calibration(
-        kind="down",
-        class_name="cold",
-        polyphony=1,
-        samples=100,
-        output_path=tmp_path / "diagnostic.json",
-    )
-    assert artifact["acceptance_eligible"] is False
-    assert artifact["native_configuration"]["warmup_samples"] == 1
-    assert artifact["native_configuration"]["budget_seconds"] == 120
-    assert (
-        artifact["orchestration_configuration"]["publication_reserve_seconds"]
-        == 5.0
-    )
-    assert "cleanup_reserve_seconds" not in artifact["orchestration_configuration"]
-    assert "configuration" not in artifact
-    assert (
-        json.loads((tmp_path / "diagnostic.json").read_text(encoding="utf-8"))
-        == artifact
-    )
-    assert cache.read_text(encoding="utf-8") == "sentinel\n"
-
-
-def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_current_full_provenance",
-        lambda _binary: {
-            "source_git_sha": "test-sha",
-            "native_build_id": "test-sha",
-            "native_source_fingerprint": "test-fingerprint",
-            "dirty_worktree": False,
-            "rustc_version": "rustc 1.97.1",
-            "host_fingerprint": {
-                "qpc_frequency_hz": 10_000_000,
-                "win32_build": "Windows 11 test build",
-            },
-        },
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_execute_native_bucket",
-        lambda *args, **kwargs: _native_bucket_result(
-            kind=kwargs["kind"],
-            class_name=kwargs["class_name"],
-            polyphony=kwargs["polyphony"],
-            samples=kwargs["samples"],
-            warmup_samples=kwargs["warmup_samples"],
-            budget_seconds=kwargs["budget_seconds"],
-        ),
-    )
-    checkpoint = tmp_path / "checkpoint"
-    result = native_calibration.run_full_calibration(checkpoint_dir=checkpoint)
-    assert result["completed_buckets"] == 12
-    assert not (tmp_path / "trusted-cache.json").exists()
-    manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
-    assert len(manifest["buckets"]) == 12
-    assert len(manifest["chunks"]) == 12
-    assert "orchestration_configuration" in manifest
-    assert manifest["orchestration_configuration"]["global_budget_seconds"] == 120.0
-    assert (
-        manifest["orchestration_configuration"]["publication_reserve_seconds"]
-        == 5.0
-    )
-    assert "cleanup_reserve_seconds" not in manifest["orchestration_configuration"]
-    assert "configuration" not in manifest
-    assert all(
-        len(
-            json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))[
-                "worst_samples"
-            ]
-        )
-        <= 16
-        for entry in manifest["chunks"]
-    )
-    assert all(
-        json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))[
-            "acceptance_eligible"
-        ]
-        for entry in manifest["buckets"]
-    )
-    first_bucket = json.loads(
-        (checkpoint / manifest["buckets"][0]["artifact"]).read_text(encoding="utf-8")
-    )
-    assert first_bucket["native_configuration"]["budget_seconds"] < 120
-    assert (
-        first_bucket["orchestration_configuration"]
-        == manifest["orchestration_configuration"]
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_execute_native_bucket",
-        lambda *args, **kwargs: pytest.fail("resume reran a completed chunk"),
-    )
-    resumed = native_calibration.run_full_calibration(
-        checkpoint_dir=checkpoint, resume=True
-    )
-    assert resumed["completed_buckets"] == 12
-
-    final = native_calibration.finalize_native_calibration(
-        checkpoint_dir=checkpoint,
-        output_path=tmp_path / "final.json",
-        cache_path=tmp_path / "trusted-cache.json",
-    )
-    assert final["acceptance_eligible"] is True
-    assert final["measured_attempted"] == 12 * 20
-    assert "sampled_at_us" not in final["host_fingerprint"]
-    legacy = json.loads((tmp_path / "trusted-cache.json").read_text(encoding="utf-8"))
-    assert "sampled_at_us" not in legacy["host_fingerprint"]
-    assert (tmp_path / "trusted-cache.json").is_file()
-
-    manifest["orchestration_configuration"]["global_budget_seconds"] = 119
-    (checkpoint / "checkpoint.json").write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="120-second acceptance"
-    ):
-        native_calibration.finalize_native_calibration(
-            checkpoint_dir=checkpoint,
-            output_path=tmp_path / "rejected-final.json",
-            cache_path=tmp_path / "rejected-cache.json",
-        )
-    with pytest.raises(
-        native_calibration.NativeCalibrationError, match="orchestration configuration"
-    ):
-        native_calibration.run_full_calibration(checkpoint_dir=checkpoint, resume=True)
-
-
-def test_full_orchestration_configuration_preserves_exact_budget() -> None:
-    configuration = native_calibration.full_orchestration_configuration(
-        global_budget_seconds=12.5
-    )
-
-    assert configuration == {
-        "polyphonies": [1, 5, 15],
-        "samples_per_bucket": 20,
-        "global_budget_seconds": 12.5,
-        "publication_reserve_seconds": 5.0,
-        "chunk_samples": 20,
-    }
-
-
-@pytest.mark.parametrize("timeout_seconds", [10.9, 10.0, 6.0])
-def test_full_calibration_rejects_impossible_timeout_before_preflight_side_effects(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    timeout_seconds: float,
-) -> None:
-    monkeypatch.setattr(
-        native_calibration,
-        "_find_binary",
-        lambda: pytest.fail("binary lookup must not run for an impossible full budget"),
-    )
-    checkpoint = tmp_path / "checkpoint"
-
-    with pytest.raises(
-        native_calibration.NativeCalibrationError,
-        match="minimum full orchestration budget of 11",
-    ):
-        native_calibration.run_full_calibration(
-            checkpoint_dir=checkpoint,
-            timeout_seconds=timeout_seconds,
-        )
-
-    assert not checkpoint.exists()
-
-
-def test_full_calibration_timeout_11_seconds_passes_initial_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-    monkeypatch.setattr(
-        native_calibration,
-        "_find_binary",
-        lambda: calls.append("find") or tmp_path / "native.exe",
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_current_full_provenance",
-        lambda _binary: {
-            "source_git_sha": "test-sha",
-            "native_build_id": "test-sha",
-            "native_source_fingerprint": "test-fingerprint",
-            "dirty_worktree": False,
-            "rustc_version": "rustc 1.97.1",
-            "host_fingerprint": {
-                "qpc_frequency_hz": 10_000_000,
-                "win32_build": "Windows 11 test build",
-            },
-        },
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_native_child_budget",
-        lambda *_args: pytest.fail("preflight may pass, but the child budget must be checked before spawn"),
-    )
-
-    with pytest.raises(pytest.fail.Exception):
-        native_calibration.run_full_calibration(
-            checkpoint_dir=tmp_path / "checkpoint",
-            timeout_seconds=11.0,
-        )
-
-    assert calls == ["find"]
-
-
-def test_current_native_metadata_accepts_the_current_gap_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    provenance = {
-        "source_git_sha": "test-sha",
-        "native_build_id": "test-sha",
-        "native_source_fingerprint": "test-fingerprint",
-        "dirty_worktree": False,
-        "rustc_version": "rustc test",
-        "host_fingerprint": {"qpc_frequency_hz": 10, "win32_build": "test"},
-    }
-    monkeypatch.setattr(native_calibration, "_current_worktree_provenance", lambda: provenance)
-    monkeypatch.setattr(
-        native_calibration,
-        "_native_metadata",
-        lambda _binary: {
-            "version": 8,
-            "measurement_protocol_version": 3,
-            "source_git_sha": "test-sha",
-            "native_build_id": "test-sha",
-            "native_source_fingerprint": "test-fingerprint",
-            "dirty_worktree": False,
-            "rustc_version": "rustc test",
-            "host_fingerprint": {"qpc_frequency_hz": 10, "win32_build": "test"},
-            "configuration": {
-                "hot_gap_target_us": 5_000,
-                "cold_threshold_us": 20_000,
-                "cold_idle_gap_us": 25_000,
-            },
-        },
-    )
-    monkeypatch.setattr(native_calibration, "_rustc_version", lambda: "rustc test")
-
-    assert native_calibration._current_full_provenance(tmp_path / "native.exe") == provenance
-
-
-def test_full_run_resume_requires_the_same_exact_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_current_full_provenance",
-        lambda _binary: {
-            "source_git_sha": "test-sha",
-            "native_build_id": "test-sha",
-            "native_source_fingerprint": "test-fingerprint",
-            "dirty_worktree": False,
-            "rustc_version": "rustc 1.97.1",
-            "host_fingerprint": {
-                "qpc_frequency_hz": 10_000_000,
-                "win32_build": "Windows 11 test build",
-            },
-        },
-    )
-    monkeypatch.setattr(
-        native_calibration,
-        "_execute_native_bucket",
-        lambda *args, **kwargs: _native_bucket_result(
-            kind=kwargs["kind"],
-            class_name=kwargs["class_name"],
-            polyphony=kwargs["polyphony"],
-            samples=kwargs["samples"],
-            warmup_samples=kwargs["warmup_samples"],
-            budget_seconds=kwargs["budget_seconds"],
-        ),
-    )
-    checkpoint = tmp_path / "checkpoint"
-    native_calibration.run_full_calibration(
-        checkpoint_dir=checkpoint, timeout_seconds=12.5
-    )
-    manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
-    assert manifest["orchestration_configuration"]["global_budget_seconds"] == 12.5
-
-    monkeypatch.setattr(
-        native_calibration,
-        "_execute_native_bucket",
-        lambda *args, **kwargs: pytest.fail("resume reran a completed bucket"),
-    )
-    native_calibration.run_full_calibration(
-        checkpoint_dir=checkpoint, resume=True, timeout_seconds=12.5
-    )
-    with pytest.raises(
-        native_calibration.NativeCalibrationError,
-        match="orchestration configuration",
-    ):
-        native_calibration.run_full_calibration(
-            checkpoint_dir=checkpoint, resume=True, timeout_seconds=120.0
-        )
+def test_full_configuration_is_six_pair_buckets() -> None:
+    assert native_calibration.calibration_bucket_keys() == [
+        (1, "hot"), (1, "cold"), (5, "hot"), (5, "cold"), (15, "hot"), (15, "cold")
+    ]
+    config = native_calibration.full_orchestration_configuration()
+    assert config["minimum_clean_pairs_per_bucket"] == 100

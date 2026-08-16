@@ -12,6 +12,7 @@ Also covers command UX (keymap rename) and invalidate_policy_metadata().
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from sky_music.config import AppConfig
@@ -24,18 +25,48 @@ from sky_music.infrastructure.calibration_loader import (
 )
 
 # ---------------------------------------------------------------------------
-# Helper – minimal valid cache payload
+# Helper – minimal valid cache-v2 payload
 # ---------------------------------------------------------------------------
 
+def _signed_stats(p99: int = 6) -> dict[str, int]:
+    if p99 < 0:
+        return {"min": p99 - 6, "p50": p99 - 4, "p90": p99 - 3, "p95": p99 - 2, "p99": p99, "max": p99 + 2, "mean": p99 - 3}
+    return {"min": -4, "p50": -1, "p90": 1, "p95": 3, "p99": p99, "max": p99 + 2, "mean": 0}
+
+
+_REQUIRED_BUCKETS = ("1/hot", "1/cold", "5/hot", "5/cold", "15/hot", "15/cold")
 _INTEGRATION_CACHE: dict = {
-    "version": 1,
-    "down_us": {"p50": 500, "p90": 800, "p99": 1100},
-    "up_us": {"p50": 400, "p90": 700, "p99": 900},
-    "n": 20,
+    "version": 2,
+    "source": "device_cache",
+    "evidence_kind": "injected_raw_input_delivery_proxy",
+    "source_formula_version": 2,
+    "native_calibration_version": 9,
+    "measurement_protocol_version": 4,
+    "source_git_sha": "test-sha",
+    "native_build_id": "test-sha",
+    "dirty_worktree": False,
+    "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+    "required_buckets": list(_REQUIRED_BUCKETS),
+    "pair_buckets": {
+        key: {
+            "attempted": 100,
+            "clean_pair_count": 100,
+            "rejected": 0,
+            "pair_worst_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
+        }
+        for key in _REQUIRED_BUCKETS
+    },
+    "selected_margin": {
+        "basis": "max_required_bucket_p99_positive_pair_hold_shrink",
+        "worst_bucket": "15/cold",
+        "global_shrink_p99_us": 700,
+        "guard_us": 100,
+        "floor_us": 300,
+        "ceiling_us": 2000,
+        "recommended_margin_us": 800,
+    },
 }
 
-# Expected margin for _INTEGRATION_CACHE:
-# clamp(300, 2000, p99_down - p50_up + 100) = clamp(300, 2000, 1100 - 400 + 100) = 800
 _EXPECTED_MARGIN_US = 800
 
 # Correct patch target: the function as imported into calibrated_policy's namespace
@@ -476,13 +507,12 @@ class TestCalibrationRegressionIntegration:
 # ---------------------------------------------------------------------------
 
 class TestPublishedCalibrationResultContract:
-    """Tests for typed PublishedCalibrationResult and strict parsing."""
+    """Tests for typed paired evidence and strict cache-v2 parsing."""
 
     def test_raw_native_result_has_no_ui_down_us_contract(self) -> None:
         """Raw native dict has buckets, not top-level down_us."""
         from pathlib import Path
 
-        from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
         from sky_music.platform.win32.native_calibration import (
             PublishedCalibrationResult,
         )
@@ -490,90 +520,78 @@ class TestPublishedCalibrationResultContract:
         pub = PublishedCalibrationResult(
             margin_us=800,
             source="device_cache",
-            sample_count=20,
-            down_us=CalibrationQuantiles(500, 800, 1100),
-            up_us=CalibrationQuantiles(400, 700, 900),
+            sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
             evidence_kind="injected_raw_input_delivery_proxy",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
+            pair_buckets={},
+            worst_bucket="15/cold",
+            global_shrink_p99_us=700,
+            guard_us=100,
         )
-        assert isinstance(pub.down_us.p50, int)
-        assert pub.down_us.p50 == 500
+        assert pub.global_shrink_p99_us == 700
         assert pub.evidence_kind == "injected_raw_input_delivery_proxy"
 
-    def test_published_result_extracts_quantiles_from_legacy_cache_payload(self) -> None:
-        """parse_calibration_cache_summary extracts typed quantiles from dict."""
+    def test_published_result_extracts_pair_quantiles_from_cache(self) -> None:
+        """parse_calibration_cache_summary extracts signed pair quantiles."""
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert summary.down_us.p50 == 500
-        assert summary.down_us.p90 == 800
-        assert summary.down_us.p99 == 1100
-        assert summary.up_us.p50 == 400
-        assert summary.up_us.p90 == 700
-        assert summary.up_us.p99 == 900
+        assert summary.pair_buckets["15/cold"].pair_worst_shrink_us.p99 == 700
         assert summary.margin_us == 800
 
-    def test_published_result_contains_numeric_down_and_up_quantiles(self) -> None:
-        """Quantiles are strictly int, never str or None."""
+    def test_published_result_contains_numeric_signed_pair_quantiles(self) -> None:
+        """Pair quantiles are strictly ints and retain negative evidence."""
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert type(summary.down_us.p50) is int
-        assert type(summary.up_us.p99) is int
+        assert type(summary.pair_buckets["1/hot"].pair_worst_shrink_us.p50) is int
+        assert summary.pair_buckets["1/hot"].pair_worst_shrink_us.min < 0
 
     def test_published_result_accepts_margin_floor_300(self) -> None:
-        """Recommended margin floor is 300 µs when calculation yields less."""
+        """Recommended margin floor is 300 µs when paired p99 is small."""
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
-        cache = {
-            "version": 1,
-            "down_us": {"p50": 100, "p90": 150, "p99": 200},
-            "up_us": {"p50": 150, "p90": 180, "p99": 200},
-            "n": 20,
-        }
+        cache = json.loads(json.dumps(_INTEGRATION_CACHE))
+        for bucket in cache["pair_buckets"].values():
+            bucket["pair_worst_shrink_us"] = _signed_stats(-2)
+        cache["selected_margin"].update(
+            {"worst_bucket": "1/hot", "global_shrink_p99_us": 0, "recommended_margin_us": 300}
+        )
         summary = parse_calibration_cache_summary(cache)
         assert summary.margin_us == 300
 
-    def test_missing_down_p50_fails_closed(self) -> None:
-        """Missing p50 in down_us raises ValueError."""
+    def test_missing_pair_p50_fails_closed(self) -> None:
+        """Missing pair p50 raises ValueError."""
         import pytest
 
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
-        cache = {
-            "version": 1,
-            "down_us": {"p90": 800, "p99": 1100},
-            "up_us": {"p50": 400, "p90": 700, "p99": 900},
-            "n": 20,
-        }
-        with pytest.raises(ValueError):
+        cache = json.loads(json.dumps(_INTEGRATION_CACHE))
+        del cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"]["p50"]
+        with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
-    def test_missing_up_p99_fails_closed(self) -> None:
-        """Missing p99 in up_us raises ValueError."""
+    def test_missing_pair_p99_fails_closed(self) -> None:
+        """Missing pair p99 raises ValueError."""
         import pytest
 
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
-        cache = {
-            "version": 1,
-            "down_us": {"p50": 500, "p90": 800, "p99": 1100},
-            "up_us": {"p50": 400, "p90": 700},
-            "n": 20,
-        }
-        with pytest.raises(ValueError):
+        cache = json.loads(json.dumps(_INTEGRATION_CACHE))
+        del cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"]["p99"]
+        with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
     def test_invalid_quantile_order_fails_closed(self) -> None:
@@ -584,12 +602,10 @@ class TestPublishedCalibrationResultContract:
             parse_calibration_cache_summary,
         )
 
-        cache = {
-            "version": 1,
-            "down_us": {"p50": 900, "p90": 800, "p99": 1100},
-            "up_us": {"p50": 400, "p90": 700, "p99": 900},
-            "n": 20,
-        }
+        cache = json.loads(json.dumps(_INTEGRATION_CACHE))
+        cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"].update(
+            {"p50": 9, "p90": 2}
+        )
         with pytest.raises(ValueError):
             parse_calibration_cache_summary(cache)
 
@@ -597,7 +613,6 @@ class TestPublishedCalibrationResultContract:
         """Success modal text formatted from PublishedCalibrationResult contains no '?'."""
         from pathlib import Path
 
-        from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
         from sky_music.platform.win32.native_calibration import (
             PublishedCalibrationResult,
         )
@@ -605,41 +620,38 @@ class TestPublishedCalibrationResultContract:
         pub = PublishedCalibrationResult(
             margin_us=800,
             source="device_cache",
-            sample_count=20,
-            down_us=CalibrationQuantiles(500, 800, 1100),
-            up_us=CalibrationQuantiles(400, 700, 900),
+            sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
             evidence_kind="injected_raw_input_delivery_proxy",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
+            pair_buckets={},
+            worst_bucket="15/cold",
+            global_shrink_p99_us=700,
+            guard_us=100,
         )
 
         msg = (
             f"Device margin: {pub.margin_us} µs\n"
             f"Source: {pub.source}\n"
             f"Cache: {pub.cache_path}\n\n"
-            f"Down latency (µs): p50={pub.down_us.p50}, "
-            f"p90={pub.down_us.p90}, p99={pub.down_us.p99}\n"
-            f"Up latency   (µs): p50={pub.up_us.p50}, "
-            f"p90={pub.up_us.p90}, p99={pub.up_us.p99}\n\n"
+            f"Host delivery hold-shrink p99: {pub.global_shrink_p99_us} µs\n"
+            f"Worst bucket: {pub.worst_bucket}\n"
             f"Evidence: {pub.evidence_kind} (SendInput → app-owned WM_INPUT)."
         )
         assert "?" not in msg
 
     def test_rejected_cache_message_does_not_read_raw_n(self) -> None:
-        """Loader raises ValueError when n < 20 without evaluating dict methods on invalid objects."""
+        """Loader raises ValueError when a bucket has fewer than 100 pairs."""
         import pytest
 
         from sky_music.infrastructure.calibration_loader import (
             parse_calibration_cache_summary,
         )
 
-        cache = {
-            "version": 1,
-            "down_us": {"p50": 500, "p90": 800, "p99": 1100},
-            "up_us": {"p50": 400, "p90": 700, "p99": 900},
-            "n": 5,
-        }
+        cache = json.loads(json.dumps(_INTEGRATION_CACHE))
+        cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 5
+        cache["pair_buckets"]["1/hot"]["rejected"] = 95
         with pytest.raises(ValueError):
             parse_calibration_cache_summary(cache)
 

@@ -135,6 +135,24 @@ Preview never creates a production dispatch session or sends input. Calibration
 is a separate native process and its Raw Input result is a host delivery
 diagnostic, not game-observed timing evidence.
 
+The publishable calibration contract is a balanced Down/Up pair for each of
+`1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`, and `15/cold`. The native
+process tags every packet with direction and sequence, records Raw Input at
+the `WM_INPUT` handler entry, and pairs receipts by scan code. For each key it
+computes the signed hold shrink `D - U`; only clean pairs enter the signed
+quantiles. At least 100 clean pairs are required in every production bucket.
+The cache is version 2 (native schema 9, measurement protocol 4), and cache
+version 1 is rejected rather than reinterpreted. The selected margin is:
+
+```text
+max(300, min(2_000, max(0, required_bucket_p99_shrink) + 100))
+```
+
+Invalid provenance, incomplete buckets, anomalies, cleanup failure, or a
+failed startup Down/Up correlation self-test fail closed and preserve the
+previous cache. Small diagnostic runs may produce a report, but can never
+write the production cache.
+
 Native admission fails closed on import, ABI, schema, free-threaded-runtime,
 or Win32-backend errors. No exception path executes a Python sender. Partial
 or mixed transport outcomes are never retried; full cleanup and termination
