@@ -2648,18 +2648,11 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
     ));
     assert_eq!(authored_calls.load(Ordering::SeqCst), 1);
 
-    let invalid_plan = super::worker::NextDispatchPlan {
-        authored: authored_plan.authored,
-        authored_budget: None,
-        deadline_ticks: authored_plan.deadline_ticks,
-        physical_target_qpc: authored_plan.physical_target_qpc,
-        authored_view: authored_plan.authored_view,
-        preflight_target: authored_plan.preflight_target,
-    };
-    assert!(!super::worker::plan_structure_is_valid(&invalid_plan));
+    let invalid_plan = super::worker::NextDispatchPlan::NoWork;
+    assert!(super::worker::plan_structure_is_valid(&invalid_plan));
     assert!(matches!(
         authored.dispatch_due_from_plan_for_test(&invalid_plan),
-        super::worker::DispatchStep::Terminate(_)
+        super::worker::DispatchStep::NoWork
     ));
 }
 
@@ -2688,7 +2681,9 @@ fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
 
     let mut missing_proof = ProductionDispatchTestHarness::new_down_only();
     let mut missing_proof_plan = missing_proof.plan_current_dispatch();
-    missing_proof_plan.preflight_target = None;
+    if let Some(physical) = missing_proof_plan.physical_mut() {
+        physical.target_proof = super::worker::TargetProof::Required;
+    }
     let step = missing_proof.dispatch_due_from_plan_for_test(&missing_proof_plan);
     assert!(matches!(
         step,
