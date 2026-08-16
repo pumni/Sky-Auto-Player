@@ -72,7 +72,12 @@ The publishable matrix has six buckets (`1/5/15 × hot/cold`) with at least
 100 clean pairs in each. The selected static margin is the positive global
 bucket p99 plus a 100 µs guard, clamped to 300–2,000 µs. This margin is
 applied only to the hold floor; it never leads the playback target or claims
-game-observed timing.
+game-observed timing. Full-calibration checkpoints use plain-text SHA256
+sidecars and a stable common provenance manifest. Resume and finalization
+reject any bucket whose source/build identity, native source fingerprint,
+Rust version, QPC frequency, or Windows build differs from the other five;
+only the observation timestamp may differ. The final artifact and cache are
+published only after the complete matrix and cache have both passed validation.
 
 ## 3. Planning and physical target
 

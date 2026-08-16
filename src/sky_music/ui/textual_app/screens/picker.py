@@ -1336,6 +1336,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
     async def _run_latency_calibration_worker(self) -> None:
         import asyncio
+        from functools import partial
 
         from sky_music.platform.win32.native_calibration import (
             run_published_native_calibration,
@@ -1361,7 +1362,11 @@ class PickerScreen(Screen[SongPickerResult]):
             loop = asyncio.get_running_loop()
             published = await loop.run_in_executor(
                 None,
-                run_published_native_calibration,
+                partial(
+                    run_published_native_calibration,
+                    fps=self.fps,
+                    hold_frames=self.hold_frames,
+                ),
             )
         except Exception as exc:
             calibration_error = exc
@@ -1397,6 +1402,7 @@ class PickerScreen(Screen[SongPickerResult]):
                     f"Worst measured bucket: {published.worst_bucket}\n"
                     f"Calibrated device margin: {published.margin_us} \u00b5s\n"
                     f"Policy guard: {published.guard_us} \u00b5s\n"
+                    f"Effective runtime floor: {published.effective_min_hold_us} \u00b5s (max selected hold + calibrated margin, configured-FPS frame + 500 \u00b5s)\n"
                     f"Clean pairs per required bucket: {published.sample_count}\n"
                     f"Evidence: {published.evidence_kind}\n"
                     f"Cache: {published.cache_path}",

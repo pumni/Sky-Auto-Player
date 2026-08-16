@@ -21,6 +21,13 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
+from sky_music.config import DEFAULT_GAME_FPS
+from sky_music.domain.hold_timing import (
+    DEFAULT_HOLD_FRAMES,
+    frame_duration_us,
+    materialize_hold_us,
+)
+from sky_music.domain.validation import ABSOLUTE_MIN_HOLD_US
 from sky_music.infrastructure.calibration_loader import (
     MARGIN_CEILING_US,
     MARGIN_FLOOR_US,
@@ -386,10 +393,14 @@ def _validate_pair_bucket_result(
 
 
 def _write_json_atomically(path: Path, data: object) -> None:
+    _write_text_atomically(path, json.dumps(data, indent=2) + "\n")
+
+
+def _write_text_atomically(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(text, encoding="utf-8")
         with temporary.open("r+b") as handle:
             handle.flush()
             os.fsync(handle.fileno())
@@ -491,6 +502,8 @@ def _cache_v2(result: dict[str, Any]) -> dict[str, Any]:
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
         "native_build_id": result.get("native_build_id"),
+        "native_source_fingerprint": result.get("native_source_fingerprint"),
+        "rustc_version": result.get("rustc_version"),
         "dirty_worktree": result.get("dirty_worktree"),
         "host_fingerprint": result.get("host_fingerprint"),
         "required_buckets": list(REQUIRED_BUCKETS),
@@ -674,12 +687,15 @@ def run_diagnostic_calibration(
 
 
 def _artifact_from_bucket(
-    bucket: dict[str, Any], *, orchestration: dict[str, Any], provenance: dict[str, Any], key: str
+    bucket: dict[str, Any], *, orchestration: dict[str, Any], key: str
 ) -> dict[str, Any]:
     return {
         "artifact_type": "native_calibration_bucket",
         "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "acceptance_eligible": int(bucket["pair_bucket"]["clean_sample_count"]) >= MIN_CALIBRATION_SAMPLE_COUNT,
+        "version": bucket["version"],
+        "measurement_protocol_version": bucket["measurement_protocol_version"],
+        "evidence_kind": bucket["evidence_kind"],
         "key": key,
         "orchestration_configuration": orchestration,
         "native_configuration": bucket["configuration"],
@@ -698,7 +714,7 @@ def _artifact_from_bucket(
         "worst_pairs": bucket["worst_pairs"],
         "anomalous_pairs": bucket["anomalous_pairs"],
         "cleanup": bucket["cleanup"],
-        "provenance": provenance,
+        "provenance": _provenance_identity(bucket),
     }
 
 
@@ -706,19 +722,91 @@ def _manifest_path(checkpoint_dir: Path) -> Path:
     return checkpoint_dir / "MANIFEST.json"
 
 
+def _provenance_identity(data: dict[str, Any]) -> dict[str, Any]:
+    host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")
+    qpc_frequency = _int(host.get("qpc_frequency_hz"), "host_fingerprint.qpc_frequency_hz", minimum=1)
+    win32_build = host.get("win32_build")
+    if not isinstance(win32_build, str) or not win32_build.strip():
+        raise NativeCalibrationError("native calibration has incomplete Windows fingerprint")
+    identity = {
+        "source_git_sha": data.get("source_git_sha"),
+        "native_build_id": data.get("native_build_id"),
+        "native_source_fingerprint": data.get("native_source_fingerprint"),
+        "dirty_worktree": data.get("dirty_worktree"),
+        "rustc_version": data.get("rustc_version"),
+        "qpc_frequency_hz": qpc_frequency,
+        "win32_build": win32_build,
+    }
+    for name in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
+        value = identity[name]
+        if not isinstance(value, str) or not value.strip():
+            raise NativeCalibrationError(f"native calibration provenance has invalid {name}")
+    if not isinstance(identity["dirty_worktree"], bool):
+        raise NativeCalibrationError("native calibration provenance has invalid dirty_worktree")
+    return identity
+
+
+def _validate_provenance_manifest(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise NativeCalibrationError("calibration checkpoint provenance manifest is missing")
+    expected = {
+        "source_git_sha",
+        "native_build_id",
+        "native_source_fingerprint",
+        "dirty_worktree",
+        "rustc_version",
+        "qpc_frequency_hz",
+        "win32_build",
+    }
+    if set(value) != expected:
+        raise NativeCalibrationError("calibration checkpoint provenance manifest is incomplete")
+    return _provenance_identity(
+        {
+            **value,
+            "host_fingerprint": {
+                "qpc_frequency_hz": value["qpc_frequency_hz"],
+                "win32_build": value["win32_build"],
+            },
+        }
+    )
+
+
+def _static_provenance(identity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: identity[name]
+        for name in (
+            "source_git_sha",
+            "native_build_id",
+            "native_source_fingerprint",
+            "dirty_worktree",
+            "rustc_version",
+        )
+    }
+
+
+def _assert_provenance_match(actual: dict[str, Any], expected: dict[str, Any], *, key: str) -> None:
+    if actual != expected:
+        raise NativeCalibrationError(f"bucket {key} has mismatched calibration provenance")
+
+
 def _finalize_artifacts(
-    artifacts: dict[str, dict[str, Any]], *, orchestration: dict[str, Any]
+    artifacts: dict[str, dict[str, Any]],
+    *,
+    orchestration: dict[str, Any],
+    expected_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if set(artifacts) != set(REQUIRED_BUCKETS):
         raise NativeCalibrationError("calibration artifact matrix is incomplete")
     buckets: dict[str, dict[str, Any]] = {}
     first = next(iter(artifacts.values()))
+    common_provenance = expected_provenance or _provenance_identity(first)
     for key, artifact in artifacts.items():
         if artifact.get("key") != key:
             raise NativeCalibrationError(f"bucket {key} has mismatched artifact identity")
         if artifact.get("orchestration_configuration") != orchestration:
             raise NativeCalibrationError(f"bucket {key} has mismatched orchestration configuration")
         _validate_common_metadata(artifact)
+        _assert_provenance_match(_provenance_identity(artifact), common_provenance, key=key)
         if artifact.get("acceptance_eligible") is not True:
             raise NativeCalibrationError(f"bucket {key} has insufficient clean pairs")
         pair_bucket = _validate_pair_bucket(artifact.get("pair_bucket"), f"{key}.pair_bucket", FULL_SAMPLE_COUNT)
@@ -730,11 +818,11 @@ def _finalize_artifacts(
         "version": SUPPORTED_NATIVE_CALIBRATION_VERSION,
         "measurement_protocol_version": SUPPORTED_MEASUREMENT_PROTOCOL_VERSION,
         "evidence_kind": "injected_raw_input_delivery_proxy",
-        "source_git_sha": first["source_git_sha"],
-        "native_build_id": first["native_build_id"],
-        "native_source_fingerprint": first["native_source_fingerprint"],
-        "dirty_worktree": first["dirty_worktree"],
-        "rustc_version": first["rustc_version"],
+        "source_git_sha": common_provenance["source_git_sha"],
+        "native_build_id": common_provenance["native_build_id"],
+        "native_source_fingerprint": common_provenance["native_source_fingerprint"],
+        "dirty_worktree": common_provenance["dirty_worktree"],
+        "rustc_version": common_provenance["rustc_version"],
         "host_fingerprint": first["host_fingerprint"],
         "orchestration_configuration": orchestration,
         "pair_buckets": buckets,
@@ -779,9 +867,23 @@ def run_full_calibration(
     checkpoint = Path(checkpoint_dir)
     checkpoint.mkdir(parents=True, exist_ok=True)
     orchestration = full_orchestration_configuration()
-    provenance = _current_worktree_provenance()
-    provenance["rustc_version"] = _rustc_version()
-    provenance["host_fingerprint"] = None
+    current_provenance = _current_worktree_provenance()
+    current_provenance["rustc_version"] = _rustc_version()
+    current_static_provenance = _static_provenance(
+        {**current_provenance, "native_build_id": current_provenance["source_git_sha"]}
+    )
+    manifest_path = _manifest_path(checkpoint)
+    stable_provenance: dict[str, Any] | None = None
+    if resume and manifest_path.is_file():
+        try:
+            saved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if saved_manifest.get("orchestration_configuration") != orchestration:
+                raise NativeCalibrationError("calibration checkpoint configuration mismatch")
+            stable_provenance = _validate_provenance_manifest(saved_manifest.get("provenance"))
+            if _static_provenance(stable_provenance) != current_static_provenance:
+                raise NativeCalibrationError("calibration checkpoint provenance does not match this build")
+        except (OSError, ValueError) as exc:
+            raise NativeCalibrationError("calibration checkpoint manifest is unreadable") from exc
     artifacts: dict[str, dict[str, Any]] = {}
     run_deadline = time.monotonic() + timeout
     binary = _find_binary()
@@ -802,6 +904,12 @@ def run_full_calibration(
                     and candidate.get("key") == key
                     and candidate.get("orchestration_configuration") == orchestration
                 ):
+                    candidate_provenance = _provenance_identity(candidate)
+                    if stable_provenance is None:
+                        raise NativeCalibrationError(
+                            "calibration checkpoint provenance manifest is required for resume"
+                        )
+                    _assert_provenance_match(candidate_provenance, stable_provenance, key=key)
                     artifacts[key] = candidate
                     continue
             except (OSError, ValueError):
@@ -817,16 +925,41 @@ def run_full_calibration(
             timeout_seconds=child_timeout,
             progress=True,
         )
-        artifact = _artifact_from_bucket(bucket, orchestration=orchestration, provenance=provenance, key=key)
+        artifact_provenance = _provenance_identity(bucket)
+        if stable_provenance is None:
+            stable_provenance = artifact_provenance
+            if _static_provenance(stable_provenance) != current_static_provenance:
+                raise NativeCalibrationError("native bucket provenance does not match this build")
+        _assert_provenance_match(artifact_provenance, stable_provenance, key=key)
+        artifact = _artifact_from_bucket(bucket, orchestration=orchestration, key=key)
         _write_json_atomically(artifact_path, artifact)
-        _write_json_atomically(
+        _write_text_atomically(
             artifact_path.with_suffix(".sha256"), hashlib.sha256(artifact_path.read_bytes()).hexdigest() + "\n"
         )
         artifacts[key] = artifact
+        _write_json_atomically(
+            manifest_path,
+            {
+                "orchestration_configuration": orchestration,
+                "provenance": stable_provenance,
+                "buckets": sorted(artifacts),
+            },
+        )
     if set(artifacts) != set(REQUIRED_BUCKETS):
         raise NativeCalibrationError("full calibration checkpoint matrix is incomplete")
-    final = _finalize_artifacts(artifacts, orchestration=orchestration)
-    _write_json_atomically(_manifest_path(checkpoint), {"orchestration_configuration": orchestration, "buckets": sorted(artifacts)})
+    if stable_provenance is None:
+        raise NativeCalibrationError("calibration checkpoint provenance is missing")
+    final = _finalize_artifacts(
+        artifacts, orchestration=orchestration, expected_provenance=stable_provenance
+    )
+    _write_json_atomically(
+        manifest_path,
+        {
+            "orchestration_configuration": orchestration,
+            "provenance": stable_provenance,
+            "buckets": sorted(artifacts),
+        },
+    )
     return final
 
 
@@ -843,6 +976,7 @@ def finalize_native_calibration(
         raise NativeCalibrationError("calibration checkpoint configuration mismatch")
     if manifest.get("buckets") != sorted(REQUIRED_BUCKETS):
         raise NativeCalibrationError("calibration checkpoint manifest matrix is incomplete")
+    stable_provenance = _validate_provenance_manifest(manifest.get("provenance"))
     artifacts: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
         key = _bucket_key(polyphony, class_name)
@@ -854,9 +988,13 @@ def finalize_native_calibration(
         if not digest_path.is_file() or digest_path.read_text(encoding="utf-8").strip() != hashlib.sha256(path.read_bytes()).hexdigest():
             raise NativeCalibrationError(f"calibration checkpoint hash mismatch for {key}")
         artifacts[key] = artifact
-    final = _finalize_artifacts(artifacts, orchestration=orchestration)
+    final = _finalize_artifacts(
+        artifacts, orchestration=orchestration, expected_provenance=stable_provenance
+    )
+    cache = _cache_v2(final)
+    parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
-    _write_json_atomically(Path(cache_path), _cache_v2(final))
+    _write_json_atomically(Path(cache_path), cache)
     return final
 
 
@@ -909,7 +1047,12 @@ def run_native_calibration(
 
 
 def run_published_native_calibration(
-    *, output_path: Path | str | None = None, cache_path: Path | str = ".cache/input_latency.json", timeout_seconds: float | None = None
+    *,
+    output_path: Path | str | None = None,
+    cache_path: Path | str = ".cache/input_latency.json",
+    timeout_seconds: float | None = None,
+    fps: int = DEFAULT_GAME_FPS,
+    hold_frames: float = DEFAULT_HOLD_FRAMES,
 ) -> PublishedCalibrationResult:
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
@@ -927,6 +1070,10 @@ def run_published_native_calibration(
         worst_bucket=summary.worst_bucket,
         global_shrink_p99_us=summary.global_shrink_p99_us,
         guard_us=summary.guard_us,
+        effective_min_hold_us=max(
+            materialize_hold_us(hold_frames, fps, summary.margin_us),
+            frame_duration_us(fps) + ABSOLUTE_MIN_HOLD_US,
+        ),
     )
 
 

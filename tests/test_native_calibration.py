@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -250,3 +252,129 @@ def test_full_configuration_is_six_pair_buckets() -> None:
     ]
     config = native_calibration.full_orchestration_configuration()
     assert config["minimum_clean_pairs_per_bucket"] == 100
+
+
+def test_checkpoint_sha256_sidecar_is_plain_text_round_trip(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "1-hot.json"
+    native_calibration._write_json_atomically(artifact_path, {"key": "1/hot"})
+    digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    sidecar = artifact_path.with_suffix(".sha256")
+
+    native_calibration._write_text_atomically(sidecar, digest + "\n")
+
+    assert sidecar.read_text(encoding="utf-8") == digest + "\n"
+    assert sidecar.read_text(encoding="utf-8").strip() == digest
+
+
+def _checkpoint_artifacts(tmp_path: Path) -> tuple[dict[str, dict[str, object]], Path]:
+    orchestration = native_calibration.full_orchestration_configuration()
+    artifacts: dict[str, dict[str, object]] = {}
+    for polyphony, class_name in native_calibration.calibration_bucket_keys():
+        key = f"{polyphony}/{class_name}"
+        artifacts[key] = native_calibration._artifact_from_bucket(
+            _pair_bucket_result(polyphony=polyphony, class_name=class_name),
+            orchestration=orchestration,
+            key=key,
+        )
+    provenance = native_calibration._provenance_identity(next(iter(artifacts.values())))
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    for key, artifact in artifacts.items():
+        polyphony, class_name = key.split("/")
+        path = checkpoint / f"{polyphony}-{class_name}.json"
+        native_calibration._write_json_atomically(path, artifact)
+        native_calibration._write_text_atomically(
+            path.with_suffix(".sha256"), hashlib.sha256(path.read_bytes()).hexdigest() + "\n"
+        )
+    native_calibration._write_json_atomically(
+        checkpoint / "MANIFEST.json",
+        {
+            "orchestration_configuration": orchestration,
+            "provenance": provenance,
+            "buckets": sorted(artifacts),
+        },
+    )
+    return artifacts, checkpoint
+
+
+def test_finalizer_rejects_mixed_provenance_before_publication(tmp_path: Path) -> None:
+    artifacts, checkpoint = _checkpoint_artifacts(tmp_path)
+    tampered = dict(artifacts["15/cold"])
+    tampered["rustc_version"] = "rustc mixed provenance"
+    artifact_path = checkpoint / "15-cold.json"
+    native_calibration._write_json_atomically(artifact_path, tampered)
+    native_calibration._write_text_atomically(
+        artifact_path.with_suffix(".sha256"), hashlib.sha256(artifact_path.read_bytes()).hexdigest() + "\n"
+    )
+    output = tmp_path / "published.json"
+    cache = tmp_path / "input_latency.json"
+    output.write_text("old output\n", encoding="utf-8")
+    cache.write_text("old cache\n", encoding="utf-8")
+
+    with pytest.raises(native_calibration.NativeCalibrationError, match="provenance"):
+        native_calibration.finalize_native_calibration(
+            checkpoint_dir=checkpoint, output_path=output, cache_path=cache
+        )
+
+    assert output.read_text(encoding="utf-8") == "old output\n"
+    assert cache.read_text(encoding="utf-8") == "old cache\n"
+
+
+def test_finalizer_validates_cache_before_publishing(tmp_path: Path) -> None:
+    _artifacts, checkpoint = _checkpoint_artifacts(tmp_path)
+    output = tmp_path / "published.json"
+    cache = tmp_path / "input_latency.json"
+    final = native_calibration.finalize_native_calibration(
+        checkpoint_dir=checkpoint, output_path=output, cache_path=cache
+    )
+
+    assert final["acceptance_eligible"] is True
+    summary = loader.parse_calibration_cache_summary(json.loads(cache.read_text(encoding="utf-8")))
+    assert summary.sample_count == 100
+    assert json.loads(output.read_text(encoding="utf-8"))["source_git_sha"] == "test-sha"
+
+
+def test_finalizer_ignores_only_observation_timestamp_differences(tmp_path: Path) -> None:
+    artifacts, checkpoint = _checkpoint_artifacts(tmp_path)
+    for index, (key, artifact) in enumerate(artifacts.items(), start=1):
+        host = dict(cast(dict[str, Any], artifact["host_fingerprint"]))
+        host["sampled_at_us"] = index
+        artifact["host_fingerprint"] = host
+        polyphony, class_name = key.split("/")
+        path = checkpoint / f"{polyphony}-{class_name}.json"
+        native_calibration._write_json_atomically(path, artifact)
+        native_calibration._write_text_atomically(
+            path.with_suffix(".sha256"), hashlib.sha256(path.read_bytes()).hexdigest() + "\n"
+        )
+
+    final = native_calibration.finalize_native_calibration(
+        checkpoint_dir=checkpoint,
+        output_path=tmp_path / "published.json",
+        cache_path=tmp_path / "input_latency.json",
+    )
+    assert final["acceptance_eligible"] is True
+
+
+def test_published_result_populates_effective_native_floor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _native_result()
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: result)
+
+    published = native_calibration.run_published_native_calibration(
+        output_path=tmp_path / "raw.json", cache_path=tmp_path / "cache.json", fps=60
+    )
+
+    assert published.effective_min_hold_us == 17_167
+
+    stressed = _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
+    monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: stressed)
+    stressed_published = native_calibration.run_published_native_calibration(
+        output_path=tmp_path / "stressed-raw.json",
+        cache_path=tmp_path / "stressed-cache.json",
+        fps=60,
+        hold_frames=1.0,
+    )
+    assert stressed_published.margin_us == 800
+    assert stressed_published.effective_min_hold_us == 17_467
