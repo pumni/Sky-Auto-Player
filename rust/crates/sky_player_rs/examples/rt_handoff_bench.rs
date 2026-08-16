@@ -165,12 +165,16 @@ fn observation_enqueue_ab() -> serde_json::Value {
     }
 
     assert_eq!(available_dropped, 0);
-    assert_eq!(available_high_watermark, 1);
-    assert_eq!(saturated_high_watermark, OBSERVATION_QUEUE_CAPACITY as u64);
     assert_eq!(saturated_dropped, sample_count as u64);
+    // The precision producer intentionally does not call ArrayQueue::len()
+    // to maintain a watermark.  Keep the variables in the report for schema
+    // compatibility, but assert the Round 2 no-len contract instead.
+    assert_eq!(available_high_watermark, 0);
+    assert_eq!(saturated_high_watermark, 0);
     json!({
         "scope": "producer primitive only; observation construction, copying, and consumer drain excluded",
         "clock": "std::time::Instant",
+        "high_watermark_tracking": "disabled_in_precision_path",
         "iterations": sample_count,
         "baseline_bypass_ns": nanos_summary(bypass_ns),
         "available_queue_push_ns": nanos_summary(available_ns),
