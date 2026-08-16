@@ -3,6 +3,9 @@
 use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 pub use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +20,29 @@ pub enum QpcError {
 pub enum TimeConversionError {
     InvalidFrequency,
     Overflow,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static QPC_READ_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+#[inline]
+fn record_qpc_read() {
+    QPC_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Reset the test-support QPC probe.  It is deliberately absent from normal
+/// builds so the production clock path remains a single platform query.
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_qpc_read_count() {
+    QPC_READ_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Return the number of `QueryPerformanceCounter`/clock-seam reads since the
+/// last reset.  Tests use this to catch a redundant post-wake sample.
+#[cfg(any(test, feature = "test-support"))]
+pub fn qpc_read_count() -> u64 {
+    QPC_READ_COUNT.load(Ordering::Relaxed)
 }
 
 /// Per-worker QPC conversion context. Frequency is captured once and all
@@ -82,6 +108,8 @@ pub fn qpc_frequency_checked() -> Result<u64, QpcError> {
 }
 
 pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
+    #[cfg(any(test, feature = "test-support"))]
+    record_qpc_read();
     #[cfg(windows)]
     {
         let mut ticks: i64 = 0;

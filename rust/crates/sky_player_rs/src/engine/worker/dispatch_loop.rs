@@ -23,6 +23,16 @@ fn physical_target_qpc_for_work(
     Ok((target <= now).then_some(target))
 }
 
+#[inline]
+fn physical_deadline_admission_is_allowed(
+    last_physical_target: Option<sky_dispatch_win32::clock::QpcTicks>,
+    physical_target: sky_dispatch_win32::clock::QpcTicks,
+    now: sky_dispatch_win32::clock::QpcTicks,
+    arrived_via_deadline_wait: bool,
+) -> bool {
+    !last_physical_target.is_some_and(|_| physical_target <= now) || arrived_via_deadline_wait
+}
+
 pub(crate) fn preflight_prepared_plan(
     plan: &mut super::planning::NextDispatchPlan,
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
@@ -133,11 +143,12 @@ pub(crate) fn dispatch_due_from_plan(
         };
 
     let arrived_via_deadline_wait = runtime.last_dispatch_deadline_wake_qpc.is_some();
-    if runtime
-        .last_physical_target_qpc
-        .is_some_and(|_| physical_target_qpc <= now_ticks)
-        && !arrived_via_deadline_wait
-    {
+    if !physical_deadline_admission_is_allowed(
+        runtime.last_physical_target_qpc,
+        physical_target_qpc,
+        now_ticks,
+        arrived_via_deadline_wait,
+    ) {
         return super::DispatchStep::Terminate(
             "physical deadline infeasible: refusing overdue catch-up burst".to_string(),
         );
@@ -815,8 +826,62 @@ pub(super) fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::physical_target_qpc_for_work;
+    use super::{physical_deadline_admission_is_allowed, physical_target_qpc_for_work};
     use sky_dispatch_core::time::QpcTicks;
+
+    #[test]
+    fn overdue_matrix_allows_only_an_isolated_or_waited_boundary() {
+        let first = QpcTicks::from_raw(1_000);
+        let second = QpcTicks::from_raw(1_100);
+        let after_slow_first_send = QpcTicks::from_raw(1_200);
+
+        // A and B are both overdue after the first SendInput completion.  B
+        // must not be emitted as a catch-up burst.
+        assert!(!physical_deadline_admission_is_allowed(
+            Some(first),
+            second,
+            after_slow_first_send,
+            false,
+        ));
+
+        // The same guard covers a three-boundary backlog: each candidate after
+        // the already-completed physical boundary remains refused.
+        for target in [1_100, 1_200, 1_300] {
+            assert!(!physical_deadline_admission_is_allowed(
+                Some(first),
+                QpcTicks::from_raw(target),
+                QpcTicks::from_raw(1_400),
+                false,
+            ));
+        }
+
+        // An isolated overdue boundary is allowed because there is no prior
+        // physical SendInput to turn it into a catch-up burst.
+        assert!(physical_deadline_admission_is_allowed(
+            None,
+            first,
+            after_slow_first_send,
+            false,
+        ));
+
+        // One tick of future slack clears the overdue condition; the normal
+        // waiter may own this boundary.
+        assert!(physical_deadline_admission_is_allowed(
+            Some(first),
+            QpcTicks::from_raw(1_201),
+            after_slow_first_send,
+            false,
+        ));
+
+        // A genuine deadline wait is the one permitted route for a target
+        // that became due while the worker was blocked.
+        assert!(physical_deadline_admission_is_allowed(
+            Some(first),
+            second,
+            after_slow_first_send,
+            true,
+        ));
+    }
 
     #[test]
     fn authored_overdue_work_uses_its_physical_target() {

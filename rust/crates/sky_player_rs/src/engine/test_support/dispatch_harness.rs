@@ -28,12 +28,12 @@ use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
-    PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PlatformSendResult, SendEvidence,
-    SendTransactionOutcome, SendTransactionStatus, TrackedKeyState,
+    PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PhysicalPacket, PlatformSendResult,
+    SendEvidence, SendTransactionOutcome, SendTransactionStatus, TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
@@ -478,6 +478,40 @@ impl ProductionDispatchTestHarness {
             }
         });
         calls
+    }
+
+    /// Capture the exact directional packet masks presented to the production
+    /// packet emitter.  This is intentionally a test-support seam: assertions
+    /// can distinguish an authored Down chord from a deferred Up or a
+    /// coalesced Mixed transaction without inferring packet identity from a
+    /// final coordinator snapshot.
+    pub fn configure_packet_capture(&mut self) -> Arc<Mutex<Vec<PhysicalPacket>>> {
+        let packets = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&packets);
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            captured.lock().expect("packet capture lock").push(packet);
+            let now = clock.now().expect("test QPC");
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(now),
+                    completed_ticks: Some(now),
+                    timing_error: None,
+                },
+            }
+        });
+        packets
     }
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {

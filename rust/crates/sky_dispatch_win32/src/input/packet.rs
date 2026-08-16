@@ -664,6 +664,37 @@ mod tests {
     }
 
     #[test]
+    fn every_mixed_insertion_prefix_fails_closed_without_retry() {
+        let packet = PhysicalPacket::new(FULL_INSTRUMENT_MASK, FULL_INSTRUMENT_MASK);
+        let requested = packet.event_count();
+        assert_eq!(requested, MAX_PACKET_EVENTS as u8);
+
+        for inserted in 1..requested {
+            let mut calls = 0;
+            let outcome = send_physical_packet_retry_policy_scripted(packet, |_| {
+                calls += 1;
+                scripted_attempt(requested, inserted)
+            });
+
+            assert_eq!(calls, 1, "partial prefix {inserted} was retried");
+            assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+            assert_eq!(outcome.evidence.first_inserted, inserted);
+            assert_eq!(outcome.evidence.attempts, 1);
+            assert_eq!(outcome.evidence.confirmed_mask, 0);
+            assert_eq!(outcome.evidence.requested_mask, FULL_INSTRUMENT_MASK);
+        }
+
+        let mut calls = 0;
+        let complete = send_physical_packet_retry_policy_scripted(packet, |_| {
+            calls += 1;
+            scripted_attempt(requested, requested)
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(complete.status, SendTransactionStatus::Complete);
+        assert_eq!(complete.evidence.confirmed_mask, FULL_INSTRUMENT_MASK);
+    }
+
+    #[test]
     fn single_attempt_packet_does_not_retry_zero_progress() {
         let mut calls = 0;
         let outcome = send_physical_packet_once_scripted(PhysicalPacket::new(0, 0b111), |_| {

@@ -2708,6 +2708,50 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
 }
 
 #[test]
+fn deferred_release_and_authored_chord_have_exact_packet_order() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::PhysicalPacket;
+
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let packets = harness.configure_packet_capture();
+
+    let first_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    let authored_plan = harness.plan_current_dispatch();
+    harness.set_deadline_wake_for_test(
+        authored_plan
+            .physical_target_qpc()
+            .expect("authored chord physical target"),
+    );
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&authored_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    let pending_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness
+            .wait_and_dispatch_current_plan(&pending_plan)
+            .expect("deferred release dispatch"),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    assert_eq!(
+        *packets.lock().expect("packet capture lock"),
+        vec![
+            PhysicalPacket::new(0, 0b001),
+            PhysicalPacket::new(0, 0b110),
+            PhysicalPacket::new(0b001, 0),
+        ],
+        "the unrelated chord must not be coalesced with the deferred release"
+    );
+}
+
+#[test]
 fn overdue_physical_boundary_refuses_catch_up_burst() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -2766,6 +2810,54 @@ fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
         super::worker::DispatchStep::Terminate(error)
             if error.contains("without preflight proof")
     ));
+}
+
+#[test]
+fn frozen_dispatch_qpc_probe_has_no_redundant_effective_now_sample() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::clock::{qpc_read_count, reset_qpc_read_count};
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_packet_capture();
+    let plan = harness.plan_current_dispatch();
+
+    // The direct frozen-plan seam excludes wait setup.  Its healthy sequence
+    // is the harness handoff sample, final admission, SendInput completion,
+    // and the explicitly diagnostic dispatch-ready sample.  In particular,
+    // no extra QPC is permitted merely to reconstruct effective_now.
+    reset_qpc_read_count();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        qpc_read_count(),
+        4,
+        "unexpected QPC sequence in frozen physical dispatch"
+    );
+}
+
+#[test]
+fn frozen_target_reaches_dispatch_and_observation_without_reconstruction() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::DispatchObservation;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_packet_capture();
+    let plan = harness.plan_current_dispatch();
+    let target = plan.physical_target_qpc().expect("frozen physical target");
+
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let observation = harness.pop_observation().expect("physical observation");
+    match observation {
+        DispatchObservation::Down(observation) => {
+            assert_eq!(observation.physical_target_qpc, target);
+        }
+        other => panic!("unexpected observation variant: {other:?}"),
+    }
 }
 
 #[test]
@@ -3522,6 +3614,78 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
     assert_eq!(mixed["requested_count"].as_u64(), Some(3));
     assert_eq!(mixed["sent_count"].as_u64(), Some(3));
     assert_eq!(mixed["polyphony"].as_u64(), Some(3));
+}
+
+#[test]
+fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "seed-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "same-key-release".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "same-key-chord".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid dynamic-infeasibility schedule");
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.timing.min_hold_us = 300;
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "error");
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert_eq!(snapshot.chord_integrity_lost, 0);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("physical deadline infeasible"))
+    );
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    assert_eq!(telemetry["attempted"].as_u64(), Some(1));
+    let records = telemetry["records"].as_array().expect("records array");
+    let physical_records: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|record| record["requested_count"].as_u64().unwrap_or(0) > 0)
+        .collect();
+    assert_eq!(physical_records.len(), 1);
+    assert_eq!(physical_records[0]["requested_count"].as_u64(), Some(1));
+    assert!(!physical_records.iter().any(|record| {
+        record["requested_count"].as_u64() == Some(2) || record["polyphony"].as_u64() == Some(2)
+    }));
 }
 
 #[test]
