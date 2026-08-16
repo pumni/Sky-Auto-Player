@@ -110,6 +110,7 @@ The detailed rationale is in `00_DECISION_REGISTER.md`. The coding agent must tr
 10. `09_IMPLEMENTATION_SEQUENCE.md` — exact PR/phase order for the coding agent.
 11. `10_FILES_TOUCH_MAP.md` — expected files/functions and explicit non-goals.
 12. `11_WINDOWS11_REFERENCE_NOTES.md` — primary Microsoft API constraints used by the design.
+13. `12_CODING_AGENT_HANDOFF.md` — mandatory executor entrypoint and stop/escalation contract.
 
 ## 6. Coding-agent operating contract
 
