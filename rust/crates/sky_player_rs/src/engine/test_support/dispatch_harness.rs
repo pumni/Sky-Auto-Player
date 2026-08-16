@@ -442,6 +442,7 @@ impl ProductionDispatchTestHarness {
             self.resources.playback.epoch,
             self.resources.clock,
             &self.config.timing,
+            &self.runtime.preparation_probe,
         )
         .expect("plan_next_dispatch");
         preflight_prepared_plan(
@@ -466,6 +467,7 @@ impl ProductionDispatchTestHarness {
             coordinator: &self.resources.coordinator,
             epoch_qpc: self.resources.playback.epoch,
             health_options: self.health.options,
+            preparation_probe: &self.runtime.preparation_probe,
         })
         .expect("projected dispatch plan");
         preflight_prepared_plan(
@@ -483,6 +485,14 @@ impl ProductionDispatchTestHarness {
         );
         self.refresh_physical_target_for_test(&mut plan);
         plan
+    }
+
+    pub fn preparation_counts(&self) -> (u64, u64, u64, u64) {
+        self.runtime.preparation_probe.counts()
+    }
+
+    pub fn set_force_preflight_failure(&mut self, flag: Arc<AtomicBool>) {
+        self.resources.backend.set_force_preflight_failure(flag);
     }
 
     /// Run the production wait boundary and direct frozen-plan dispatch path.

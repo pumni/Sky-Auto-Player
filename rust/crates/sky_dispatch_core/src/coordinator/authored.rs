@@ -367,7 +367,7 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::Time(
                     crate::time::TimeArithmeticError::Overflow,
                 ))?;
-        self.check_invariants()?;
+        self.validate_local_slot_masks()?;
         Ok(())
     }
 
@@ -567,6 +567,17 @@ impl RuntimeDispatchCoordinator {
                 continue;
             }
             let slot = compact.key_slot();
+            let slot_bit = Self::bit_for_slot(slot);
+            if self.active_by_slot[usize::from(slot)].is_some()
+                || self.active_mask & slot_bit != 0
+                || self.blocked_mask & slot_bit != 0
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "packet Down would overwrite an active or blocked key slot".to_string(),
+                    ),
+                ));
+            }
             let scan_code = self
                 .schedule
                 .key_registry
@@ -597,6 +608,40 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::Time(
                     crate::time::TimeArithmeticError::Overflow,
                 ))?;
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
+    /// Validate only the bounded slot/mask ownership maintained by local
+    /// transitions.  The full generation-ledger verifier remains reserved for
+    /// explicit cleanup and test validation, never for a stale or physical
+    /// packet deadline path.
+    fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
+        for slot in 0..MAX_KEYS {
+            let bit = Self::bit_for_slot(slot as KeySlot);
+            match self.active_by_slot[slot].as_ref() {
+                Some(active) => {
+                    if active.key_slot != slot as KeySlot
+                        || self.active_mask & bit == 0
+                        || self.blocked_mask & bit == 0
+                    {
+                        return Err(CoordinatorError::Invariant(
+                            CoordinatorInvariantError::Accounting(
+                                "active slot and ownership masks disagree".to_string(),
+                            ),
+                        ));
+                    }
+                }
+                None if self.active_mask & bit != 0 || self.blocked_mask & bit != 0 => {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "ownership mask has no active slot owner".to_string(),
+                        ),
+                    ));
+                }
+                None => {}
+            }
+        }
         Ok(())
     }
 

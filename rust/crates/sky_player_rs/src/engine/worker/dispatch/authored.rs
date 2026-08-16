@@ -272,8 +272,16 @@ fn admit_authored_down(
             "focus lost after due check before SendInput boundary".to_string(),
         ));
     }
-    let preflight_target =
-        preflight_target.unwrap_or_else(|| load_target_stamp(target_hwnd, target_generation));
+    let preflight_target = if has_down_events {
+        let Some(preflight_target) = preflight_target else {
+            return Err(DispatchStep::Terminate(
+                "down-bearing dispatch reached final admission without preflight proof".to_string(),
+            ));
+        };
+        preflight_target
+    } else {
+        load_target_stamp(target_hwnd, target_generation)
+    };
     if has_down_events
         && !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
     {

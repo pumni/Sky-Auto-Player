@@ -12,8 +12,8 @@ use super::super::super::{
     TimelineTicks,
 };
 use super::super::{
-    DispatchPath, WorkerConfig, WorkerHealthState, WorkerRuntime, WorkerTimingState,
-    signed_timeline_delta_ticks,
+    DispatchPath, DispatchPreparationProbe, WorkerConfig, WorkerHealthState, WorkerRuntime,
+    WorkerTimingState, signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
 use sky_dispatch_core::coordinator::PreparedBatch;
@@ -79,6 +79,7 @@ fn physical_event_counts(
 pub(crate) fn prepare_authored_batch_view(
     coordinator: &RuntimeDispatchCoordinator,
     prepared_batch: PreparedBatch,
+    preparation_probe: &DispatchPreparationProbe,
 ) -> BatchViewResult {
     let batch_index = prepared_batch.index;
     let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
@@ -97,6 +98,7 @@ pub(crate) fn prepare_authored_batch_view(
         up_intents,
         down_intents,
     ) = {
+        preparation_probe.record_packet_view();
         let packet_view = match coordinator
             .schedule
             .view_packet_ticks(prepared_batch.packet_index, batch_scheduled_ticks)
@@ -108,6 +110,7 @@ pub(crate) fn prepare_authored_batch_view(
                 )));
             }
         };
+        preparation_probe.record_conflict();
         let conflict_mask =
             coordinator.check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_mask());
         let up_intents = packet_view.up_intents.iter().copied().collect();
@@ -155,6 +158,7 @@ pub(crate) fn prepare_authored_batch_view(
             down_intents,
         )
     };
+    preparation_probe.record_input_build();
     let prepared_packet = match packet_masks
         .map(sky_dispatch_win32::input::PreparedPhysicalPacket::try_new)
         .transpose()

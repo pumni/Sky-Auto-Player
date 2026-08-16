@@ -2664,6 +2664,40 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
 }
 
 #[test]
+fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let plan = harness.plan_current_dispatch();
+    let prepared_counts = harness.preparation_counts();
+    assert_eq!(prepared_counts, (1, 1, 1, 1));
+
+    let forced_preflight_failure = Arc::new(AtomicBool::new(false));
+    harness.set_force_preflight_failure(Arc::clone(&forced_preflight_failure));
+    forced_preflight_failure.store(true, Ordering::Release);
+
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        harness.preparation_counts(),
+        prepared_counts,
+        "WaitBoundary::Due dispatch must consume the frozen view and packet"
+    );
+
+    let mut missing_proof = ProductionDispatchTestHarness::new_down_only();
+    let mut missing_proof_plan = missing_proof.plan_current_dispatch();
+    missing_proof_plan.preflight_target = None;
+    let step = missing_proof.dispatch_due_from_plan_for_test(&missing_proof_plan);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::Terminate(error)
+            if error.contains("without preflight proof")
+    ));
+}
+
+#[test]
 fn supervisor_lease_treats_equal_heartbeat_as_fresh() {
     let heartbeat = AtomicU64::new(1_000);
     assert_eq!(

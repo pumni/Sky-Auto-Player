@@ -38,6 +38,7 @@ pub(crate) fn preflight_prepared_plan(
     if !has_down_events {
         return Ok(true);
     }
+    runtime.preparation_probe.record_preflight();
     let target = super::load_target_stamp(target_hwnd, target_generation);
     if let Err(error) =
         super::ensure_preflight_for_target(backend, target, &mut runtime.verified_target)
@@ -601,6 +602,7 @@ pub(super) fn dispatch(
                     .as_ref()
                     .expect("worker health initialized")
                     .options,
+                preparation_probe: &core.runtime.preparation_probe,
             }) {
                 Ok(plan) => plan,
                 Err(error) => {

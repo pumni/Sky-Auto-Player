@@ -89,6 +89,60 @@ use super::shared::SessionShared;
 use super::*;
 use sky_dispatch_core::model::RuntimeSchedule;
 use std::sync::Arc;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Test-only accounting for the immutable preparation boundary.
+///
+/// In production this is a zero-sized no-op, so the proof instrumentation
+/// cannot add atomics or branches to the real-time path.
+#[derive(Default)]
+pub(crate) struct DispatchPreparationProbe {
+    #[cfg(any(test, feature = "test-support"))]
+    packet_view_calls: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    conflict_calls: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    input_build_calls: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    preflight_calls: AtomicU64,
+}
+
+impl DispatchPreparationProbe {
+    #[inline]
+    pub(crate) fn record_packet_view(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        self.packet_view_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_conflict(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        self.conflict_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_input_build(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        self.input_build_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_preflight(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        self.preflight_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn counts(&self) -> (u64, u64, u64, u64) {
+        (
+            self.packet_view_calls.load(Ordering::Relaxed),
+            self.conflict_calls.load(Ordering::Relaxed),
+            self.input_build_calls.load(Ordering::Relaxed),
+            self.preflight_calls.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// Mutable state owned exclusively by the worker thread.
 ///
@@ -97,6 +151,7 @@ use std::sync::Arc;
 /// injected or unexpected panic.
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
+    pub(crate) preparation_probe: DispatchPreparationProbe,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,

@@ -107,6 +107,10 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         start_thread_cpu_us,
         start_process_cpu_us,
     } = timing;
+    // Capture the dispatch worker's final CPU sample before cleanup and
+    // observer shutdown.  Publication happens later, but the value must not
+    // include release/rollback work owned by finalization.
+    let final_worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
 
     // Validate before either cleanup operation can erase the evidence of a
     // coordinator mismatch. The first failure remains primary; later cleanup
@@ -245,8 +249,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     );
 
     local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
-    local_metrics.worker_cpu_time_us =
-        current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+    local_metrics.worker_cpu_time_us = final_worker_cpu_time_us;
     local_metrics.process_cpu_time_us =
         current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
     if local_metrics.playback_wall_time_us > 0 {

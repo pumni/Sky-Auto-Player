@@ -4,6 +4,7 @@
 //! coordinator's effective QPC-timeline deadlines; wake guards are applied
 //! only by the wait strategy.
 
+use super::DispatchPreparationProbe;
 use super::admission::TargetStamp;
 use super::dispatch::{AuthoredBatchView, DispatchStep, timing::prepare_authored_batch_view};
 use super::health::{
@@ -93,11 +94,13 @@ pub(crate) fn plan_next_dispatch(
     epoch_qpc: QpcTicks,
     _qpc_clock: sky_dispatch_win32::clock::QpcClock,
     _timing: &TimingOptions,
+    preparation_probe: &DispatchPreparationProbe,
 ) -> Result<NextDispatchPlan, PlanningError> {
     plan_next_dispatch_projected(PlanningInput {
         coordinator,
         epoch_qpc,
         health_options: DispatchHealthOptions::default(),
+        preparation_probe,
     })
 }
 
@@ -105,6 +108,7 @@ pub(crate) struct PlanningInput<'a> {
     pub(crate) coordinator: &'a RuntimeDispatchCoordinator,
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) health_options: DispatchHealthOptions,
+    pub(crate) preparation_probe: &'a DispatchPreparationProbe,
 }
 
 pub(crate) fn plan_next_dispatch_projected(
@@ -114,18 +118,21 @@ pub(crate) fn plan_next_dispatch_projected(
         coordinator,
         epoch_qpc,
         health_options,
+        preparation_probe,
     } = input;
     let authored_view = match coordinator.prepare_current_authored_packet()? {
-        Some(prepared) => match prepare_authored_batch_view(coordinator, prepared) {
-            Ok(Some(view)) => Some(view),
-            Ok(None) => None,
-            Err(DispatchStep::Terminate(error)) => return Err(PlanningError::Prepared(error)),
-            Err(step) => {
-                return Err(PlanningError::Prepared(format!(
-                    "unexpected prepared view outcome: {step:?}"
-                )));
+        Some(prepared) => {
+            match prepare_authored_batch_view(coordinator, prepared, preparation_probe) {
+                Ok(Some(view)) => Some(view),
+                Ok(None) => None,
+                Err(DispatchStep::Terminate(error)) => return Err(PlanningError::Prepared(error)),
+                Err(step) => {
+                    return Err(PlanningError::Prepared(format!(
+                        "unexpected prepared view outcome: {step:?}"
+                    )));
+                }
             }
-        },
+        }
         None => None,
     };
     let authored = authored_view.as_ref().map(|view| AuthoredDispatchPlan {
