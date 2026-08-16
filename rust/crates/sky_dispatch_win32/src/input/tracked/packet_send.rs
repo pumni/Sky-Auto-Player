@@ -2,7 +2,10 @@ use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
-use super::super::packet::send_physical_packet_once_with_start;
+use super::super::packet::{
+    PreparedPhysicalPacket, send_physical_packet_once_with_start,
+    send_prepared_physical_packet_once_with_start,
+};
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
     no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock,
@@ -288,6 +291,86 @@ impl TrackedKeyState {
             }
         };
 
+        self.apply_packet_outcome(packet, outcome)
+    }
+
+    /// Send a packet whose fixed Win32 payload was built before the precision
+    /// boundary.  State reconciliation remains identical to the legacy packet
+    /// wrapper; only payload construction moves out of the final path.
+    pub fn send_prepared_physical_packet_with_start(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        started_ticks: QpcTicks,
+    ) -> SendTransactionOutcome {
+        let packet = prepared.packet();
+        let outcome = {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(emitter) = self.custom_packet_emitter.as_ref() {
+                let mut outcome = emitter(packet);
+                outcome.evidence.started_ticks = Some(started_ticks);
+                outcome
+            } else {
+                let Some(clock) = self.qpc_clock else {
+                    self.last_error = Some("packet sender has no QPC clock".to_string());
+                    return self.apply_packet_outcome(
+                        packet,
+                        SendTransactionOutcome {
+                            status: SendTransactionStatus::ZeroProgress,
+                            evidence: SendEvidence {
+                                requested_mask: packet.up_mask | packet.down_mask,
+                                confirmed_mask: 0,
+                                skipped_mask: 0,
+                                first_inserted: 0,
+                                attempts: 0,
+                                zero_progress_retries: 0,
+                                retry_reason: PacketRetryReason::None,
+                                first_win32_error: None,
+                                last_win32_error: None,
+                                started_ticks: None,
+                                completed_ticks: None,
+                                timing_error: None,
+                            },
+                        },
+                    );
+                };
+                send_prepared_physical_packet_once_with_start(prepared, clock, started_ticks)
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                let Some(clock) = self.qpc_clock else {
+                    self.last_error = Some("packet sender has no QPC clock".to_string());
+                    return self.apply_packet_outcome(
+                        packet,
+                        SendTransactionOutcome {
+                            status: SendTransactionStatus::ZeroProgress,
+                            evidence: SendEvidence {
+                                requested_mask: packet.up_mask | packet.down_mask,
+                                confirmed_mask: 0,
+                                skipped_mask: 0,
+                                first_inserted: 0,
+                                attempts: 0,
+                                zero_progress_retries: 0,
+                                retry_reason: PacketRetryReason::None,
+                                first_win32_error: None,
+                                last_win32_error: None,
+                                started_ticks: None,
+                                completed_ticks: None,
+                                timing_error: None,
+                            },
+                        },
+                    );
+                };
+                send_prepared_physical_packet_once_with_start(prepared, clock, started_ticks)
+            }
+        };
+        self.apply_packet_outcome(packet, outcome)
+    }
+
+    fn apply_packet_outcome(
+        &mut self,
+        packet: PhysicalPacket,
+        outcome: SendTransactionOutcome,
+    ) -> SendTransactionOutcome {
         let confirmed_mask = outcome.evidence.confirmed_mask;
         match outcome.status {
             SendTransactionStatus::Complete => {

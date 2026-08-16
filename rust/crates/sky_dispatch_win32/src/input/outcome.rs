@@ -19,6 +19,23 @@ pub struct PhysicalPacket {
     pub down_mask: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketPreparationError {
+    Empty,
+    InvalidMask,
+}
+
+impl fmt::Display for PacketPreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("physical packet is empty"),
+            Self::InvalidMask => {
+                formatter.write_str("physical packet contains an invalid key mask")
+            }
+        }
+    }
+}
+
 impl PhysicalPacket {
     pub const fn new(up_mask: u16, down_mask: u16) -> Self {
         Self { up_mask, down_mask }

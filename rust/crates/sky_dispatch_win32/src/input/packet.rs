@@ -1,6 +1,6 @@
 use super::outcome::{
-    PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, classify_send_status,
+    PacketPreparationError, PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, classify_send_status,
 };
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
@@ -8,6 +8,58 @@ use super::scan_code::{
 use crate::clock::{QpcClock, QpcTicks};
 
 pub const MAX_PACKET_EVENTS: usize = 30;
+
+/// Fixed-capacity physical work prepared before the precision boundary.
+///
+/// The Win32 payload is intentionally opaque to the scheduler/core crates.
+/// Production callers retain this value until the single `SendInput` call.
+pub struct PreparedPhysicalPacket {
+    packet: PhysicalPacket,
+    length: u8,
+    #[cfg(windows)]
+    inputs: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX_PACKET_EVENTS],
+}
+
+impl std::fmt::Debug for PreparedPhysicalPacket {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedPhysicalPacket")
+            .field("packet", &self.packet)
+            .field("length", &self.length)
+            .finish()
+    }
+}
+
+impl PreparedPhysicalPacket {
+    pub fn try_new(packet: PhysicalPacket) -> Result<Self, PacketPreparationError> {
+        if !valid_packet(packet) {
+            return Err(PacketPreparationError::InvalidMask);
+        }
+        if packet.event_count() == 0 {
+            return Err(PacketPreparationError::Empty);
+        }
+        #[cfg(windows)]
+        let (inputs, length) = build_inputs(packet);
+        #[cfg(not(windows))]
+        let length = packet.event_count() as usize;
+        Ok(Self {
+            packet,
+            length: length as u8,
+            #[cfg(windows)]
+            inputs,
+        })
+    }
+
+    #[inline]
+    pub fn packet(&self) -> PhysicalPacket {
+        self.packet
+    }
+
+    #[inline]
+    pub fn event_count(&self) -> u8 {
+        self.length
+    }
+}
 
 #[cfg(windows)]
 const MAX_SCAN_CODE: usize = 0x36;
@@ -94,13 +146,23 @@ fn send_once(
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
 ) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
+    let prepared = PreparedPhysicalPacket::try_new(packet)
+        .expect("send_once receives a validated physical packet");
+    send_once_prepared(&prepared, clock, supplied_started_ticks)
+}
+
+fn send_once_prepared(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    supplied_started_ticks: Option<QpcTicks>,
+) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
 
-        let requested = packet.event_count();
-        let (inputs, length) = build_inputs(packet);
+        let requested = prepared.event_count();
+        let length = usize::from(prepared.event_count());
         let started_ticks = match supplied_started_ticks {
             Some(ticks) => ticks,
             None => match clock.now() {
@@ -112,7 +174,7 @@ fn send_once(
         let inserted = unsafe {
             SendInput(
                 length as u32,
-                inputs.as_ptr(),
+                prepared.inputs.as_ptr(),
                 std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>()
                     as i32,
             )
@@ -138,7 +200,7 @@ fn send_once(
     }
     #[cfg(not(windows))]
     {
-        let requested = packet.event_count();
+        let requested = prepared.event_count();
         let started_ticks = match supplied_started_ticks {
             Some(ticks) => ticks,
             None => match clock.now() {
@@ -176,6 +238,17 @@ fn run_send_attempt(
     supplied_started_ticks: Option<QpcTicks>,
 ) -> PacketSendAttempt {
     match send_once(packet, clock, supplied_started_ticks) {
+        Ok(res) => PacketSendAttempt::Outcome(res),
+        Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
+    }
+}
+
+fn run_prepared_send_attempt(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    supplied_started_ticks: Option<QpcTicks>,
+) -> PacketSendAttempt {
+    match send_once_prepared(prepared, clock, supplied_started_ticks) {
         Ok(res) => PacketSendAttempt::Outcome(res),
         Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
     }
@@ -474,6 +547,18 @@ pub fn send_physical_packet_once_with_start(
 ) -> SendTransactionOutcome {
     send_physical_packet_once_impl(packet, |packet| {
         run_send_attempt(packet, clock, Some(started_ticks))
+    })
+}
+
+/// One packet transaction using a payload built before the final admission
+/// boundary and a caller-owned authoritative start timestamp.
+pub fn send_prepared_physical_packet_once_with_start(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+) -> SendTransactionOutcome {
+    send_physical_packet_once_impl(prepared.packet(), |_| {
+        run_prepared_send_attempt(prepared, clock, Some(started_ticks))
     })
 }
 

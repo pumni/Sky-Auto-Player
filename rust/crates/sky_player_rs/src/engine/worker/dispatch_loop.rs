@@ -15,20 +15,44 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 fn physical_target_qpc_for_work(
     plan: &super::planning::NextDispatchPlan,
-    epoch: sky_dispatch_win32::clock::QpcTicks,
     now: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
-    let deadline = plan
-        .authored
-        .as_ref()
-        .map(|authored| authored.deadline_ticks);
-    let Some(deadline) = deadline else {
+    let Some(target) = plan.physical_target_qpc else {
         return Ok(None);
     };
-    let target = epoch
-        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-        .map_err(|error| format!("physical target arithmetic failure: {error}"))?;
     Ok((target <= now).then_some(target))
+}
+
+pub(crate) fn preflight_prepared_plan(
+    plan: &mut super::planning::NextDispatchPlan,
+    backend: &mut sky_dispatch_win32::input::TrackedKeyState,
+    runtime: &mut super::WorkerRuntime,
+    target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
+) -> Result<bool, super::DispatchStep> {
+    let has_down_events = plan
+        .authored_view
+        .as_ref()
+        .and_then(|view| view.packet_masks)
+        .is_some_and(|packet| packet.down_mask != 0);
+    if !has_down_events {
+        return Ok(true);
+    }
+    let target = super::load_target_stamp(target_hwnd, target_generation);
+    if let Err(error) =
+        super::ensure_preflight_for_target(backend, target, &mut runtime.verified_target)
+    {
+        runtime.verified_target = None;
+        return Err(super::DispatchStep::Terminate(format!(
+            "instrument key preflight failed before timed wait; release the 15 instrument keys before playback: {error}"
+        )));
+    }
+    if !super::target_stamp_still_current(target_hwnd, target_generation, target) {
+        runtime.verified_target = None;
+        return Ok(false);
+    }
+    plan.preflight_target = Some(target);
+    Ok(true)
 }
 
 /// Project the current QPC into playback time for stale metadata diagnostics.
@@ -55,7 +79,6 @@ pub(crate) fn dispatch_due_from_plan(
     plan: &super::planning::NextDispatchPlan,
     effective_now_ticks: TimelineTicks,
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
-    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
     focus_loss_fault: bool,
     config: &super::WorkerConfig,
     resources: &mut super::WorkerResources,
@@ -90,7 +113,7 @@ pub(crate) fn dispatch_due_from_plan(
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
-    let physical_target_qpc = match physical_target_qpc_for_work(plan, epoch_qpc, now_ticks) {
+    let physical_target_qpc = match physical_target_qpc_for_work(plan, now_ticks) {
         Ok(Some(target)) => target,
         Ok(None) => return super::DispatchStep::NoWork,
         Err(error) => return super::DispatchStep::Terminate(error),
@@ -570,8 +593,9 @@ pub(super) fn dispatch(
                     &mut core.metrics.observer_queue_high_watermark,
                 );
             }
-            let dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
+            let mut dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
                 coordinator: &resources.coordinator,
+                epoch_qpc: resources.playback.epoch,
                 health_options: core
                     .health
                     .as_ref()
@@ -585,11 +609,32 @@ pub(super) fn dispatch(
                     break;
                 }
             };
+            match preflight_prepared_plan(
+                &mut dispatch_plan,
+                &mut resources.backend,
+                &mut core.runtime,
+                target_hwnd,
+                target_generation,
+            ) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(super::DispatchStep::Terminate(error)) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error = Some(error);
+                    break;
+                }
+                Err(step) => {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error = Some(format!(
+                        "unexpected preflight preparation outcome: {step:?}"
+                    ));
+                    break;
+                }
+            }
             let authored_step = dispatch_due_from_plan(
                 &dispatch_plan,
                 effective_now_ticks,
                 now_ticks,
-                resources.playback.epoch,
                 focus_loss_fault,
                 config,
                 resources,
@@ -696,7 +741,6 @@ pub(super) fn dispatch(
                         &dispatch_plan,
                         dispatch_effective_now,
                         dispatch_now_ticks,
-                        resources.playback.epoch,
                         focus_loss_fault,
                         config,
                         resources,
@@ -768,6 +812,9 @@ mod tests {
             }),
             authored_budget: None,
             deadline_ticks: Some(TimelineTicks::from_raw(deadline)),
+            physical_target_qpc: Some(QpcTicks::from_raw(deadline)),
+            authored_view: None,
+            preflight_target: None,
         }
     }
 
@@ -776,7 +823,7 @@ mod tests {
         let plan = authored_plan(1_000);
 
         assert_eq!(
-            physical_target_qpc_for_work(&plan, QpcTicks::ZERO, QpcTicks::from_raw(1_200),)
+            physical_target_qpc_for_work(&plan, QpcTicks::from_raw(1_200))
                 .expect("authored target")
                 .expect("authored deadline"),
             QpcTicks::from_raw(1_000)
@@ -785,13 +832,10 @@ mod tests {
 
     #[test]
     fn startup_target_cannot_precede_the_playback_epoch() {
-        let plan = authored_plan(0);
-        let target = physical_target_qpc_for_work(
-            &plan,
-            QpcTicks::from_raw(10_000),
-            QpcTicks::from_raw(9_540),
-        )
-        .expect("target arithmetic");
+        let mut plan = authored_plan(0);
+        plan.physical_target_qpc = Some(QpcTicks::from_raw(10_000));
+        let target = physical_target_qpc_for_work(&plan, QpcTicks::from_raw(9_540))
+            .expect("target arithmetic");
 
         assert_eq!(target, None);
     }
@@ -799,8 +843,8 @@ mod tests {
     #[test]
     fn future_selected_target_is_not_replaced_with_now() {
         let plan = authored_plan(1_000);
-        let target = physical_target_qpc_for_work(&plan, QpcTicks::ZERO, QpcTicks::from_raw(900))
-            .expect("target arithmetic");
+        let target =
+            physical_target_qpc_for_work(&plan, QpcTicks::from_raw(900)).expect("prepared target");
 
         assert_eq!(target, None);
     }

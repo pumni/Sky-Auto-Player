@@ -50,10 +50,10 @@ cannot shift unrelated future authored actions.
 ## 3. Planning and physical target
 
 Each worker epoch freezes one typed plan. It contains the current authored
-deadline, physical path, polyphony, health budget, and absolute QPC
-target. The same deadline is used for waiting, due selection, final target
-validation, and observation. The coordinator remains the sole owner of
-schedule and key-generation state.
+deadline, physical path, polyphony, health budget, prepared packet, and
+absolute QPC target. The same deadline and frozen target are used for waiting,
+due selection, final target validation, and observation. The coordinator
+remains the sole owner of schedule and key-generation state.
 
 The physical target is normally:
 
@@ -157,6 +157,10 @@ The serialized `send_started_ticks`, `send_completed_ticks`, and
 `send_duration_us` names remain compatibility aliases for older Python/API
 callers. They map to the same admission and completion boundaries above;
 production does not take a second QPC sample to preserve the old names.
+The optional `dispatch_ready_qpc` and `core_post_send_duration_us` fields are
+diagnostic-only and are not sampled by the production sender.  The dispatch
+worker CPU metric is likewise captured during worker finalization, never by
+the deferred observer thread.
 
 ## 8. Validation obligations
 

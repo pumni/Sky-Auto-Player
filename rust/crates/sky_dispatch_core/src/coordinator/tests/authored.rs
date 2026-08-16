@@ -165,6 +165,35 @@ fn production_ticks_do_not_advance_authored_deadlines() {
 }
 
 #[test]
+fn current_authored_packet_can_be_prepared_before_its_deadline() {
+    let schedule = compile_runtime_intents(
+        &[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: vec![0x15].into(),
+            reason: "future".into(),
+        }],
+        &[0x15],
+    )
+    .expect("valid future schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+
+    let prepared = coordinator
+        .prepare_current_authored_packet()
+        .expect("current packet preparation")
+        .expect("future packet exists");
+    assert_eq!(prepared.effective_scheduled_ticks.as_u64(), 10_000);
+    assert!(
+        coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(9_999), DurationTicks::ZERO)
+            .expect("due check")
+            .is_none()
+    );
+}
+
+#[test]
 fn down_commit_uses_pre_send_timestamp() {
     let schedule = compile_runtime_intents(
         &[

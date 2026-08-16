@@ -19,7 +19,7 @@ use crate::engine::worker::{
     WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals, WaitTiming,
     WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
     dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
-    wait_for_next_boundary,
+    preflight_prepared_plan, wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -437,20 +437,52 @@ impl ProductionDispatchTestHarness {
     }
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
-        plan_next_dispatch(
+        let mut plan = plan_next_dispatch(
             &self.resources.coordinator,
+            self.resources.playback.epoch,
             self.resources.clock,
             &self.config.timing,
         )
-        .expect("plan_next_dispatch")
+        .expect("plan_next_dispatch");
+        preflight_prepared_plan(
+            &mut plan,
+            &mut self.resources.backend,
+            &mut self.runtime,
+            &self.target_hwnd,
+            &self.target_generation,
+        )
+        .expect("preflight prepared dispatch plan");
+        self.align_epoch_to_selected_target_for_test(
+            &plan,
+            self.effective_now_ticks,
+            self.resources.clock.now().expect("qpc now"),
+        );
+        self.refresh_physical_target_for_test(&mut plan);
+        plan
     }
 
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
-        plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
+        let mut plan = plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
             coordinator: &self.resources.coordinator,
+            epoch_qpc: self.resources.playback.epoch,
             health_options: self.health.options,
         })
-        .expect("projected dispatch plan")
+        .expect("projected dispatch plan");
+        preflight_prepared_plan(
+            &mut plan,
+            &mut self.resources.backend,
+            &mut self.runtime,
+            &self.target_hwnd,
+            &self.target_generation,
+        )
+        .expect("preflight prepared projected plan");
+        self.align_epoch_to_selected_target_for_test(
+            &plan,
+            self.effective_now_ticks,
+            self.resources.clock.now().expect("qpc now"),
+        );
+        self.refresh_physical_target_for_test(&mut plan);
+        plan
     }
 
     /// Run the production wait boundary and direct frozen-plan dispatch path.
@@ -548,6 +580,15 @@ impl ProductionDispatchTestHarness {
             self.align_epoch_to_deadline_for_test(deadline, now_ticks);
         }
     }
+    fn refresh_physical_target_for_test(&self, plan: &mut NextDispatchPlan) {
+        plan.physical_target_qpc = plan.authored.as_ref().map(|authored| {
+            self.resources
+                .playback
+                .epoch
+                .checked_add_duration(DurationTicks::from_raw(authored.deadline_ticks.as_u64()))
+                .expect("physical target QPC")
+        });
+    }
     fn dispatch_plan_at(
         &mut self,
         plan: &NextDispatchPlan,
@@ -560,7 +601,6 @@ impl ProductionDispatchTestHarness {
             plan,
             effective_now_ticks,
             now_ticks,
-            self.resources.playback.epoch,
             false,
             &self.config,
             &mut self.resources,

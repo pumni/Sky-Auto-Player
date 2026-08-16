@@ -48,6 +48,8 @@ pub(super) use dispatch::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::preflight_prepared_plan;
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]
@@ -64,6 +66,7 @@ pub use planning::NextDispatchPlan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
@@ -233,8 +236,10 @@ pub(super) fn update_deferred_worker_metrics(
         timing.last_cpu_metrics_sample_us,
         CPU_METRICS_SAMPLE_INTERVAL_US,
     ) {
-        local_metrics.worker_cpu_time_us =
-            current_thread_cpu_time_us().saturating_sub(timing.start_thread_cpu_us);
+        // The observer runs on a different thread.  Its sampling point can
+        // update the process-wide value, but it must never publish that
+        // thread's CPU time as the dispatch-worker CPU metric.  The worker
+        // value is captured once during finalization on the owning thread.
         local_metrics.process_cpu_time_us =
             current_process_cpu_time_us().saturating_sub(timing.start_process_cpu_us);
         timing.last_cpu_metrics_sample_us = wall_now_us;

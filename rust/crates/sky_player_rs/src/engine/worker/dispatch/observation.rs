@@ -19,6 +19,9 @@ pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 #[derive(Clone, Copy, Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
+    // Retained for the observer schema and test/support scenarios; the
+    // production path currently does not construct this variant.
+    #[allow(dead_code)]
     Up(UpObservation),
     Wait(WaitObservation),
     StaleMetadata(StaleMetadataObservation),

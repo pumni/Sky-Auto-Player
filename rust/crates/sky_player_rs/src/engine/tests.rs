@@ -2648,8 +2648,14 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
     ));
     assert_eq!(authored_calls.load(Ordering::SeqCst), 1);
 
-    let mut invalid_plan = authored_plan.clone();
-    invalid_plan.authored_budget = None;
+    let invalid_plan = super::worker::NextDispatchPlan {
+        authored: authored_plan.authored,
+        authored_budget: None,
+        deadline_ticks: authored_plan.deadline_ticks,
+        physical_target_qpc: authored_plan.physical_target_qpc,
+        authored_view: authored_plan.authored_view,
+        preflight_target: authored_plan.preflight_target,
+    };
     assert!(!super::worker::plan_structure_is_valid(&invalid_plan));
     assert!(matches!(
         authored.dispatch_due_from_plan_for_test(&invalid_plan),

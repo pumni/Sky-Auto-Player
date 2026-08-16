@@ -16,3 +16,7 @@ proptest = "1"
 [[bench]]
 name = "soak_benchmark"
 harness = false
+
+[[bench]]
+name = "commit_scaling"
+harness = false

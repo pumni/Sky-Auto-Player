@@ -5,14 +5,14 @@ use super::super::super::{
 };
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
-    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
-    WorkerTimingState, ensure_preflight_for_target, final_control_admission_at,
-    final_control_precheck, final_down_target_admission, focus_matches, load_target_stamp,
-    signed_ticks_to_us, suspend_live_input, target_stamp_still_current,
+    TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
+    WorkerRuntime, WorkerTimingState, final_control_admission_at, final_control_precheck,
+    final_down_target_admission, focus_matches, load_target_stamp, signed_ticks_to_us,
+    suspend_live_input, target_stamp_still_current,
 };
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
-use super::timing::{interpret_down_send_timing, prepare_authored_batch_view};
+use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
@@ -61,34 +61,12 @@ pub(crate) fn dispatch_authored_packet(
         return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
     };
 
-    let prepare_now_ticks = authored_prepare_now_ticks(
-        effective_now_ticks,
-        startup_target_selected,
-        dispatch_plan
-            .authored
-            .as_ref()
-            .map_or(TimelineTicks::ZERO, |authored| authored.deadline_ticks),
-    );
-    let prepared_batch = match coordinator.prepare_next_due_authored(prepare_now_ticks) {
-        Ok(value) => value,
-        Err(error) => {
-            return DispatchStep::Terminate(format!(
-                "coordinator authored-prepare failure: {error}"
-            ));
-        }
-    };
-    let Some(prepared_batch) = prepared_batch else {
+    let Some(view) = dispatch_plan.authored_view.as_ref() else {
         return DispatchStep::NoWork;
     };
 
-    let view = match prepare_authored_batch_view(coordinator, prepared_batch) {
-        Ok(Some(view)) => view,
-        Ok(None) => return DispatchStep::NoWork,
-        Err(step) => return step,
-    };
-
     commit_down_send_outcome(
-        &view,
+        view,
         config,
         health,
         timing,
@@ -112,18 +90,11 @@ pub(crate) fn dispatch_authored_packet(
         startup_target_selected,
         focus_loss_fault,
         frozen_budget,
+        dispatch_plan.preflight_target,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         observer,
     )
-}
-
-fn authored_prepare_now_ticks(
-    effective_now_ticks: TimelineTicks,
-    _startup_target_selected: bool,
-    _authored_deadline_ticks: TimelineTicks,
-) -> TimelineTicks {
-    effective_now_ticks
 }
 
 /// Admission gate + SendInput call + telemetry + health
@@ -155,6 +126,7 @@ fn commit_down_send_outcome(
     _startup_target_selected: bool,
     focus_loss_fault: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    preflight_target: Option<TargetStamp>,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     observer: &mut PendingObservationQueue,
@@ -183,6 +155,7 @@ fn commit_down_send_outcome(
         has_conflicts,
         focus_loss_fault,
         frozen_budget,
+        preflight_target,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         observer,
@@ -252,6 +225,7 @@ fn admit_authored_down(
     has_conflicts: bool,
     focus_loss_fault: bool,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
+    preflight_target: Option<TargetStamp>,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     observer: &PendingObservationQueue,
@@ -298,20 +272,13 @@ fn admit_authored_down(
             "focus lost after due check before SendInput boundary".to_string(),
         ));
     }
-    let preflight_target = load_target_stamp(target_hwnd, target_generation);
-    if has_down_events {
-        if let Err(error) =
-            ensure_preflight_for_target(backend, preflight_target, &mut runtime.verified_target)
-        {
-            runtime.verified_target = None;
-            return Err(DispatchStep::Terminate(format!(
-                "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
-            )));
-        }
-        if !target_stamp_still_current(target_hwnd, target_generation, preflight_target) {
-            runtime.verified_target = None;
-            return Ok(AdmissionOutcome::TargetChanged);
-        }
+    let preflight_target =
+        preflight_target.unwrap_or_else(|| load_target_stamp(target_hwnd, target_generation));
+    if has_down_events
+        && !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
+    {
+        runtime.verified_target = None;
+        return Ok(AdmissionOutcome::TargetChanged);
     }
     if config.timing.strict_timing
         && effective_now_ticks
@@ -484,11 +451,17 @@ fn record_down_send_outcome(
             "authored physical dispatch has no canonical packet".to_string(),
         );
     };
+    let Some(prepared_packet) = view.prepared_packet.as_ref() else {
+        return DispatchStep::Terminate(
+            "authored physical dispatch has no prepared Win32 packet".to_string(),
+        );
+    };
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
-    let result = backend.send_physical_packet_with_start(packet, *started_qpc);
+    debug_assert_eq!(prepared_packet.packet(), packet);
+    let result = backend.send_prepared_physical_packet_with_start(prepared_packet, *started_qpc);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
@@ -594,6 +567,11 @@ fn finalize_down_send_outcome(
         Ok(value) => value,
         Err(step) => return step,
     };
+    #[cfg(any(test, feature = "test-support"))]
+    let capture_dispatch_ready_qpc = config.timing.strict_timing
+        || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off);
+    #[cfg(not(any(test, feature = "test-support")))]
+    let capture_dispatch_ready_qpc = false;
     publisher_down_send_outcome(
         view,
         runtime,
@@ -602,8 +580,7 @@ fn finalize_down_send_outcome(
         qpc_clock,
         effective_now_ticks,
         physical_target_qpc,
-        config.timing.strict_timing
-            || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off),
+        capture_dispatch_ready_qpc,
         frozen_budget,
         trace_kind,
         result_confirmed_mask,
@@ -689,6 +666,7 @@ mod tests {
                 packet_index: 0,
             },
             batch_source_action_index: 0,
+            down_source_action_index: Some(0),
             batch_intent_count: 1,
             batch_kind: ActionKind::Down,
             batch_scheduled_ticks: TimelineTicks::ZERO,
@@ -696,6 +674,9 @@ mod tests {
             conflict_mask: 0,
             dispatch_path: DispatchPath::DownOnly { down_count: 1 },
             packet_masks: None,
+            up_intents: smallvec::SmallVec::new(),
+            down_intents: smallvec::SmallVec::new(),
+            prepared_packet: None,
         };
         let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
         let mut runtime = WorkerRuntime::default();
@@ -712,26 +693,6 @@ mod tests {
         );
 
         assert!(matches!(step, DispatchStep::Dispatched));
-    }
-
-    #[test]
-    fn prepare_now_does_not_apply_dispatch_lead() {
-        assert_eq!(
-            authored_prepare_now_ticks(TimelineTicks::ZERO, true, TimelineTicks::from_raw(100),),
-            TimelineTicks::ZERO
-        );
-        assert_eq!(
-            authored_prepare_now_ticks(
-                TimelineTicks::from_raw(150),
-                true,
-                TimelineTicks::from_raw(100),
-            ),
-            TimelineTicks::from_raw(150)
-        );
-        assert_eq!(
-            authored_prepare_now_ticks(TimelineTicks::ZERO, false, TimelineTicks::from_raw(100),),
-            TimelineTicks::ZERO
-        );
     }
 
     #[test]

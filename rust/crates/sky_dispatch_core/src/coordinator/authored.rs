@@ -9,6 +9,7 @@ use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
+    #[cfg(test)]
     fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
         if batch.kind != ActionKind::Down {
             return false;
@@ -155,9 +156,11 @@ impl RuntimeDispatchCoordinator {
             .map(|index| (index, 0))
     }
 
-    fn prepare_next_due_authored_uncompensated(
-        &mut self,
-        now: TimelineTicks,
+    /// Prepare the current physical authored packet without consulting the
+    /// current clock.  The worker uses this before entering its timed wait so
+    /// packet identity, masks, and effective deadline are frozen together.
+    pub fn prepare_current_authored_packet(
+        &self,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         if self.cursor >= self.schedule.batches.len() {
             return Ok(None);
@@ -191,10 +194,6 @@ impl RuntimeDispatchCoordinator {
         }
         let effective_scheduled_ticks =
             self.packet_effective_deadline_ticks_uncompensated(packet_index)?;
-        let deadline = effective_scheduled_ticks;
-        if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(&batch)) {
-            return Ok(None);
-        }
         let packet_kind = physical_packet_kind(packet.up_mask, packet.down_mask)?;
         Ok(Some(PreparedBatch {
             index,
@@ -203,6 +202,19 @@ impl RuntimeDispatchCoordinator {
             packet_batch_count: usize::from(packet.batch_count),
             packet_kind,
         }))
+    }
+
+    fn prepare_next_due_authored_uncompensated(
+        &mut self,
+        now: TimelineTicks,
+    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
+        let Some(prepared) = self.prepare_current_authored_packet()? else {
+            return Ok(None);
+        };
+        if prepared.effective_scheduled_ticks > now {
+            return Ok(None);
+        }
+        Ok(Some(prepared))
     }
 
     #[cfg(not(test))]
@@ -368,12 +380,6 @@ impl RuntimeDispatchCoordinator {
         started: TimelineTicks,
         completed: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        if prepared.index != self.cursor {
-            return Err(CoordinatorError::PreparedBatchMismatch {
-                prepared: prepared.index,
-                cursor: self.cursor,
-            });
-        }
         let (up_intents, down_intents, down_source_action_index) = {
             let packet = self
                 .schedule
@@ -401,6 +407,109 @@ impl RuntimeDispatchCoordinator {
                 packet.header.down_source_action_index,
             )
         };
+        self.commit_prepared_packet_success_parts(
+            prepared,
+            &up_intents,
+            &down_intents,
+            down_source_action_index,
+            started,
+            completed,
+        )
+    }
+
+    /// Commit a packet whose bounded logical contents were frozen before the
+    /// physical deadline.  The healthy path validates only the current packet
+    /// and transitions the identities it owns; it never recounts the complete
+    /// generation ledger.
+    pub fn commit_prepared_packet_success_parts(
+        &mut self,
+        prepared: PreparedBatch,
+        up_intents: &[CompactIntent],
+        down_intents: &[CompactIntent],
+        down_source_action_index: Option<u32>,
+        started: TimelineTicks,
+        completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.index,
+                cursor: self.cursor,
+            });
+        }
+        let packet =
+            *self
+                .schedule
+                .packets
+                .get(prepared.packet_index)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIndex {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        if packet.first_batch_index as usize != prepared.index
+            || usize::from(packet.batch_count) != prepared.packet_batch_count
+            || packet.up_intent_len as usize != up_intents.len()
+            || packet.down_intent_len as usize != down_intents.len()
+            || packet.down_source_action_index != down_source_action_index
+            || physical_packet_kind(packet.up_mask, packet.down_mask)? != prepared.packet_kind
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared packet metadata changed before commit".to_string(),
+                ),
+            ));
+        }
+        let up_start = packet.up_intent_start as usize;
+        let up_end = up_start
+            .checked_add(up_intents.len())
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIntentRange {
+                    index: prepared.packet_index,
+                },
+            ))?;
+        let down_start = packet.down_intent_start as usize;
+        let down_end =
+            down_start
+                .checked_add(down_intents.len())
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        let current_up =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        let current_down =
+            self.schedule
+                .intents
+                .get(down_start..down_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: prepared.packet_index,
+                    },
+                ))?;
+        if current_up != up_intents || current_down != down_intents {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared packet intents changed before commit".to_string(),
+                ),
+            ));
+        }
+        if self.packet_effective_deadline_ticks_uncompensated(prepared.packet_index)?
+            != prepared.effective_scheduled_ticks
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "prepared packet deadline changed before commit".to_string(),
+                ),
+            ));
+        }
         if prepared.packet_batch_count == 0 {
             return Err(CoordinatorError::Invariant(
                 CoordinatorInvariantError::Accounting(
@@ -413,7 +522,7 @@ impl RuntimeDispatchCoordinator {
         // Apply releases first. Stale Up intents are present for authored
         // diagnostics but deliberately have NO_GENERATION_ID and no physical
         // event in the packet.
-        for compact in up_intents {
+        for compact in up_intents.iter().copied() {
             let generation_id = compact.generation_id();
             if generation_id == NO_GENERATION_ID {
                 continue;
@@ -452,7 +561,7 @@ impl RuntimeDispatchCoordinator {
 
         // Full SendInput success means every Down identity in the immutable
         // packet was inserted; no returned-count prefix is consulted.
-        for compact in down_intents {
+        for compact in down_intents.iter().copied() {
             let generation_id = compact.generation_id();
             if generation_id == NO_GENERATION_ID {
                 continue;
@@ -488,7 +597,6 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::Time(
                     crate::time::TimeArithmeticError::Overflow,
                 ))?;
-        self.check_invariants()?;
         Ok(())
     }
 

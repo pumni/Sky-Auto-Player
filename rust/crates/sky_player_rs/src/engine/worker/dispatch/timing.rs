@@ -16,45 +16,8 @@ use super::super::{
     signed_timeline_delta_ticks,
 };
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep};
-use sky_dispatch_core::coordinator::{
-    CoordinatorError, CoordinatorInvariantError, PreparedBatch, physical_packet_kind,
-};
-use sky_dispatch_core::model::PhysicalPacketKind;
+use sky_dispatch_core::coordinator::PreparedBatch;
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
-
-fn dispatch_path_from_masks(
-    up_mask: u16,
-    down_mask: u16,
-) -> Result<DispatchPath, CoordinatorError> {
-    let up_count = up_mask.count_ones() as usize;
-    let down_count = down_mask.count_ones() as usize;
-    match physical_packet_kind(up_mask, down_mask)? {
-        PhysicalPacketKind::UpOnly => Ok(DispatchPath::UpOnly { up_count }),
-        PhysicalPacketKind::DownOnly => Ok(DispatchPath::DownOnly { down_count }),
-        PhysicalPacketKind::Mixed => Ok(DispatchPath::Mixed {
-            up_count,
-            down_count,
-        }),
-    }
-}
-
-/// Classify only the packet at the coordinator cursor. Normal planning must
-/// never look through stale metadata to borrow a future packet's path.
-pub(crate) fn current_authored_physical_path(
-    coordinator: &RuntimeDispatchCoordinator,
-) -> Result<Option<DispatchPath>, CoordinatorError> {
-    let Some((up_mask, down_mask)) = coordinator.next_authored_packet_masks() else {
-        return Ok(None);
-    };
-    if up_mask == 0 && down_mask == 0 {
-        return Err(CoordinatorError::Invariant(
-            CoordinatorInvariantError::Accounting(
-                "stale metadata reached normal physical planner".to_string(),
-            ),
-        ));
-    }
-    dispatch_path_from_masks(up_mask, down_mask).map(Some)
-}
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
 /// dispatch observations.  The observer applies the one canonical predicate
@@ -114,7 +77,7 @@ fn physical_event_counts(
 /// coordinator schedule across multiple invariants within a single loop epoch
 /// (D1 — one immutable dispatch plan per epoch).
 pub(crate) fn prepare_authored_batch_view(
-    coordinator: &mut RuntimeDispatchCoordinator,
+    coordinator: &RuntimeDispatchCoordinator,
     prepared_batch: PreparedBatch,
 ) -> BatchViewResult {
     let batch_index = prepared_batch.index;
@@ -127,9 +90,12 @@ pub(crate) fn prepare_authored_batch_view(
         batch_kind,
         dispatch_path,
         batch_source_action_index,
+        down_source_action_index,
         batch_intent_count,
         conflict_mask,
         packet_masks,
+        up_intents,
+        down_intents,
     ) = {
         let packet_view = match coordinator
             .schedule
@@ -144,6 +110,18 @@ pub(crate) fn prepare_authored_batch_view(
         };
         let conflict_mask =
             coordinator.check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_mask());
+        let up_intents = packet_view.up_intents.iter().copied().collect();
+        let down_intents = packet_view.down_intents.iter().copied().collect();
+        let down_source_action_index = packet_view.header.down_source_action_index;
+        let batch_source_action_index = down_source_action_index
+            .or_else(|| {
+                coordinator
+                    .schedule
+                    .batches
+                    .get(packet_view.header.first_batch_index as usize)
+                    .map(|batch| batch.source_action_index)
+            })
+            .unwrap_or(0);
         let up_count = packet_view.up_mask().count_ones() as usize;
         let down_count = packet_view.down_mask().count_ones() as usize;
         let dispatch_path = match packet_kind {
@@ -165,29 +143,34 @@ pub(crate) fn prepare_authored_batch_view(
                 ActionKind::Down
             },
             dispatch_path,
-            packet_view
-                .header
-                .down_source_action_index
-                .or_else(|| {
-                    coordinator
-                        .schedule
-                        .batches
-                        .get(packet_view.header.first_batch_index as usize)
-                        .map(|batch| batch.source_action_index)
-                })
-                .unwrap_or(0),
+            batch_source_action_index,
+            down_source_action_index,
             up_count + down_count,
             conflict_mask,
             Some(sky_dispatch_win32::input::PhysicalPacket::new(
                 packet_view.up_mask(),
                 packet_view.down_mask(),
             )),
+            up_intents,
+            down_intents,
         )
+    };
+    let prepared_packet = match packet_masks
+        .map(sky_dispatch_win32::input::PreparedPhysicalPacket::try_new)
+        .transpose()
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(DispatchStep::Terminate(format!(
+                "physical packet preparation failure: {error}"
+            )));
+        }
     };
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
+        down_source_action_index,
         batch_intent_count,
         batch_kind,
         batch_scheduled_ticks,
@@ -195,6 +178,9 @@ pub(crate) fn prepare_authored_batch_view(
         conflict_mask,
         dispatch_path,
         packet_masks,
+        up_intents,
+        down_intents,
+        prepared_packet,
     }))
 }
 
@@ -282,8 +268,11 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let commit_result = coordinator.commit_packet_success(
+    let commit_result = coordinator.commit_prepared_packet_success_parts(
         view.prepared_batch,
+        &view.up_intents,
+        &view.down_intents,
+        view.down_source_action_index,
         final_admission_effective_ticks,
         completed_effective_ticks,
     );

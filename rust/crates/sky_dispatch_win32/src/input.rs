@@ -13,11 +13,15 @@ mod up_transaction;
 pub(crate) use down_transaction::emit_down_with;
 pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
 pub use outcome::{
-    PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult,
-    ReleaseAllOutcome, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+    PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket,
+    PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus,
 };
 
-pub use packet::{MAX_PACKET_EVENTS, send_physical_packet_once_with_clock};
+pub use packet::{
+    MAX_PACKET_EVENTS, PreparedPhysicalPacket, send_physical_packet_once_with_clock,
+    send_prepared_physical_packet_once_with_start,
+};
 pub use physical::is_scan_code_physically_down;
 pub use raw::{send_input_raw, send_input_raw_with_clock};
 pub use scan_code::{

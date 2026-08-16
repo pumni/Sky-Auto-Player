@@ -44,9 +44,11 @@ pub(crate) struct AuthoredPacketContext<'a> {
 /// the send/admission/telemetry helpers consume it without re-querying the
 /// coordinator schedule.
 #[cfg(not(any(test, feature = "test-support")))]
-pub(super) struct AuthoredBatchView {
+#[derive(Debug)]
+pub(crate) struct AuthoredBatchView {
     pub(super) prepared_batch: PreparedBatch,
     pub(super) batch_source_action_index: u32,
+    pub(super) down_source_action_index: Option<u32>,
     pub(super) batch_intent_count: usize,
     pub(super) batch_kind: ActionKind,
     pub(super) batch_scheduled_ticks: TimelineTicks,
@@ -54,12 +56,21 @@ pub(super) struct AuthoredBatchView {
     pub(super) conflict_mask: u16,
     pub(super) dispatch_path: DispatchPath,
     pub(super) packet_masks: Option<PhysicalPacket>,
+    pub(super) up_intents: smallvec::SmallVec<
+        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
+    >,
+    pub(super) down_intents: smallvec::SmallVec<
+        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
+    >,
+    pub(super) prepared_packet: Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[derive(Debug)]
 pub(crate) struct AuthoredBatchView {
     pub(crate) prepared_batch: PreparedBatch,
     pub(crate) batch_source_action_index: u32,
+    pub(crate) down_source_action_index: Option<u32>,
     pub(crate) batch_intent_count: usize,
     pub(crate) batch_kind: ActionKind,
     pub(crate) batch_scheduled_ticks: TimelineTicks,
@@ -67,6 +78,13 @@ pub(crate) struct AuthoredBatchView {
     pub(crate) conflict_mask: u16,
     pub(crate) dispatch_path: DispatchPath,
     pub(crate) packet_masks: Option<PhysicalPacket>,
+    pub(crate) up_intents: smallvec::SmallVec<
+        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
+    >,
+    pub(crate) down_intents: smallvec::SmallVec<
+        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
+    >,
+    pub(crate) prepared_packet: Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
 }
 
 /// `Err(None)` indicates an unrecoverable terminal step; `Ok(None)` means the
@@ -77,9 +95,9 @@ pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep
 pub(crate) use authored::dispatch_authored_packet;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
-pub(crate) use observer::{
-    ObserverRuntime, PendingObservationQueue, dispatch_stale_packet, drain_one_observer,
-};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use observer::drain_one_observer;
+pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 
 use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
