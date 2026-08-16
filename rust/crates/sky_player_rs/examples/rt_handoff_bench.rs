@@ -413,6 +413,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.wake_to_admission_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_admission_us, 95, 100),
             "p99": quantile(&mut samples.wake_to_admission_us, 99, 100),
+            "p99_9": quantile(&mut samples.wake_to_admission_us, 999, 1000),
             "max": samples.wake_to_admission_us.iter().copied().max(),
             "samples": samples.wake_to_admission_us.len(),
         },
@@ -420,6 +421,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.final_spin_us, 50, 100),
             "p95": quantile(&mut samples.final_spin_us, 95, 100),
             "p99": quantile(&mut samples.final_spin_us, 99, 100),
+            "p99_9": quantile(&mut samples.final_spin_us, 999, 1000),
             "max": samples.final_spin_us.iter().copied().max(),
             "samples": samples.final_spin_us.len(),
         },
@@ -453,6 +455,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.target_to_completion_us, 50, 100),
             "p95": quantile(&mut samples.target_to_completion_us, 95, 100),
             "p99": quantile(&mut samples.target_to_completion_us, 99, 100),
+            "p99_9": quantile(&mut samples.target_to_completion_us, 999, 1000),
             "max": samples.target_to_completion_us.iter().copied().max(),
             "samples": samples.target_to_completion_us.len(),
         },
@@ -497,6 +500,27 @@ fn build_wait_mode(
     }
 }
 
+fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode {
+    let qpc_clock = QpcClock::initialize().expect("QPC");
+    let waiter = HybridWaiter::with_options(true, true);
+    let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
+    let startup_wake_error = waiter
+        .probe_wake_error_stats(
+            qpc_clock,
+            &interrupt,
+            sky_player_rs::engine::dispatch_primitives::PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES,
+        )
+        .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
+    WaitMode {
+        name,
+        waitable_timer_enabled: true,
+        event_wait_enabled: true,
+        adaptive_spin_enabled: false,
+        effective_spin_threshold_us: spin_threshold_us,
+        startup_wake_error,
+    }
+}
+
 fn wake_error_json(stats: WakeErrorStats) -> serde_json::Value {
     json!({
         "p50_us": stats.p50_us,
@@ -512,8 +536,10 @@ fn main() {
     let qpc_frequency = qpc_frequency_checked().expect("QPC frequency");
     let modes = [
         build_wait_mode("production_adaptive_spin", true, true, true),
-        build_wait_mode("timer_only_spin_zero", true, false, false),
-        build_wait_mode("fixed_production_floor", true, true, false),
+        build_fixed_wait_mode("fixed_spin_250us", 250),
+        build_fixed_wait_mode("fixed_spin_400us", 400),
+        build_fixed_wait_mode("fixed_spin_700us", 700),
+        build_fixed_wait_mode("fixed_spin_1000us", 1_000),
     ];
     let mut mode_reports = serde_json::Map::new();
     for mode in modes {
