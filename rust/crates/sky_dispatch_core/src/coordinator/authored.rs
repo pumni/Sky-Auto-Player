@@ -1,6 +1,7 @@
 use super::{
     ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
-    PendingRelease, PreparedAuthoredFrame, PreparedBatch, PreparedStalePacket,
+    PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame, PreparedBatch,
+    PreparedDeferredReleaseIntent, PreparedDownIntent, PreparedStalePacket,
     RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
@@ -472,6 +473,202 @@ impl RuntimeDispatchCoordinator {
             self.pending_release_by_slot[usize::from(slot)] = None;
             self.pending_release_mask &= !bit;
         }
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
+    /// Freeze all coordinator evidence required by the authored commit.  This
+    /// is intentionally called before the timed wait; the completion path can
+    /// then apply only the bounded token and never traverse schedule ranges.
+    pub fn prepare_authored_commit(
+        &self,
+        prepared: PreparedAuthoredFrame,
+    ) -> Result<PreparedAuthoredCommit, CoordinatorError> {
+        let packet = *self.schedule.packets.get(prepared.packet_index).ok_or(
+            CoordinatorError::InvalidBatchIndex {
+                index: prepared.packet_index,
+            },
+        )?;
+        let view = self
+            .schedule
+            .view_packet_ticks(prepared.packet_index, prepared.authored_ticks)?;
+        let mut immediate_up_intents = SmallVec::new();
+        let mut deferred_up_intents = SmallVec::new();
+        let up_start = usize::try_from(packet.up_intent_start).map_err(|_| {
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: prepared.packet_index,
+            })
+        })?;
+        for (offset, intent) in view.up_intents.iter().copied().enumerate() {
+            if intent.generation_id() == NO_GENERATION_ID {
+                continue;
+            }
+            let bit = Self::bit_for_slot(intent.key_slot());
+            if prepared.immediate_up_mask & bit != 0 {
+                immediate_up_intents.push(intent);
+            } else if prepared.deferred_up_mask & bit != 0 {
+                let source_action_index = self.packet_intent_source_action_index(
+                    &packet,
+                    up_start.checked_add(offset).ok_or(CoordinatorError::Time(
+                        crate::time::TimeArithmeticError::Overflow,
+                    ))?,
+                    ActionKind::Up,
+                )?;
+                deferred_up_intents.push(PreparedDeferredReleaseIntent {
+                    intent,
+                    source_action_index,
+                });
+            }
+        }
+        let mut down_intents = SmallVec::new();
+        for intent in view.down_intents.iter().copied() {
+            let scan_code = self
+                .schedule
+                .key_registry
+                .scan_code_for(intent.key_slot())
+                .ok_or(CoordinatorError::InvalidKeySlot {
+                    slot: intent.key_slot(),
+                })?;
+            down_intents.push(PreparedDownIntent { intent, scan_code });
+        }
+        Ok(PreparedAuthoredCommit {
+            frame: prepared,
+            immediate_up_intents,
+            deferred_up_intents,
+            down_intents,
+            down_source_action_index: packet.down_source_action_index,
+        })
+    }
+
+    fn register_deferred_releases_frozen(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+        deferred_up_intents: &[PreparedDeferredReleaseIntent],
+    ) -> Result<(), CoordinatorError> {
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        for release in deferred_up_intents {
+            let generation_id = release.intent.generation_id();
+            let slot = release.intent.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            if prepared.deferred_up_mask & bit == 0 || generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let active = self
+                .active_for_slot(slot)
+                .cloned()
+                .ok_or(CoordinatorError::PendingReleaseOwnershipMismatch { slot })?;
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::PendingReleaseOwnershipMismatch { slot });
+            }
+            if self.pending_release_by_slot[usize::from(slot)].is_some() {
+                return Err(CoordinatorError::PendingReleaseAlreadyRegistered { slot });
+            }
+            self.pending_release_by_slot[usize::from(slot)] = Some(PendingRelease {
+                generation_id,
+                key_slot: slot,
+                authored_release_ticks: prepared.authored_ticks,
+                due_ticks: active.release_not_before_ticks.max(prepared.authored_ticks),
+                source_action_index: release.source_action_index,
+            });
+            self.pending_release_mask |= bit;
+        }
+        Ok(())
+    }
+
+    /// Apply a frozen authored commit after a successful physical send.
+    /// There is no schedule or packet traversal on this path.
+    pub fn commit_prepared_authored_frame_success_frozen(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let prepared = commit.frame;
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
+
+        for compact in &commit.immediate_up_intents {
+            let generation_id = compact.generation_id();
+            let slot = compact.key_slot();
+            let Some(active) = self.active_for_slot(slot).cloned() else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored immediate Up has no active generation".into(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id || started < active.release_not_before_ticks {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored immediate Up violates generation ownership or hold floor".into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::Released,
+            )?;
+            let bit = Self::bit_for_slot(slot);
+            self.active_by_slot[usize::from(slot)] = None;
+            self.active_mask &= !bit;
+            self.blocked_mask &= !bit;
+        }
+
+        self.register_deferred_releases_frozen(prepared, &commit.deferred_up_intents)?;
+
+        for down in &commit.down_intents {
+            let generation_id = down.intent.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = down.intent.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            if self.active_by_slot[usize::from(slot)].is_some()
+                || self.active_mask & bit != 0
+                || self.blocked_mask & bit != 0
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Down would overwrite an active or blocked key slot".into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            )?;
+            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
+                generation_id,
+                scan_code: down.scan_code,
+                key_slot: slot,
+                source_action_index: commit.down_source_action_index.unwrap_or(0),
+                scheduled_down_ticks: prepared.authored_ticks,
+                down_dispatch_started_ticks: started,
+                down_dispatch_completed_ticks: completed,
+                release_not_before_ticks,
+            });
+            self.active_mask |= bit;
+            self.blocked_mask |= bit;
+        }
+
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
         self.validate_local_slot_masks()?;
         Ok(())
     }

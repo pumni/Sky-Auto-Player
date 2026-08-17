@@ -130,6 +130,34 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Two independent physical Down boundaries used by the deterministic
+    /// pre-wait stall/backlog regression.
+    pub fn new_two_down_boundaries() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "backlog-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "backlog-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "backlog-cleanup".into(),
+            },
+        ])
+    }
+
     /// A deferred release for key A shares an authored timestamp with an
     /// unrelated Down chord on keys B/C. Production must send B/C at their
     /// authored boundary and retain A as an independent pending release.
@@ -163,6 +191,176 @@ impl ProductionDispatchTestHarness {
             ],
             100_000,
         )
+    }
+
+    /// Build a pending release whose due boundary is shared with an authored
+    /// metadata-only deferred Up.  The packet emitter uses deterministic QPC
+    /// completion samples so the equality is a state-machine property rather
+    /// than a wall-clock coincidence.
+    pub fn new_pending_release_with_metadata_boundary() -> Self {
+        let mut harness = Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "equal-boundary-a-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "equal-boundary-b-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 20_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "equal-boundary-a-up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 21_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "equal-boundary-b-up".into(),
+                },
+            ],
+            1_000,
+        );
+        let epoch = harness.resources.playback.epoch;
+        let one_us = harness
+            .resources
+            .clock
+            .duration_from_us(1)
+            .expect("one microsecond");
+        let base_completion_us = harness
+            .resources
+            .clock
+            .duration_from_us(20_000)
+            .expect("base completion boundary");
+        let equal_boundary_us = harness
+            .resources
+            .clock
+            .duration_from_us(21_000)
+            .expect("equal completion boundary");
+        let call_index = Arc::new(AtomicU64::new(0));
+        let emitter_index = Arc::clone(&call_index);
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
+            let completion_offset = match index {
+                0 => base_completion_us,
+                1 => base_completion_us
+                    .checked_add(one_us)
+                    .expect("base completion plus one microsecond"),
+                _ => equal_boundary_us,
+            };
+            let boundary = epoch
+                .checked_add_duration(completion_offset)
+                .expect("deterministic completion boundary");
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(boundary),
+                    completed_ticks: Some(boundary),
+                    timing_error: None,
+                },
+            }
+        });
+        harness
+    }
+
+    /// Deterministic coalesced Mixed boundary: pending A Up and authored B
+    /// Down must be transported by one physical packet.
+    pub fn new_coalesced_pending_release_with_unrelated_down() -> Self {
+        let mut harness = Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "coalesced-a-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 20_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "coalesced-a-up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 21_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "coalesced-b-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 30_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "coalesced-b-up".into(),
+                },
+            ],
+            1_000,
+        );
+        let epoch = harness.resources.playback.epoch;
+        let base_completion = harness
+            .resources
+            .clock
+            .duration_from_us(20_000)
+            .expect("base completion boundary");
+        let coalesced_boundary = harness
+            .resources
+            .clock
+            .duration_from_us(21_000)
+            .expect("coalesced completion boundary");
+        let call_index = Arc::new(AtomicU64::new(0));
+        let emitter_index = Arc::clone(&call_index);
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
+            let boundary = epoch
+                .checked_add_duration(if index == 0 {
+                    base_completion
+                } else {
+                    coalesced_boundary
+                })
+                .expect("deterministic completion boundary");
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(boundary),
+                    completed_ticks: Some(boundary),
+                    timing_error: None,
+                },
+            }
+        });
+        harness
     }
 
     /// Seed a Down observation while leaving a future Mixed packet for the
@@ -408,6 +606,12 @@ impl ProductionDispatchTestHarness {
     pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
         self.runtime.set_deadline_wake_qpc_for_test(Some(ticks));
     }
+
+    pub fn set_deadline_wake_for_plan_for_test(&mut self, plan: &NextDispatchPlan) {
+        let target = plan.physical_target_qpc().expect("physical plan target");
+        self.runtime
+            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
+    }
     /// Query whether coordinator has active generation for `scan_code`.
     pub fn has_active_generation(&self, scan_code: u16) -> bool {
         let slot = match scan_code {
@@ -598,8 +802,10 @@ impl ProductionDispatchTestHarness {
                 dispatch_qpc,
                 ..
             } => {
-                self.runtime
-                    .set_deadline_wake_qpc_for_test(Some(dispatch_qpc));
+                self.runtime.set_deadline_wait_evidence_for_test(
+                    Some(dispatch_qpc),
+                    plan.physical_target_qpc(),
+                );
                 wait_result
             }
             WaitBoundary::Due {
@@ -624,7 +830,7 @@ impl ProductionDispatchTestHarness {
         };
         self.last_wait_result = Some(wait_result);
         self.runtime
-            .set_deadline_wake_qpc_for_test(wait_result.wake_qpc);
+            .set_deadline_wait_evidence_for_test(wait_result.wake_qpc, plan.physical_target_qpc());
         let now_ticks = wait_result.wake_qpc.unwrap_or(
             self.resources
                 .clock

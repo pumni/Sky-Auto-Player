@@ -87,12 +87,9 @@ pub(crate) fn prepare_authored_batch_view(
         batch_kind,
         dispatch_path,
         batch_source_action_index,
-        down_source_action_index,
         batch_intent_count,
         conflict_mask,
         packet_masks,
-        up_intents,
-        down_intents,
     ) = {
         preparation_probe.record_packet_view();
         let packet_view = match coordinator
@@ -109,8 +106,6 @@ pub(crate) fn prepare_authored_batch_view(
         preparation_probe.record_conflict();
         let conflict_mask =
             coordinator.check_packet_down_conflicts(packet_view.up_mask(), packet_view.down_mask());
-        let up_intents = packet_view.up_intents.iter().copied().collect();
-        let down_intents = packet_view.down_intents.iter().copied().collect();
         let down_source_action_index = packet_view.header.down_source_action_index;
         let batch_source_action_index = down_source_action_index
             .or_else(|| {
@@ -143,15 +138,12 @@ pub(crate) fn prepare_authored_batch_view(
             },
             dispatch_path,
             batch_source_action_index,
-            down_source_action_index,
             up_count + down_count,
             conflict_mask,
             Some(sky_dispatch_win32::input::PhysicalPacket::new(
                 packet_view.up_mask(),
                 packet_view.down_mask(),
             )),
-            up_intents,
-            down_intents,
         )
     };
     preparation_probe.record_input_build();
@@ -178,10 +170,24 @@ pub(crate) fn prepare_authored_batch_view(
         .map_err(|error| {
             DispatchStep::Terminate(format!("authored frame timing failure: {error}"))
         })?;
+    let prepared = PreparedAuthoredFrame {
+        first_batch_index: prepared_batch.index,
+        packet_index: prepared_batch.packet_index,
+        packet_batch_count: prepared_batch.packet_batch_count,
+        authored_ticks,
+        immediate_up_mask: packet_masks.up_mask,
+        deferred_up_mask: 0,
+        down_mask: packet_masks.down_mask,
+        stale_up_count: 0,
+    };
+    let commit = coordinator
+        .prepare_authored_commit(prepared)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("authored commit preparation failure: {error}"))
+        })?;
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
-        down_source_action_index,
         batch_intent_count,
         batch_kind,
         batch_scheduled_ticks,
@@ -189,19 +195,8 @@ pub(crate) fn prepare_authored_batch_view(
         conflict_mask,
         dispatch_path,
         packet_masks,
-        up_intents,
-        down_intents,
         prepared_packet,
-        commit: PhysicalCommit::Authored(PreparedAuthoredFrame {
-            first_batch_index: prepared_batch.index,
-            packet_index: prepared_batch.packet_index,
-            packet_batch_count: prepared_batch.packet_batch_count,
-            authored_ticks,
-            immediate_up_mask: packet_masks.up_mask,
-            deferred_up_mask: 0,
-            down_mask: packet_masks.down_mask,
-            stale_up_count: 0,
-        }),
+        commit: PhysicalCommit::Authored(commit),
     }))
 }
 
@@ -246,16 +241,6 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
     preparation_probe.record_conflict();
     let conflict_mask =
         coordinator.check_packet_down_conflicts(selected_up_mask, selected_down_mask);
-    let up_intents = packet
-        .up_intents
-        .iter()
-        .copied()
-        .filter(|intent| {
-            intent.generation_id() != sky_dispatch_core::model::NO_GENERATION_ID
-                && selected_up_mask & (1u16 << intent.key_slot()) != 0
-        })
-        .collect();
-    let down_intents = packet.down_intents.iter().copied().collect();
     let down_source_action_index = packet.header.down_source_action_index;
     let batch_source_action_index = down_source_action_index
         .or_else(|| {
@@ -292,10 +277,14 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
         packet_batch_count: frame.packet_batch_count,
         packet_kind,
     };
+    let authored_commit = coordinator
+        .prepare_authored_commit(frame)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("authored commit preparation failure: {error}"))
+        })?;
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
-        down_source_action_index,
         batch_intent_count: up_count + down_count,
         batch_kind: if down_count != 0 {
             ActionKind::Down
@@ -307,14 +296,12 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
         conflict_mask,
         dispatch_path,
         packet_masks: selected_packet,
-        up_intents,
-        down_intents,
         prepared_packet,
         commit: if pending_release_mask == 0 {
-            PhysicalCommit::Authored(frame)
+            PhysicalCommit::Authored(authored_commit)
         } else {
             PhysicalCommit::Coalesced {
-                frame,
+                authored: authored_commit,
                 release_mask: pending_release_mask,
                 due_ticks: pending_due_ticks,
             }
@@ -355,7 +342,6 @@ pub(crate) fn prepare_pending_release_view(
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index: source_action_index,
-        down_source_action_index: None,
         batch_intent_count: count,
         batch_kind: ActionKind::Up,
         batch_scheduled_ticks: due_ticks,
@@ -363,8 +349,6 @@ pub(crate) fn prepare_pending_release_view(
         conflict_mask: 0,
         dispatch_path: DispatchPath::UpOnly { up_count: count },
         packet_masks: packet,
-        up_intents: smallvec::SmallVec::new(),
-        down_intents: smallvec::SmallVec::new(),
         prepared_packet,
         commit: PhysicalCommit::PendingRelease {
             release_mask,
@@ -380,10 +364,7 @@ pub(crate) struct DownSendTiming {
     pub(crate) final_admission_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
     pub(crate) admission_to_completion_ticks: DurationTicks,
-    pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks_value: i64,
-    pub(crate) authored_completion_error_ticks_value: i64,
-    pub(crate) observation_evidence: DispatchObservationEvidence,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
     pub(crate) strict_completion_late: bool,
@@ -457,45 +438,40 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let commit_result = match view.commit {
-        PhysicalCommit::Authored(prepared) => coordinator.commit_prepared_authored_frame_success(
-            prepared,
-            &view.up_intents,
-            &view.down_intents,
-            view.down_source_action_index,
-            final_admission_effective_ticks,
-            completed_effective_ticks,
-        ),
+    let commit_result = match &view.commit {
+        PhysicalCommit::Authored(commit) => coordinator
+            .commit_prepared_authored_frame_success_frozen(
+                commit,
+                final_admission_effective_ticks,
+                completed_effective_ticks,
+            ),
         PhysicalCommit::PendingRelease {
             release_mask,
             due_ticks,
         } => {
-            if final_admission_effective_ticks < due_ticks {
+            if final_admission_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "pending release started before its due boundary".to_string(),
                 ));
             }
             coordinator
-                .commit_pending_release_success(release_mask, final_admission_effective_ticks)
+                .commit_pending_release_success(*release_mask, final_admission_effective_ticks)
         }
         PhysicalCommit::Coalesced {
-            frame,
+            authored,
             release_mask,
             due_ticks,
         } => {
-            if final_admission_effective_ticks < due_ticks {
+            if final_admission_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "coalesced pending release started before its due boundary".to_string(),
                 ));
             }
             coordinator
-                .commit_pending_release_success(release_mask, final_admission_effective_ticks)
+                .commit_pending_release_success(*release_mask, final_admission_effective_ticks)
                 .and_then(|_| {
-                    coordinator.commit_prepared_authored_frame_success(
-                        frame,
-                        &view.up_intents,
-                        &view.down_intents,
-                        view.down_source_action_index,
+                    coordinator.commit_prepared_authored_frame_success_frozen(
+                        authored,
                         final_admission_effective_ticks,
                         completed_effective_ticks,
                     )
@@ -570,15 +546,6 @@ pub(crate) fn interpret_down_send_timing(
     // `resolve_send_boundaries`.
     let final_admission_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
     let sendinput_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
-    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
-        TimelineTicks::from_raw(final_admission_qpc.as_u64()),
-        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
-    )
-    .map_err(|error| {
-        DispatchStep::Terminate(format!(
-            "note-on dispatch-start timing conversion failure: {error}"
-        ))
-    })?;
     let completion_error_ticks_value =
         match signed_timeline_delta_ticks(completed_effective_ticks, view.batch_scheduled_ticks) {
             Ok(value) => value,
@@ -588,17 +555,6 @@ pub(crate) fn interpret_down_send_timing(
                 )));
             }
         };
-    let authored_completion_error_ticks_value = match signed_timeline_delta_ticks(
-        completed_effective_ticks,
-        view.authored_batch_scheduled_ticks,
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "note-on authored timing conversion failure: {error}"
-            )));
-        }
-    };
     let (requested_count, delivered_count) = physical_event_counts(
         view.packet_masks,
         view.dispatch_path,
@@ -646,10 +602,7 @@ pub(crate) fn interpret_down_send_timing(
         final_admission_effective_ticks,
         completed_effective_ticks,
         admission_to_completion_ticks,
-        dispatch_start_error_ticks,
         completion_error_ticks_value,
-        authored_completion_error_ticks_value,
-        observation_evidence,
         recovered_partial_up,
         recovered_retry_late,
         strict_completion_late,

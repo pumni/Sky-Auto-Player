@@ -59,9 +59,6 @@ pub struct DownTraceObservation {
     pub wake_ticks: TimelineTicks,
     pub final_admission_ticks: Option<TimelineTicks>,
     pub sendinput_completed_ticks: Option<TimelineTicks>,
-    pub dispatch_start_error_ticks: i64,
-    pub completion_error_ticks: i64,
-    pub authored_completion_error_ticks: i64,
     pub recovered_retry_late: bool,
     pub recovered_partial_up: bool,
     pub strict_completion_late: bool,
@@ -71,10 +68,6 @@ pub struct DownTraceObservation {
 pub struct DownObservation {
     pub path: DispatchPath,
     pub physical_target_qpc: QpcTicks,
-    pub timeline_rebase_count: u64,
-    pub timeline_rebase_total_ticks: DurationTicks,
-    pub timeline_rebase_max_ticks: DurationTicks,
-    pub timeline_rebase_last_reason: u8,
     pub final_admission_qpc: QpcTicks,
     pub sendinput_completed_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
@@ -183,12 +176,16 @@ pub struct UpObservation {
     pub recovery_pause_ticks: Option<DurationTicks>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_down_send_telemetry(
     observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
     core_post_send_us: u64,
     completion_residual_us: u64,
     post_send_metrics_available: bool,
+    dispatch_start_error_ticks: i64,
+    completion_error_ticks: i64,
+    authored_completion_error_ticks: i64,
 ) -> Result<(&'static str, bool), DispatchStep> {
     let trace = observation.trace;
     let down_outcome = if trace.recovered_retry_late {
@@ -238,9 +235,9 @@ pub(super) fn record_down_send_telemetry(
                 completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,
-                dispatch_start_error_ticks: trace.dispatch_start_error_ticks,
-                completion_error_ticks: trace.completion_error_ticks,
-                authored_completion_error_ticks: trace.authored_completion_error_ticks,
+                dispatch_start_error_ticks,
+                completion_error_ticks,
+                authored_completion_error_ticks,
             },
             TraceDelivery {
                 requested: observation.requested_count(),

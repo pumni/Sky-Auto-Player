@@ -8,7 +8,7 @@ use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, WorkerHealthState,
     WorkerMetricsLocal, WorkerRuntime, WorkerTimingState, observe_dispatch_health, record_lateness,
-    signed_delta, signed_ticks_to_us,
+    signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
 };
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
@@ -65,6 +65,7 @@ pub(crate) fn publisher_down_send_outcome(
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
     capture_dispatch_ready_qpc: bool,
     trace_kind: u8,
+    result_status: sky_dispatch_win32::input::SendTransactionStatus,
     result_confirmed_mask: u16,
     result_skipped_mask: u16,
     result_send_attempts: u8,
@@ -82,7 +83,6 @@ pub(crate) fn publisher_down_send_outcome(
         completed_effective_ticks,
         admission_to_completion_ticks,
         completion_error_ticks_value,
-        authored_completion_error_ticks_value,
         recovered_partial_up,
         recovered_retry_late,
         retry_late_abort,
@@ -107,10 +107,6 @@ pub(crate) fn publisher_down_send_outcome(
     let observation = DownObservation {
         path: view.dispatch_path,
         physical_target_qpc,
-        timeline_rebase_count: local_metrics.timeline_rebase_count,
-        timeline_rebase_total_ticks: local_metrics.timeline_rebase_total_ticks,
-        timeline_rebase_max_ticks: local_metrics.timeline_rebase_max_ticks,
-        timeline_rebase_last_reason: local_metrics.timeline_rebase_last_reason,
         final_admission_qpc,
         sendinput_completed_qpc,
         dispatch_ready_qpc,
@@ -123,7 +119,7 @@ pub(crate) fn publisher_down_send_outcome(
         trace: DownTraceObservation {
             event_index: view.batch_source_action_index,
             trace_kind,
-            result_status: timing_proof.observation_evidence.status,
+            result_status,
             send_attempts: result_send_attempts,
             retry_reason: result_retry_reason,
             chord_integrity_lost: result_chord_integrity_lost,
@@ -133,9 +129,6 @@ pub(crate) fn publisher_down_send_outcome(
             wake_ticks: effective_now_ticks,
             final_admission_ticks: Some(final_admission_effective_ticks),
             sendinput_completed_ticks: Some(completed_effective_ticks),
-            dispatch_start_error_ticks: timing_proof.dispatch_start_error_ticks,
-            completion_error_ticks: completion_error_ticks_value,
-            authored_completion_error_ticks: authored_completion_error_ticks_value,
             recovered_retry_late,
             recovered_partial_up,
             strict_completion_late,
@@ -381,6 +374,10 @@ impl ObserverRuntime {
                             terminal_error = Some(error);
                             break;
                         }
+                        Err(DispatchStep::TerminateStatic(error)) => {
+                            terminal_error = Some((*error).to_string());
+                            break;
+                        }
                         Err(DispatchStep::NoWork | DispatchStep::Continue) => {}
                         Err(DispatchStep::Dispatched) => {}
                     }
@@ -582,29 +579,43 @@ pub(crate) fn drain_down_send_outcome(
         }
     }
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    local_metrics.timeline_rebase_count = observation.timeline_rebase_count;
-    local_metrics.timeline_rebase_total_us = qpc_clock
-        .duration_to_us(observation.timeline_rebase_total_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "timeline rebase total conversion failure: {error:?}"
-            ))
-        })?;
-    local_metrics.timeline_rebase_max_us = qpc_clock
-        .duration_to_us(observation.timeline_rebase_max_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "timeline rebase maximum conversion failure: {error:?}"
-            ))
-        })?;
-    local_metrics.timeline_rebase_last_reason = observation.timeline_rebase_last_reason;
     record_down_recovery_metrics(observation, local_metrics);
+    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
+        TimelineTicks::from_raw(observation.final_admission_qpc.as_u64()),
+        TimelineTicks::from_raw(observation.physical_target_qpc.as_u64()),
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on observer dispatch-start conversion failure: {error}"
+        ))
+    })?;
+    let completion_error_ticks = signed_timeline_delta_ticks(
+        observation.completed_effective_ticks,
+        observation.trace.effective_deadline_ticks,
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on observer completion conversion failure: {error}"
+        ))
+    })?;
+    let authored_completion_error_ticks = signed_timeline_delta_ticks(
+        observation.completed_effective_ticks,
+        observation.trace.authored_ticks,
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on observer authored-completion conversion failure: {error}"
+        ))
+    })?;
     let (_, force_publish) = record_down_send_telemetry(
         observation,
         telemetry,
         core_post_send_us,
         completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
+        dispatch_start_error_ticks,
+        completion_error_ticks,
+        authored_completion_error_ticks,
     )?;
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);

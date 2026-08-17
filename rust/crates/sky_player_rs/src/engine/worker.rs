@@ -160,9 +160,11 @@ pub(crate) struct WorkerRuntime {
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
-    /// Last successfully transported physical boundary. A later overdue
-    /// boundary is a missed schedule, not a catch-up burst opportunity.
-    pub(crate) last_physical_target_qpc: Option<QpcTicks>,
+    /// A successful physical send arms the no-catch-up guard. It is cleared
+    /// only by a genuine future-target deadline wait for that target.
+    pub(crate) awaiting_future_physical_boundary: bool,
+    future_physical_wait_target_qpc: Option<QpcTicks>,
+    last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
@@ -186,6 +188,16 @@ impl WorkerRuntime {
 
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
+        self.last_dispatch_deadline_target_qpc = ticks;
+    }
+
+    pub(crate) fn set_deadline_wait_evidence_for_test(
+        &mut self,
+        wake_qpc: Option<QpcTicks>,
+        target_qpc: Option<QpcTicks>,
+    ) {
+        self.last_dispatch_deadline_wake_qpc = wake_qpc;
+        self.last_dispatch_deadline_target_qpc = target_qpc;
     }
 }
 

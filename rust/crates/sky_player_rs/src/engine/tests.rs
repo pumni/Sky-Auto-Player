@@ -2752,6 +2752,59 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
 }
 
 #[test]
+fn pending_release_equal_metadata_boundary_sends_up_and_commits_metadata() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::PhysicalPacket;
+
+    let mut harness = ProductionDispatchTestHarness::new_pending_release_with_metadata_boundary();
+
+    let first = harness.plan_current_dispatch();
+    let first_result = harness.dispatch_due_from_plan_for_test(&first);
+    assert!(
+        matches!(first_result, super::worker::DispatchStep::Dispatched),
+        "first setup dispatch failed: {first_result:?}"
+    );
+    let second = harness.plan_current_dispatch();
+    let result = harness.wait_and_dispatch_current_plan(&second);
+    assert!(
+        matches!(result, Ok(super::worker::DispatchStep::Dispatched)),
+        "initial setup dispatch failed: {result:?}"
+    );
+
+    // A's authored Up is deferred and becomes a pending release due at the
+    // same boundary as B's authored metadata-only deferred Up.
+    let deferred_a = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&deferred_a),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+
+    let equal_boundary = harness.plan_current_dispatch();
+    let physical = equal_boundary
+        .physical()
+        .expect("equal boundary must remain physical");
+    assert_eq!(
+        physical.authored_view.packet_masks,
+        PhysicalPacket::new(0b001, 0),
+        "pending A Up must not be hidden behind metadata-only B Up"
+    );
+    let packets = harness.configure_packet_capture();
+    let equal_result = harness.wait_and_dispatch_current_plan(&equal_boundary);
+    assert!(
+        matches!(equal_result, Ok(super::worker::DispatchStep::Dispatched)),
+        "equal-boundary dispatch failed: {equal_result:?}"
+    );
+
+    assert_eq!(
+        *packets.lock().expect("packet capture lock"),
+        vec![PhysicalPacket::new(0b001, 0)]
+    );
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+    assert_eq!(harness.resources.coordinator.cursor, 4);
+}
+
+#[test]
 fn overdue_physical_boundary_refuses_catch_up_burst() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -2768,11 +2821,50 @@ fn overdue_physical_boundary_refuses_catch_up_burst() {
     harness.advance_playback_time_us(100_000);
     let overdue_plan = harness.plan_current_dispatch();
     let step = harness.dispatch_due_from_plan_for_test(&overdue_plan);
+    assert!(match step {
+        super::worker::DispatchStep::TerminateStatic(error) => {
+            error.contains("refusing overdue catch-up burst")
+        }
+        super::worker::DispatchStep::Terminate(error) => {
+            error.contains("refusing overdue catch-up burst")
+        }
+        _ => false,
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn future_classification_then_waiter_entry_stall_sends_zero_second_boundary() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let calls = harness.configure_send_counter();
+
+    let first = harness.plan_current_dispatch();
     assert!(matches!(
-        step,
-        super::worker::DispatchStep::Terminate(error)
-            if error.contains("refusing overdue catch-up burst")
+        harness.dispatch_due_from_plan_for_test(&first),
+        super::worker::DispatchStep::Dispatched
     ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // B is future at first classification.  The worker must leave the guard
+    // armed even though dispatch_due returns NoWork before entering wait.
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        super::worker::DispatchStep::NoWork
+    ));
+
+    // Replan after a deterministic stall: the waiter would enter with B
+    // already due and therefore returns Due { wait_result: None } semantics.
+    harness.advance_playback_time_us(100_000);
+    let overdue = harness.plan_current_dispatch();
+    let step = harness.dispatch_due_from_plan_for_test(&overdue);
+    assert!(match step {
+        super::worker::DispatchStep::TerminateStatic(error) => error.contains("catch-up"),
+        super::worker::DispatchStep::Terminate(error) => error.contains("catch-up"),
+        _ => false,
+    });
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -3550,28 +3642,28 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Down,
-            scheduled_us: 100,
+            scheduled_us: 10_000,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "retrigger-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 100,
+            scheduled_us: 10_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: 20_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "release-one".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 4,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: 20_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "release-two".to_string().into(),
         },
@@ -3617,7 +3709,7 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
 }
 
 #[test]
-fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
+fn native_session_rejects_deterministically_infeasible_schedule_before_worker_start() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -3653,7 +3745,60 @@ fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
         },
     );
     options.timing.min_hold_us = 300;
-    let session = NativeDispatchSession::new(options).expect("test session admission");
+    let result = NativeDispatchSession::new(options);
+    assert!(matches!(
+        result,
+        Err(error) if error.contains("native schedule admission failed")
+    ));
+}
+
+#[test]
+fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "seed-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "same-key-release".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "same-key-chord".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 2_000,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "cleanup".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid authored-feasible dynamic schedule");
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            // The first Down completes late enough that completion + the
+            // native floor makes the same-key retrigger at 1ms impossible.
+            latency_base_us: 900,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.timing.min_hold_us = 300;
+    let session = NativeDispatchSession::new(options).expect("authored-feasible admission");
 
     session.start().expect("worker start");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));

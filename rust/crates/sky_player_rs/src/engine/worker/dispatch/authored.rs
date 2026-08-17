@@ -180,7 +180,7 @@ fn commit_down_send_outcome(
 enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
-        started_qpc: QpcTicks,
+        final_admission_qpc: QpcTicks,
     },
     BlockedUnfocused,
     FocusLost,
@@ -346,18 +346,19 @@ fn admit_authored_down(
                 }
             }
         }
-        let started_qpc = qpc_clock.now().map_err(|error| {
+        let final_admission_qpc = qpc_clock.now().map_err(|error| {
             DispatchStep::Terminate(format!("QPC send-start failure: {error:?}"))
         })?;
         let lease_admission =
-            final_control_admission_at(started_qpc, lease_timeout_ticks, control_signals).map_err(
-                |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
-            )?;
+            final_control_admission_at(final_admission_qpc, lease_timeout_ticks, control_signals)
+                .map_err(|error| {
+                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+            })?;
         if !matches!(lease_admission, FinalControlAdmission::Allowed) {
             runtime.verified_target = None;
             return Ok(AdmissionOutcome::ControlRejected);
         }
-        return Ok(finalize_allowed_admission(trace_kind, started_qpc));
+        return Ok(finalize_allowed_admission(trace_kind, final_admission_qpc));
     }
     Ok(AdmissionOutcome::ConflictReject)
 }
@@ -401,10 +402,10 @@ fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     }
 }
 
-fn finalize_allowed_admission(trace_kind: u8, started_qpc: QpcTicks) -> AdmissionOutcome {
+fn finalize_allowed_admission(trace_kind: u8, final_admission_qpc: QpcTicks) -> AdmissionOutcome {
     AdmissionOutcome::Allowed {
         trace_kind,
-        started_qpc,
+        final_admission_qpc,
     }
 }
 
@@ -427,7 +428,7 @@ fn record_down_send_outcome(
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         trace_kind,
-        started_qpc,
+        final_admission_qpc,
     } = admission
     else {
         return DispatchStep::Continue;
@@ -439,7 +440,8 @@ fn record_down_send_outcome(
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result = backend.send_prepared_physical_packet_with_start(prepared_packet, *started_qpc);
+    let result =
+        backend.send_prepared_physical_packet_with_start(prepared_packet, *final_admission_qpc);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
@@ -558,6 +560,7 @@ fn finalize_down_send_outcome(
         physical_target_qpc,
         capture_dispatch_ready_qpc,
         trace_kind,
+        result_status,
         result_confirmed_mask,
         result_skipped_mask,
         result_send_attempts,
@@ -627,7 +630,7 @@ pub(super) fn resolve_slo_terminal_step(
 mod tests {
     use super::super::PhysicalCommit;
     use super::*;
-    use sky_dispatch_core::coordinator::PreparedBatch;
+    use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
     use sky_dispatch_core::model::PhysicalPacketKind;
     use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
     use std::num::NonZeroU64;
@@ -643,7 +646,6 @@ mod tests {
                 packet_index: 0,
             },
             batch_source_action_index: 0,
-            down_source_action_index: Some(0),
             batch_intent_count: 1,
             batch_kind: ActionKind::Down,
             batch_scheduled_ticks: TimelineTicks::ZERO,
@@ -651,12 +653,10 @@ mod tests {
             conflict_mask: 0,
             dispatch_path: DispatchPath::DownOnly { down_count: 1 },
             packet_masks: PhysicalPacket::new(0, 0b001),
-            up_intents: smallvec::SmallVec::new(),
-            down_intents: smallvec::SmallVec::new(),
             prepared_packet: PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001))
                 .unwrap(),
-            commit: PhysicalCommit::Authored(
-                sky_dispatch_core::coordinator::PreparedAuthoredFrame {
+            commit: PhysicalCommit::Authored(PreparedAuthoredCommit {
+                frame: sky_dispatch_core::coordinator::PreparedAuthoredFrame {
                     first_batch_index: 0,
                     packet_index: 0,
                     packet_batch_count: 1,
@@ -666,7 +666,11 @@ mod tests {
                     down_mask: 0b001,
                     stale_up_count: 0,
                 },
-            ),
+                immediate_up_intents: smallvec::SmallVec::new(),
+                deferred_up_intents: smallvec::SmallVec::new(),
+                down_intents: smallvec::SmallVec::new(),
+                down_source_action_index: Some(0),
+            }),
         };
         let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
         let mut runtime = WorkerRuntime::default();

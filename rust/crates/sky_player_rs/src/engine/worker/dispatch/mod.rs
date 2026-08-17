@@ -24,6 +24,7 @@ pub enum DispatchStep {
     Dispatched,
     Continue,
     Terminate(String),
+    TerminateStatic(&'static str),
 }
 
 pub(crate) struct AuthoredPacketContext<'a> {
@@ -48,7 +49,6 @@ pub(crate) struct AuthoredPacketContext<'a> {
 pub(crate) struct AuthoredBatchView {
     pub(super) prepared_batch: PreparedBatch,
     pub(super) batch_source_action_index: u32,
-    pub(super) down_source_action_index: Option<u32>,
     pub(super) batch_intent_count: usize,
     pub(super) batch_kind: ActionKind,
     pub(super) batch_scheduled_ticks: TimelineTicks,
@@ -56,12 +56,6 @@ pub(crate) struct AuthoredBatchView {
     pub(super) conflict_mask: u16,
     pub(super) dispatch_path: DispatchPath,
     pub(super) packet_masks: PhysicalPacket,
-    pub(super) up_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(super) down_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
     pub(super) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(super) commit: PhysicalCommit,
 }
@@ -71,7 +65,6 @@ pub(crate) struct AuthoredBatchView {
 pub(crate) struct AuthoredBatchView {
     pub(crate) prepared_batch: PreparedBatch,
     pub(crate) batch_source_action_index: u32,
-    pub(crate) down_source_action_index: Option<u32>,
     pub(crate) batch_intent_count: usize,
     pub(crate) batch_kind: ActionKind,
     pub(crate) batch_scheduled_ticks: TimelineTicks,
@@ -79,12 +72,6 @@ pub(crate) struct AuthoredBatchView {
     pub(crate) conflict_mask: u16,
     pub(crate) dispatch_path: DispatchPath,
     pub(crate) packet_masks: PhysicalPacket,
-    pub(crate) up_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(crate) down_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) commit: PhysicalCommit,
 }
@@ -104,18 +91,18 @@ pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_sta
 use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
-use sky_dispatch_core::coordinator::{PreparedAuthoredFrame, PreparedBatch};
+use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_win32::input::PhysicalPacket;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum PhysicalCommit {
-    Authored(PreparedAuthoredFrame),
+    Authored(PreparedAuthoredCommit),
     PendingRelease {
         release_mask: u16,
         due_ticks: TimelineTicks,
     },
     Coalesced {
-        frame: PreparedAuthoredFrame,
+        authored: PreparedAuthoredCommit,
         release_mask: u16,
         due_ticks: TimelineTicks,
     },

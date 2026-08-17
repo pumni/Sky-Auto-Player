@@ -4,7 +4,6 @@ use sky_dispatch_win32::mmcss::PriorityMode;
 
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 700;
 pub(crate) const DEFAULT_SPIN_FLOOR_US: u64 = 700;
-pub(crate) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize = 32;
 
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;

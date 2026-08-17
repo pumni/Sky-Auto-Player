@@ -58,8 +58,6 @@ pub mod dispatch_primitives {
     /// Production timing policy constants shared by diagnostic benchmarks.
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
     pub const PRODUCTION_SPIN_FLOOR_US: u64 = super::config::DEFAULT_SPIN_FLOOR_US;
-    pub const PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
-        super::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
 
     /// Derive the production adaptive threshold without duplicating its
     /// policy or magic numbers in a benchmark.

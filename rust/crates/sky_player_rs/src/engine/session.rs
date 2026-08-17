@@ -29,6 +29,15 @@ pub struct NativeDispatchSession {
 
 impl NativeDispatchSession {
     pub(crate) fn new(options: NativeSessionOptions) -> Result<Self, String> {
+        // This is the authoritative native admission boundary.  Python calls
+        // the same core validator before crossing into Rust, but direct native
+        // callers must not be able to construct a session that can only fail
+        // after the worker has started.
+        sky_dispatch_core::validation::validate_min_hold_feasibility(
+            &options.schedule,
+            options.timing.min_hold_us,
+        )
+        .map_err(|error| format!("native schedule admission failed: {error}"))?;
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }

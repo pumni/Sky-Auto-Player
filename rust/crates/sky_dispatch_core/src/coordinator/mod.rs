@@ -239,6 +239,30 @@ pub struct PreparedAuthoredFrame {
     pub stale_up_count: u8,
 }
 
+/// Frozen authored commit evidence.  The worker builds this while preparing
+/// the immutable dispatch plan; the post-SendInput path applies it directly to
+/// the bounded generation ledger without rediscovering schedule ranges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedDeferredReleaseIntent {
+    pub intent: CompactIntent,
+    pub source_action_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedDownIntent {
+    pub intent: CompactIntent,
+    pub scan_code: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAuthoredCommit {
+    pub frame: PreparedAuthoredFrame,
+    pub immediate_up_intents: SmallVec<[CompactIntent; MAX_KEYS]>,
+    pub deferred_up_intents: SmallVec<[PreparedDeferredReleaseIntent; MAX_KEYS]>,
+    pub down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]>,
+    pub down_source_action_index: Option<u32>,
+}
+
 /// One completion-anchored release that is waiting for its own physical due
 /// boundary.  The table is bounded by the fifteen physical key slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,7 @@
 #![cfg(feature = "test-support")]
 
 use serde_json::json;
-use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitResult, WakeErrorStats};
@@ -22,6 +22,7 @@ use std::time::Instant;
 
 const DEFAULT_ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
+const WAKE_PROBE_SAMPLES: usize = 32;
 
 fn due_us() -> u64 {
     std::env::var("RT_HANDOFF_BENCH_DUE_US")
@@ -206,14 +207,27 @@ fn signed_qpc_us(
     if negative { -value } else { value }
 }
 
+fn signed_timeline_us(clock: QpcClock, end: TimelineTicks, start: TimelineTicks) -> i64 {
+    let (negative, ticks) = if end >= start {
+        (
+            false,
+            end.checked_duration_since(start)
+                .expect("timeline ordering"),
+        )
+    } else {
+        (
+            true,
+            start
+                .checked_duration_since(end)
+                .expect("timeline ordering"),
+        )
+    };
+    let value = clock.duration_to_us(ticks).expect("timeline conversion") as i64;
+    if negative { -value } else { value }
+}
+
 fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait: WaitResult) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
-    let signed_ticks_to_us = |value: i64| {
-        qpc_clock
-            .duration_to_us(DurationTicks::from_raw(value.unsigned_abs()))
-            .expect("timing conversion") as i64
-            * value.signum()
-    };
     match observation {
         DispatchObservation::Down(value) => {
             let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
@@ -244,17 +258,21 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             if value.final_admission_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
-            samples
-                .dispatch_start_error_us
-                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.dispatch_start_error_us.push(signed_qpc_us(
+                qpc_clock,
+                value.final_admission_qpc,
+                value.physical_target_qpc,
+            ));
             samples.admission_to_completion_us.push(
                 qpc_clock
                     .duration_to_us(value.admission_to_completion_ticks)
                     .expect("duration"),
             );
-            samples
-                .completion_error_us
-                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
+            samples.completion_error_us.push(signed_timeline_us(
+                qpc_clock,
+                value.completed_effective_ticks,
+                value.trace.effective_deadline_ticks,
+            ));
         }
         DispatchObservation::Up(value) => {
             let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
@@ -285,17 +303,21 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             if value.final_admission_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
-            samples
-                .dispatch_start_error_us
-                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.dispatch_start_error_us.push(signed_qpc_us(
+                qpc_clock,
+                value.final_admission_qpc,
+                value.physical_target_qpc,
+            ));
             samples.admission_to_completion_us.push(
                 qpc_clock
                     .duration_to_us(value.admission_to_completion_ticks)
                     .expect("duration"),
             );
-            samples
-                .completion_error_us
-                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
+            samples.completion_error_us.push(signed_timeline_us(
+                qpc_clock,
+                value.completed_effective_ticks,
+                value.trace.effective_deadline_ticks,
+            ));
         }
         DispatchObservation::Wait(wait) => {
             panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")
@@ -488,11 +510,7 @@ fn build_wait_mode(
     let waiter = HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
-        .probe_wake_error_stats(
-            qpc_clock,
-            &interrupt,
-            sky_player_rs::engine::dispatch_primitives::PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES,
-        )
+        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
         sky_player_rs::engine::dispatch_primitives::production_spin_threshold_us(
@@ -518,11 +536,7 @@ fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode
     let waiter = HybridWaiter::with_options(true, true);
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
-        .probe_wake_error_stats(
-            qpc_clock,
-            &interrupt,
-            sky_player_rs::engine::dispatch_primitives::PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES,
-        )
+        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     WaitMode {
         name,

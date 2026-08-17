@@ -131,23 +131,23 @@ pub(crate) fn plan_structure_is_valid(plan: &NextDispatchPlan) -> bool {
             };
             proof_valid
                 && plan.authored_view.prepared_packet.packet() == plan.authored_view.packet_masks
-                && match plan.authored_view.commit {
-                    PhysicalCommit::Authored(frame) => {
-                        frame.immediate_up_mask == plan.authored_view.packet_masks.up_mask
-                            && frame.down_mask == plan.authored_view.packet_masks.down_mask
+                && match &plan.authored_view.commit {
+                    PhysicalCommit::Authored(commit) => {
+                        commit.frame.immediate_up_mask == plan.authored_view.packet_masks.up_mask
+                            && commit.frame.down_mask == plan.authored_view.packet_masks.down_mask
                     }
                     PhysicalCommit::PendingRelease { release_mask, .. } => {
                         plan.authored_view.packet_masks
-                            == sky_dispatch_win32::input::PhysicalPacket::new(release_mask, 0)
+                            == sky_dispatch_win32::input::PhysicalPacket::new(*release_mask, 0)
                     }
                     PhysicalCommit::Coalesced {
-                        frame,
+                        authored,
                         release_mask,
                         ..
                     } => {
-                        frame.immediate_up_mask | release_mask
+                        authored.frame.immediate_up_mask | *release_mask
                             == plan.authored_view.packet_masks.up_mask
-                            && frame.down_mask == plan.authored_view.packet_masks.down_mask
+                            && authored.frame.down_mask == plan.authored_view.packet_masks.down_mask
                     }
                 }
         }
@@ -239,8 +239,14 @@ pub(crate) fn plan_next_dispatch_projected(
         return Ok(NextDispatchPlan::NoWork);
     };
 
+    let coalesced_pending_mask = match pending_target {
+        Some(target) if target == frame.authored_ticks => {
+            coordinator.pending_release_mask_due_at(target)
+        }
+        _ => 0,
+    };
     let authored_is_physical = frame.immediate_up_mask != 0 || frame.down_mask != 0;
-    if !authored_is_physical {
+    if !authored_is_physical && coalesced_pending_mask == 0 {
         let physical_target_qpc = epoch_qpc
             .checked_add_duration(DurationTicks::from_raw(frame.authored_ticks.as_u64()))
             .map_err(|error| {
@@ -253,12 +259,6 @@ pub(crate) fn plan_next_dispatch_projected(
         }));
     }
 
-    let coalesced_pending_mask = match pending_target {
-        Some(target) if target == frame.authored_ticks => {
-            coordinator.pending_release_mask_due_at(target)
-        }
-        _ => 0,
-    };
     let authored_view = if coalesced_pending_mask == 0 {
         planning_view(prepare_authored_frame_view(
             coordinator,
@@ -282,6 +282,9 @@ fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningE
         Ok(Some(view)) => Ok(view),
         Ok(None) => Err(PlanningError::Prepared("physical view was empty".into())),
         Err(DispatchStep::Terminate(error)) => Err(PlanningError::Prepared(error)),
+        Err(DispatchStep::TerminateStatic(error)) => {
+            Err(PlanningError::Prepared(error.to_string()))
+        }
         Err(step) => Err(PlanningError::Prepared(format!(
             "unexpected prepared view outcome: {step:?}"
         ))),
