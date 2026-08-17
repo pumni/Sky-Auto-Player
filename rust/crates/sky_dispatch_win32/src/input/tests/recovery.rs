@@ -52,6 +52,7 @@ fn test_send_transaction_status_exhaustive_match() {
         SendTransactionStatus::ZeroProgress,
         SendTransactionStatus::PartialProgress,
         SendTransactionStatus::IntegrityLost,
+        SendTransactionStatus::DeadlineMissedBeforeSend,
         SendTransactionStatus::ClockFailureBeforeSend,
         SendTransactionStatus::ClockFailureAfterSend,
     ];
@@ -61,6 +62,7 @@ fn test_send_transaction_status_exhaustive_match() {
             SendTransactionStatus::ZeroProgress => {}
             SendTransactionStatus::PartialProgress => {}
             SendTransactionStatus::IntegrityLost => {}
+            SendTransactionStatus::DeadlineMissedBeforeSend => {}
             SendTransactionStatus::ClockFailureBeforeSend => {}
             SendTransactionStatus::ClockFailureAfterSend => {}
         }

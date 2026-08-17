@@ -68,12 +68,15 @@ def _build_wheel(
     *,
     env_file: Path | None,
     expected_sha: str,
+    test_support: bool = False,
     runner: RunCommand | None = None,
 ) -> Path:
     command = ["uv", "run"]
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
-    command.extend(["python", "scripts/build_rust_wheel.py", "--test-support"])
+    command.extend(["python", "scripts/build_rust_wheel.py"])
+    if test_support:
+        command.append("--test-support")
     build_env = os.environ.copy()
     build_env["GITHUB_SHA"] = expected_sha
     run = _run if runner is None else runner
@@ -244,6 +247,7 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "native_profile": (
             "strict_timing_diagnostic" if real_backend else "mock_test"
         ),
+        "native_build_flavor": "production" if real_backend else "test_support",
         "require_focus": real_backend,
         "materialized_min_hold_us": materialized_hold_us,
         "budget_seconds": args.budget_seconds,
@@ -267,6 +271,9 @@ def _ab_provenance(
         "command_line": list(sys.argv),
         "benchmark_matrix": _benchmark_matrix(args),
         "backend": args.backend,
+        "native_build_flavor": (
+            "production" if args.backend == "sendinput" else "test_support"
+        ),
         "real_input_qualification": args.backend == "sendinput" and args.allow_real_input,
     }
 
@@ -390,11 +397,15 @@ def main() -> int:
                 worktree,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=baseline_sha,
+                test_support=args.backend != "sendinput",
                 runner=role_runner("baseline"),
             )
             provenance["roles"]["baseline"] = {
                 "native_build_commit": baseline_sha,
                 "wheel": baseline_wheel.name,
+                "native_build_flavor": (
+                    "production" if args.backend == "sendinput" else "test_support"
+                ),
             }
 
             stage = "baseline_benchmark"
@@ -426,11 +437,15 @@ def main() -> int:
                 ROOT,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=candidate_sha,
+                test_support=args.backend != "sendinput",
                 runner=role_runner("candidate"),
             )
             provenance["roles"]["candidate"] = {
                 "native_build_commit": candidate_sha,
                 "wheel": candidate_wheel.name,
+                "native_build_flavor": (
+                    "production" if args.backend == "sendinput" else "test_support"
+                ),
             }
 
             stage = "candidate_benchmark"

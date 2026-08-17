@@ -624,16 +624,15 @@ fn production_coalesced_pending_up_and_authored_down_no_alloc() {
             down_count: 1,
         })
     );
-    harness.set_deadline_wake_for_plan_for_test(&coalesced);
     enable_counting();
-    let step = harness.wait_and_dispatch_current_plan(&coalesced);
+    // The allocation assertion is about the frozen-plan dispatch segment;
+    // use the test-controlled exact boundary so host timer overshoot cannot
+    // turn this structural probe into a deadline failure.
+    let step = harness.dispatch_at_plan_target_for_test(&coalesced);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0, "coalesced Mixed path allocated {allocs} time(s)");
-    assert!(
-        matches!(step, Ok(DispatchStep::Dispatched)),
-        "step={step:?}"
-    );
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }
 
 #[test]

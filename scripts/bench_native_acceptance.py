@@ -44,7 +44,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 6
+BENCHMARK_SCHEMA_VERSION = 7
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -64,6 +64,17 @@ SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
 BENCHMARK_HOLD_GUARD_US = 2_500
+MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
+
+
+def _native_build_flavor() -> str:
+    import sky_player_rs
+
+    return (
+        "test_support"
+        if callable(getattr(sky_player_rs, "TestDispatchSession", None))
+        else "production"
+    )
 
 
 def _normalize_historical_native_trace(
@@ -218,6 +229,9 @@ def _benchmark_config(
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
         "native_profile": native_profile,
+        "native_build_flavor": (
+            "production" if args.backend == "sendinput" else "test_support"
+        ),
         "require_focus": args.backend == "sendinput",
         "materialized_min_hold_us": _materialized_hold_us(
             game_fps=args.game_fps,
@@ -777,6 +791,11 @@ def _new_session(
         )
     if backend != "sendinput":
         raise ValueError(f"unsupported native benchmark backend: {backend}")
+    if callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        raise RuntimeError(
+            "SendInput qualification requires a production native wheel; "
+            "test-support is not a valid physical timing path"
+        )
     target_hwnd = _real_input_target_hwnd()
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
@@ -1315,6 +1334,17 @@ def _report_sha(report: dict[str, Any]) -> str:
     raise SystemExit("benchmark report is missing an exact candidate SHA")
 
 
+def _require_native_build_flavor(backend: str) -> str:
+    flavor = _native_build_flavor()
+    required = "production" if backend == "sendinput" else "test_support"
+    if flavor != required:
+        raise SystemExit(
+            f"{backend} benchmark requires the {required} native wheel; "
+            f"loaded flavor is {flavor}"
+        )
+    return flavor
+
+
 def _timeline_semantics_version(report: dict[str, Any]) -> int:
     sha = _report_sha(report)
     value = report.get("timeline_semantics_version")
@@ -1426,6 +1456,25 @@ def _assert_absolute_pre_call_slo(report: dict[str, Any]) -> None:
         )
 
 
+def _qualification_boundary_gate(*, backend: str, measured_boundaries: int) -> bool:
+    """Return whether a report has enough physical samples for qualification."""
+
+    return backend != "sendinput" or measured_boundaries >= MIN_QUALIFICATION_PHYSICAL_BOUNDARIES
+
+
+def _assert_minimum_qualification_boundaries(
+    *, backend: str, measured_boundaries: int
+) -> None:
+    if not _qualification_boundary_gate(
+        backend=backend, measured_boundaries=measured_boundaries
+    ):
+        raise SystemExit(
+            "SendInput qualification requires at least "
+            f"{MIN_QUALIFICATION_PHYSICAL_BOUNDARIES} physical boundaries; "
+            f"measured={measured_boundaries}"
+        )
+
+
 def _comparison_metadata(
     candidate_sha: str, baseline_path: Path | None
 ) -> dict[str, Any]:
@@ -1474,7 +1523,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 6"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 7"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -1508,6 +1557,7 @@ def _assert_baseline_compatible(
         "gap_profile",
         "warmup_cycles",
         "native_profile",
+        "native_build_flavor",
         "require_focus",
         "materialized_min_hold_us",
     )
@@ -1764,6 +1814,7 @@ def main() -> int:
         mock_base_latency_us=mock_base_latency_us,
         mock_per_key_latency_us=mock_per_key_latency_us,
     )
+    benchmark_config["native_build_flavor"] = _require_native_build_flavor(args.backend)
     if args.backend == "sendinput" and command_samples:
         raise SystemExit(
             "SendInput qualification uses a production wheel; use "
@@ -1928,6 +1979,7 @@ def main() -> int:
             "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
             "label": args.label,
             "backend": args.backend,
+            "native_build_flavor": benchmark_config["native_build_flavor"],
             "actions_per_polyphony": args.actions * 2,
             "polyphony": polyphonies,
             "dispatch_repeats": dispatch_repeats,
@@ -1974,6 +2026,7 @@ def main() -> int:
         for suite in successful_suites
         for run in suite["dispatch"].values()
     ]
+    physical_boundaries = sum(run["measurement_records"] for run in dispatch_runs)
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
         actions = _actions(
@@ -1998,6 +2051,7 @@ def main() -> int:
             "warmup_cycles": args.warmup_cycles,
             "warmup_records": args.warmup_cycles * 2,
             "measurement_records": sum(run["measurement_records"] for run in runs),
+            "physical_boundaries": sum(run["measurement_records"] for run in runs),
             "wake_error_us": _aggregate_metric(runs, "wake_error_us"),
             "pre_send_software_latency_us": _aggregate_metric(
                 runs, "pre_send_software_latency_us"
@@ -2085,6 +2139,7 @@ def main() -> int:
         "label": args.label,
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "backend": args.backend,
+        "native_build_flavor": benchmark_config["native_build_flavor"],
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
         "dispatch_repeats": dispatch_repeats,
@@ -2102,12 +2157,22 @@ def main() -> int:
         "requested_command_samples": command_samples,
         "successful_command_samples": len(command_runs),
         "failed_command_samples": 0,
-        "statistics_eligible": True,
+        "statistics_eligible": _qualification_boundary_gate(
+            backend=args.backend, measured_boundaries=physical_boundaries
+        ),
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
         "warmup_records": args.warmup_cycles * 2 * len(polyphonies) * dispatch_repeats,
-        "measurement_records": sum(run["measurement_records"] for run in dispatch_runs),
+        "measurement_records": physical_boundaries,
+        "physical_boundaries": physical_boundaries,
+        "qualification_gate": {
+            "minimum_physical_boundaries": MIN_QUALIFICATION_PHYSICAL_BOUNDARIES,
+            "measured_physical_boundaries": physical_boundaries,
+            "passed": _qualification_boundary_gate(
+                backend=args.backend, measured_boundaries=physical_boundaries
+            ),
+        },
         "wake_error_us": _aggregate_metric(dispatch_runs, "wake_error_us"),
         "pre_send_software_latency_us": _aggregate_metric(
             dispatch_runs, "pre_send_software_latency_us"
@@ -2236,6 +2301,12 @@ def main() -> int:
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
+    if not report["statistics_eligible"]:
+        encoded = json.dumps(report, indent=2)
+        print(encoded)
+        if args.output is not None:
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+        return 1
     _assert_report_correctness(report)
     _assert_absolute_wake_slo(report)
     _assert_absolute_pre_call_slo(report)

@@ -145,9 +145,16 @@ pub(crate) fn spin_and_send_prepared(
                 return Err(SpinSendError::DownHardLateAbort);
             }
             #[cfg(any(test, feature = "test-support"))]
-            return Ok(backend.send_prepared_physical_packet_with_start(prepared_packet, now_ticks));
+            return Ok(backend.send_prepared_physical_packet_with_start_and_cutoff(
+                prepared_packet,
+                now_ticks,
+                latest_allowed_down_qpc,
+            ));
             #[cfg(not(any(test, feature = "test-support")))]
-            return Ok(backend.send_prepared_physical_packet(prepared_packet));
+            return Ok(backend.send_prepared_physical_packet_with_cutoff(
+                prepared_packet,
+                latest_allowed_down_qpc,
+            ));
         }
         std::hint::spin_loop();
     }

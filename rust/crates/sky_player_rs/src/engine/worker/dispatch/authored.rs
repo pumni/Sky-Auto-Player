@@ -318,7 +318,8 @@ fn admit_authored_down(
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::TargetChanged);
     }
-    if config.timing.strict_timing
+    if has_down_events
+        && config.timing.strict_timing
         && effective_now_ticks
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
@@ -516,18 +517,6 @@ fn finalize_authored_down_admission(
         runtime.verified_target = None;
         return Err(DispatchStep::TerminateStatic(
             "down_deadline_missed_before_send",
-        ));
-    }
-    if !view_has_down && deadline_missed {
-        if let Err(error) =
-            suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
-        {
-            return Err(DispatchStep::Terminate(format!(
-                "late up-only safety release failed: {error}"
-            )));
-        }
-        return Err(DispatchStep::TerminateStatic(
-            "up_deadline_missed_before_send",
         ));
     }
     Ok(AdmissionOutcome::Allowed {

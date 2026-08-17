@@ -55,6 +55,26 @@ def test_real_backend_requires_explicit_physical_probe_target(
         ACCEPTANCE._real_input_target_hwnd()
 
 
+def test_sendinput_qualification_rejects_test_support_wheel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sky_player_rs,
+        "TestDispatchSession",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+    with pytest.raises(RuntimeError, match="production native wheel"):
+        ACCEPTANCE._new_session(
+            [],
+            backend="sendinput",
+            mock_base_latency_us=0,
+            mock_per_key_latency_us=0,
+            adaptive_spin=False,
+            rt_priority_mode="off",
+        )
+
+
 def test_mock_backend_defaults_preserve_latency_model() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",
@@ -150,13 +170,27 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["materialized_min_hold_us"] == 17_167
 
 
+def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
+    with pytest.raises(SystemExit, match="at least 10000 physical boundaries"):
+        ACCEPTANCE._assert_minimum_qualification_boundaries(
+            backend="sendinput", measured_boundaries=9_999
+        )
+
+    ACCEPTANCE._assert_minimum_qualification_boundaries(
+        backend="sendinput", measured_boundaries=10_000
+    )
+    ACCEPTANCE._assert_minimum_qualification_boundaries(
+        backend="mock", measured_boundaries=1
+    )
+
+
 def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
     args = SimpleNamespace(repeats=2, dispatch_repeats=3, command_samples=4)
     with pytest.raises(SystemExit, match="ambiguous"):
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_six_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
         "game_fps": 60,
@@ -173,11 +207,12 @@ def test_schema_six_baseline_requires_matching_timing_domain_and_config() -> Non
         "gap_profile": "hot",
         "warmup_cycles": 8,
         "native_profile": "mock_test",
+        "native_build_flavor": "test_support",
         "require_focus": False,
         "materialized_min_hold_us": 17_167,
     }
     report = {
-        "benchmark_schema_version": 6,
+        "benchmark_schema_version": 7,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
@@ -214,14 +249,14 @@ def test_schema_six_baseline_requires_matching_timing_domain_and_config() -> Non
 
 def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
     candidate = {
-        "benchmark_schema_version": 6,
+        "benchmark_schema_version": 7,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
         "timeline_semantics_version": 2,
     }
     baseline = {
-        "benchmark_schema_version": 5,
+        "benchmark_schema_version": 7,
         "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "timeline_semantics_version": 1,
     }

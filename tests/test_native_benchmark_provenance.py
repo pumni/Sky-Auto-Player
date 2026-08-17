@@ -35,10 +35,33 @@ def test_build_wheel_sets_expected_github_sha(monkeypatch, tmp_path: Path) -> No
         tmp_path,
         env_file=None,
         expected_sha="baseline-sha",
+        test_support=True,
     )
 
     assert result == wheel
     assert captured["env"]["GITHUB_SHA"] == "baseline-sha"  # type: ignore[index]
+    assert "--test-support" in captured["command"]  # type: ignore[operator]
+
+
+def test_build_wheel_omits_test_support_for_production(monkeypatch, tmp_path: Path) -> None:
+    wheel_dir = tmp_path / "target" / "wheels"
+    wheel_dir.mkdir(parents=True)
+    (wheel_dir / "sky_player_rs-0.0.0-py3-none-any.whl").write_bytes(b"wheel")
+    captured: dict[str, object] = {}
+
+    def fake_run(command, *, cwd, env=None, capture=False):
+        captured["command"] = command
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bench_native_ab, "_run", fake_run)
+    bench_native_ab._build_wheel(
+        tmp_path,
+        env_file=None,
+        expected_sha="candidate-sha",
+        test_support=False,
+    )
+
+    assert "--test-support" not in captured["command"]  # type: ignore[operator]
 
 
 def test_benchmark_subprocess_output_uses_utf8_replacement(monkeypatch, tmp_path: Path) -> None:
@@ -113,6 +136,7 @@ def _run_ab_scenario(
         *,
         env_file: Path | None,
         expected_sha: str,
+        test_support: bool,
         runner=None,
     ) -> Path:
         if scenario == "candidate-build" and expected_sha == "candidate-sha":

@@ -273,6 +273,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         .unwrap_or(super::super::config::DEFAULT_SPIN_THRESHOLD_US);
     #[cfg(not(any(test, feature = "test-support")))]
     let effective_spin_threshold_us = super::super::config::DEFAULT_SPIN_THRESHOLD_US;
+    #[cfg(any(test, feature = "test-support"))]
+    let effective_admission_guard_us = config
+        .wait
+        .test_spin_threshold_us
+        .unwrap_or(DEFAULT_ADMISSION_GUARD_US);
+    #[cfg(not(any(test, feature = "test-support")))]
+    let effective_admission_guard_us = DEFAULT_ADMISSION_GUARD_US;
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
     core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
@@ -308,7 +315,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    let admission_guard_ticks = match qpc_clock.duration_from_us(DEFAULT_ADMISSION_GUARD_US) {
+    let admission_guard_ticks = match qpc_clock.duration_from_us(effective_admission_guard_us) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
@@ -334,7 +341,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
     let startup_anchor_ticks = worker.epoch_qpc;
-    let startup_deadline_ticks = match qpc_clock.duration_from_us(DEFAULT_ADMISSION_GUARD_US) {
+    let startup_deadline_ticks = match qpc_clock.duration_from_us(effective_admission_guard_us) {
         Ok(guard) => {
             QpcTicks::from_raw(startup_anchor_ticks.as_u64().saturating_sub(guard.as_u64()))
         }

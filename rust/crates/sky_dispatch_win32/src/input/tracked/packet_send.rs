@@ -2,9 +2,9 @@ use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
-use super::super::packet::send_prepared_physical_packet_once;
+use super::super::packet::send_prepared_physical_packet_once_with_cutoff;
 #[cfg(any(test, feature = "test-support"))]
-use super::super::packet::send_prepared_physical_packet_once_with_start;
+use super::super::packet::send_prepared_physical_packet_once_with_start_and_cutoff;
 use super::super::packet::{PreparedPhysicalPacket, send_physical_packet_once_with_start};
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
@@ -15,6 +15,30 @@ use super::super::up_transaction::emit_up_once_with;
 use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
+
+#[cfg(any(test, feature = "test-support"))]
+fn deadline_missed_before_send_outcome(
+    packet: PhysicalPacket,
+    started_ticks: QpcTicks,
+) -> SendTransactionOutcome {
+    SendTransactionOutcome {
+        status: SendTransactionStatus::DeadlineMissedBeforeSend,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask | packet.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts: 0,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: Some(started_ticks),
+            completed_ticks: None,
+            timing_error: None,
+        },
+    }
+}
 
 impl TrackedKeyState {
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
@@ -155,7 +179,9 @@ impl TrackedKeyState {
                 self.active_mask &= !to_send_mask;
                 self.possibly_active_mask |= to_send_mask;
             }
-            SendTransactionStatus::ZeroProgress | SendTransactionStatus::ClockFailureBeforeSend => {
+            SendTransactionStatus::ZeroProgress
+            | SendTransactionStatus::DeadlineMissedBeforeSend
+            | SendTransactionStatus::ClockFailureBeforeSend => {
                 self.possibly_active_mask &= !to_send_mask;
             }
             SendTransactionStatus::PartialProgress => {
@@ -303,7 +329,25 @@ impl TrackedKeyState {
         prepared: &PreparedPhysicalPacket,
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_with_start_and_cutoff(prepared, started_ticks, None)
+    }
+
+    /// Test-support prepared send with a caller-controlled authoritative start
+    /// timestamp and the same pre-syscall Down cutoff as production.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn send_prepared_physical_packet_with_start_and_cutoff(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        started_ticks: QpcTicks,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+    ) -> SendTransactionOutcome {
         let packet = prepared.packet();
+        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+            return self.apply_packet_outcome(
+                packet,
+                deadline_missed_before_send_outcome(packet, started_ticks),
+            );
+        }
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -334,7 +378,12 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                send_prepared_physical_packet_once_with_start(prepared, clock, started_ticks)
+                send_prepared_physical_packet_once_with_start_and_cutoff(
+                    prepared,
+                    clock,
+                    started_ticks,
+                    latest_allowed_down_qpc,
+                )
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
@@ -361,7 +410,12 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                send_prepared_physical_packet_once_with_start(prepared, clock, started_ticks)
+                send_prepared_physical_packet_once_with_start_and_cutoff(
+                    prepared,
+                    clock,
+                    started_ticks,
+                    latest_allowed_down_qpc,
+                )
             }
         };
         self.apply_packet_outcome(packet, outcome)
@@ -376,6 +430,16 @@ impl TrackedKeyState {
     pub fn send_prepared_physical_packet(
         &mut self,
         prepared: &PreparedPhysicalPacket,
+    ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_with_cutoff(prepared, None)
+    }
+
+    /// Send a trusted prepared packet and enforce an optional Down-only hard
+    /// cutoff against the sender's authoritative pre-call QPC sample.
+    pub fn send_prepared_physical_packet_with_cutoff(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        latest_allowed_down_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         let outcome = {
@@ -402,7 +466,7 @@ impl TrackedKeyState {
                     },
                 );
             };
-            send_prepared_physical_packet_once(prepared, clock)
+            send_prepared_physical_packet_once_with_cutoff(prepared, clock, latest_allowed_down_qpc)
         };
         self.apply_packet_outcome(packet, outcome)
     }
@@ -467,6 +531,13 @@ impl TrackedKeyState {
                     "physical packet QPC failure ({:?})",
                     outcome.status
                 ));
+            }
+            SendTransactionStatus::DeadlineMissedBeforeSend => {
+                self.chords_rejected = self.chords_rejected.saturating_add(1);
+                self.authored_keys_rejected = self
+                    .authored_keys_rejected
+                    .saturating_add(u64::from(packet.down_mask.count_ones()));
+                self.last_error = Some("physical packet deadline missed before SendInput".into());
             }
         }
         if packet.up_mask != 0 && !outcome.is_success() {
