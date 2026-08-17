@@ -40,7 +40,7 @@ Song file
   -> Rust coordinator and playback epoch
   -> absolute QPC target, wait/spin, final control gate
   -> one packetized SendInput call
-  -> completion-anchored release ownership and deferred observation
+  -> authored release ownership and diagnostic-only observation
   -> snapshot_lite() while playing
   -> session_report() after worker termination
   -> Python HUD and telemetry writer
@@ -51,23 +51,23 @@ deadline is not advanced by a learned send-cost lead. Immediately before an
 allowed physical send, the worker takes one authoritative
 `final_admission_qpc` sample and uses that same sample for the final
 lease/admission decision and the transport boundary. The Win32 sender returns a
-`sendinput_completion_qpc` sample. The completion is used for release floors,
-completion diagnostics, and observer records; it is not subtracted from future
-authored timestamps. The compatibility `send_started_ticks` and
+`sendinput_completion_qpc` sample. The completion is used for feasibility
+diagnostics and diagnostic observer records; it is not subtracted from future
+authored timestamps or used as a healthy release floor. The compatibility `send_started_ticks` and
 `send_completed_ticks` fields refer to these same two boundaries; they do not
 cause an additional production QPC sample.
 
-For a Down completion `C`, a release is not allowed before:
+For an authored Down, a release is not allowed before:
 
 ```text
-release_floor = C + effective_min_hold
+release_floor = authored_down + effective_min_hold
 effective_release = max(authored_release, release_floor)
 ```
 
 `effective_min_hold` is materialized and validated at the Python/native
 boundary as `max(requested_min_hold_us, ceil(1_000_000 / game_fps) + 500)`.
-The worker receives the resulting floor in its timing configuration and does
-not recompute it from observations.
+If actual Down completion makes the authored Up infeasible, native safety
+cleanup is terminal; the authored Up target is never moved.
 
 The worker owns active key masks, stale-Up suppression,
 zero/partial progress handling, focus-loss pause and restore safety release,
@@ -76,20 +76,19 @@ sender-duration value is diagnostic evidence only; it does not become a lead,
 estimator, or deadline adjustment. A session cannot report successful
 completion while cleanup residue remains.
 
-The coordinator also owns a fixed per-key pending-release table. When a
-completion-anchored hold floor defers one Up, the worker can dispatch an
-unrelated authored Down chord at its own boundary and later dispatch the
-pending Up independently. Same-key retriggers whose physical floor is
-infeasible fail closed; no retry or catch-up burst is emitted.
+The coordinator also owns a fixed per-key pending-release table for recovery
+state. It cannot move an authored Up or block an unrelated authored Down
+chord. Same-key retriggers whose authored hold is infeasible fail closed; no
+retry or catch-up burst is emitted.
 
-## Deferred observation ownership
+## Observer profiles
 
-The physical dispatch path performs only bounded, nonblocking observation
-enqueue work after ownership reconciliation. A fixed-capacity
-`crossbeam_queue::ArrayQueue` is shared with one dedicated observer thread.
-The producer never waits, allocates, drains, mutates coordinator state, or
-formats telemetry. When full, the queue drops the new observation and records
-the drop; it does not evict an older observation. The consumer owns health
+Production has no observation queue or observer thread. After ownership
+reconciliation it commits only bounded scalar counters. Strict diagnostic mode
+uses a fixed-capacity `crossbeam_queue::ArrayQueue` and one observer thread;
+the producer never waits, allocates, drains, mutates coordinator state, or
+formats telemetry. When full, the diagnostic queue drops the new observation;
+it does not evict an older observation. The diagnostic consumer owns health
 windows, telemetry materialization, snapshot publication, and observer metric
 updates. Its local metrics are merged after the consumer stops.
 
@@ -106,10 +105,9 @@ native boundary exposes lifecycle commands, target/focus hints, a small live
 snapshot, and one final report. `snapshot_lite` excludes trace records, maps,
 generation detail, and compatibility estimator payloads.
 
-`estimator_state_json` and historical lead fields remain readable for older
-Python callers only. They are deprecated, ignored by production planning,
-and published as zero/`{"deprecated":true}` compatibility values. They must
-not affect deadlines, SendInput admission, release floors, health, or transport
+The active Python/native session contract does not carry estimator state.
+Historical lead and estimator artifacts are not timing inputs and cannot
+affect deadlines, SendInput admission, release floors, health, or transport
 policy.
 
 Focus hints are coarse wake/gate signals, never input authorization. Rust

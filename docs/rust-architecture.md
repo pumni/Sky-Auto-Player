@@ -36,11 +36,12 @@ Current stable facades and ownership boundaries:
   fields that already live for the session.
 - `engine/worker/{admission,cleanup,control,health,orchestration,planning,startup,timing,wait}.rs`
   own focused invariant and phase boundaries. `engine/worker/dispatch/` owns
-  authored packet admission/commit, typed timing evidence, and the deferred
-  observation producer/consumer boundary. Terminal resource extraction and
-  publication are assembled by `Worker::finalize` outside the contained panic
-  loop. `WorkerCore` owns mutable dispatch/runtime state outside that boundary;
-  the observer thread owns observation health and telemetry materialization.
+  authored packet admission/commit, typed timing evidence, and the optional
+  diagnostic observation producer/consumer boundary. Terminal resource
+  extraction and publication are assembled by `Worker::finalize` outside the
+  contained panic loop. `WorkerCore` owns mutable dispatch/runtime state
+  outside that boundary; only diagnostic mode has an observer thread for
+  observation health and telemetry materialization.
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
   session, and telemetry code live under `python/`.
 - `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
@@ -60,8 +61,8 @@ Current stable facades and ownership boundaries:
 | Playback clock | `WorkerCore::resources.playback` | worker phases | worker thread only |
 | Backend masks | `TrackedKeyState` | dispatch, cleanup | worker thread only |
 | Coordinator | `WorkerCore::resources.coordinator` | dispatch, cleanup | worker thread only |
-| Observation queue | `PendingObservationQueue` | dispatch producer, observer consumer | bounded nonblocking `ArrayQueue`; drop-new when full |
-| Observer health/telemetry | `ObserverRuntime` | observer | observer thread only; merged after join |
+| Observation queue | `PendingObservationQueue` | diagnostic dispatch producer, observer consumer | diagnostic-only bounded nonblocking `ArrayQueue`; drop-new when full |
+| Observer health/telemetry | `ObserverRuntime` | diagnostic observer | diagnostic observer thread only; merged after join |
 | Local dispatch timing/error state | `WorkerCore::{timing,errors}` | worker phases | worker thread only |
 
 Adding worker state requires assigning it to one `WorkerCore` capability before

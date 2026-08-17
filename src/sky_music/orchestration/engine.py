@@ -60,6 +60,7 @@ class PlaybackEngine:
         min_hold_margin_us: int = 500,
         min_hold_margin_source: str = "default_500",
         dry_run: bool = False,
+        pre_roll_us: int = 0,
     ) -> None:
         self.song = song
         self.actions = tuple(actions)
@@ -70,6 +71,9 @@ class PlaybackEngine:
             raise ValueError("focus_restore_grace_us must be in 0..=60000000")
         self.focus_restore_grace_us = int(focus_restore_grace_us)
         self.dry_run = bool(dry_run)
+        if type(pre_roll_us) is not int or pre_roll_us < 0:
+            raise ValueError("pre_roll_us must be a non-negative integer")
+        self.pre_roll_us = pre_roll_us
         self.game_fps = int(game_fps)
         if not 15 <= self.game_fps <= 240:
             raise ValueError("game_fps must be in 15..=240")
@@ -119,6 +123,7 @@ class PlaybackEngine:
             min_hold_us=self.min_hold_us,
             require_focus=self.require_focus,
             focus_restore_grace_us=self.focus_restore_grace_us,
+            pre_roll_us=self.pre_roll_us,
             focus_guard=self.focus_guard,
             controls=self.controls,
             renderer=self.renderer,
@@ -126,7 +131,7 @@ class PlaybackEngine:
             telemetry_enabled=self.telemetry.enabled,
         )
         try:
-            outcome, snapshot, native_telemetry, _deprecated_estimator_state_json = runtime.run()
+            outcome, snapshot, native_telemetry = runtime.run()
         except NativeDispatchError as exc:
             # The native supervisor has already joined and materialized the
             # final report before raising a terminal worker error. Ingest it
@@ -148,6 +153,22 @@ class PlaybackEngine:
                 str(snapshot.get("terminal_error") or "native dispatch failed")
             )
         return outcome
+
+    def prepare_focus_for_playback(self) -> bool:
+        """Resolve, focus, and verify the target once at playback commit."""
+        if self.dry_run or not self.require_focus:
+            return True
+        try:
+            from sky_music.platform.win32 import window_target
+
+            window_target.reset_window_cache()
+            if not window_target.is_sky_window_valid():
+                return False
+            if not bool(self.focus_guard.focus()):
+                return False
+            return bool(window_target.is_foreground_cached_hwnd())
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return False
 
     def _play_preview(self) -> str:
         """Complete an explicit UI preview without touching the input path."""

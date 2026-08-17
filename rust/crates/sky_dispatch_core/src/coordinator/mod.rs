@@ -117,6 +117,14 @@ pub enum CoordinatorError {
         blocked_mask: u16,
         latest_required_release_ticks: TimelineTicks,
     },
+    #[error(
+        "min_hold_infeasible_after_late_down at authored tick {authored_ticks:?}: blocked_mask=0x{blocked_mask:04x}, required_release={required_release_ticks:?}"
+    )]
+    MinHoldInfeasibleAfterLateDown {
+        authored_ticks: TimelineTicks,
+        blocked_mask: u16,
+        required_release_ticks: TimelineTicks,
+    },
     #[error("pending release already exists for key slot {slot}")]
     PendingReleaseAlreadyRegistered { slot: KeySlot },
     #[error("pending release does not match active generation for key slot {slot}")]
@@ -225,8 +233,8 @@ pub struct PreparedBatch {
 /// Authored-frame classification performed before timed waiting.
 ///
 /// The compiler packet remains an immutable authored frame, but its Up
-/// intents are classified per key against completion-anchored release floors.
-/// Preparation never mutates coordinator state.
+/// intents are classified per key against authored minimum-hold floors and
+/// runtime feasibility evidence. Preparation never mutates coordinator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedAuthoredFrame {
     pub first_batch_index: usize,
@@ -263,8 +271,8 @@ pub struct PreparedAuthoredCommit {
     pub down_source_action_index: Option<u32>,
 }
 
-/// One completion-anchored release that is waiting for its own physical due
-/// boundary.  The table is bounded by the fifteen physical key slots.
+/// One authored release that is waiting for its own physical due boundary.
+/// The table is bounded by the fifteen physical key slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingRelease {
     pub generation_id: GenerationId,

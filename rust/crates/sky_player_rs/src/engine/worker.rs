@@ -4,9 +4,9 @@ mod cleanup;
 mod control;
 #[cfg(not(any(test, feature = "test-support")))]
 mod dispatch;
-// `pub(crate)` under test / test-support so engine.rs can re-export the
-// observer queue primitives (§8.11) and slow-observer hooks (§8.12) to the
-// public API without a private-module path.
+// `pub(crate)` under test / test-support so the deterministic harness can
+// exercise diagnostic observer primitives and slow-observer hooks without
+// exposing those test seams in production builds.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod dispatch;
 mod dispatch_loop;
@@ -59,7 +59,7 @@ pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
     HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
-    publish_backend_metrics, record_lateness,
+    publish_backend_metrics, record_lateness, record_sendinput_entry_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
@@ -227,6 +227,7 @@ pub(crate) struct WorkerTimingState {
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
+    pub(super) admission_guard_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
     pub(super) paused_poll_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
@@ -245,6 +246,7 @@ impl WorkerTimingState {
             hard_late_abort_threshold_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
+            admission_guard_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
             paused_poll_ticks: DurationTicks::ZERO,
             lease_timeout_ticks: DurationTicks::ZERO,
@@ -300,10 +302,11 @@ pub(super) struct WorkerCore {
 }
 
 /// Deferred dispatch-observer state owned exclusively by the worker thread.
-/// `pending` holds the fixed observation queue. Never placed into shared state.
+/// Production keeps both fields empty; strict diagnostics own the fixed queue
+/// and consumer thread here, never in shared state.
 #[derive(Default)]
 pub(super) struct WorkerObserverState {
-    pub(super) pending: dispatch::PendingObservationQueue,
+    pub(super) pending: Option<dispatch::PendingObservationQueue>,
     pub(super) runtime: Option<ObserverRuntime>,
 }
 
@@ -337,14 +340,20 @@ pub(super) struct Worker<'a> {
     schedule: Option<RuntimeSchedule>,
     config: WorkerConfig,
     shared: &'a SessionShared,
+    epoch_qpc: QpcTicks,
     core: WorkerCore,
 }
 
 impl<'a> Worker<'a> {
-    pub(super) fn new(options: NativeSessionOptions, shared: &'a SessionShared) -> Self {
+    pub(super) fn new(
+        options: NativeSessionOptions,
+        shared: &'a SessionShared,
+        epoch_qpc: QpcTicks,
+    ) -> Self {
         let NativeSessionOptions {
             schedule,
             backend,
+            profile,
             timing,
             focus,
             wait,
@@ -367,6 +376,7 @@ impl<'a> Worker<'a> {
             schedule: Some(schedule),
             config: WorkerConfig {
                 backend,
+                profile,
                 timing,
                 focus,
                 wait,
@@ -374,6 +384,7 @@ impl<'a> Worker<'a> {
                 priority,
             },
             shared,
+            epoch_qpc,
             core: WorkerCore {
                 runtime,
                 ..WorkerCore::default()
@@ -394,5 +405,17 @@ impl<'a> Worker<'a> {
 
     pub(super) fn run(mut self) -> u8 {
         orchestration::run(&mut self)
+    }
+}
+
+#[cfg(test)]
+mod observer_profile_tests {
+    use super::WorkerObserverState;
+
+    #[test]
+    fn default_production_observer_state_has_no_queue_or_thread() {
+        let state = WorkerObserverState::default();
+        assert!(state.pending.is_none());
+        assert!(state.runtime.is_none());
     }
 }

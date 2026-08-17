@@ -122,6 +122,5 @@ const OUTCOME_ERROR: u8 = 4;
 const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
-const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 #[cfg(test)]
 mod tests;

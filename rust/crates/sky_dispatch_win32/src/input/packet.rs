@@ -158,7 +158,7 @@ fn send_once_prepared(
 ) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+        use windows_sys::Win32::Foundation::GetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
 
         let requested = prepared.event_count();
@@ -170,7 +170,6 @@ fn send_once_prepared(
                 Err(error) => return Err((None, error, false)),
             },
         };
-        unsafe { SetLastError(0) };
         let inserted = unsafe {
             SendInput(
                 length as u32,

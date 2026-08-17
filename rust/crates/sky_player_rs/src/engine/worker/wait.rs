@@ -30,6 +30,7 @@ pub struct WaitObservation {
 
 pub(crate) struct WaitDeadline {
     pub(crate) physical_target_qpc: Option<QpcTicks>,
+    pub(crate) admission_guard_ticks: DurationTicks,
     pub(crate) qpc_clock: QpcClock,
 }
 
@@ -85,6 +86,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     } = context;
     let WaitDeadline {
         physical_target_qpc,
+        admission_guard_ticks,
         qpc_clock,
         ..
     } = deadline;
@@ -100,10 +102,15 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         terminal_error,
     } = mutable;
 
-    let target_qpc = match physical_target_qpc {
+    let physical_target_qpc = match physical_target_qpc {
         Some(target) => target,
         None => return WaitBoundary::Exit,
     };
+    let target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(admission_guard_ticks.as_u64()),
+    );
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -115,7 +122,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     if target_sample_ticks >= target_qpc {
         return WaitBoundary::Due {
             wait_result: None,
-            target_qpc,
+            target_qpc: physical_target_qpc,
             dispatch_qpc: target_sample_ticks,
         };
     }
@@ -139,7 +146,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             let dispatch_qpc = wait_result.wake_qpc.unwrap_or(target_qpc);
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
-                target_qpc,
+                target_qpc: physical_target_qpc,
                 dispatch_qpc,
             }
         }
@@ -248,6 +255,7 @@ mod tests {
                         .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
                         .expect("target"),
                 ),
+                admission_guard_ticks: DurationTicks::ZERO,
                 qpc_clock,
             },
             timing: WaitTiming {

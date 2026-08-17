@@ -72,7 +72,7 @@ pub(crate) fn publisher_down_send_outcome(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
-    observer: &mut PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
     let requested_packet = view.packet_masks;
@@ -95,34 +95,36 @@ pub(crate) fn publisher_down_send_outcome(
     // physical/coordinator ownership is safe for the next dispatch.  From
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
-    let observation = DownObservation {
-        epoch_qpc: timing_proof.epoch_qpc,
-        allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
-        physical_target_qpc,
-        final_admission_qpc,
-        sendinput_completed_qpc,
-        dispatch_ready_qpc,
-        wake_qpc,
-        requested_packet,
-        confirmed_mask: result_confirmed_mask,
-        skipped_mask: result_skipped_mask,
-        trace: DownTraceObservation {
-            event_index: view.batch_source_action_index,
-            trace_kind,
-            result_status,
-            send_attempts: result_send_attempts,
-            retry_reason: result_retry_reason,
-            chord_integrity_lost: result_chord_integrity_lost,
-            last_win32_error: result_last_win32_error.unwrap_or(0),
-            authored_ticks: view.authored_batch_scheduled_ticks,
-            effective_deadline_ticks: view.batch_scheduled_ticks,
-        },
-    };
-    observer.push(
-        DispatchObservation::Down(observation),
-        &mut local_metrics.observer_dropped_samples,
-        &mut local_metrics.observer_queue_high_watermark,
-    );
+    if let Some(observer) = observer {
+        let observation = DownObservation {
+            epoch_qpc: timing_proof.epoch_qpc,
+            allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
+            physical_target_qpc,
+            final_admission_qpc,
+            sendinput_completed_qpc,
+            dispatch_ready_qpc,
+            wake_qpc,
+            requested_packet,
+            confirmed_mask: result_confirmed_mask,
+            skipped_mask: result_skipped_mask,
+            trace: DownTraceObservation {
+                event_index: view.batch_source_action_index,
+                trace_kind,
+                result_status,
+                send_attempts: result_send_attempts,
+                retry_reason: result_retry_reason,
+                chord_integrity_lost: result_chord_integrity_lost,
+                last_win32_error: result_last_win32_error.unwrap_or(0),
+                authored_ticks: view.authored_batch_scheduled_ticks,
+                effective_deadline_ticks: view.batch_scheduled_ticks,
+            },
+        };
+        observer.push(
+            DispatchObservation::Down(observation),
+            &mut local_metrics.observer_dropped_samples,
+            &mut local_metrics.observer_queue_high_watermark,
+        );
+    }
     resolve_slo_terminal_step(
         result_chord_integrity_lost,
         strict_completion_late,
@@ -136,7 +138,7 @@ pub(crate) fn publisher_down_send_outcome(
 pub(crate) fn dispatch_stale_packet(
     prepared: sky_dispatch_core::coordinator::PreparedStalePacket,
     coordinator: &mut RuntimeDispatchCoordinator,
-    observer: &PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
     dropped_samples: &mut u64,
     queue_high_watermark: &mut u64,
     effective_now_ticks: TimelineTicks,
@@ -146,16 +148,18 @@ pub(crate) fn dispatch_stale_packet(
             "coordinator stale-packet commit failure: {error}"
         ));
     }
-    observer.push(
-        DispatchObservation::StaleMetadata(StaleMetadataObservation {
-            source_action_index: prepared.source_action_index,
-            effective_scheduled_ticks: prepared.effective_scheduled_ticks,
-            effective_now_ticks,
-            suppressed_intent_count: prepared.suppressed_intent_count,
-        }),
-        dropped_samples,
-        queue_high_watermark,
-    );
+    if let Some(observer) = observer {
+        observer.push(
+            DispatchObservation::StaleMetadata(StaleMetadataObservation {
+                source_action_index: prepared.source_action_index,
+                effective_scheduled_ticks: prepared.effective_scheduled_ticks,
+                effective_now_ticks,
+                suppressed_intent_count: prepared.suppressed_intent_count,
+            }),
+            dropped_samples,
+            queue_high_watermark,
+        );
+    }
     DispatchStep::Dispatched
 }
 fn drain_stale_metadata_observation(
@@ -289,7 +293,7 @@ impl PendingObservationQueue {
     }
 }
 
-/// Dedicated consumer for deferred dispatch observations. The producer side
+/// Dedicated consumer for diagnostic dispatch observations. The producer side
 /// only performs a bounded `ArrayQueue::push`; all telemetry and health work
 /// runs here, off the physical dispatch thread.
 pub(crate) struct ObserverRuntime {

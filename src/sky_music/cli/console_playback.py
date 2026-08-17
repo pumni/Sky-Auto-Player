@@ -46,7 +46,6 @@ from sky_music.ui.hud import (
 from sky_music.ui.picker_helpers import (
     SONG_DIR,
     SUPPORTED_EXTENSIONS,
-    countdown_before_playback,
 )
 from sky_music.ui.picker_theme import get_theme_preset
 
@@ -561,10 +560,9 @@ def play_selected_song(
             _console.print(f"[red]Playback aborted: global hotkeys could not be registered: {exc}[/red]")
             return PLAYBACK_QUIT
 
-    # Check window/readiness only if we are NOT running dry-run mode
-    if not is_dry_run:
-        countdown_before_playback(countdown_seconds)
-    else:
+    # The native session owns the absolute epoch. The UI countdown is now
+    # display-only pre-roll, so the engine is launched immediately below.
+    if is_dry_run:
         print(f"[simulation] DRY-RUN enabled. Simulating playback of {song.name}...")
 
     user_cfg = load_config()
@@ -614,6 +612,7 @@ def play_selected_song(
         min_hold_us=int(active_policy.min_hold_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,
+        pre_roll_us=max(0, int(countdown_seconds)) * 1_000_000,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 

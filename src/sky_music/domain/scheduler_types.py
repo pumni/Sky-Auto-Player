@@ -15,8 +15,6 @@ from sky_music.domain.hold_timing import (
 DEFAULT_FOCUS_RESTORE_GRACE_US = 100_000
 DEFAULT_SPIN_THRESHOLD_US = 800
 DEFAULT_SAME_KEY_CONFLICT_POLICY = "drop_chord"
-DEFAULT_CHORD_STAGGER_US = 0
-DEFAULT_CHORD_STAGGER_MAX_US = 15_000
 
 
 class ActionKind(StrEnum):
@@ -40,8 +38,6 @@ class TimingPolicy:
     hold_frames: float = DEFAULT_HOLD_FRAMES
     focus_restore_grace_us: Microseconds = Microseconds(DEFAULT_FOCUS_RESTORE_GRACE_US)
     same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY
-    chord_stagger_us: Microseconds = Microseconds(DEFAULT_CHORD_STAGGER_US)
-    chord_stagger_max_us: Microseconds = Microseconds(DEFAULT_CHORD_STAGGER_MAX_US)
     min_hold_margin_us: Microseconds = Microseconds(500)
     min_hold_margin_source: str = "default_500"
 
@@ -49,8 +45,6 @@ class TimingPolicy:
         validate_hold_frames(self.hold_frames)
         if self.focus_restore_grace_us < 0:
             raise ValueError("focus_restore_grace_us must be non-negative")
-        if self.chord_stagger_us < 0 or self.chord_stagger_max_us < 0:
-            raise ValueError("chord staggering must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +56,6 @@ class FrameTimingPolicy:
     min_hold_us: Microseconds
     focus_restore_grace_us: Microseconds
     same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY
-    chord_stagger_us: Microseconds = Microseconds(DEFAULT_CHORD_STAGGER_US)
-    chord_stagger_max_us: Microseconds = Microseconds(DEFAULT_CHORD_STAGGER_MAX_US)
     min_hold_margin_us: Microseconds = Microseconds(500)
     min_hold_margin_source: str = "default_500"
 
@@ -88,8 +80,6 @@ class FrameTimingPolicy:
             min_hold_us=Microseconds(effective),
             focus_restore_grace_us=policy.focus_restore_grace_us,
             same_key_conflict_policy=conflict,
-            chord_stagger_us=policy.chord_stagger_us,
-            chord_stagger_max_us=policy.chord_stagger_max_us,
             min_hold_margin_us=Microseconds(max(0, int(policy.min_hold_margin_us))),
             min_hold_margin_source=policy.min_hold_margin_source,
         )
@@ -104,16 +94,12 @@ class FrameTimingPolicy:
         margin_source: str = "default_500",
         focus_restore_grace_us: int = DEFAULT_FOCUS_RESTORE_GRACE_US,
         same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY,
-        chord_stagger_us: int = DEFAULT_CHORD_STAGGER_US,
-        chord_stagger_max_us: int = DEFAULT_CHORD_STAGGER_MAX_US,
     ) -> FrameTimingPolicy:
         return cls.from_timing_policy(
             TimingPolicy(
                 hold_frames=hold_frames,
                 focus_restore_grace_us=Microseconds(focus_restore_grace_us),
                 same_key_conflict_policy=same_key_conflict_policy,
-                chord_stagger_us=Microseconds(chord_stagger_us),
-                chord_stagger_max_us=Microseconds(chord_stagger_max_us),
                 min_hold_margin_us=Microseconds(margin_us),
                 min_hold_margin_source=margin_source,
             ),

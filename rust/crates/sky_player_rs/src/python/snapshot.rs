@@ -43,6 +43,8 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) total_us: u64,
     #[pyo3(get)]
+    pub(super) pre_roll_remaining_us: u64,
+    #[pyo3(get)]
     pub(super) max_completion_error_us: u64,
     #[pyo3(get)]
     pub(super) late_2ms: u64,
@@ -51,11 +53,21 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) late_10ms: u64,
     #[pyo3(get)]
+    pub(super) max_sendinput_entry_lateness_us: u64,
+    #[pyo3(get)]
+    pub(super) entry_late_2ms: u64,
+    #[pyo3(get)]
+    pub(super) entry_late_5ms: u64,
+    #[pyo3(get)]
+    pub(super) entry_late_10ms: u64,
+    #[pyo3(get)]
     pub(super) release_max_us: u64,
     #[pyo3(get)]
     pub(super) release_late_2ms: u64,
     #[pyo3(get)]
     pub(super) recent_latencies_us: Vec<i64>,
+    #[pyo3(get)]
+    pub(super) recent_latency_samples_available: bool,
     #[pyo3(get)]
     pub(super) is_running: bool,
     #[pyo3(get)]
@@ -154,13 +166,19 @@ impl ProgressSnapshotPy {
         Self {
             elapsed_us: snapshot.elapsed_us,
             total_us: snapshot.total_us,
+            pre_roll_remaining_us: snapshot.pre_roll_remaining_us,
             max_completion_error_us: snapshot.max_lateness_us,
             late_2ms: snapshot.late_2ms,
             late_5ms: snapshot.late_5ms,
             late_10ms: snapshot.late_10ms,
+            max_sendinput_entry_lateness_us: snapshot.max_sendinput_entry_lateness_us,
+            entry_late_2ms: snapshot.entry_late_2ms,
+            entry_late_5ms: snapshot.entry_late_5ms,
+            entry_late_10ms: snapshot.entry_late_10ms,
             release_max_us: snapshot.release_max_us,
             release_late_2ms: snapshot.release_late_2ms,
             recent_latencies_us: snapshot.recent_latencies_us.clone(),
+            recent_latency_samples_available: snapshot.recent_latency_samples_available,
             is_running: snapshot.is_running,
             is_finished: snapshot.is_finished,
             is_paused: snapshot.is_paused,

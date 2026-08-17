@@ -77,6 +77,7 @@ class PlaybackSnapshot:
     total: float
     song_name: str
     status: str = "playing"
+    pre_roll_remaining_us: int = 0
     input_path_degraded: bool = False
     sendinput_path_degraded: bool = False
     core_post_send_degraded: bool = False
@@ -134,6 +135,7 @@ class SnapshotRenderer:
         total: float,
         song_name: str,
         status: str = "playing",
+        pre_roll_remaining_us: int = 0,
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
@@ -151,6 +153,7 @@ class SnapshotRenderer:
                 total=total,
                 song_name=song_name,
                 status=status,
+                pre_roll_remaining_us=max(0, int(pre_roll_remaining_us)),
                 input_path_degraded=input_path_degraded,
                 sendinput_path_degraded=sendinput_path_degraded,
                 core_post_send_degraded=core_post_send_degraded,
@@ -302,7 +305,6 @@ class PlaybackCard(Static):
         self._risk_options: tuple[str, ...] = ()
         self._risk_selected = 0
         self._countdown_remaining = 0
-        self._countdown_callback: Any | None = None
         self._playback_result_callback: Any | None = None
         self._timer: Any | None = None
         self._poll_timer: Any | None = None
@@ -320,11 +322,12 @@ class PlaybackCard(Static):
         self.show_idle("Preparing playback")
 
     def on_key(self, event: events.Key) -> None:
-        if self._mode == "playing":
+        if self._mode in {"playing", "countdown"}:
             command = {
                 "f8": "pause",
                 "f9": "skip",
                 "f10": "quit",
+                "escape": "quit",
                 "f2": "toggle_debug",
             }.get(event.key)
             if command is not None:
@@ -445,29 +448,6 @@ class PlaybackCard(Static):
         self._rerender(force=True)
         self.focus()
 
-    def start_countdown(self, seconds: int, callback: Any) -> None:
-        if self._timer is not None:
-            self._timer.stop()
-        self._mode = "countdown"
-        self._countdown_remaining = seconds
-        self._countdown_callback = callback
-        self._rerender(force=True)
-        self._timer = self.set_interval(1.0, self._tick_countdown)
-        self.focus()
-
-    def _tick_countdown(self) -> None:
-        self._countdown_remaining -= 1
-        if self._countdown_remaining <= 0:
-            if self._timer is not None:
-                self._timer.stop()
-                self._timer = None
-            callback = self._countdown_callback
-            self._countdown_callback = None
-            if callable(callback):
-                callback()
-            return
-        self._rerender(force=True)
-
     def start_playback(
         self,
         *,
@@ -483,6 +463,7 @@ class PlaybackCard(Static):
         result_callback: Any,
         command_bridge: PlaybackCommandBridge | None = None,
         schedule_warnings: tuple[str, ...] = (),
+        pre_roll_us: int = 0,
     ) -> None:
         self.engine = engine
         self.command_bridge = command_bridge
@@ -499,7 +480,8 @@ class PlaybackCard(Static):
         self._debug_hotkey = getattr(controls, "toggle_debug", None) or parse_hotkey("f2")
         self._playback_result_callback = result_callback
         self._exited = False
-        self._mode = "playing"
+        self._mode = "countdown" if pre_roll_us > 0 else "playing"
+        self._countdown_remaining = max(0, (pre_roll_us + 999_999) // 1_000_000)
         self._snapshot = None
         self._rerender(force=True)
         self.run_engine()
@@ -555,6 +537,13 @@ class PlaybackCard(Static):
         snap = self.renderer.get_snapshot()
         if snap is not None:
             self._snapshot = snap
+            if snap.status == "countdown":
+                self._mode = "countdown"
+                self._countdown_remaining = max(
+                    0, (int(snap.pre_roll_remaining_us) + 999_999) // 1_000_000
+                )
+            elif self._mode == "countdown":
+                self._mode = "playing"
             self._rerender()
 
     def toggle_debug(self) -> None:

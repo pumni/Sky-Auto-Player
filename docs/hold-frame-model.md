@@ -29,39 +29,40 @@ At 60 FPS with the default margin:
 | 1.25 frames | 21,334 µs | 21,334 µs |
 | 1.5 frames | 25,500 µs | 25,500 µs |
 
-## Completion-anchored release floor
+## Authored minimum-hold floor
 
-For a successful Down packet, `C` is the QPC completion boundary returned by
-the single `SendInput` transport call. A same-key release cannot be committed
+For an authored Down at timestamp `A`, a same-key release cannot be committed
 before:
 
 ```text
-release_floor = C + effective_min_hold_us
+release_floor = A + effective_min_hold_us
 effective_release = max(authored_release, release_floor)
 ```
 
-The floor is checked in QPC ticks with checked arithmetic. It is a sender-side
-visibility safeguard and does not claim to measure when Sky or the game
-render loop observed the input. The completion anchor prevents the sender's
-own call duration from shortening the configured hold.
+The floor is checked in QPC ticks with checked arithmetic. It is an authored
+sender-side contract and does not claim to measure when Sky or the game render
+loop observed the input. The native worker records the actual Down completion
+only as feasibility evidence; if a late completion makes the authored Up
+impossible, the session fails closed and never moves that Up target.
 
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
 The native-boundary validator performs this check before the worker can send
 anything, including exact same-timestamp retriggers and timestamp overflow
-cases. The coordinator may defer an authored release until this floor after a
-slow Down; it records the defer in a fixed per-key generation table. That defer
-does not move unrelated future authored actions and cannot head-of-line block a
-Down chord on other keys. A same-key Down whose floor is infeasible fails
-closed before transport.
+cases. Runtime completion is checked against the same authored floor. A
+late-completion release that is still feasible may use the coordinator's
+per-key recovery state, but it does not move the authored release or block an
+unrelated Down chord. A same-key Down whose floor is infeasible fails closed
+before transport.
 
 A transport zero/partial result is terminal and is handled by fail-closed
 cleanup; it is not retried in production. Strict timing evaluates completion
 residuals, while normal playback preserves the schedule when transport
 integrity remains valid.
 
-The native observer reports sender-side start, completion, lateness, duration,
-and release-floor evidence. These values are not game-onset or audio-onset
-measurements. The old estimator and adaptive dispatch lead are not part of
-this model; historical lead fields are compatibility-only zeros.
+Diagnostic mode may report sender-side start, completion, lateness, duration,
+and release-floor evidence. Production retains only bounded scalar timing
+counters. These values are not game-onset or audio-onset measurements. The
+old estimator and adaptive dispatch lead are not part of this model; historical
+lead fields are compatibility-only zeros.

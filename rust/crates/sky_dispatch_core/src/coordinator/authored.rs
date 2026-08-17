@@ -55,7 +55,7 @@ impl RuntimeDispatchCoordinator {
     }
 
     /// Return the next authored dispatch deadline in the playback tick domain.
-    /// Completion-anchored releases are represented by the separate pending
+    /// Pending recovery releases are represented by the separate pending
     /// release table and never rewrite this authored timestamp.
     pub(crate) fn next_authored_ticks_uncompensated(
         &self,
@@ -232,6 +232,16 @@ impl RuntimeDispatchCoordinator {
                         "authored Up generation does not own its key slot".into(),
                     ),
                 ));
+            }
+            let actual_release_not_before_ticks = active
+                .down_dispatch_completed_ticks
+                .checked_add_duration(self.min_hold_ticks)?;
+            if actual_release_not_before_ticks > authored_ticks {
+                return Err(CoordinatorError::MinHoldInfeasibleAfterLateDown {
+                    authored_ticks,
+                    blocked_mask: bit,
+                    required_release_ticks: actual_release_not_before_ticks,
+                });
             }
             if active.release_not_before_ticks <= authored_ticks {
                 immediate_up_mask |= bit;
@@ -469,6 +479,35 @@ impl RuntimeDispatchCoordinator {
             .min()
     }
 
+    /// Test-support seam for constructing a pending safety release after a
+    /// healthy authored Down. Normal playback never manufactures pending
+    /// releases from observed completion latency.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn seed_pending_release_for_test(
+        &mut self,
+        slot: KeySlot,
+        due_ticks: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let index = usize::from(slot);
+        if self.pending_release_by_slot[index].is_some() {
+            return Err(CoordinatorError::PendingReleaseAlreadyRegistered { slot });
+        }
+        let active = self
+            .active_for_slot(slot)
+            .cloned()
+            .ok_or(CoordinatorError::PendingReleaseOwnershipMismatch { slot })?;
+        let bit = Self::bit_for_slot(slot);
+        self.pending_release_by_slot[index] = Some(PendingRelease {
+            generation_id: active.generation_id,
+            key_slot: slot,
+            authored_release_ticks: due_ticks,
+            due_ticks,
+            source_action_index: active.source_action_index,
+        });
+        self.pending_release_mask |= bit;
+        self.validate_local_slot_masks()
+    }
+
     /// Commit pending releases at one exact due boundary.  The caller may
     /// coalesce this mask with an authored Down transaction, but the logical
     /// Up transition must happen before the new Down transition.
@@ -624,7 +663,9 @@ impl RuntimeDispatchCoordinator {
                 cursor: self.cursor,
             });
         }
-        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
+        let release_not_before_ticks = prepared
+            .authored_ticks
+            .checked_add_duration(self.min_hold_ticks)?;
 
         for compact in &commit.immediate_up_intents {
             let generation_id = compact.generation_id();
@@ -810,7 +851,9 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
+        let release_not_before_ticks = prepared
+            .authored_ticks
+            .checked_add_duration(self.min_hold_ticks)?;
 
         for compact in immediate_up_intents.iter().copied() {
             let generation_id = compact.generation_id();
@@ -1299,7 +1342,9 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let release_not_before_ticks = completed.checked_add_duration(self.min_hold_ticks)?;
+        let release_not_before_ticks = prepared
+            .effective_scheduled_ticks
+            .checked_add_duration(self.min_hold_ticks)?;
 
         // Apply releases first. Stale Up intents are present for authored
         // diagnostics but deliberately have NO_GENERATION_ID and no physical

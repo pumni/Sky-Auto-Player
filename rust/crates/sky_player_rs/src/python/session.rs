@@ -2,8 +2,8 @@ use super::conversion::*;
 use super::snapshot::ProgressSnapshotPy;
 use super::*;
 use crate::engine::{
-    FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
-    WaitOptions,
+    DispatchProfile, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
+    TimingOptions, WaitOptions,
 };
 
 #[pyclass(name = "DispatchSession", frozen)]
@@ -59,8 +59,6 @@ impl NativeDispatchSessionPy {
         let priority_mode = PriorityMode::Auto;
         let enable_waitable_timer = true;
         let enable_event_wait = true;
-        // Compatibility input only: estimator state is intentionally ignored.
-        let _deprecated_estimator_state_json = config.estimator_state_json.as_ref();
         let input_path_warn_us = 300;
         let strict_timing = parsed_profile.strict_timing();
         let strict_down_completion_late_us = 2_000;
@@ -76,6 +74,7 @@ impl NativeDispatchSessionPy {
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Production,
+            profile: parsed_profile,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
                 strict_timing,
@@ -126,8 +125,10 @@ impl NativeDispatchSessionPy {
         })
     }
 
-    fn start(&self) -> PyResult<()> {
-        self.session.start().map_err(PyRuntimeError::new_err)
+    fn arm(&self, pre_roll_us: StrictU64) -> PyResult<()> {
+        self.session
+            .arm(pre_roll_us.0)
+            .map_err(PyRuntimeError::new_err)
     }
 
     fn pause(&self) -> PyResult<()> {
@@ -228,14 +229,26 @@ impl NativeDispatchSessionPy {
         dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
         dict.set_item("elapsed_us", snap.elapsed_us)?;
         dict.set_item("total_us", snap.total_us)?;
+        dict.set_item("pre_roll_remaining_us", snap.pre_roll_remaining_us)?;
         dict.set_item("lateness_us", snap.lateness_us)?;
         dict.set_item("max_lateness_us", snap.max_lateness_us)?;
         dict.set_item("late_2ms", snap.late_2ms)?;
         dict.set_item("late_5ms", snap.late_5ms)?;
         dict.set_item("late_10ms", snap.late_10ms)?;
+        dict.set_item(
+            "max_sendinput_entry_lateness_us",
+            snap.max_sendinput_entry_lateness_us,
+        )?;
+        dict.set_item("entry_late_2ms", snap.entry_late_2ms)?;
+        dict.set_item("entry_late_5ms", snap.entry_late_5ms)?;
+        dict.set_item("entry_late_10ms", snap.entry_late_10ms)?;
         dict.set_item("release_max_us", snap.release_max_us)?;
         dict.set_item("release_late_2ms", snap.release_late_2ms)?;
         dict.set_item("recent_latencies_us", snap.recent_latencies_us)?;
+        dict.set_item(
+            "recent_latency_samples_available",
+            snap.recent_latency_samples_available,
+        )?;
         dict.set_item("is_running", snap.is_running)?;
         dict.set_item("is_finished", snap.is_finished)?;
         dict.set_item("is_paused", snap.is_paused)?;
@@ -419,7 +432,6 @@ impl NativeDispatchSessionPy {
         report.set_item("snapshot", self.snapshot(py)?)?;
         report.set_item("effective_config", self.effective_config.to_py_dict(py)?)?;
         report.set_item("telemetry_json", self.take_telemetry_json(py)?)?;
-        report.set_item("estimator_state_json", self.estimator_state_json()?)?;
         Ok(report)
     }
 
@@ -450,12 +462,6 @@ impl NativeDispatchSessionPy {
 
     fn take_telemetry_json(&self, py: Python<'_>) -> PyResult<String> {
         py.detach(|| self.session.take_telemetry_json())
-            .map_err(PyRuntimeError::new_err)
-    }
-
-    fn estimator_state_json(&self) -> PyResult<String> {
-        self.session
-            .estimator_state_json()
             .map_err(PyRuntimeError::new_err)
     }
 }
@@ -566,6 +572,7 @@ impl TestDispatchSessionPy {
                 latency_per_key_us: mock_latency_per_key_us,
                 fault_script,
             },
+            profile: DispatchProfile::MockTest,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
                 strict_timing: false,
@@ -600,8 +607,14 @@ impl TestDispatchSessionPy {
         })
     }
 
+    fn arm(&self, pre_roll_us: StrictU64) -> PyResult<()> {
+        self.session
+            .arm(pre_roll_us.0)
+            .map_err(PyRuntimeError::new_err)
+    }
+
     fn start(&self) -> PyResult<()> {
-        self.session.start().map_err(PyRuntimeError::new_err)
+        self.arm(StrictU64(0))
     }
 
     /// Keep the test-support session's supervisor lease alive for acceptance

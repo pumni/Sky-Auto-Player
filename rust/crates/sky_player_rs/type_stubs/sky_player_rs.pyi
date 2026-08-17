@@ -12,9 +12,7 @@ class SessionConfig:
     telemetry: bool
     focus_restore_grace_us: int
     profile: PlaybackProfile
-    estimator_state_json: str | None
-
-    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., focus_restore_grace_us: int = ..., profile: PlaybackProfile = ..., estimator_state_json: str | None = ...) -> None: ...
+    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., focus_restore_grace_us: int = ..., profile: PlaybackProfile = ...) -> None: ...
 
 
 class BackendHealthSnapshot:
@@ -38,13 +36,19 @@ class BackendHealthSnapshot:
 class ProgressSnapshot:
     elapsed_us: int
     total_us: int
+    pre_roll_remaining_us: int
     max_completion_error_us: int
     late_2ms: int
     late_5ms: int
     late_10ms: int
+    max_sendinput_entry_lateness_us: int
+    entry_late_2ms: int
+    entry_late_5ms: int
+    entry_late_10ms: int
     release_max_us: int
     release_late_2ms: int
     recent_latencies_us: Sequence[int]
+    recent_latency_samples_available: bool
     is_running: bool
     is_finished: bool
     is_paused: bool
@@ -90,7 +94,7 @@ class ProgressSnapshot:
 
 class DispatchSession:
     def __init__(self, py_actions: Iterable[tuple[int, str, int, Sequence[int], str]], *, config: SessionConfig | None = ...) -> None: ...
-    def start(self) -> None: ...
+    def arm(self, pre_roll_us: int = ...) -> None: ...
     def pause(self) -> None: ...
     def resume(self) -> None: ...
     def skip(self) -> None: ...
@@ -104,7 +108,6 @@ class DispatchSession:
     def join(self, *, timeout_ms: int = ...) -> bool: ...
     def session_report(self) -> Mapping[str, Any]: ...
     def take_telemetry_json(self) -> str: ...
-    def estimator_state_json(self) -> str: ...
 
 
 def build_info() -> Mapping[str, Any]: ...

@@ -45,7 +45,6 @@ pub(super) struct FinalizeSignals<'a> {
 pub(super) struct FinalizePublication<'a> {
     pub(super) metrics: &'a SharedMetrics,
     pub(super) telemetry_output: &'a Mutex<Option<NativeTelemetryOutput>>,
-    pub(super) estimator_output: &'a Mutex<Option<String>>,
     pub(super) priority_acquired: &'a Mutex<String>,
     pub(super) progress_clock: &'a SharedProgressClock,
 }
@@ -98,7 +97,6 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let FinalizePublication {
         metrics,
         telemetry_output,
-        estimator_output,
         priority_acquired,
         progress_clock,
     } = publication;
@@ -266,9 +264,6 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let mut telemetry = telemetry;
     telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
     *telemetry_output.lock() = Some(std::mem::take(&mut telemetry.output));
-    // Kept as a stable compatibility publication for older Python callers.
-    // Adaptive dispatch estimation is no longer part of the runtime.
-    *estimator_output.lock() = Some("{\"deprecated\":true}".to_string());
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();
     local_metrics.power_throttling_disabled = false;

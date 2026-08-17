@@ -20,7 +20,7 @@ microsecond conversions.
 | `sendinput_completion_qpc` | QPC sample returned after the packetized SendInput call. |
 | `admission_to_completion` | The interval from `final_admission_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `effective_release` | Release deadline after the completion-anchored hold floor. |
+| `effective_release` | Release deadline after the authored minimum-hold floor. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
 `physical_target`. Historical `dispatch_lead_us`, estimator state, and lead
@@ -36,24 +36,26 @@ frame_us = ceil(1_000_000 / game_fps)
 effective_min_hold = max(requested_min_hold_us, frame_us + 500)
 ```
 
-For every successful Down packet:
+For every authored Down packet:
 
 ```text
-release_floor = sendinput_completion_qpc + effective_min_hold
+release_floor = authored_down + effective_min_hold
 effective_release = max(authored_release, release_floor)
 ```
 
-The release floor is a sender-side contract. A completion sample does not prove
-kernel delivery or game observation. A slow Down can defer its own release but
+The release floor is an authored sender-side contract. A completion sample
+does not prove kernel delivery or game observation. The worker checks the
+completion against the authored floor for feasibility; a slow Down may enter
+per-key recovery state only when its authored release remains feasible. It
 cannot shift unrelated future authored actions.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
 that share one authored timestamp. Runtime completion lateness is handled
-separately: an Up that misses its authored floor becomes one per-key pending
-release, while an unrelated Down remains eligible at its own authored
-boundary. A same-key Down whose release floor cannot be met is rejected
-fail-closed with physical deadline infeasibility.
+separately: an Up that remains feasible after its authored floor may become
+one per-key pending release, while an unrelated Down remains eligible at its
+own authored boundary. A same-key Up whose authored floor cannot be met is
+rejected fail-closed with physical deadline infeasibility.
 
 ## 2.1 Host delivery calibration
 
@@ -167,19 +169,21 @@ SendInput-only security boundary.
 
 ## 6. Deferred observation
 
-After ownership commit, the dispatch thread pushes a raw observation into a
-fixed-capacity `crossbeam_queue::ArrayQueue` using a nonblocking operation.
-Capacity is bounded at 64 for the production observer. If full, the new
+Production does not enqueue observations or run an observer thread. After
+ownership commit it records only bounded scalar counters. Strict diagnostic
+mode pushes a raw observation into a fixed-capacity
+`crossbeam_queue::ArrayQueue` using a nonblocking operation. If full, the new
 observation is dropped and a counter is incremented; older observations remain
 queued. The producer does not drain, allocate, format strings, update health,
 sample `queue.len()`, or mutate the coordinator. Queue high-watermark and
 health-window calculations belong to the observer-side diagnostic path.
 
-A single observer consumer thread owns the queue drain, health windows,
-telemetry record materialization, shared metric publication, and observer
-timing counters. It uses its own local health state and metrics. On shutdown,
-the worker signals the consumer, joins it, merges its metrics, and only then
-publishes the final report. Observer output cannot authorize or reorder input.
+In diagnostic mode a single observer consumer thread owns the queue drain,
+health windows, telemetry record materialization, shared metric publication,
+and observer timing counters. It uses its own local health state and metrics.
+On shutdown, the worker signals the consumer, joins it, merges its metrics,
+and only then publishes the final report. Observer output cannot authorize or
+reorder input.
 
 ## 7. Observability and compatibility
 
@@ -192,7 +196,7 @@ The authoritative sender-side metrics are:
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
 - release-floor/defer evidence; and
-- bounded observer queue/drop and telemetry counters.
+- diagnostic-only observer queue/drop and telemetry counters.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
 They must not be described as game-observed timing. The compatibility report

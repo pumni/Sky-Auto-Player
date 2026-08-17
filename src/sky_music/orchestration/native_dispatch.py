@@ -69,13 +69,19 @@ class NativeBackendHealthProtocol(Protocol):
 class NativeProgressSnapshotProtocol(Protocol):
     elapsed_us: int
     total_us: int
+    pre_roll_remaining_us: int
     max_completion_error_us: int
     late_2ms: int
     late_5ms: int
     late_10ms: int
+    max_sendinput_entry_lateness_us: int
+    entry_late_2ms: int
+    entry_late_5ms: int
+    entry_late_10ms: int
     release_max_us: int
     release_late_2ms: int
     recent_latencies_us: Sequence[int]
+    recent_latency_samples_available: bool
     is_finished: bool
     is_paused: bool
     input_path_degraded: bool
@@ -108,6 +114,7 @@ class RustDispatchRuntime:
         "_last_hwnd",
         "_manual_paused",
         "_min_hold_us",
+        "_pre_roll_us",
         "_renderer",
         "_require_focus",
         "_session",
@@ -130,6 +137,7 @@ class RustDispatchRuntime:
         poll_s: float,
         telemetry_enabled: bool = False,
         focus_restore_grace_us: int = 100_000,
+        pre_roll_us: int = 0,
     ) -> None:
         import sky_player_rs  # type: ignore[import-not-found]
 
@@ -153,13 +161,13 @@ class RustDispatchRuntime:
                 focus_restore_grace_us=focus_restore_grace_us,
                 telemetry=telemetry_enabled,
                 profile="production",
-                # Compatibility input is deliberately not loaded: production
-                # dispatch has no learned lead/estimator control path.
-                estimator_state_json=None,
             ),
         )
         self._song_name = song_name
         self._min_hold_us = min_hold_us
+        if type(pre_roll_us) is not int or pre_roll_us < 0:
+            raise ValueError("pre_roll_us must be a non-negative integer")
+        self._pre_roll_us = pre_roll_us
         self._require_focus = require_focus
         self._focus_guard = focus_guard
         self._controls = controls
@@ -175,13 +183,6 @@ class RustDispatchRuntime:
         with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
             self._focus_guard.focus()
         self._set_initial_target()
-        self._publish_focus()
-
-    def _attempt_initial_focus(self) -> None:
-        if not self._require_focus:
-            return
-        with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
-            self._focus_guard.focus()
         self._publish_focus()
 
     def _publish_focus(self) -> None:
@@ -296,7 +297,7 @@ class RustDispatchRuntime:
         except (AttributeError, RuntimeError, TypeError, ValueError):
             return False
 
-    def run(self) -> tuple[str, dict[str, Any], dict[str, Any], str | None]:
+    def run(self) -> tuple[PlaybackOutcome, dict[str, Any], dict[str, Any]]:
         """Run supervisor polling until the native worker reaches a terminal state."""
         started = False
         joined = False
@@ -311,12 +312,13 @@ class RustDispatchRuntime:
                 if callable(start_controls):
                     start_controls()
             self._set_initial_target()
-            self._attempt_initial_focus()
-            self._session.start()
+            self._publish_focus()
+            self._session.arm(self._pre_roll_us)  # type: ignore[attr-defined]
             started = True
 
             live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
-            if not live.is_paused:
+            initial_status = parse_native_session_status(str(live.status))
+            if initial_status == NativeSessionStatus.PLAYING:
                 self._has_played = True
 
             while True:
@@ -332,7 +334,8 @@ class RustDispatchRuntime:
                 self._publish_focus()
                 self._session.heartbeat()
                 live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
-                if not live.is_paused:
+                native_status = parse_native_session_status(str(live.status))
+                if native_status == NativeSessionStatus.PLAYING:
                     self._has_played = True
 
                 now = time.monotonic()
@@ -340,10 +343,28 @@ class RustDispatchRuntime:
                     if hasattr(self._renderer, "update_counters_batch"):
                         self._renderer.update_counters_batch(
                             ProgressCounters(
-                                max_lateness_us=live.max_completion_error_us,
-                                late_2ms=live.late_2ms,
-                                late_5ms=live.late_5ms,
-                                late_10ms=live.late_10ms,
+                                max_lateness_us=max(
+                                    live.max_completion_error_us,
+                                    int(
+                                        getattr(
+                                            live,
+                                            "max_sendinput_entry_lateness_us",
+                                            0,
+                                        )
+                                    ),
+                                ),
+                                late_2ms=max(
+                                    live.late_2ms,
+                                    int(getattr(live, "entry_late_2ms", 0)),
+                                ),
+                                late_5ms=max(
+                                    live.late_5ms,
+                                    int(getattr(live, "entry_late_5ms", 0)),
+                                ),
+                                late_10ms=max(
+                                    live.late_10ms,
+                                    int(getattr(live, "entry_late_10ms", 0)),
+                                ),
                                 release_max_us=live.release_max_us,
                                 release_late_2ms=live.release_late_2ms,
                                 recent_latencies_us=tuple(
@@ -351,7 +372,9 @@ class RustDispatchRuntime:
                                 ),
                             )
                         )
-                    if live.is_paused:
+                    if native_status == NativeSessionStatus.PREROLL:
+                        status = "countdown"
+                    elif live.is_paused:
                         status = (
                             "paused"
                             if self._manual_paused
@@ -362,10 +385,11 @@ class RustDispatchRuntime:
                     else:
                         status = "playing"
                     self._renderer.render(
-                        live.elapsed_us / 1_000_000,
+                        0.0 if native_status == NativeSessionStatus.PREROLL else live.elapsed_us / 1_000_000,
                         max(self._total_us, 1) / 1_000_000,
                         self._song_name,
                         status=status,
+                        pre_roll_remaining_us=int(live.pre_roll_remaining_us),
                         input_path_degraded=live.input_path_degraded,
                         sendinput_path_degraded=live.sendinput_path_degraded,
                         core_post_send_degraded=live.core_post_send_degraded,
@@ -415,10 +439,9 @@ class RustDispatchRuntime:
                     "dropped": 0,
                     "truncated": False,
                 }
-                return outcome, latest, telemetry, None
+                return outcome, latest, telemetry
             assert report is not None
             telemetry = json.loads(str(report["telemetry_json"]))
-            estimator_state_json = str(report["estimator_state_json"])
             final_status = parse_native_session_status(str(latest.get("status")))
             if final_status in {
                 NativeSessionStatus.ERROR,
@@ -430,9 +453,8 @@ class RustDispatchRuntime:
                     str(detail),
                     snapshot=latest,
                     telemetry=telemetry,
-                    estimator_state_json=estimator_state_json,
                 )
-            return outcome, latest, telemetry, estimator_state_json
+            return outcome, latest, telemetry
         except BaseException:
             if started and not self._native_is_finished():
                 with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):

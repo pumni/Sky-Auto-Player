@@ -435,6 +435,7 @@ fn pop_empty_no_alloc() {
 fn production_down_only_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.align_next_plan_to_future_for_test(100_000);
 
     enable_counting();
     let plan = harness.plan_current_dispatch();
@@ -462,6 +463,7 @@ fn production_down_only_hard_path_no_alloc() {
 fn production_mixed_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_mixed();
+    harness.align_next_plan_to_future_for_test(100_000);
 
     // Step 1: Dispatch initial Down key A COMPLETELY OUTSIDE allocation measurement.
     let plan0 = harness.plan_current_dispatch();
@@ -507,33 +509,29 @@ fn production_mixed_hard_path_no_alloc() {
 #[test]
 fn production_deadline_handoff_down_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 100_000);
+    harness.align_next_plan_to_future_for_test(100_000);
     let plan = harness.plan_current_dispatch();
     harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
 
     enable_counting();
-    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let step = harness.dispatch_at_plan_target_for_test(&plan);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0);
-    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }
 
 #[test]
 fn production_deadline_handoff_mixed_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_mixed();
-    let initial_plan = harness.plan_current_dispatch();
-    assert!(matches!(
-        harness.dispatch_authored_with_plan(&initial_plan),
-        DispatchStep::Dispatched
-    ));
-    harness.advance_playback_time_us(10_000);
+    let mut harness = ProductionDispatchTestHarness::new_mixed_events_with_gap(2, 100_000);
+    harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
     harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
 
     enable_counting();
-    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let step = harness.dispatch_at_plan_target_for_test(&plan);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0);
@@ -543,23 +541,27 @@ fn production_deadline_handoff_mixed_no_alloc() {
 #[test]
 fn production_deadline_handoff_up_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
-    harness.advance_playback_time_us(10_000);
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
+    harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
     harness.set_deadline_wake_for_test(QpcTicks::from_raw(1));
 
     enable_counting();
-    let step = harness.dispatch_due_from_plan_for_test(&plan);
+    let step = harness.wait_and_dispatch_current_plan(&plan);
     let allocs = disable_counting();
 
+    assert!(
+        matches!(step, Ok(DispatchStep::Dispatched)),
+        "step={step:?}"
+    );
     assert_eq!(allocs, 0);
-    assert!(matches!(step, DispatchStep::Dispatched));
 }
 
 #[test]
 fn production_fifteen_key_down_chord_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(15, 0);
+    harness.align_next_plan_to_future_for_test(100_000);
 
     enable_counting();
     let plan = harness.plan_current_dispatch();
@@ -576,8 +578,8 @@ fn production_pending_release_up_only_no_alloc() {
     let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
     let first = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&first),
-        DispatchStep::Dispatched
+        harness.wait_and_dispatch_current_plan(&first),
+        Ok(DispatchStep::Dispatched)
     ));
     let authored = harness.plan_current_dispatch();
     assert!(matches!(
@@ -589,7 +591,7 @@ fn production_pending_release_up_only_no_alloc() {
     let pending = harness.plan_current_dispatch();
     assert_eq!(
         pending.authored_path(),
-        Some(DispatchPath::UpOnly { up_count: 1 })
+        Some(DispatchPath::UpOnly { up_count: 2 })
     );
     let step = harness.wait_and_dispatch_current_plan(&pending);
     let allocs = disable_counting();
@@ -603,18 +605,15 @@ fn production_coalesced_pending_up_and_authored_down_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness =
         ProductionDispatchTestHarness::new_coalesced_pending_release_with_unrelated_down();
+    harness.align_next_plan_to_future_for_test(100_000);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&first),
-        DispatchStep::Dispatched
-    ));
-    let deferred = harness.plan_current_dispatch();
-    assert!(matches!(
-        harness.wait_and_dispatch_current_plan(&deferred),
+        harness.wait_and_dispatch_current_plan(&first),
         Ok(DispatchStep::Dispatched)
     ));
-
-    harness.advance_playback_time_us(1_000);
+    harness.seed_pending_release_for_test(0x15, 21_000);
+    harness.advance_playback_time_us(21_000);
+    harness.align_next_plan_to_future_for_test(100_000);
     let coalesced = harness.plan_current_dispatch();
     assert_eq!(
         coalesced.authored_path(),
@@ -625,51 +624,63 @@ fn production_coalesced_pending_up_and_authored_down_no_alloc() {
     );
     harness.set_deadline_wake_for_plan_for_test(&coalesced);
     enable_counting();
-    let step = harness.dispatch_due_from_plan_for_test(&coalesced);
+    let step = harness.wait_and_dispatch_current_plan(&coalesced);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0, "coalesced Mixed path allocated {allocs} time(s)");
-    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(
+        matches!(step, Ok(DispatchStep::Dispatched)),
+        "step={step:?}"
+    );
 }
 
 #[test]
-fn production_metadata_only_deferred_commit_at_equal_boundary_no_alloc() {
+fn production_metadata_only_stale_commit_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_pending_release_with_metadata_boundary();
+    let mut harness = ProductionDispatchTestHarness::new_stale_metadata_boundary();
+    harness.align_next_plan_to_future_for_test(100_000);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&first),
+        &first,
+        sky_player_rs::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
+    ));
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
         DispatchStep::Dispatched
     ));
     let second = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.wait_and_dispatch_current_plan(&second),
-        Ok(DispatchStep::Dispatched)
+        harness.dispatch_at_plan_target_for_test(&second),
+        DispatchStep::Dispatched
     ));
-    let deferred = harness.plan_current_dispatch();
-    assert!(matches!(
-        harness.wait_and_dispatch_current_plan(&deferred),
-        Ok(DispatchStep::Dispatched)
-    ));
+    let third = harness.plan_current_dispatch();
+    let third_step = harness.dispatch_at_plan_target_for_test(&third);
+    assert!(
+        matches!(third_step, DispatchStep::Dispatched),
+        "third step={third_step:?}"
+    );
 
-    harness.advance_playback_time_us(1_000);
-    let equal_boundary = harness.plan_current_dispatch();
-    harness.set_deadline_wake_for_plan_for_test(&equal_boundary);
+    let metadata = harness.plan_current_dispatch();
+    assert!(matches!(
+        &metadata,
+        sky_player_rs::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
+    ));
     enable_counting();
-    let step = harness.dispatch_due_from_plan_for_test(&equal_boundary);
+    let step = harness.dispatch_at_plan_target_for_test(&metadata);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
-        "equal-boundary metadata commit allocated {allocs} time(s)"
+        "stale metadata commit allocated {allocs} time(s)"
     );
-    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }
 
 #[test]
 fn production_backlog_abort_decision_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.align_next_plan_to_future_for_test(100_000);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_due_from_plan_for_test(&first),
@@ -679,7 +690,7 @@ fn production_backlog_abort_decision_no_alloc() {
 
     enable_counting();
     let overdue = harness.plan_current_dispatch();
-    let step = harness.dispatch_due_from_plan_for_test(&overdue);
+    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&overdue);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0, "backlog decision allocated {allocs} time(s)");

@@ -58,7 +58,6 @@ struct NativeSessionConfigPy {
     target_hwnd: isize,
     telemetry: bool,
     profile: DispatchProfile,
-    estimator_state_json: Option<String>,
 }
 
 impl Default for NativeSessionConfigPy {
@@ -71,7 +70,6 @@ impl Default for NativeSessionConfigPy {
             target_hwnd: 0,
             telemetry: false,
             profile: DispatchProfile::Production,
-            estimator_state_json: None,
         }
     }
 }
@@ -86,8 +84,7 @@ impl NativeSessionConfigPy {
         focus_restore_grace_us = StrictU64(100000),
         target_hwnd = StrictU64(0),
         telemetry = false,
-        profile = "production",
-        estimator_state_json = None
+        profile = "production"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -98,7 +95,6 @@ impl NativeSessionConfigPy {
         target_hwnd: StrictU64,
         telemetry: bool,
         profile: &str,
-        estimator_state_json: Option<String>,
     ) -> PyResult<Self> {
         let target_hwnd = isize::try_from(target_hwnd.0)
             .map_err(|_| PyValueError::new_err("target_hwnd is outside the platform range"))?;
@@ -132,7 +128,6 @@ impl NativeSessionConfigPy {
             target_hwnd,
             telemetry,
             profile,
-            estimator_state_json,
         })
     }
 
@@ -164,11 +159,6 @@ impl NativeSessionConfigPy {
     #[getter]
     fn telemetry(&self) -> bool {
         self.telemetry
-    }
-
-    #[getter]
-    fn estimator_state_json(&self) -> Option<&str> {
-        self.estimator_state_json.as_deref()
     }
 
     #[getter]

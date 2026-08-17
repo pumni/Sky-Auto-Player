@@ -1,4 +1,5 @@
 use super::*;
+use crate::coordinator::PendingRelease;
 
 #[test]
 fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -791,14 +792,14 @@ fn unrelated_deferred_release_does_not_move_authored_down_chord() {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 100,
+                scheduled_us: 400,
                 scan_codes: vec![0x15].into(),
                 reason: "late release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100,
+                scheduled_us: 400,
                 scan_codes: vec![0x16, 0x17].into(),
                 reason: "independent chord".into(),
             },
@@ -813,16 +814,16 @@ fn unrelated_deferred_release_does_not_move_authored_down_chord() {
         .unwrap()
         .unwrap();
     coordinator
-        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::ZERO)
         .unwrap();
 
     let prepared = coordinator
         .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(100));
-    assert_eq!(prepared.immediate_up_mask, 0);
-    assert_eq!(prepared.deferred_up_mask, 0b001);
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(400));
+    assert_eq!(prepared.immediate_up_mask, 0b001);
+    assert_eq!(prepared.deferred_up_mask, 0);
     assert_eq!(prepared.down_mask, 0b110);
 }
 
@@ -867,16 +868,16 @@ fn same_key_infeasible_retrigger_fails_before_down_send() {
 
     assert!(matches!(
         coordinator.prepare_current_authored_frame(),
-        Err(CoordinatorError::PhysicalDeadlineInfeasible {
+        Err(CoordinatorError::MinHoldInfeasibleAfterLateDown {
             authored_ticks: TimelineTicks { .. },
             blocked_mask: 0b01,
-            latest_required_release_ticks: TimelineTicks { .. },
+            required_release_ticks: TimelineTicks { .. },
         })
     ));
 }
 
 #[test]
-fn deferred_up_only_frame_is_metadata_and_does_not_block_later_down() {
+fn authored_up_only_frame_does_not_block_later_down() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -889,14 +890,14 @@ fn deferred_up_only_frame_is_metadata_and_does_not_block_later_down() {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 100,
+                scheduled_us: 400,
                 scan_codes: vec![0x15].into(),
                 reason: "deferred release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 200,
+                scheduled_us: 500,
                 scan_codes: vec![0x16].into(),
                 reason: "independent down".into(),
             },
@@ -911,29 +912,33 @@ fn deferred_up_only_frame_is_metadata_and_does_not_block_later_down() {
         .unwrap()
         .unwrap();
     coordinator
-        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::ZERO)
         .unwrap();
 
     let release_frame = coordinator
         .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(release_frame.deferred_up_mask, 0b01);
+    assert_eq!(release_frame.immediate_up_mask, 0b01);
+    assert_eq!(release_frame.deferred_up_mask, 0);
     assert_eq!(release_frame.down_mask, 0);
-    coordinator
-        .commit_authored_frame_metadata(release_frame)
+    let release = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(400), DurationTicks::ZERO)
+        .unwrap()
         .unwrap();
-
-    assert_eq!(coordinator.pending_release_mask(), 0b01);
-    assert_eq!(
-        coordinator.earliest_pending_release_ticks(),
-        Some(TimelineTicks::from_raw(600))
-    );
+    coordinator
+        .commit_packet_success(
+            release,
+            TimelineTicks::from_raw(400),
+            TimelineTicks::from_raw(400),
+        )
+        .unwrap();
+    assert_eq!(coordinator.pending_release_mask(), 0);
     let next = coordinator
         .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(next.authored_ticks, TimelineTicks::from_raw(200));
+    assert_eq!(next.authored_ticks, TimelineTicks::from_raw(500));
     assert_eq!(next.down_mask, 0b10);
 }
 
@@ -968,11 +973,17 @@ fn pending_release_queries_preserve_distinct_and_equal_boundaries() {
     coordinator
         .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
         .unwrap();
-    let release = coordinator
-        .prepare_current_authored_frame()
-        .unwrap()
-        .unwrap();
-    coordinator.commit_authored_frame_metadata(release).unwrap();
+    for slot in 0..2u8 {
+        let active = coordinator.active_for_slot(slot).unwrap().clone();
+        coordinator.pending_release_by_slot[usize::from(slot)] = Some(PendingRelease {
+            generation_id: active.generation_id,
+            key_slot: slot,
+            authored_release_ticks: TimelineTicks::from_raw(100),
+            due_ticks: TimelineTicks::from_raw(600),
+            source_action_index: u32::from(slot),
+        });
+        coordinator.pending_release_mask |= 1u16 << slot;
+    }
 
     assert_eq!(
         coordinator.pending_release_mask_due_at(TimelineTicks::from_raw(600)),
@@ -1019,14 +1030,16 @@ fn coordinator_with_pending_release() -> RuntimeDispatchCoordinator {
     coordinator
         .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(1_000))
         .expect("commit suspension down");
-    let up = coordinator
-        .prepare_current_authored_frame()
-        .expect("prepare suspension up")
-        .expect("suspension up exists");
-    assert_eq!(up.deferred_up_mask, 0b01);
-    coordinator
-        .commit_authored_frame_metadata(up)
-        .expect("register suspension pending release");
+    let active = coordinator.active_for_slot(0).unwrap().clone();
+    coordinator.pending_release_by_slot[0] = Some(PendingRelease {
+        generation_id: active.generation_id,
+        key_slot: 0,
+        authored_release_ticks: TimelineTicks::from_raw(1_000),
+        due_ticks: TimelineTicks::from_raw(1_300),
+        source_action_index: 1,
+    });
+    coordinator.pending_release_mask |= 0b001;
+    coordinator.cursor = coordinator.schedule.batches.len();
     assert_eq!(coordinator.pending_release_mask(), 0b01);
     coordinator
         .check_invariants()

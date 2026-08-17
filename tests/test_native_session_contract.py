@@ -123,7 +123,7 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
             telemetry=True,
         ),
     )
-    session.start()
+    session.arm(0)  # type: ignore[attr-defined]
     assert session.join(timeout_ms=5_000) is True
 
     live = session.snapshot_lite()  # type: ignore[attr-defined]
@@ -137,7 +137,6 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
         "snapshot",
         "effective_config",
         "telemetry_json",
-        "estimator_state_json",
     }
     assert dict(report["snapshot"])["is_finished"] is True
     assert report["effective_config"] == {
