@@ -66,7 +66,9 @@ pub use planning::NextDispatchPlan;
 pub(crate) use planning::TargetProof;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
-pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
+#[cfg(debug_assertions)]
+pub(crate) use planning::plan_structure_is_valid;
+pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
