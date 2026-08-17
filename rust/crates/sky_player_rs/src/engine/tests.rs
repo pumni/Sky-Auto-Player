@@ -2749,6 +2749,67 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
 }
 
 #[test]
+fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let authored = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&authored),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+
+    harness
+        .suspend_live_input_for_test()
+        .expect("manual pause suspension");
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
+    assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    assert!(matches!(
+        harness.plan_current_dispatch(),
+        super::worker::NextDispatchPlan::NoWork
+    ));
+    assert!(harness.resources.coordinator.is_finished());
+}
+
+#[test]
+fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let authored = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&authored),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+
+    // Focus restoration uses the same production suspension seam before it
+    // re-preflights the target.  A resumed planner must not rediscover the
+    // cancelled pending Up.
+    harness
+        .suspend_live_input_for_test()
+        .expect("focus suspension");
+    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
+    assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    assert!(matches!(
+        harness.plan_current_dispatch(),
+        super::worker::NextDispatchPlan::NoWork
+    ));
+    assert!(harness.resources.coordinator.is_finished());
+}
+
+#[test]
 fn pending_release_equal_metadata_boundary_sends_up_and_commits_metadata() {
     use super::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_win32::input::PhysicalPacket;
@@ -4184,14 +4245,16 @@ fn note_on_lateness_shifts_note_off_floor_one_to_one() {
         .expect("coordinator");
 
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(1_000));
+    let commit = coordinator.prepare_authored_commit(prepared).unwrap();
 
     let down_started = TimelineTicks::from_raw(10_000);
     let down_completed = TimelineTicks::from_raw(15_000);
     coordinator
-        .commit_packet_success(prepared, down_started, down_completed)
+        .commit_prepared_authored_frame_success_frozen(&commit, down_started, down_completed)
         .unwrap();
 
     let active = coordinator.active_for_slot(0).unwrap();
@@ -4239,14 +4302,16 @@ fn fast_note_on_preserves_authored_note_off() {
         .expect("coordinator");
 
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(1_000));
+    let commit = coordinator.prepare_authored_commit(prepared).unwrap();
 
     let down_started = TimelineTicks::from_raw(1_000);
     let down_completed = TimelineTicks::from_raw(1_050);
     coordinator
-        .commit_packet_success(prepared, down_started, down_completed)
+        .commit_prepared_authored_frame_success_frozen(&commit, down_started, down_completed)
         .unwrap();
 
     let active = coordinator.active_for_slot(0).unwrap();
@@ -4301,45 +4366,41 @@ fn late_first_event_does_not_move_second_event() {
     .expect("coordinator");
 
     let p1 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(11_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
+    assert_eq!(p1.authored_ticks, TimelineTicks::from_raw(1_000));
+    let p1_commit = coordinator.prepare_authored_commit(p1).unwrap();
     coordinator
-        .commit_packet_success(
-            p1,
+        .commit_prepared_authored_frame_success_frozen(
+            &p1_commit,
             TimelineTicks::from_raw(11_000),
             TimelineTicks::from_raw(11_050),
         )
         .unwrap();
 
     let p2 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(20_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        p2.effective_scheduled_ticks,
-        TimelineTicks::from_raw(20_000)
-    );
+    assert_eq!(p2.authored_ticks, TimelineTicks::from_raw(20_000));
+    let p2_commit = coordinator.prepare_authored_commit(p2).unwrap();
     coordinator
-        .commit_packet_success(
-            p2,
+        .commit_prepared_authored_frame_success_frozen(
+            &p2_commit,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(20_050),
         )
         .unwrap();
 
     let p3 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(50_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        p3.effective_scheduled_ticks,
-        TimelineTicks::from_raw(50_000)
-    );
+    assert_eq!(p3.authored_ticks, TimelineTicks::from_raw(50_000));
 
-    let delta_b_a = p2.effective_scheduled_ticks.as_u64() - p1.effective_scheduled_ticks.as_u64();
-    let delta_c_b = p3.effective_scheduled_ticks.as_u64() - p2.effective_scheduled_ticks.as_u64();
+    let delta_b_a = p2.authored_ticks.as_u64() - p1.authored_ticks.as_u64();
+    let delta_c_b = p3.authored_ticks.as_u64() - p2.authored_ticks.as_u64();
     assert_eq!(delta_b_a, 19_000);
     assert_eq!(delta_c_b, 30_000);
 }
@@ -4388,12 +4449,13 @@ fn pending_release_does_not_move_unrelated_future_authored_action() {
     .expect("coordinator");
 
     let p_down_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
+    let p_down_a_commit = coordinator.prepare_authored_commit(p_down_a).unwrap();
     coordinator
-        .commit_packet_success(
-            p_down_a,
+        .commit_prepared_authored_frame_success_frozen(
+            &p_down_a_commit,
             TimelineTicks::from_raw(1_000),
             TimelineTicks::from_raw(15_000),
         )
@@ -4451,7 +4513,7 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
     )
     .expect("schedule");
 
-    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+    let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         10_000,
         DurationTicks::from_raw(10_000),
@@ -4460,10 +4522,10 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
     .expect("coordinator");
 
     let p1 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(1_000))
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
+    assert_eq!(p1.authored_ticks, TimelineTicks::from_raw(1_000));
 }
 
 /// §8.12 — slow observer must not shift the next authored dispatch when slack

@@ -28,8 +28,9 @@ use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
-    PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PhysicalPacket, PlatformSendResult,
-    SendEvidence, SendTransactionOutcome, SendTransactionStatus, TrackedKeyState,
+    InstrumentPhysicalState, PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PhysicalPacket,
+    PlatformSendResult, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+    TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -515,6 +516,7 @@ impl ProductionDispatchTestHarness {
         .expect("coordinator");
         let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
         backend.set_test_emitters();
+        backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
         let waiter = HybridWaiter::new();
         let playback =
             PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
@@ -633,6 +635,18 @@ impl ProductionDispatchTestHarness {
 
     pub fn backend_possibly_active_mask(&self) -> u16 {
         self.resources.backend.possibly_active_mask
+    }
+
+    /// Exercise the same verified-release/cancel seam used by manual pause
+    /// and focus suspension.  The harness keeps this call explicit so tests
+    /// cannot accidentally replace the production cleanup path with a direct
+    /// coordinator mutation.
+    pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
+        super::super::worker::suspend_live_input(
+            &mut self.resources.backend,
+            &mut self.resources.coordinator,
+            self.target_hwnd.load(Ordering::Acquire),
+        )
     }
 
     /// Number of full-instrument cleanup operations performed by terminal

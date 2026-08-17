@@ -365,7 +365,6 @@ pub(crate) struct DownSendTiming {
     pub(crate) sendinput_completed_qpc: QpcTicks,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) strict_completion_late: bool,
-    pub(crate) retry_late_abort: bool,
 }
 
 /// Resolves the QPC evidence, commits the prepared batch, and computes the
@@ -543,62 +542,50 @@ pub(crate) fn interpret_down_send_timing(
     // `resolve_send_boundaries`.
     let final_admission_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
     let sendinput_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
-    let (completion_error_ticks_value, retry_late_abort, strict_completion_late) =
-        if config.timing.strict_timing {
-            let completion_error_ticks_value = match signed_timeline_delta_ticks(
-                completed_effective_ticks,
-                view.batch_scheduled_ticks,
-            ) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "note-on timing conversion failure: {error}"
-                    )));
-                }
-            };
-            let (requested_count, delivered_count) = physical_event_counts(
-                view.packet_masks,
-                view.dispatch_path,
-                result_success,
-                result_confirmed_mask,
-            );
-            let recovered_zero_progress =
-                matches!(result_retry_reason, PacketRetryReason::ZeroProgress);
-            let recovered_retry_late = recovered_zero_progress
-                && result_success
-                && completion_lateness_ticks
-                    .is_some_and(|late| late > timing.retry_late_threshold_ticks);
-            let retry_late_abort = recovered_retry_late;
-            let observation_evidence = DispatchObservationEvidence {
-                status: result_status,
-                attempts: result_send_attempts,
-                retry_reason: result_retry_reason,
-                requested_count,
-                confirmed_count: delivered_count,
-                skipped_count: result_skipped_mask.count_ones() as usize,
-                timing_valid: true,
-                transport_anomaly: result_last_win32_error.is_some(),
-                recovery_used: !matches!(result_retry_reason, PacketRetryReason::None),
-                chord_integrity_lost: result_chord_integrity_lost,
-            };
-            let clean_dispatch_sample = is_clean_dispatch_observation(observation_evidence);
-            let strict_completion_late = clean_dispatch_sample
-                && completion_lateness_ticks.is_some_and(|late| {
-                    late > match view.dispatch_path {
-                        DispatchPath::UpOnly { .. } => timing.strict_up_completion_late_ticks,
-                        DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
-                            timing.strict_down_completion_late_ticks
-                        }
-                    }
-                });
-            (
-                completion_error_ticks_value,
-                retry_late_abort,
-                strict_completion_late,
-            )
-        } else {
-            (0, false, false)
+    let (completion_error_ticks_value, strict_completion_late) = if config.timing.strict_timing {
+        let completion_error_ticks_value = match signed_timeline_delta_ticks(
+            completed_effective_ticks,
+            view.batch_scheduled_ticks,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "note-on timing conversion failure: {error}"
+                )));
+            }
         };
+        let (requested_count, delivered_count) = physical_event_counts(
+            view.packet_masks,
+            view.dispatch_path,
+            result_success,
+            result_confirmed_mask,
+        );
+        let observation_evidence = DispatchObservationEvidence {
+            status: result_status,
+            attempts: result_send_attempts,
+            retry_reason: result_retry_reason,
+            requested_count,
+            confirmed_count: delivered_count,
+            skipped_count: result_skipped_mask.count_ones() as usize,
+            timing_valid: true,
+            transport_anomaly: result_last_win32_error.is_some(),
+            recovery_used: !matches!(result_retry_reason, PacketRetryReason::None),
+            chord_integrity_lost: result_chord_integrity_lost,
+        };
+        let clean_dispatch_sample = is_clean_dispatch_observation(observation_evidence);
+        let strict_completion_late = clean_dispatch_sample
+            && completion_lateness_ticks.is_some_and(|late| {
+                late > match view.dispatch_path {
+                    DispatchPath::UpOnly { .. } => timing.strict_up_completion_late_ticks,
+                    DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+                        timing.strict_down_completion_late_ticks
+                    }
+                }
+            });
+        (completion_error_ticks_value, strict_completion_late)
+    } else {
+        (0, false)
+    };
     Ok(DownSendTiming {
         epoch_qpc: clock_state.epoch,
         allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
@@ -606,7 +593,6 @@ pub(crate) fn interpret_down_send_timing(
         sendinput_completed_qpc,
         completion_error_ticks_value,
         strict_completion_late,
-        retry_late_abort,
     })
 }
 

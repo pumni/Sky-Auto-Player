@@ -22,6 +22,8 @@ impl RuntimeDispatchCoordinator {
             + self.counters.cancelled;
         self.cursor >= self.schedule.batches.len()
             && self.active_mask == 0
+            && self.pending_release_mask == 0
+            && self.pending_release_by_slot.iter().all(Option::is_none)
             && terminal_count == self.schedule.generation_count
     }
 
@@ -60,6 +62,49 @@ impl RuntimeDispatchCoordinator {
                 self.counters.terminal_total()
             )));
         }
+        for slot in 0..MAX_KEYS {
+            let bit = Self::bit_for_slot(slot as KeySlot);
+            let pending = self.pending_release_by_slot[slot];
+            if pending.is_some() != (self.pending_release_mask & bit != 0) {
+                return Err(CoordinatorInvariantError::Accounting(format!(
+                    "pending slot {slot} and pending mask disagree"
+                )));
+            }
+            let Some(pending) = pending else {
+                continue;
+            };
+            if pending.key_slot != slot as KeySlot {
+                return Err(CoordinatorInvariantError::Accounting(format!(
+                    "pending slot {slot} stores key slot {}",
+                    pending.key_slot
+                )));
+            }
+            let Some(active) = self.active_by_slot[slot].as_ref() else {
+                return Err(CoordinatorInvariantError::Accounting(format!(
+                    "pending slot {slot} has no active owner"
+                )));
+            };
+            if active.generation_id != pending.generation_id
+                || self.active_mask & bit == 0
+                || self.blocked_mask & bit == 0
+            {
+                return Err(CoordinatorInvariantError::Accounting(format!(
+                    "pending slot {slot} does not match active ownership"
+                )));
+            }
+            let Some(state) = self.generation_states.get(pending.generation_id as usize) else {
+                return Err(CoordinatorInvariantError::UnknownGeneration {
+                    generation_id: pending.generation_id,
+                    generation_count: self.generation_count,
+                });
+            };
+            if *state != GenerationStatus::Active {
+                return Err(CoordinatorInvariantError::Accounting(format!(
+                    "pending slot {slot} points to non-active generation {}",
+                    pending.generation_id
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -78,6 +123,13 @@ impl RuntimeDispatchCoordinator {
         if self.active_by_slot.iter().any(Option::is_some) {
             return Err(CoordinatorInvariantError::Accounting(
                 "terminal cleanup left a live coordinator slot".to_string(),
+            ));
+        }
+        if self.pending_release_mask != 0
+            || self.pending_release_by_slot.iter().any(Option::is_some)
+        {
+            return Err(CoordinatorInvariantError::Accounting(
+                "terminal cleanup left a pending release".to_string(),
             ));
         }
         if self.generation_states.iter().any(|state| {
@@ -114,6 +166,7 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn cancel_all(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {
+        self.check_invariants()?;
         let cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
             .active_by_slot
             .iter()
@@ -142,6 +195,8 @@ impl RuntimeDispatchCoordinator {
         self.active_by_slot.fill(None);
         self.active_mask = 0;
         self.blocked_mask = 0;
+        self.pending_release_by_slot.fill(None);
+        self.pending_release_mask = 0;
 
         self.check_invariants()?;
 
@@ -154,6 +209,7 @@ impl RuntimeDispatchCoordinator {
     /// so a focus/manual suspension can resume the immutable authored cursor
     /// without ever attempting `Cancelled -> Active`.
     pub fn cancel_live_generations(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {
+        self.check_invariants()?;
         let mut cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
             .generation_states
             .iter()
@@ -183,6 +239,8 @@ impl RuntimeDispatchCoordinator {
         self.active_by_slot.fill(None);
         self.active_mask = 0;
         self.blocked_mask = 0;
+        self.pending_release_by_slot.fill(None);
+        self.pending_release_mask = 0;
         self.check_invariants()?;
 
         Ok(cancelled_ids.into_vec())

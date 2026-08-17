@@ -295,6 +295,7 @@ impl RuntimeDispatchCoordinator {
         }))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn register_deferred_releases(
         &mut self,
         prepared: PreparedAuthoredFrame,
@@ -374,6 +375,7 @@ impl RuntimeDispatchCoordinator {
     /// Consume an authored frame that has no immediate physical work.
     /// Deferred releases are registered independently so later authored frames
     /// are not held behind this metadata boundary.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn commit_authored_frame_metadata(
         &mut self,
         prepared: PreparedAuthoredFrame,
@@ -704,6 +706,7 @@ impl RuntimeDispatchCoordinator {
     /// packet completed successfully.  Immediate releases are sent now;
     /// unrelated deferred releases are registered in the fixed pending table
     /// and never hold the frame's Down chord hostage.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn commit_prepared_authored_frame_success(
         &mut self,
         prepared: PreparedAuthoredFrame,
@@ -980,6 +983,7 @@ impl RuntimeDispatchCoordinator {
         }))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn prepare_next_due_authored_uncompensated(
         &mut self,
         now: TimelineTicks,
@@ -993,19 +997,19 @@ impl RuntimeDispatchCoordinator {
         Ok(Some(prepared))
     }
 
-    #[cfg(not(test))]
-    pub fn prepare_next_due_authored(
-        &mut self,
-        now: TimelineTicks,
-    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
-        self.prepare_next_due_authored_uncompensated(now)
-    }
-
     #[cfg(test)]
     pub fn prepare_next_due_authored(
         &mut self,
         now: TimelineTicks,
         _dispatch_lead: DurationTicks,
+    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
+        self.prepare_next_due_authored_uncompensated(now)
+    }
+
+    #[cfg(all(not(test), feature = "test-support"))]
+    pub fn prepare_next_due_authored(
+        &mut self,
+        now: TimelineTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         self.prepare_next_due_authored_uncompensated(now)
     }
@@ -1150,6 +1154,7 @@ impl RuntimeDispatchCoordinator {
     /// Commit one physical packet after the sender reported a complete
     /// transaction. The logical Up transition is applied before Down so a
     /// same-key retrigger replaces the previous generation atomically.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn commit_packet_success(
         &mut self,
         prepared: PreparedBatch,
@@ -1197,6 +1202,7 @@ impl RuntimeDispatchCoordinator {
     /// physical deadline.  The healthy path validates only the current packet
     /// and transitions the identities it owns; it never recounts the complete
     /// generation ledger.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn commit_prepared_packet_success_parts(
         &mut self,
         prepared: PreparedBatch,
@@ -1430,10 +1436,62 @@ impl RuntimeDispatchCoordinator {
                 }
                 None => {}
             }
+            match self.pending_release_by_slot[slot] {
+                Some(pending) => {
+                    if pending.key_slot != slot as KeySlot || self.pending_release_mask & bit == 0 {
+                        return Err(CoordinatorError::Invariant(
+                            CoordinatorInvariantError::Accounting(
+                                "pending slot and ownership mask disagree".to_string(),
+                            ),
+                        ));
+                    }
+                    let Some(active) = self.active_by_slot[slot].as_ref() else {
+                        return Err(CoordinatorError::Invariant(
+                            CoordinatorInvariantError::Accounting(
+                                "pending slot has no active owner".to_string(),
+                            ),
+                        ));
+                    };
+                    if active.generation_id != pending.generation_id
+                        || self.active_mask & bit == 0
+                        || self.blocked_mask & bit == 0
+                    {
+                        return Err(CoordinatorError::Invariant(
+                            CoordinatorInvariantError::Accounting(
+                                "pending slot does not match active ownership".to_string(),
+                            ),
+                        ));
+                    }
+                }
+                None if self.pending_release_mask & bit != 0 => {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "pending mask has no pending slot owner".to_string(),
+                        ),
+                    ));
+                }
+                None => {}
+            }
+        }
+        if self
+            .pending_release_by_slot
+            .iter()
+            .enumerate()
+            .any(|(slot, pending)| {
+                pending.is_some()
+                    && self.pending_release_mask & Self::bit_for_slot(slot as KeySlot) == 0
+            })
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "pending slot exists outside pending mask".to_string(),
+                ),
+            ));
         }
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn commit_down_success(
         &mut self,
         prepared: PreparedBatch,
@@ -1460,6 +1518,7 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn pop_next_due_authored_ticks(
         &mut self,
         now: TimelineTicks,

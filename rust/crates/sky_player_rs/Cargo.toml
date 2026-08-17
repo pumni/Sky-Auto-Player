@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-test-support = ["sky_dispatch_win32/test-support"]
+test-support = ["sky_dispatch_core/test-support", "sky_dispatch_win32/test-support"]
 calibration = []
 
 [dependencies]

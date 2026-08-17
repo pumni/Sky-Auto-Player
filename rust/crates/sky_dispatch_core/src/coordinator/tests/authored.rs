@@ -988,3 +988,106 @@ fn pending_release_queries_preserve_distinct_and_equal_boundaries() {
     assert_eq!(coordinator.pending_release_mask(), 0);
     assert_eq!(coordinator.active_mask, 0);
 }
+
+fn coordinator_with_pending_release() -> RuntimeDispatchCoordinator {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "suspension down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "suspension up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid suspension schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let down = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("prepare suspension down")
+        .expect("suspension down is due");
+    coordinator
+        .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(1_000))
+        .expect("commit suspension down");
+    let up = coordinator
+        .prepare_current_authored_frame()
+        .expect("prepare suspension up")
+        .expect("suspension up exists");
+    assert_eq!(up.deferred_up_mask, 0b01);
+    coordinator
+        .commit_authored_frame_metadata(up)
+        .expect("register suspension pending release");
+    assert_eq!(coordinator.pending_release_mask(), 0b01);
+    coordinator
+        .check_invariants()
+        .expect("pending release has valid ownership");
+    coordinator
+}
+
+#[test]
+fn cancel_live_generations_clears_pending_release_ownership() {
+    let mut coordinator = coordinator_with_pending_release();
+
+    let cancelled = coordinator
+        .cancel_live_generations()
+        .expect("cancel live generations");
+    assert_eq!(cancelled, vec![0]);
+    assert_eq!(coordinator.pending_release_mask(), 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
+    assert!(coordinator.pending_release_for_slot(0).is_none());
+    coordinator
+        .check_invariants()
+        .expect("cancelled coordinator remains consistent");
+    assert!(coordinator.is_finished());
+}
+
+#[test]
+fn cancel_all_clears_pending_release_ownership() {
+    let mut coordinator = coordinator_with_pending_release();
+
+    let cancelled = coordinator.cancel_all().expect("cancel all generations");
+    assert_eq!(cancelled, vec![0]);
+    assert_eq!(coordinator.pending_release_mask(), 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
+    assert!(coordinator.pending_release_for_slot(0).is_none());
+    coordinator
+        .check_post_cleanup_invariants()
+        .expect("cancel-all cleanup is complete");
+    assert!(coordinator.is_finished());
+}
+
+#[test]
+fn pending_release_invariants_require_a_matching_active_owner() {
+    let mut coordinator = coordinator_with_pending_release();
+    coordinator.active_by_slot[0] = None;
+
+    let error = coordinator
+        .check_invariants()
+        .expect_err("orphan pending release must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("pending slot 0 has no active owner")
+    );
+}
+
+#[test]
+fn terminal_cleanup_never_reports_clean_with_pending_residue() {
+    let mut coordinator = coordinator_with_pending_release();
+    coordinator.active_by_slot.fill(None);
+    coordinator.active_mask = 0;
+    coordinator.blocked_mask = 0;
+
+    assert!(coordinator.check_post_cleanup_invariants().is_err());
+    assert_eq!(coordinator.pending_release_mask(), 0b01);
+}

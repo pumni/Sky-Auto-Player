@@ -575,7 +575,6 @@ fn finalize_down_send_outcome(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_slo_terminal_step(
     result_chord_integrity_lost: bool,
-    retry_late_abort: bool,
     strict_completion_late: bool,
     _saturation_abort: bool,
     qpc_clock: QpcClock,
@@ -588,20 +587,6 @@ pub(super) fn resolve_slo_terminal_step(
         return DispatchStep::Terminate(format!(
             "SendInput split authored chord at action {}",
             view.batch_source_action_index
-        ));
-    }
-    if retry_late_abort {
-        let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "note-on terminal timing conversion failure: {error}"
-                ));
-            }
-        };
-        return DispatchStep::Terminate(format!(
-            "strict timing rejected zero-progress retry at action {}: completion was {}us late",
-            view.batch_source_action_index, completion_error_us
         ));
     }
     if strict_completion_late {
@@ -676,7 +661,6 @@ mod tests {
         let mut runtime = WorkerRuntime::default();
 
         let step = resolve_slo_terminal_step(
-            false,
             false,
             false,
             false,

@@ -187,15 +187,9 @@ pub(super) fn down_observer_evidence(
 
 pub(super) fn record_down_recovery_metrics(
     observation: &DownObservation,
-    recovered_retry_late: bool,
     recovered_partial_up: bool,
     local_metrics: &mut WorkerMetricsLocal,
 ) {
-    if recovered_retry_late {
-        local_metrics.recovered_zero_progress_but_late = local_metrics
-            .recovered_zero_progress_but_late
-            .saturating_add(1);
-    }
     if matches!(
         observation.trace.retry_reason,
         PacketRetryReason::ZeroProgress
@@ -262,14 +256,11 @@ pub(super) fn record_down_send_telemetry(
     final_admission_ticks: Option<TimelineTicks>,
     sendinput_completed_ticks: Option<TimelineTicks>,
     wake_ticks: TimelineTicks,
-    recovered_retry_late: bool,
     recovered_partial_up: bool,
     strict_completion_late: bool,
 ) -> Result<(&'static str, bool), DispatchStep> {
     let trace = observation.trace;
-    let down_outcome = if recovered_retry_late {
-        "recovered_zero_progress_but_late"
-    } else if recovered_partial_up {
+    let down_outcome = if recovered_partial_up {
         "recovered_partial_up_retry"
     } else if strict_completion_late {
         "strict_completion_slo_exceeded"
@@ -289,7 +280,7 @@ pub(super) fn record_down_send_telemetry(
     if trace.result_success() && observation.confirmed_count() == observation.requested_count() {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
-    if recovered_retry_late || trace.chord_integrity_lost {
+    if recovered_partial_up || trace.chord_integrity_lost {
         trace_flags |= TRACE_FLAG_RECOVERY;
     }
     if down_outcome != "sent" {

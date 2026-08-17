@@ -78,7 +78,6 @@ pub(crate) fn publisher_down_send_outcome(
     let requested_packet = view.packet_masks;
     let final_admission_qpc = timing_proof.final_admission_qpc;
     let sendinput_completed_qpc = timing_proof.sendinput_completed_qpc;
-    let retry_late_abort = timing_proof.retry_late_abort;
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
     let wake_qpc = take_deadline_wake_qpc(runtime, final_admission_qpc);
@@ -126,7 +125,6 @@ pub(crate) fn publisher_down_send_outcome(
     );
     resolve_slo_terminal_step(
         result_chord_integrity_lost,
-        retry_late_abort,
         strict_completion_late,
         false,
         qpc_clock,
@@ -545,14 +543,6 @@ pub(crate) fn drain_down_send_outcome(
             "note-on observer completion conversion failure: {error}"
         ))
     })?;
-    let recovered_zero_progress = matches!(
-        observation.trace.retry_reason,
-        PacketRetryReason::ZeroProgress
-    );
-    let recovered_retry_late = recovered_zero_progress
-        && observation.trace.result_success()
-        && completion_lateness_ticks > 0
-        && completion_lateness_ticks as u64 > timing.retry_late_threshold_ticks.as_u64();
     let recovered_partial_up = matches!(
         (path, observation.trace.retry_reason),
         (
@@ -571,12 +561,7 @@ pub(crate) fn drain_down_send_outcome(
                     timing.strict_down_completion_late_ticks.as_u64()
                 }
             });
-    record_down_recovery_metrics(
-        observation,
-        recovered_retry_late,
-        recovered_partial_up,
-        local_metrics,
-    );
+    record_down_recovery_metrics(observation, recovered_partial_up, local_metrics);
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
         TimelineTicks::from_raw(observation.final_admission_qpc.as_u64()),
         TimelineTicks::from_raw(observation.physical_target_qpc.as_u64()),
@@ -614,7 +599,6 @@ pub(crate) fn drain_down_send_outcome(
         Some(final_admission_effective_ticks),
         Some(completed_effective_ticks),
         wake_ticks,
-        recovered_retry_late,
         recovered_partial_up,
         strict_completion_late,
     )?;

@@ -3,9 +3,8 @@ use super::super::create_mock_backend;
 use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
     PlaybackClockState, QpcClock, QpcError, QpcTicks, RuntimeDispatchCoordinator,
-    STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector,
-    TrackedKeyState, WaitOptions, current_process_cpu_time_us, current_thread_cpu_time_us,
-    qpc_frequency_checked,
+    STARTUP_WAKE_GUARD_US, SharedMetrics, TelemetryCollector, TrackedKeyState, WaitOptions,
+    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
@@ -138,17 +137,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                     &mut backend,
                     metrics,
                     format!("hard late-abort threshold conversion failed: {error:?}"),
-                );
-            }
-        };
-    let retry_late_threshold_ticks =
-        match qpc_clock.duration_from_us(STRICT_RETRY_LATE_THRESHOLD_US) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("retry-late threshold conversion failed: {error:?}"),
                 );
             }
         };
@@ -350,7 +338,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.timing = Some(WorkerTimingState {
         strict_timing: config.timing.strict_timing,
         hard_late_abort_threshold_ticks,
-        retry_late_threshold_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
         focus_restore_grace_ticks,

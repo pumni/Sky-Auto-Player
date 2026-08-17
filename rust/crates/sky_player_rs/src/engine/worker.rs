@@ -225,7 +225,6 @@ pub(super) struct WorkerErrorState {
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
-    pub(super) retry_late_threshold_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -244,7 +243,6 @@ impl WorkerTimingState {
         Self {
             strict_timing: false,
             hard_late_abort_threshold_ticks: DurationTicks::ZERO,
-            retry_late_threshold_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,

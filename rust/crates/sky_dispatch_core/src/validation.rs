@@ -10,7 +10,7 @@ pub enum ScheduleTimingError {
     #[error("schedule and timing configuration exceed supported timestamp range")]
     TimestampOverflow,
     #[error(
-        "same-key hold too short for scan code {scan_code}: down action {down_source_action_index} at {down_scheduled_us}us, up action {up_source_action_index} at {up_scheduled_us}us, interval={interval_us}us, required={required_min_hold_us}us"
+        "same-key hold too short for scan code {scan_code}: down action {down_source_action_index} at {down_scheduled_us}us ({down_scheduled_ticks} ticks), up action {up_source_action_index} at {up_scheduled_us}us ({up_scheduled_ticks} ticks), interval={interval_us}us, required={required_min_hold_us}us ({required_min_hold_ticks} ticks), earliest release={earliest_release_ticks} ticks"
     )]
     SameKeyHoldTooShort {
         scan_code: u16,
@@ -20,6 +20,10 @@ pub enum ScheduleTimingError {
         up_scheduled_us: u64,
         interval_us: u64,
         required_min_hold_us: u64,
+        down_scheduled_ticks: u64,
+        up_scheduled_ticks: u64,
+        required_min_hold_ticks: u64,
+        earliest_release_ticks: u64,
     },
     #[error(
         "generation ownership mismatch for scan code {scan_code}: expected generation {expected_generation_id}, found {actual_generation_id} at up action {up_source_action_index}"
@@ -164,6 +168,10 @@ where
                                     up_scheduled_us: batch.scheduled_us,
                                     interval_us,
                                     required_min_hold_us: effective_min_hold_us,
+                                    down_scheduled_ticks: active.down_scheduled_ticks.as_u64(),
+                                    up_scheduled_ticks: batch_ticks.as_u64(),
+                                    required_min_hold_ticks: effective_min_hold_ticks.as_u64(),
+                                    earliest_release_ticks: earliest_release_ticks.as_u64(),
                                 });
                             }
                         }
@@ -233,6 +241,10 @@ mod tests {
                 up_scheduled_us: 199,
                 interval_us: 99,
                 required_min_hold_us: 100,
+                down_scheduled_ticks: 100,
+                up_scheduled_ticks: 199,
+                required_min_hold_ticks: 100,
+                earliest_release_ticks: 200,
             }
         );
     }
@@ -264,6 +276,47 @@ mod tests {
             (ActionKind::Up, 300, 1),
         ]);
         assert!(validate_min_hold_feasibility(&schedule, 100).is_ok());
+    }
+
+    #[test]
+    fn rejects_qpc_quantization_mismatch_before_runtime_dispatch() {
+        let authored = schedule(&[(ActionKind::Down, 1, 1), (ActionKind::Up, 101, 1)]);
+        let frequency_hz = 3_125_000u64;
+        let ceil_us_to_ticks = |microseconds: u64| {
+            microseconds
+                .checked_mul(frequency_hz)
+                .and_then(|value| value.checked_add(999_999))
+                .map(|value| TimelineTicks::from_raw(value / 1_000_000))
+        };
+        let min_hold_ticks = ceil_us_to_ticks(100).expect("hold conversion");
+
+        let error = validate_min_hold_feasibility_ticks(
+            &authored,
+            100,
+            DurationTicks::from_raw(min_hold_ticks.as_u64()),
+            ceil_us_to_ticks,
+        )
+        .expect_err("tick-domain rounding must reject the schedule");
+
+        assert_eq!(
+            error,
+            ScheduleTimingError::SameKeyHoldTooShort {
+                scan_code: 1,
+                down_source_action_index: 0,
+                up_source_action_index: 1,
+                down_scheduled_us: 1,
+                up_scheduled_us: 101,
+                interval_us: 100,
+                required_min_hold_us: 100,
+                down_scheduled_ticks: 4,
+                up_scheduled_ticks: 316,
+                required_min_hold_ticks: 313,
+                earliest_release_ticks: 317,
+            }
+        );
+        let message = error.to_string();
+        assert!(message.contains("interval=100us, required=100us"));
+        assert!(message.contains("earliest release=317 ticks"));
     }
 
     #[test]
