@@ -52,6 +52,9 @@ pub(super) use dispatch::{
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
+#[cfg(any(test, feature = "test-support"))]
+#[allow(unused_imports)]
+pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]
@@ -88,7 +91,7 @@ pub(crate) use timing::{
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-    record_wait_failure, wait_for_next_boundary,
+    record_wait_failure, wait_for_next_boundary, wait_to_precision_boundary,
 };
 
 use super::shared::SessionShared;

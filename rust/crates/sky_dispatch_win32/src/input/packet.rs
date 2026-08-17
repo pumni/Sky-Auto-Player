@@ -351,14 +351,20 @@ fn send_physical_packet_once_impl(
 /// Trusted fast path for a packet that was validated and materialized before
 /// the precision boundary. This deliberately does not inspect the packet
 /// masks or recount events after the caller's final QPC sample.
+///
+/// In the production path `started_ticks` is `None`, so the authoritative
+/// `pre_call_qpc` is sampled here, after the prepared payload length and
+/// pointer have been resolved and immediately before `SendInput`. Test
+/// support may provide a controlled timestamp without changing production
+/// behavior.
 fn send_prepared_physical_packet_once_impl(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
-    started_ticks: QpcTicks,
+    started_ticks: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
     let packet = prepared.packet();
     let requested_mask = packet.up_mask | packet.down_mask;
-    let first = match run_prepared_send_attempt(prepared, clock, Some(started_ticks)) {
+    let first = match run_prepared_send_attempt(prepared, clock, started_ticks) {
         PacketSendAttempt::Outcome(res) => res,
         PacketSendAttempt::ClockFailure(start, err, called) => {
             return SendTransactionOutcome {
@@ -634,7 +640,16 @@ pub fn send_prepared_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared, clock, started_ticks)
+    send_prepared_physical_packet_once_impl(prepared, clock, Some(started_ticks))
+}
+
+/// One trusted prepared packet attempt whose authoritative pre-call QPC is
+/// sampled inside the Win32 sender immediately before `SendInput`.
+pub fn send_prepared_physical_packet_once(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(prepared, clock, None)
 }
 
 #[cfg(test)]

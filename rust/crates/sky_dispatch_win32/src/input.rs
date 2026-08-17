@@ -20,7 +20,7 @@ pub use outcome::{
 
 pub use packet::{
     MAX_PACKET_EVENTS, PreparedPhysicalPacket, send_physical_packet_once_with_clock,
-    send_prepared_physical_packet_once_with_start,
+    send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
 };
 pub use physical::is_scan_code_physically_down;
 pub use raw::{send_input_raw, send_input_raw_with_clock};

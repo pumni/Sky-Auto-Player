@@ -117,6 +117,15 @@ pub enum CoordinatorError {
         blocked_mask: u16,
         latest_required_release_ticks: TimelineTicks,
     },
+    #[error(
+        "physical minimum hold infeasible for generation {generation_id}: Down completed at {down_completed_ticks:?}, authored Up is {authored_up_ticks:?}, minimum hold is {min_hold_ticks:?}"
+    )]
+    PhysicalHoldInfeasible {
+        generation_id: GenerationId,
+        down_completed_ticks: TimelineTicks,
+        authored_up_ticks: Option<TimelineTicks>,
+        min_hold_ticks: DurationTicks,
+    },
     #[error("pending release already exists for key slot {slot}")]
     PendingReleaseAlreadyRegistered { slot: KeySlot },
     #[error("pending release does not match active generation for key slot {slot}")]
@@ -252,6 +261,10 @@ pub struct PreparedDeferredReleaseIntent {
 pub struct PreparedDownIntent {
     pub intent: CompactIntent,
     pub scan_code: u16,
+    /// The immutable authored Up target for this generation.  It is frozen
+    /// before the timed wait so a late Down can only fail closed; it can never
+    /// manufacture or move a release target.
+    pub authored_up_ticks: Option<TimelineTicks>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

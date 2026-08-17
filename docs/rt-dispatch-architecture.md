@@ -72,8 +72,9 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 frozen plan
   -> fresh command/target/lease checks
   -> Down target + foreground validation when required
-  -> one QPC pre_call_qpc sample
-  -> lease admission using that exact admission sample
+  -> final_proof_qpc target/focus/control proof
+  -> lease admission using that proof sample
+  -> QPC spin to the authored target and one pre_call_qpc sample
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
@@ -91,8 +92,8 @@ ownership evidence only; it does not create a completion-relative hold floor.
 The primary sender-side timing evidence is the signed start residual:
 
 ```text
-dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc
-admission_to_completion = sendinput_completion_qpc - final_admission_qpc
+dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc
+pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc
 completion_error = sendinput_completion_qpc - physical_target_qpc  # diagnostic only
 ```
 

@@ -33,6 +33,22 @@ fn physical_deadline_admission_is_allowed(
     !(awaiting_future_physical_boundary && physical_target <= now && !arrived_via_deadline_wait)
 }
 
+#[inline]
+pub(crate) const fn startup_focus_loss_is_terminal(
+    focus_ok: bool,
+    musical_physical_commit_started: bool,
+) -> bool {
+    !focus_ok && !musical_physical_commit_started
+}
+
+#[inline]
+pub(crate) const fn preroll_manual_pause_cancels(
+    manual_pause: bool,
+    musical_physical_commit_started: bool,
+) -> bool {
+    manual_pause && !musical_physical_commit_started
+}
+
 pub(crate) fn preflight_prepared_plan(
     plan: &mut super::planning::NextDispatchPlan,
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
@@ -109,7 +125,9 @@ pub(crate) fn dispatch_due_from_plan(
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: Option<&super::dispatch::PendingObservationQueue>,
     allow_pre_deadline: bool,
-    test_physical_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))] test_physical_target_qpc: Option<
+        sky_dispatch_win32::clock::QpcTicks,
+    >,
 ) -> super::DispatchStep {
     if let super::planning::NextDispatchPlan::Metadata(metadata) = plan {
         if metadata.physical_target_qpc > now_ticks {
@@ -130,10 +148,18 @@ pub(crate) fn dispatch_due_from_plan(
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
+    #[cfg(any(test, feature = "test-support"))]
     let test_direct_boundary = test_physical_target_qpc.is_some();
     let physical_target_qpc = match physical_target_qpc_for_work(
         if allow_pre_deadline {
-            test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                plan.physical_target_qpc()
+            }
         } else {
             plan.physical_target_qpc()
         },
@@ -171,6 +197,7 @@ pub(crate) fn dispatch_due_from_plan(
             interrupt,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            #[cfg(any(test, feature = "test-support"))]
             test_direct_boundary,
         },
         config,
@@ -303,7 +330,10 @@ pub(super) fn dispatch(
 
             let now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
-            if !focus_ok && now_ticks < resources.playback.epoch {
+            if startup_focus_loss_is_terminal(
+                focus_ok,
+                core.runtime.musical_physical_commit_started,
+            ) {
                 core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some("focus_lost_during_preroll".to_string());
                 break;
@@ -321,6 +351,15 @@ pub(super) fn dispatch(
                     }
                 };
                 command_timing.observe_pause(observed_ticks);
+            }
+
+            if preroll_manual_pause_cancels(
+                manual_pause,
+                core.runtime.musical_physical_commit_started,
+            ) {
+                core.runtime.force_full_cleanup = true;
+                core.runtime.terminal_error = Some("manual_pause_during_preroll".to_string());
+                break;
             }
 
             if !focus_ok {
@@ -716,6 +755,7 @@ pub(super) fn dispatch(
                 &shared.publication.progress_clock,
                 core.observer.pending.as_ref(),
                 false,
+                #[cfg(any(test, feature = "test-support"))]
                 None,
             );
             match authored_step {
@@ -849,6 +889,7 @@ pub(super) fn dispatch(
                         &shared.publication.progress_clock,
                         core.observer.pending.as_ref(),
                         true,
+                        #[cfg(any(test, feature = "test-support"))]
                         None,
                     ) {
                         super::DispatchStep::Terminate(error) => {

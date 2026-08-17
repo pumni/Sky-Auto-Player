@@ -268,14 +268,14 @@ fn stale_metadata_commits_before_first_physical_send() {
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "physical-hundred".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
-                scheduled_us: 200_000,
+                scheduled_us: 1_000_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "cleanup".to_string().into(),
             },
@@ -349,14 +349,16 @@ fn many_leading_stale_packets_are_drained_before_precision_handoff() {
     actions.push(KeyActionInput {
         source_action_index: stale_count as u32,
         kind: ActionKind::Down,
-        scheduled_us: 100_000,
+        scheduled_us: 500_000,
         scan_codes: smallvec::smallvec![0x15],
         reason: "many-stale-down".to_string().into(),
     });
     actions.push(KeyActionInput {
         source_action_index: (stale_count + 1) as u32,
         kind: ActionKind::Up,
-        scheduled_us: 500_000,
+        // Keep the cleanup boundary after the test-only arm margin.  This
+        // test checks stale metadata ordering, not host wake-up lateness.
+        scheduled_us: 1_000_000,
         scan_codes: smallvec::smallvec![0x15],
         reason: "many-stale-cleanup".to_string().into(),
     });
@@ -535,14 +537,16 @@ fn stale_leading_up_schedule(
     actions.push(KeyActionInput {
         source_action_index: down_index,
         kind: ActionKind::Down,
-        scheduled_us: 100_000,
+        scheduled_us: 500_000,
         scan_codes: smallvec::smallvec![0x15],
         reason: "stale-leading-down".to_string().into(),
     });
     actions.push(KeyActionInput {
         source_action_index: down_index + 1,
         kind: ActionKind::Up,
-        scheduled_us: 500_000,
+        // Keep the cleanup boundary after the test-only arm margin.  This
+        // test checks stale metadata ordering, not host wake-up lateness.
+        scheduled_us: 1_000_000,
         scan_codes: smallvec::smallvec![0x15],
         reason: "stale-leading-cleanup".to_string().into(),
     });
@@ -571,14 +575,14 @@ fn same_timestamp_stale_leading_up_schedule() -> sky_dispatch_core::model::Runti
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "same-timestamp-first-down".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
-                scheduled_us: 200_000,
+                scheduled_us: 600_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "same-timestamp-cleanup".to_string().into(),
             },
@@ -696,14 +700,14 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
-                scheduled_us: 200_000,
+                scheduled_us: 1_000_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "production-profile-down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 400_000,
+                scheduled_us: 1_200_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "production-profile-up".into(),
             },
@@ -919,28 +923,28 @@ fn stale_ups_with_down_same_timestamp_use_one_down_packet() {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Up,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "mixed-stale-a".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "mixed-stale-b".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "mixed-down".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
-                scheduled_us: 200_000,
+                scheduled_us: 600_000,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "mixed-cleanup".into(),
             },
@@ -976,35 +980,35 @@ fn owned_up_stale_up_and_down_same_timestamp_count_only_physical_events() {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
-                scheduled_us: 100_000,
+                scheduled_us: 500_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "owned-up-down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 200_000,
+                scheduled_us: 600_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "owned-up".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
-                scheduled_us: 200_000,
+                scheduled_us: 600_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "owned-stale".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Down,
-                scheduled_us: 200_000,
+                scheduled_us: 600_000,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "owned-redown".into(),
             },
             KeyActionInput {
                 source_action_index: 4,
                 kind: ActionKind::Up,
-                scheduled_us: 300_000,
+                scheduled_us: 700_000,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "owned-cleanup".into(),
             },
@@ -1252,9 +1256,23 @@ fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 5_000_000,
+                scheduled_us: 300_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "progress-idle-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 5_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "progress-idle-second-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 5_100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "progress-idle-second-up".to_string().into(),
             },
         ],
         &[0x15],
@@ -1319,13 +1337,19 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
 
     let session = NativeDispatchSession::new(options).expect("test session admission");
     start_with_test_wall_clock_slack(&session);
+    // Manual pause is a mid-play operation only after the first authored
+    // musical commit. Waiting for both first-note transport samples proves
+    // that boundary while leaving the test in the authored idle interval.
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let snapshot = session.snapshot_lite();
-        if snapshot.is_running && snapshot.elapsed_us >= 50_000 {
+        if snapshot.is_running && snapshot.recent_latencies_us.len() >= 2 {
             break;
         }
-        assert!(Instant::now() < deadline, "progress did not start");
+        assert!(
+            Instant::now() < deadline,
+            "progress did not start: {snapshot:?}"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 
@@ -2066,6 +2090,24 @@ fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
 }
 
 #[test]
+fn startup_focus_boundary_does_not_depend_on_qpc_epoch_position() {
+    let epoch = QpcTicks::from_raw(10_000);
+    for now in [epoch.as_u64() - 1, epoch.as_u64(), epoch.as_u64() + 1] {
+        let _now = QpcTicks::from_raw(now);
+        assert!(super::worker::startup_focus_loss_is_terminal(false, false));
+        assert!(!super::worker::startup_focus_loss_is_terminal(true, false));
+        assert!(!super::worker::startup_focus_loss_is_terminal(false, true));
+    }
+}
+
+#[test]
+fn preroll_manual_pause_cancels_without_entering_pause_clock() {
+    assert!(super::worker::preroll_manual_pause_cancels(true, false));
+    assert!(!super::worker::preroll_manual_pause_cancels(false, false));
+    assert!(!super::worker::preroll_manual_pause_cancels(true, true));
+}
+
+#[test]
 fn final_control_admission_rejects_each_command_state_in_priority_order() {
     let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let quit_requested = AtomicBool::new(false);
@@ -2149,7 +2191,7 @@ fn authored_up_only_does_not_send_after_final_control_rejection() {
     use super::test_support::ProductionDispatchTestHarness;
 
     for command in ["pause", "quit", "skip", "panic"] {
-        let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+        let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
         let calls = harness.configure_send_counter();
         harness.advance_playback_time_us(100_000);
         let plan = harness.plan_current_dispatch();
@@ -2173,7 +2215,7 @@ fn authored_up_only_does_not_send_after_final_control_rejection() {
 fn authored_up_only_does_not_send_after_lease_expiry() {
     use super::test_support::ProductionDispatchTestHarness;
 
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
@@ -2193,7 +2235,7 @@ fn authored_up_only_does_not_send_after_lease_expiry() {
 fn authored_up_only_is_not_blocked_by_focus_loss() {
     use super::test_support::ProductionDispatchTestHarness;
 
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
     harness.config.focus.require_focus = true;
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
@@ -2226,16 +2268,19 @@ fn authored_focus_pause_publishes_progress_anchor() {
     let step = harness.dispatch_authored_with_plan(&plan);
 
     assert!(
-        matches!(step, super::worker::DispatchStep::Continue),
-        "unfocused authored Down must pause and replan: {step:?}"
+        matches!(
+            step,
+            super::worker::DispatchStep::TerminateStatic("focus_lost_during_preroll")
+        ),
+        "unfocused authored Down must cancel the startup attempt: {step:?}"
     );
-    let anchor = harness
-        .progress_clock
-        .load()
-        .expect("progress anchor after focus pause");
     assert!(
-        anchor.paused,
-        "focus pause must be visible in the projection"
+        !harness
+            .progress_clock
+            .load()
+            .expect("progress projection")
+            .paused,
+        "pre-roll focus loss must not enter a rebased pause"
     );
 }
 
@@ -2253,7 +2298,9 @@ fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
-                scheduled_us: 200_000,
+                // Keep the focus-state tests independent of worker-startup
+                // jitter; their assertions begin only after this commit.
+                scheduled_us: 400_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-recovery-down".to_string().into(),
             },
@@ -2879,7 +2926,7 @@ fn manual_and_focus_pauses_compose_without_auto_resume() {
 fn authored_up_only_is_not_blocked_by_target_change() {
     use super::test_support::ProductionDispatchTestHarness;
 
-    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(1_000);
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
@@ -3085,17 +3132,15 @@ fn pending_release_equal_authored_boundary_sends_one_up_packet() {
     let mut harness = ProductionDispatchTestHarness::new_pending_release_with_metadata_boundary();
 
     let first = harness.plan_current_dispatch();
-    let first_result = harness.wait_and_dispatch_current_plan(&first);
-    assert!(
-        matches!(first_result, Ok(super::worker::DispatchStep::Dispatched)),
-        "first setup dispatch failed: {first_result:?}"
-    );
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
     let second = harness.plan_current_dispatch();
-    let result = harness.wait_and_dispatch_current_plan(&second);
-    assert!(
-        matches!(result, Ok(super::worker::DispatchStep::Dispatched)),
-        "initial setup dispatch failed: {result:?}"
-    );
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&second),
+        super::worker::DispatchStep::Dispatched
+    ));
 
     harness.seed_pending_release_for_test(0x15, 220_000);
     assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
@@ -3110,10 +3155,12 @@ fn pending_release_equal_authored_boundary_sends_one_up_packet() {
         "pending A Up must coalesce with authored B Up at the equal boundary"
     );
     let packets = harness.configure_packet_capture();
-    let equal_result = harness.wait_and_dispatch_current_plan(&equal_boundary);
     assert!(
-        matches!(equal_result, Ok(super::worker::DispatchStep::Dispatched)),
-        "equal-boundary dispatch failed: {equal_result:?}"
+        matches!(
+            harness.dispatch_at_plan_target_for_test(&equal_boundary),
+            super::worker::DispatchStep::Dispatched
+        ),
+        "equal-boundary dispatch failed"
     );
 
     assert_eq!(
@@ -3162,7 +3209,7 @@ fn future_classification_then_waiter_entry_stall_sends_zero_second_boundary() {
 
     let first = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&first),
+        harness.dispatch_at_plan_target_for_test(&first),
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -3230,6 +3277,7 @@ fn frozen_dispatch_qpc_probe_has_no_redundant_effective_now_sample() {
 
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_packet_capture();
+    harness.align_next_plan_to_future_for_test(5_000_000);
     let plan = harness.plan_current_dispatch();
 
     // The frozen-plan waiter/dispatch seam must retain the handoff sample,
@@ -3462,8 +3510,9 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
-            final_admission_ticks: Some(TimelineTicks::from_raw(20)),
-            sendinput_completed_ticks: Some(TimelineTicks::from_raw(25)),
+            final_proof_ticks: Some(TimelineTicks::from_raw(20)),
+            pre_call_ticks: Some(TimelineTicks::from_raw(22)),
+            sendinput_completion_ticks: Some(TimelineTicks::from_raw(25)),
             completion_residual_us: 5,
             core_post_send_duration_us: 4,
             post_send_metrics_available: true,
@@ -3484,7 +3533,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.sent_count, 2);
     assert_eq!(record.skipped_count, 1);
     assert_eq!(record.send_attempts, 2);
-    assert_eq!(record.send_started_ticks, 20);
+    assert_eq!(record.send_started_ticks, 22);
     assert_eq!(record.send_completed_ticks, 25);
     assert_eq!(record.core_post_send_duration_us, 4);
 
@@ -3510,8 +3559,9 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_admission_ticks: None,
-            sendinput_completed_ticks: None,
+            final_proof_ticks: None,
+            pre_call_ticks: None,
+            sendinput_completion_ticks: None,
             completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
@@ -3547,8 +3597,9 @@ fn native_summary_ignores_non_backend_trace() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_admission_ticks: None,
-            sendinput_completed_ticks: None,
+            final_proof_ticks: None,
+            pre_call_ticks: None,
+            sendinput_completion_ticks: None,
             completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
@@ -3894,14 +3945,17 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 10_000,
+            // Leave enough authored interval for this fault-injection test
+            // to reach the mixed packet; hold-feasibility is tested directly
+            // with exact QPC boundaries elsewhere.
+            scheduled_us: 100_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 10_000,
+            scheduled_us: 100_000,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "retrigger-down".to_string().into(),
         },
@@ -3962,28 +4016,28 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Down,
-            scheduled_us: 10_000,
+            scheduled_us: 100_000,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "retrigger-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 10_000,
+            scheduled_us: 100_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 20_000,
+            scheduled_us: 200_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "release-one".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 4,
             kind: ActionKind::Up,
-            scheduled_us: 20_000,
+            scheduled_us: 200_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "release-two".to_string().into(),
         },
@@ -4115,28 +4169,30 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
-            scheduled_us: 0,
+            // Keep the first physical boundary away from worker startup so
+            // this test isolates completion-vs-authored-hold feasibility.
+            scheduled_us: 1_000_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "seed-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: 1_500_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "same-key-release".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 1_000,
+            scheduled_us: 1_500_000,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "same-key-chord".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 2_000,
+            scheduled_us: 2_100_000,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "cleanup".to_string().into(),
         },
@@ -4148,14 +4204,14 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
         2,
         BackendConfig::Mock {
             // The first Down completes close to the next authored boundary.
-            // Completion is evidence only; the overdue policy may terminate
-            // the missed boundary, but it must not report a hold failure.
-            latency_base_us: 900,
+            // The physical hold check must fail closed before that authored
+            // Up is dispatched; it must not rewrite the target.
+            latency_base_us: 100_000,
             latency_per_key_us: 0,
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.timing.min_hold_us = 300;
+    options.timing.min_hold_us = 450_000;
     let session = NativeDispatchSession::new(options).expect("authored-feasible admission");
 
     session.start().expect("worker start");
@@ -4169,21 +4225,26 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.outcome.as_deref(), Some("error"));
-    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
-        error.contains("physical deadline infeasible") && !error.contains("min_hold_infeasible")
-    }));
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("physical minimum hold infeasible"))
+    );
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
-    assert_eq!(telemetry["attempted"].as_u64(), Some(1));
+    // The Down reaches the backend, but the coordinator rejects the
+    // generation before publishing a musical observer record because the
+    // completed Down cannot satisfy the frozen authored Up target.
+    assert_eq!(telemetry["attempted"].as_u64(), Some(0));
     let records = telemetry["records"].as_array().expect("records array");
     let physical_records: Vec<&serde_json::Value> = records
         .iter()
         .filter(|record| record["requested_count"].as_u64().unwrap_or(0) > 0)
         .collect();
-    assert_eq!(physical_records.len(), 1);
-    assert_eq!(physical_records[0]["requested_count"].as_u64(), Some(1));
+    assert!(physical_records.is_empty());
 }
 
 #[test]
@@ -4271,7 +4332,7 @@ fn join_timeout_does_not_poison_running_session() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 100_000,
+            scheduled_us: 500_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "up".to_string().into(),
         },
@@ -4292,6 +4353,7 @@ fn join_timeout_does_not_poison_running_session() {
     session.start().expect("worker start");
     assert!(!session.join(Duration::from_millis(1)).expect("timed join"));
     assert!(session.snapshot().is_running);
+    wait_for_focus_down(&session);
     session.pause().expect("pause after join timeout");
     session.resume().expect("resume after join timeout");
     session.quit().expect("quit after join timeout");
@@ -4516,24 +4578,16 @@ fn late_down_completion_does_not_move_authored_note_off_target() {
 
     let down_started = TimelineTicks::from_raw(10_000);
     let down_completed = TimelineTicks::from_raw(15_000);
-    coordinator
+    let error = coordinator
         .commit_prepared_authored_frame_success_frozen(&commit, down_started, down_completed)
-        .unwrap();
-
-    let active = coordinator.active_for_slot(0).unwrap();
-    // The authored floor is derived from the authored Down timestamp.  The
-    // completion sample is retained as evidence only and cannot create a
-    // completion-relative hold failure.
-    assert_eq!(
-        active.release_not_before_ticks,
-        TimelineTicks::from_raw(11_000)
+        .expect_err("late completion must fail the physical hold");
+    assert!(
+        error
+            .to_string()
+            .contains("physical minimum hold infeasible")
     );
-    let prepared = coordinator
-        .prepare_current_authored_frame()
-        .expect("authored Up remains valid after a late Down completion")
-        .expect("authored Up frame");
-    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(20_000));
-    assert_eq!(prepared.immediate_up_mask, 0b001);
+    assert_eq!(coordinator.cursor, 0);
+    assert_eq!(coordinator.active_mask, 0);
 }
 
 #[test]
@@ -4628,13 +4682,11 @@ fn late_first_event_does_not_move_second_event() {
     )
     .expect("schedule");
 
-    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        10_000,
-        DurationTicks::from_raw(10_000),
-        |us| Ok(TimelineTicks::from_raw(us)),
-    )
-    .expect("coordinator");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::try_new_ticks(schedule, 0, DurationTicks::ZERO, |us| {
+            Ok(TimelineTicks::from_raw(us))
+        })
+        .expect("coordinator");
 
     let p1 = coordinator
         .prepare_current_authored_frame()

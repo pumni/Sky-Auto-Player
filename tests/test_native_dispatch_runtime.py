@@ -492,15 +492,66 @@ def test_manual_refocus_refreshes_changed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, state = _focus_runtime(monkeypatch)
-
-    def restore_target() -> None:
-        state["hwnd"] = 456
-        state["focused"] = True
-
-    guard.on_focus = restore_target
+    state["hwnd"] = 456
+    state["focused"] = True
+    guard.result = True
     runtime._handle_command("refocus")
 
     assert guard.focus_calls == 1
     assert runtime._last_hwnd == 456
     assert runtime._last_focus_active is True
+    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 456
+
+
+def test_manual_refocus_does_not_publish_candidate_that_changes_during_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, guard, state = _focus_runtime(monkeypatch)
+    state["focused"] = True
+
+    def recreate_window() -> None:
+        state["hwnd"] = 456
+
+    guard.on_focus = recreate_window
+    runtime._handle_command("refocus")
+
+    assert guard.focus_calls == 1
+    assert runtime._target_hwnd is None
+    assert runtime._last_hwnd == 0
+    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 0
+
+
+def test_manual_refocus_resolves_before_focus_and_verifies_same_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sky_music.platform.win32 import window_target
+
+    runtime, guard, state = _focus_runtime(monkeypatch)
+    state["hwnd"] = 456
+    state["focused"] = True
+    guard.result = True
+    events: list[str] = []
+    guard.event_log = events
+    monkeypatch.setattr(window_target, "reset_window_cache", lambda: events.append("reset"))
+    monkeypatch.setattr(
+        window_target,
+        "is_sky_window_valid",
+        lambda: events.append("resolve") or True,
+    )
+    monkeypatch.setattr(
+        window_target,
+        "cached_target_hwnd",
+        lambda: events.append("capture") or state["hwnd"],
+    )
+    monkeypatch.setattr(
+        window_target,
+        "is_foreground_cached_hwnd",
+        lambda: events.append("verify") or bool(state["focused"]),
+    )
+
+    runtime._handle_command("refocus")
+
+    assert events[:5] == ["reset", "resolve", "capture", "focus", "capture"]
+    assert "verify" in events
+    assert runtime._target_hwnd == 456
     assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 456

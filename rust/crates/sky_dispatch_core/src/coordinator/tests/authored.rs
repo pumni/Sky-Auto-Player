@@ -1,5 +1,5 @@
 use super::*;
-use crate::coordinator::PendingRelease;
+use crate::coordinator::{CoordinatorError, PendingRelease, PreparedAuthoredCommit};
 
 #[test]
 fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -873,6 +873,101 @@ fn late_down_completion_does_not_create_a_new_hold_deadline() {
     assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(400));
     assert_eq!(prepared.immediate_up_mask, 0b01);
     assert_eq!(prepared.down_mask, 0b11);
+}
+
+fn frozen_down_commit_fixture(
+    scan_codes: &[u16],
+    authored_up_us: u64,
+    min_hold_us: u64,
+) -> (RuntimeDispatchCoordinator, PreparedAuthoredCommit) {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: scan_codes.to_vec().into(),
+                reason: "physical hold down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: authored_up_us,
+                scan_codes: scan_codes.to_vec().into(),
+                reason: "physical hold up".into(),
+            },
+        ],
+        scan_codes,
+    )
+    .expect("valid physical hold schedule");
+    let coordinator =
+        RuntimeDispatchCoordinator::new(schedule, min_hold_us, 0, TimelineTicks::from_raw);
+    let frame = coordinator
+        .prepare_current_authored_frame()
+        .expect("prepare authored frame")
+        .expect("down frame exists");
+    let commit = coordinator
+        .prepare_authored_commit(frame)
+        .expect("freeze authored commit");
+    (coordinator, commit)
+}
+
+#[test]
+fn physical_hold_exact_boundary_is_accepted_without_replacement_release() {
+    let (mut coordinator, commit) = frozen_down_commit_fixture(&[0x15], 100, 100);
+    assert_eq!(
+        commit.down_intents[0].authored_up_ticks,
+        Some(TimelineTicks::from_raw(100))
+    );
+
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("exact physical hold boundary is feasible");
+    assert_eq!(coordinator.cursor, 1);
+    assert_eq!(coordinator.active_mask, 0b1);
+    assert_eq!(coordinator.pending_release_count(), 0);
+}
+
+#[test]
+fn physical_hold_completion_late_by_one_tick_fails_closed() {
+    let (mut coordinator, commit) = frozen_down_commit_fixture(&[0x15], 100, 100);
+    let error = coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::from_raw(1),
+        )
+        .expect_err("one late completion tick makes authored Up infeasible");
+    assert!(matches!(
+        error,
+        CoordinatorError::PhysicalHoldInfeasible { .. }
+    ));
+    assert_eq!(coordinator.cursor, 0);
+    assert_eq!(coordinator.active_mask, 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
+}
+
+#[test]
+fn physical_hold_infeasible_chord_fails_as_one_atomic_commit() {
+    let (mut coordinator, commit) = frozen_down_commit_fixture(&[0x15, 0x16], 100, 100);
+    let error = coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::from_raw(1),
+        )
+        .expect_err("one infeasible chord generation aborts the whole commit");
+    assert!(matches!(
+        error,
+        CoordinatorError::PhysicalHoldInfeasible { .. }
+    ));
+    assert_eq!(coordinator.cursor, 0);
+    assert_eq!(coordinator.active_mask, 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
 }
 
 #[test]

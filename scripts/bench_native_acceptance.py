@@ -951,9 +951,15 @@ def _measure_command_interrupt(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
 ) -> dict[str, int]:
-    # The deadline is intentionally far away; the only expected wake is the
-    # command event. No input can be emitted before the pause is observed.
-    actions = [(0, "down", 10_000_000, [int(SKY_15_SCAN_CODES[0])], "interrupt")]
+    # Put the first Down in a controlled future slot, then measure the pause
+    # command after that first musical commit.  Pre-roll Pause now cancels the
+    # start attempt by contract, so this probe must exercise the mid-play
+    # command path rather than the preroll cancellation path.
+    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
+    actions = [
+        (0, "down", 100_000, interrupt_key, "interrupt-down"),
+        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
+    ]
     session = _new_session(
         actions,
         backend=backend,
@@ -965,11 +971,30 @@ def _measure_command_interrupt(
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
     )
-    session.start()
+    # Test-only epoch choice made before worker arm; the frozen authored
+    # timestamps remain unchanged and production callers do not use this path.
+    session.arm(500_000)
     deadline = time.perf_counter() + 2.0
     while not bool(dict(session.snapshot()).get("startup_ready")):
         if time.perf_counter() >= deadline:
             raise RuntimeError("native worker did not publish startup-ready boundary")
+        time.sleep(0.001)
+
+    commit_deadline = time.perf_counter() + 2.0
+    while True:
+        progress = dict(session.snapshot())
+        if progress.get("recent_latencies_us") or int(progress.get("active_count", 0)) > 0:
+            break
+        if bool(progress.get("is_finished")):
+            session.join(timeout_ms=5_000)
+            raise RuntimeError(
+                "native worker terminated before first musical commit: "
+                f"{progress.get('terminal_error')}"
+            )
+        if time.perf_counter() >= commit_deadline:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native worker did not publish first musical commit")
         time.sleep(0.001)
 
     pause_with_timing_token = getattr(session, "pause_with_timing_token", None)
@@ -1018,6 +1043,47 @@ def _measure_command_interrupt(
     if any(int(result[key]) < 0 for key in required[4:]):
         raise RuntimeError("native pause timing latency must be non-negative")
     return {key: int(result[key]) for key in required}
+
+
+def _measure_preroll_pause_cancellation(
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+    rt_priority_mode: str,
+) -> dict[str, Any]:
+    """Verify the locked pre-roll Pause cancellation contract."""
+    key = [int(SKY_15_SCAN_CODES[0])]
+    session = _new_session(
+        [(0, "down", 10_000_000, key, "preroll-cancel")],
+        backend=backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
+    )
+    session.start()
+    deadline = time.perf_counter() + 2.0
+    while not bool(dict(session.snapshot()).get("startup_ready")):
+        if time.perf_counter() >= deadline:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native worker did not publish startup-ready boundary")
+        time.sleep(0.001)
+    session.pause()
+    while True:
+        snapshot = dict(session.snapshot())
+        if bool(snapshot.get("is_finished")):
+            break
+        if time.perf_counter() >= deadline + 2.0:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native preroll pause did not cancel the start attempt")
+        time.sleep(0.001)
+    if not session.join(timeout_ms=5_000):
+        raise RuntimeError("native preroll cancellation session did not terminate")
+    return snapshot
 
 
 def _parse_args() -> argparse.Namespace:

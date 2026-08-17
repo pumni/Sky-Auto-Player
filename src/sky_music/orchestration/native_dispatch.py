@@ -187,8 +187,6 @@ class RustDispatchRuntime:
         self._has_played = False
 
     def _attempt_refocus_and_refresh(self) -> None:
-        with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
-            self._focus_guard.focus()
         self._refresh_target_after_explicit_refocus()
         self._publish_focus()
 
@@ -224,18 +222,25 @@ class RustDispatchRuntime:
         self._last_hwnd = target
 
     def _refresh_target_after_explicit_refocus(self) -> None:
-        """Resolve a replacement HWND only after the explicit refocus command."""
+        """Resolve, focus, verify, then publish one explicit target HWND."""
         if not self._require_focus:
             return
         try:
             from sky_music.platform.win32 import window_target
 
             window_target.reset_window_cache()
-            target = (
-                int(window_target.cached_target_hwnd())
-                if window_target.is_sky_window_valid()
-                else 0
-            )
+            if not window_target.is_sky_window_valid():
+                target = 0
+            else:
+                target = int(window_target.cached_target_hwnd())
+                focused = target > 0 and bool(self._focus_guard.focus())
+                verified = (
+                    focused
+                    and int(window_target.cached_target_hwnd()) == target
+                    and bool(window_target.is_foreground_cached_hwnd())
+                )
+                if not verified:
+                    target = 0
         except FOCUS_PLATFORM_ERRORS:
             target = 0
         self._target_hwnd = target if target > 0 else None

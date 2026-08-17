@@ -446,16 +446,16 @@ def test_test_support_pause_timing_smoke_uses_100_fresh_sessions() -> None:
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
     for _ in range(100):
-        result = ACCEPTANCE._measure_command_interrupt(
+        snapshot = ACCEPTANCE._measure_preroll_pause_cancellation(
             backend="mock",
             mock_base_latency_us=80,
             mock_per_key_latency_us=40,
             adaptive_spin=True,
             rt_priority_mode="off",
         )
-        assert result["requested_ticks"] <= result["observed_ticks"]
-        assert result["observed_ticks"] <= result["acknowledged_ticks"]
-        assert result["generation"] > 0
+        assert snapshot["terminal_error"] == "manual_pause_during_preroll"
+        assert snapshot["timeline_rebase_count"] == 0
+        assert snapshot["active_count"] == 0
 
 
 @pytest.mark.windows
@@ -490,7 +490,12 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
 
-    actions = ACCEPTANCE._actions(4, 3, gap_profile="cold", game_fps=60)
+    actions = [
+        (index, kind, at_us * 4 + 100_000, scan_codes, reason)
+        for index, kind, at_us, scan_codes, reason in ACCEPTANCE._actions(
+            4, 3, gap_profile="cold", game_fps=60
+        )
+    ]
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
         actions,
         list(ACCEPTANCE.SKY_15_SCAN_CODES),
@@ -501,7 +506,9 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
         telemetry_capacity=256,
         fault_mode=fault_mode,
     )
-    session.start()
+    # Test-only epoch setup before arm; this fixture validates fault counters,
+    # not first-boundary wake latency.
+    session.arm(500_000)
     deadline = ACCEPTANCE.time.perf_counter() + 5.0
     while not bool(dict(session.snapshot()).get("is_finished")):
         session.heartbeat()

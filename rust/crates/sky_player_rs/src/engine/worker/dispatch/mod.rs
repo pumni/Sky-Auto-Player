@@ -38,7 +38,8 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
     /// Test-only direct-boundary admission for frozen-plan correctness tests.
-    /// Production always waits to the final spin boundary.
+    /// This field and its branch are absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) test_direct_boundary: bool,
 }
 
@@ -94,7 +95,7 @@ pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 
-use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
+use super::super::{ActionKind, DurationTicks, QpcClock, QpcTicks, TimelineTicks, TrackedKeyState};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
@@ -112,4 +113,24 @@ pub(crate) enum PhysicalCommit {
         release_mask: u16,
         due_ticks: TimelineTicks,
     },
+}
+
+#[inline]
+pub(crate) fn spin_and_send_prepared(
+    qpc_clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+    backend: &mut TrackedKeyState,
+    prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
+) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, sky_dispatch_win32::clock::QpcError>
+{
+    loop {
+        let now_ticks = qpc_clock.now()?;
+        if now_ticks >= physical_target_qpc {
+            #[cfg(any(test, feature = "test-support"))]
+            return Ok(backend.send_prepared_physical_packet_with_start(prepared_packet, now_ticks));
+            #[cfg(not(any(test, feature = "test-support")))]
+            return Ok(backend.send_prepared_physical_packet(prepared_packet));
+        }
+        std::hint::spin_loop();
+    }
 }

@@ -2,6 +2,7 @@ use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
+use super::super::packet::send_prepared_physical_packet_once;
 use super::super::packet::{
     PreparedPhysicalPacket, send_physical_packet_once_with_start,
     send_prepared_physical_packet_once_with_start,
@@ -297,6 +298,7 @@ impl TrackedKeyState {
     /// Send a packet whose fixed Win32 payload was built before the precision
     /// boundary.  State reconciliation remains identical to the legacy packet
     /// wrapper; only payload construction moves out of the final path.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn send_prepared_physical_packet_with_start(
         &mut self,
         prepared: &PreparedPhysicalPacket,
@@ -362,6 +364,46 @@ impl TrackedKeyState {
                 };
                 send_prepared_physical_packet_once_with_start(prepared, clock, started_ticks)
             }
+        };
+        self.apply_packet_outcome(packet, outcome)
+    }
+
+    /// Send a trusted prepared packet on the production precision path.
+    ///
+    /// The Win32 primitive samples the authoritative pre-call QPC after the
+    /// prepared payload pointer and length are resolved and immediately
+    /// before the single `SendInput` call. Test-only timestamp injection is
+    /// deliberately kept in `send_prepared_physical_packet_with_start`.
+    pub fn send_prepared_physical_packet(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+    ) -> SendTransactionOutcome {
+        let packet = prepared.packet();
+        let outcome = {
+            let Some(clock) = self.qpc_clock else {
+                self.last_error = Some("packet sender has no QPC clock".to_string());
+                return self.apply_packet_outcome(
+                    packet,
+                    SendTransactionOutcome {
+                        status: SendTransactionStatus::ZeroProgress,
+                        evidence: SendEvidence {
+                            requested_mask: packet.up_mask | packet.down_mask,
+                            confirmed_mask: 0,
+                            skipped_mask: 0,
+                            first_inserted: 0,
+                            attempts: 0,
+                            zero_progress_retries: 0,
+                            retry_reason: PacketRetryReason::None,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            started_ticks: None,
+                            completed_ticks: None,
+                            timing_error: None,
+                        },
+                    },
+                );
+            };
+            send_prepared_physical_packet_once(prepared, clock)
         };
         self.apply_packet_outcome(packet, outcome)
     }

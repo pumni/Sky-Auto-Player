@@ -16,9 +16,10 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_admission_qpc` | One authoritative QPC sample taken immediately before final admission and supplied to the packetized SendInput call. |
-| `sendinput_completion_qpc` | QPC sample returned after the packetized SendInput call. |
-| `admission_to_completion` | The interval from `final_admission_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
+| `final_proof_qpc` | QPC sample after final target/focus/control proof and before the final spin. It authorizes the frozen plan but is not a syscall-entry timestamp. |
+| `pre_call_qpc` | QPC sample taken at the final spin boundary immediately before the trusted prepared SendInput call. |
+| `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
+| `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
@@ -65,7 +66,7 @@ audio, or network latency. The sender boundary is measured as:
 
 ```text
 validate/build/tag packet -> arm sequence -> SetLastError(0)
--> start_qpc -> SendInput -> completion_qpc -> validate receipt
+-> pre_call_qpc -> SendInput -> sendinput_completion_qpc -> validate receipt
 ```
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
@@ -123,9 +124,10 @@ The final physical path is ordered and fail-closed:
 
 1. Recheck command, target generation, focus (Down only), and the prepared
    packet against the current coordinator state.
-2. Take one authoritative QPC `final_admission_qpc` sample.
-3. Evaluate the lease using that same sample.
-4. Call the packetized `SendInput` transport with that supplied start sample.
+2. Take the final target/focus/control proof QPC `final_proof_qpc`.
+3. Evaluate the lease using that proof sample.
+4. Spin to the authored physical target, take `pre_call_qpc`, and call the
+   trusted prepared `SendInput` transport immediately.
 5. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
 6. Commit coordinator ownership using the confirmed transport result.
 7. Enqueue one bounded raw observation and return to orchestration.
@@ -190,11 +192,11 @@ reorder input.
 
 The authoritative sender-side metrics are:
 
-- `final_admission_qpc` and `sendinput_completion_qpc`;
+- `final_proof_qpc`, `pre_call_qpc`, and `sendinput_completion_qpc`;
 - signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
   as the primary pre-call timing metric; it is not a syscall-entry or game-
   receipt timestamp;
-- `admission_to_completion = sendinput_completion_qpc - final_admission_qpc`;
+- `pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc`;
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
 - release-floor/defer evidence; and
@@ -211,8 +213,9 @@ feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
 
 The serialized `send_started_ticks`, `send_completed_ticks`, and
 `send_duration_us` names remain compatibility aliases for older Python/API
-callers. They map to the same admission and completion boundaries above;
-production does not take a second QPC sample to preserve the old names.
+callers. They map to `pre_call_qpc`, `sendinput_completion_qpc`, and
+`pre_call_to_completion`; production does not take a second QPC sample to
+preserve the old names.
 The optional `dispatch_ready_qpc` and `core_post_send_duration_us` fields are
 diagnostic-only and are not sampled by the production sender.  The dispatch
 worker CPU metric is likewise captured during worker finalization, never by

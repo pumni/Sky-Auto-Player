@@ -47,15 +47,16 @@ Song file
 ```
 
 The worker has one physical timing contract. The authored/effective timeline
-deadline is not advanced by a learned send-cost lead. Immediately before an
-allowed physical send, the worker takes one authoritative
-`final_admission_qpc` sample and uses that same sample for the final
-lease/admission decision and the transport boundary. The Win32 sender returns a
-`sendinput_completion_qpc` sample. The completion is used for feasibility
-diagnostics and diagnostic observer records; it is not subtracted from future
-authored timestamps or used as a healthy release floor. The compatibility `send_started_ticks` and
-`send_completed_ticks` fields refer to these same two boundaries; they do not
-cause an additional production QPC sample.
+deadline is not advanced by a learned send-cost lead. After final target,
+focus, and control proof the worker takes `final_proof_qpc`; the lease is
+evaluated against that sample. It then spins to the authored physical target
+and takes `pre_call_qpc` immediately before the trusted prepared SendInput
+call. The Win32 sender returns `sendinput_completion_qpc`. Completion is used
+for physical-hold feasibility and diagnostic observer records; it is not
+subtracted from future authored timestamps or used as a healthy release floor.
+The compatibility `send_started_ticks` and `send_completed_ticks` fields refer
+to `pre_call_qpc` and `sendinput_completion_qpc`; they do not cause an
+additional production QPC sample.
 
 For an authored same-key Down→Up pair, the schedule must satisfy:
 

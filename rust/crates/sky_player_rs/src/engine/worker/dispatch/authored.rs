@@ -9,12 +9,15 @@ use super::super::{
     WorkerRuntime, WorkerTimingState, final_control_admission_at, final_control_precheck,
     final_down_target_admission, focus_matches, load_target_stamp,
     record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
-    target_stamp_still_current,
+    target_stamp_still_current, wait_to_precision_boundary,
 };
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::timing::interpret_down_send_timing;
-use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
+use super::{
+    AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue,
+    spin_and_send_prepared,
+};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -48,6 +51,7 @@ pub(crate) fn dispatch_authored_packet(
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
     } = ctx;
 
@@ -100,14 +104,12 @@ pub(crate) fn dispatch_authored_packet(
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         observer,
     )
 }
 
-/// Admission gate + SendInput call + telemetry + health
-/// observation for an authored Down/Mixed batch.  Owns the physical send
-/// boundary; the orchestrator only sees a `DispatchStep` outcome.
 #[allow(clippy::too_many_arguments)]
 fn commit_down_send_outcome(
     view: &AuthoredBatchView,
@@ -138,7 +140,7 @@ fn commit_down_send_outcome(
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    test_direct_boundary: bool,
+    #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
@@ -194,6 +196,7 @@ fn commit_down_send_outcome(
         physical_target_qpc,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         admission,
     ) {
@@ -218,12 +221,10 @@ fn commit_down_send_outcome(
     )
 }
 
-/// Outcome returned by `admit_authored_down`.  `Allowed` carries the frozen
-/// dispatch budget plus the trace kind for the upcoming send; every other
-/// variant is a non-terminal redirect (`Continue`) handled by the worker.
 pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
+        final_proof_qpc: QpcTicks,
     },
     Guarded {
         trace_kind: u8,
@@ -269,6 +270,9 @@ fn admit_authored_down(
     let trace_kind = trace_kind_for_view(view);
     let has_down_events = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
+        if !runtime.musical_physical_commit_started {
+            return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+        }
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         {
@@ -401,7 +405,7 @@ fn finalize_authored_down_admission(
     physical_target_qpc: QpcTicks,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    test_direct_boundary: bool,
+    #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let AdmissionOutcome::Guarded {
@@ -411,39 +415,31 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    if !test_direct_boundary {
-        let spin_target_qpc = QpcTicks::from_raw(
-            physical_target_qpc
-                .as_u64()
-                .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
-        );
-        let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+    #[cfg(any(test, feature = "test-support"))]
+    if !test_direct_boundary
+        && let Err(step) = wait_to_precision_boundary(
             qpc_clock,
-            spin_target_qpc,
-            DurationTicks::ZERO,
+            waiter,
             interrupt,
-        );
-        match wait_result.outcome {
-            sky_dispatch_win32::wait::WaitOutcome::Deadline => {}
-            sky_dispatch_win32::wait::WaitOutcome::Interrupted => {
-                local_metrics.wait_interrupted_count =
-                    local_metrics.wait_interrupted_count.saturating_add(1);
-                return Ok(AdmissionOutcome::ControlRejected);
-            }
-            sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
-                if matches!(failure, sky_dispatch_win32::wait::WaitFailure::Clock) {
-                    local_metrics.wait_clock_failures =
-                        local_metrics.wait_clock_failures.saturating_add(1);
-                } else {
-                    local_metrics.wait_backend_failures =
-                        local_metrics.wait_backend_failures.saturating_add(1);
-                }
-                return Err(DispatchStep::Terminate(super::super::wait_failure_message(
-                    failure,
-                )));
-            }
-        }
+            physical_target_qpc,
+            timing,
+            local_metrics,
+        )
+    {
+        return match step {
+            DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
+            other => Err(other),
+        };
     }
+    #[cfg(not(any(test, feature = "test-support")))]
+    wait_to_precision_boundary(
+        qpc_clock,
+        waiter,
+        interrupt,
+        physical_target_qpc,
+        timing,
+        local_metrics,
+    )?;
 
     let control_signals = FinalControlSignals {
         quit_requested,
@@ -496,7 +492,8 @@ fn finalize_authored_down_admission(
             }
         }
     }
-    let final_admission_qpc = if test_direct_boundary {
+    #[cfg(any(test, feature = "test-support"))]
+    let final_proof_qpc = if test_direct_boundary {
         // The test harness supplied the already-frozen target as a synthetic
         // exact-boundary sample. It does not rebase the epoch or mutate the
         // plan after arm; it only avoids host waiter jitter in correctness
@@ -507,22 +504,29 @@ fn finalize_authored_down_admission(
             DispatchStep::Terminate(format!("QPC final proof failure: {error:?}"))
         })?
     };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let final_proof_qpc = qpc_clock
+        .now()
+        .map_err(|error| DispatchStep::Terminate(format!("QPC final proof failure: {error:?}")))?;
     let lease_admission =
-        final_control_admission_at(final_admission_qpc, lease_timeout_ticks, control_signals)
-            .map_err(|error| {
-                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
-            })?;
+        final_control_admission_at(final_proof_qpc, lease_timeout_ticks, control_signals).map_err(
+            |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
+        )?;
     if !matches!(lease_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::ControlRejected);
     }
-    if view_has_down && !test_direct_boundary && final_admission_qpc >= physical_target_qpc {
+    #[cfg(any(test, feature = "test-support"))]
+    let deadline_missed = final_proof_qpc >= physical_target_qpc && !test_direct_boundary;
+    #[cfg(not(any(test, feature = "test-support")))]
+    let deadline_missed = final_proof_qpc >= physical_target_qpc;
+    if view_has_down && deadline_missed {
         runtime.verified_target = None;
         return Err(DispatchStep::TerminateStatic(
             "down_deadline_missed_before_send",
         ));
     }
-    if !view_has_down && !test_direct_boundary && final_admission_qpc >= physical_target_qpc {
+    if !view_has_down && deadline_missed {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         {
@@ -534,7 +538,10 @@ fn finalize_authored_down_admission(
             "up_deadline_missed_before_send",
         ));
     }
-    Ok(AdmissionOutcome::Allowed { trace_kind })
+    Ok(AdmissionOutcome::Allowed {
+        trace_kind,
+        final_proof_qpc,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -568,26 +575,6 @@ pub(crate) fn handle_final_focus_loss(
     Ok(AdmissionOutcome::FocusLost)
 }
 
-#[inline]
-fn spin_and_send_prepared(
-    qpc_clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-    backend: &mut TrackedKeyState,
-    prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
-) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, sky_dispatch_win32::clock::QpcError>
-{
-    loop {
-        let now_ticks = qpc_clock.now()?;
-        if now_ticks >= physical_target_qpc {
-            return Ok(backend.send_prepared_physical_packet_with_start(prepared_packet, now_ticks));
-        }
-        std::hint::spin_loop();
-    }
-}
-
-/// Contstructs the allowed admission from the frozen dispatch budget and the
-/// packet trace kind.  Extracted to keep `admit_authored_down` under the per
-/// dispatch-function line limit.
 fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     match view.prepared_batch.packet_kind {
         sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
@@ -613,7 +600,11 @@ fn record_down_send_outcome(
     admission: &AdmissionOutcome,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
-    let AdmissionOutcome::Allowed { trace_kind } = admission else {
+    let AdmissionOutcome::Allowed {
+        trace_kind,
+        final_proof_qpc,
+    } = admission
+    else {
         return DispatchStep::Continue;
     };
     let packet = view.packet_masks;
@@ -676,6 +667,7 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
+        *final_proof_qpc,
         trace_kind,
         result_success,
         result.status,
@@ -704,6 +696,7 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    final_proof_qpc: QpcTicks,
     trace_kind: u8,
     result_success: bool,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
@@ -724,6 +717,7 @@ fn finalize_down_send_outcome(
         runtime,
         qpc_clock,
         physical_target_qpc,
+        final_proof_qpc,
         coordinator,
         health,
         timing,

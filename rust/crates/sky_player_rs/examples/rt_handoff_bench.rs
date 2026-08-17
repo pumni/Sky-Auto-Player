@@ -66,7 +66,7 @@ struct Samples {
     wake_to_admission_us: Vec<u64>,
     final_spin_us: Vec<u64>,
     dispatch_start_error_us: Vec<i64>,
-    admission_to_completion_us: Vec<u64>,
+    pre_call_to_completion_us: Vec<u64>,
     target_to_completion_us: Vec<i64>,
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
@@ -230,21 +230,21 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
     let qpc_clock = QpcClock::initialize().expect("QPC");
     match observation {
         DispatchObservation::Down(value) => {
-            let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
+            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
                 value
-                    .final_admission_qpc
+                    .final_proof_qpc
                     .checked_duration_since(wake)
                     .ok()
                     .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
             }).unwrap_or_else(|| {
                 panic!(
-                    "missing Down wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
+                    "missing Down wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
                     value.wake_qpc,
-                    value.final_admission_qpc,
-                    value.sendinput_completed_qpc
+                    value.final_proof_qpc,
+                    value.sendinput_completion_qpc
                 )
             });
-            samples.wake_to_admission_us.push(wake_to_admission_us);
+            samples.wake_to_admission_us.push(wake_to_proof_us);
             samples.final_spin_us.push(
                 qpc_clock
                     .duration_to_us(wait.spin_ticks)
@@ -252,29 +252,29 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
-                value.sendinput_completed_qpc,
+                value.sendinput_completion_qpc,
                 value.physical_target_qpc,
             ));
-            if value.final_admission_qpc < value.physical_target_qpc {
+            if value.pre_call_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
             samples.dispatch_start_error_us.push(signed_qpc_us(
                 qpc_clock,
-                value.final_admission_qpc,
+                value.pre_call_qpc,
                 value.physical_target_qpc,
             ));
-            samples.admission_to_completion_us.push(
+            samples.pre_call_to_completion_us.push(
                 qpc_clock
                     .duration_to_us(
                         value
-                            .sendinput_completed_qpc
-                            .checked_duration_since(value.final_admission_qpc)
+                            .sendinput_completion_qpc
+                            .checked_duration_since(value.pre_call_qpc)
                             .expect("QPC ordering"),
                     )
                     .expect("duration"),
             );
             let completed_effective_ticks = value
-                .sendinput_completed_qpc
+                .sendinput_completion_qpc
                 .checked_duration_since(value.epoch_qpc)
                 .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
                 .unwrap_or(TimelineTicks::ZERO);
@@ -285,21 +285,21 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             ));
         }
         DispatchObservation::Up(value) => {
-            let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
+            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
                 value
-                    .final_admission_qpc
+                    .final_proof_qpc
                     .checked_duration_since(wake)
                     .ok()
                     .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
             }).unwrap_or_else(|| {
                 panic!(
-                    "missing Up wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
+                    "missing Up wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
                     value.wake_qpc,
-                    value.final_admission_qpc,
-                    value.sendinput_completed_qpc
+                    value.final_proof_qpc,
+                    value.sendinput_completion_qpc
                 )
             });
-            samples.wake_to_admission_us.push(wake_to_admission_us);
+            samples.wake_to_admission_us.push(wake_to_proof_us);
             samples.final_spin_us.push(
                 qpc_clock
                     .duration_to_us(wait.spin_ticks)
@@ -307,20 +307,20 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
-                value.sendinput_completed_qpc,
+                value.sendinput_completion_qpc,
                 value.physical_target_qpc,
             ));
-            if value.final_admission_qpc < value.physical_target_qpc {
+            if value.pre_call_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
             samples.dispatch_start_error_us.push(signed_qpc_us(
                 qpc_clock,
-                value.final_admission_qpc,
+                value.pre_call_qpc,
                 value.physical_target_qpc,
             ));
-            samples.admission_to_completion_us.push(
+            samples.pre_call_to_completion_us.push(
                 qpc_clock
-                    .duration_to_us(value.admission_to_completion_ticks)
+                    .duration_to_us(value.pre_call_to_completion_ticks)
                     .expect("duration"),
             );
             samples.completion_error_us.push(signed_timeline_us(
@@ -454,7 +454,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     );
     json!({
         "controller": "dispatch_start_error",
-        "wake_to_final_admission_us": {
+            "wake_to_final_proof_us": {
             "p50": quantile(&mut samples.wake_to_admission_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_admission_us, 95, 100),
             "p99": quantile(&mut samples.wake_to_admission_us, 99, 100),
@@ -487,14 +487,14 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max_abs": samples.completion_error_us.iter().map(|value| value.unsigned_abs()).max(),
             "samples": samples.completion_error_us.len(),
         },
-        "admission_to_completion_us": {
-            "min": samples.admission_to_completion_us.iter().copied().min(),
-            "p50": quantile(&mut samples.admission_to_completion_us, 50, 100),
-            "p95": quantile(&mut samples.admission_to_completion_us, 95, 100),
-            "p99": quantile(&mut samples.admission_to_completion_us, 99, 100),
-            "p99_9": quantile(&mut samples.admission_to_completion_us, 999, 1000),
-            "max": samples.admission_to_completion_us.iter().copied().max(),
-            "samples": samples.admission_to_completion_us.len(),
+        "pre_call_to_completion_us": {
+            "min": samples.pre_call_to_completion_us.iter().copied().min(),
+            "p50": quantile(&mut samples.pre_call_to_completion_us, 50, 100),
+            "p95": quantile(&mut samples.pre_call_to_completion_us, 95, 100),
+            "p99": quantile(&mut samples.pre_call_to_completion_us, 99, 100),
+            "p99_9": quantile(&mut samples.pre_call_to_completion_us, 999, 1000),
+            "max": samples.pre_call_to_completion_us.iter().copied().max(),
+            "samples": samples.pre_call_to_completion_us.len(),
         },
         "target_to_completion_us": {
             "p50": quantile(&mut samples.target_to_completion_us, 50, 100),

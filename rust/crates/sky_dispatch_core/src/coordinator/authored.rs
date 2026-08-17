@@ -152,6 +152,43 @@ impl RuntimeDispatchCoordinator {
         ))
     }
 
+    fn authored_up_ticks_for_generation(
+        &self,
+        generation_id: GenerationId,
+    ) -> Result<Option<TimelineTicks>, CoordinatorError> {
+        if generation_id == NO_GENERATION_ID {
+            return Ok(None);
+        }
+        let generation_index = usize::try_from(generation_id).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "generation id does not fit in usize".into(),
+            ))
+        })?;
+        let Some((packet_index, _)) = self
+            .up_intent_locations
+            .get(generation_index)
+            .copied()
+            .flatten()
+        else {
+            return Ok(None);
+        };
+        let packet =
+            self.schedule
+                .packets
+                .get(packet_index)
+                .ok_or(CoordinatorError::InvalidBatchIndex {
+                    index: packet_index,
+                })?;
+        let first_batch_index = usize::try_from(packet.first_batch_index).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet first batch index does not fit in usize".into(),
+            ))
+        })?;
+        Ok(Some(
+            self.effective_batch_scheduled_ticks(first_batch_index)?,
+        ))
+    }
+
     /// Classify the current immutable authored frame without mutating state.
     ///
     /// Release floors are evaluated per generation/key.  An unrelated
@@ -587,7 +624,11 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::InvalidKeySlot {
                     slot: intent.key_slot(),
                 })?;
-            down_intents.push(PreparedDownIntent { intent, scan_code });
+            down_intents.push(PreparedDownIntent {
+                intent,
+                scan_code,
+                authored_up_ticks: self.authored_up_ticks_for_generation(intent.generation_id())?,
+            });
         }
         Ok(PreparedAuthoredCommit {
             frame: prepared,
@@ -638,6 +679,37 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
+    fn validate_physical_hold_feasibility(
+        &self,
+        down_intents: &[PreparedDownIntent],
+        down_completed_ticks: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let latest_physical_release =
+            down_completed_ticks.checked_add_duration(self.min_hold_ticks)?;
+        for down in down_intents {
+            let generation_id = down.intent.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            // A Down-only authored generation has no musical Up target to
+            // compare. Its eventual release remains cleanup-owned; the
+            // authored hold feasibility check applies only when the frozen
+            // schedule contains the corresponding Up target.
+            let hold_is_infeasible = down
+                .authored_up_ticks
+                .is_some_and(|authored_up_ticks| latest_physical_release > authored_up_ticks);
+            if hold_is_infeasible {
+                return Err(CoordinatorError::PhysicalHoldInfeasible {
+                    generation_id,
+                    down_completed_ticks,
+                    authored_up_ticks: down.authored_up_ticks,
+                    min_hold_ticks: self.min_hold_ticks,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Apply a frozen authored commit after a successful physical send.
     /// There is no schedule or packet traversal on this path.
     pub fn commit_prepared_authored_frame_success_frozen(
@@ -653,6 +725,7 @@ impl RuntimeDispatchCoordinator {
                 cursor: self.cursor,
             });
         }
+        self.validate_physical_hold_feasibility(&commit.down_intents, completed)?;
         let release_not_before_ticks = prepared
             .authored_ticks
             .checked_add_duration(self.min_hold_ticks)?;
@@ -841,6 +914,22 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
+        let mut prepared_down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]> = SmallVec::new();
+        for intent in current_down.iter().copied() {
+            let scan_code = self
+                .schedule
+                .key_registry
+                .scan_code_for(intent.key_slot())
+                .ok_or(CoordinatorError::InvalidKeySlot {
+                    slot: intent.key_slot(),
+                })?;
+            prepared_down_intents.push(PreparedDownIntent {
+                intent,
+                scan_code,
+                authored_up_ticks: self.authored_up_ticks_for_generation(intent.generation_id())?,
+            });
+        }
+        self.validate_physical_hold_feasibility(&prepared_down_intents, completed)?;
         let release_not_before_ticks = prepared
             .authored_ticks
             .checked_add_duration(self.min_hold_ticks)?;

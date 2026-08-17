@@ -1,10 +1,51 @@
-use super::{lease_bounded_ticks, wait_failure_message};
+use super::{WorkerTimingState, lease_bounded_ticks, wait_failure_message};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
 use std::sync::atomic::AtomicU64;
+
+pub(crate) fn wait_to_precision_boundary(
+    qpc_clock: QpcClock,
+    waiter: &HybridWaiter,
+    interrupt: &OwnedEvent,
+    physical_target_qpc: QpcTicks,
+    timing: &WorkerTimingState,
+    local_metrics: &mut WorkerMetricsLocal,
+) -> Result<(), super::DispatchStep> {
+    let spin_target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
+    );
+    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+        qpc_clock,
+        spin_target_qpc,
+        DurationTicks::ZERO,
+        interrupt,
+    );
+    match wait_result.outcome {
+        WaitOutcome::Deadline => Ok(()),
+        WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+            Err(super::DispatchStep::Continue)
+        }
+        WaitOutcome::Failed(failure) => {
+            if matches!(failure, WaitFailure::Clock) {
+                local_metrics.wait_clock_failures =
+                    local_metrics.wait_clock_failures.saturating_add(1);
+            } else {
+                local_metrics.wait_backend_failures =
+                    local_metrics.wait_backend_failures.saturating_add(1);
+            }
+            Err(super::DispatchStep::Terminate(wait_failure_message(
+                failure,
+            )))
+        }
+    }
+}
 
 pub(crate) enum WaitBoundary {
     Due {

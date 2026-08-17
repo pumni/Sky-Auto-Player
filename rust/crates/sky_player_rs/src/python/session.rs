@@ -594,7 +594,10 @@ impl TestDispatchSessionPy {
                 enable_event_wait,
                 supervisor_lease_timeout_us: 3_000_000,
                 #[cfg(any(test, feature = "test-support"))]
-                test_spin_threshold_us: None,
+                // Test-support sessions use a fixed, test-only precision
+                // margin so correctness fixtures do not become host-wake
+                // latency probes. Production keeps its locked 700 us value.
+                test_spin_threshold_us: Some(20_000),
             },
             telemetry: TelemetryOptions {
                 mode: crate::engine::TelemetryMode::Ring,

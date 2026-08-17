@@ -33,7 +33,12 @@ proptest! {
         min_hold_us in 1_u64..=50_000,
         send_latency_us in 0_u64..=5_000,
     ) {
-        prop_assume!(authored_hold_us >= min_hold_us);
+        // The simulation models a Down transport completion at
+        // `down_scheduled_us + send_latency_us`.  A valid generated case must
+        // therefore leave the full configured physical hold before its
+        // authored Up; cases that do not are covered by the explicit
+        // fail-closed coordinator tests.
+        prop_assume!(authored_hold_us >= min_hold_us.saturating_add(send_latency_us));
         scan_codes.sort_unstable();
         scan_codes.dedup();
         let down_scheduled_us = 1_000;
