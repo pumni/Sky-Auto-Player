@@ -194,6 +194,73 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    /// Build an authored-feasible same-key hold whose release becomes
+    /// pending only because the completed Down arrived 300 us late.  This is
+    /// the production-shaped setup needed by pause/focus lifecycle tests: the
+    /// native admission floor accepts the authored 50 ms hold, while the
+    /// completion-anchored runtime floor moves the physical Up to 50.3 ms.
+    pub fn new_admissible_dynamic_pending_release() -> Self {
+        let mut harness = Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "dynamic-pending-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 50_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "dynamic-pending-up".into(),
+                },
+            ],
+            50_000,
+        );
+        let epoch = harness.resources.playback.epoch;
+        let late_completion = epoch
+            .checked_add_duration(
+                harness
+                    .resources
+                    .clock
+                    .duration_from_us(300)
+                    .expect("300 microseconds"),
+            )
+            .expect("late completion target");
+        let clock = harness.resources.clock;
+        let call_index = Arc::new(AtomicU64::new(0));
+        let emitter_index = Arc::clone(&call_index);
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
+            let completed_ticks = if index == 0 {
+                late_completion
+            } else {
+                clock.now().expect("test QPC")
+            };
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(completed_ticks),
+                    completed_ticks: Some(completed_ticks),
+                    timing_error: None,
+                },
+            }
+        });
+        harness
+    }
+
     /// Build a pending release whose due boundary is shared with an authored
     /// metadata-only deferred Up.  The packet emitter uses deterministic QPC
     /// completion samples so the equality is a state-machine property rather

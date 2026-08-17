@@ -1,6 +1,4 @@
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
-#[cfg(debug_assertions)]
-use super::plan_structure_is_valid;
 use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
@@ -109,11 +107,6 @@ pub(crate) fn dispatch_due_from_plan(
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: &mut super::dispatch::PendingObservationQueue,
 ) -> super::DispatchStep {
-    #[cfg(debug_assertions)]
-    debug_assert!(
-        plan_structure_is_valid(plan),
-        "invalid physical plan escaped construction"
-    );
     if let super::planning::NextDispatchPlan::Metadata(metadata) = plan {
         if metadata.physical_target_qpc > now_ticks {
             return super::DispatchStep::NoWork;

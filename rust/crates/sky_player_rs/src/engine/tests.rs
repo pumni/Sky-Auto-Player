@@ -2752,7 +2752,7 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
 fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
     use super::test_support::ProductionDispatchTestHarness;
 
-    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let mut harness = ProductionDispatchTestHarness::new_admissible_dynamic_pending_release();
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_due_from_plan_for_test(&first),
@@ -2770,18 +2770,26 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
         .expect("manual pause suspension");
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    let packets = harness.configure_packet_capture();
+    harness.advance_playback_time_us(1_000);
     assert!(matches!(
         harness.plan_current_dispatch(),
         super::worker::NextDispatchPlan::NoWork
     ));
     assert!(harness.resources.coordinator.is_finished());
+    assert!(packets.lock().expect("packet capture lock").is_empty());
+    harness
+        .resources
+        .coordinator
+        .check_post_cleanup_invariants()
+        .expect("clean suspension state");
 }
 
 #[test]
 fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
     use super::test_support::ProductionDispatchTestHarness;
 
-    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let mut harness = ProductionDispatchTestHarness::new_admissible_dynamic_pending_release();
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_due_from_plan_for_test(&first),
@@ -2802,11 +2810,19 @@ fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
         .expect("focus suspension");
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    let packets = harness.configure_packet_capture();
+    harness.advance_playback_time_us(1_000);
     assert!(matches!(
         harness.plan_current_dispatch(),
         super::worker::NextDispatchPlan::NoWork
     ));
     assert!(harness.resources.coordinator.is_finished());
+    assert!(packets.lock().expect("packet capture lock").is_empty());
+    harness
+        .resources
+        .coordinator
+        .check_post_cleanup_invariants()
+        .expect("clean focus suspension state");
 }
 
 #[test]
