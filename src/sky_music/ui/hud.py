@@ -171,6 +171,7 @@ class ProgressRenderer:
         total: float,
         song_name: str,
         status: str = "playing",
+        pre_roll_remaining_us: int = 0,
         force: bool = False,
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
@@ -203,6 +204,7 @@ class ProgressRenderer:
             "paused": styles["warning"],
             "focus_lost": styles["danger"],
             "waiting_for_focus": styles["warning"],
+            "countdown": styles["warning"],
             "refocus": styles["accent"],
             "panic": styles["warning"],
             "done": styles["accent"],
@@ -321,6 +323,10 @@ class ProgressRenderer:
             backend_status_text = Text("healthy", style=styles["success"])
 
         status_descriptions: dict[str, Text] = {
+            "countdown": Text(
+                f"Preparing playback. Starting in {max(0, pre_roll_remaining_us) / 1_000_000:.1f}s.",
+                style=styles["warning"],
+            ),
             "waiting_for_focus": Text("Playback has not started yet. Bring Sky window to foreground.", style=styles["warning"]),
             "focus_lost": Text("Playback is paused and tracked keys were released.", style=styles["danger"]),
             "paused": Text("Playback is paused and tracked keys were released.", style=styles["warning"]),

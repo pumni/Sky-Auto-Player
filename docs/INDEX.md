@@ -15,7 +15,7 @@ This index defines the structure and hierarchy of truth for the Sky Auto Player 
 
 ## 1. Canonical Documents
 These files represent the current system state and contracts:
-* [timing-principles.md](timing-principles.md) — Timing domains, same-key feasibility limits, the completion-anchor contract, fixed hold floors, and deferred observation boundaries.
+* [timing-principles.md](timing-principles.md) — Timing domains, same-key feasibility limits, authored hold materialization, fixed precision boundaries, and deferred observation.
 * [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Current Rust-only RT session contract, QPC timing, focus gate, cleanup invariants, live snapshot, and final report.
 * [architecture.md](architecture.md) — Explains the 4-layer DDD codebase and the Python application / Rust native dispatch boundary.
 * [hold-frame-model.md](hold-frame-model.md) — Explicit hold-frame choices, FPS selection, and materialization formulas.

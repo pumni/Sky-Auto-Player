@@ -72,6 +72,17 @@ def test_snapshot_renderer_unit() -> None:
     assert snap.wait_clock_failures == 1
     assert snap.recovered_zero_progress_but_late == 3
     assert snap.recovered_partial_up_retries == 4
+
+    renderer.render(
+        current=0.0,
+        total=10.0,
+        song_name="My Song",
+        status="countdown",
+        pre_roll_remaining_us=2_500_000,
+    )
+    snap = renderer.get_snapshot()
+    assert snap is not None
+    assert snap.pre_roll_remaining_us == 2_500_000
     
     renderer.update_counters_batch(ProgressCounters(5000, 1 if 5000>2000 else 0, 1 if 5000>5000 else 0, 1 if 5000>10000 else 0, 0, 0, (5000,)))
     assert renderer.max_lateness_us == 5000
@@ -333,6 +344,12 @@ def test_unified_workflow_integration(monkeypatch) -> None:
         def __init__(self, *args, **kwargs) -> None:
             self.telemetry = MockTelemetry()
 
+        def prepare_focus_for_playback(self) -> bool:
+            return True
+
+        def release_song_data(self) -> None:
+            pass
+
         def play(self) -> str:
             return "finished"
 
@@ -537,9 +554,15 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
         def record_schedule_metadata(self, sched_meta) -> None:
             pass
 
+    focus_calls: list[int] = []
+
     class MockPlaybackEngine:
         def __init__(self, *args, **kwargs) -> None:
             self.telemetry = MockTelemetry()
+
+        def prepare_focus_for_playback(self) -> bool:
+            focus_calls.append(1)
+            return True
 
         def play(self) -> str:
             return "finished"
@@ -566,8 +589,7 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
             await pilot.pause(0.3)
 
     asyncio.run(run_focus_test())
-    # Playback does not mutate foreground focus automatically. The user must
-    # focus Sky explicitly before starting a non-dry run.
+    assert len(focus_calls) == 1
 
 
 def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
@@ -766,12 +788,15 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
         def record_schedule_metadata(self, sched_meta) -> None:
             pass
 
+    play_calls: list[int] = []
+
     class MockPlaybackEngine:
         def __init__(self, *args, **kwargs) -> None:
             self.telemetry = MockTelemetry()
 
         def play(self) -> str:
-            time.sleep(0.5)
+            play_calls.append(1)
+            time.sleep(5.0)
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
@@ -784,6 +809,7 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
     monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
 
     async def run_growth_test(size: tuple[int, int]) -> None:
+        calls_before = len(play_calls)
         app = SkyPickerApp(
             initial_dry_run=False,
             unified_mode=True,
@@ -797,12 +823,16 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
             await pilot.press("enter")
             await pilot.pause(0.2)
             card = app.query_one("#playback-card", PlaybackCard)
-            assert app.playback_mode == "countdown"
+            # The app enters playback immediately; the card's countdown mode
+            # is driven by the native pre-roll snapshot rather than a UI timer.
+            assert app.playback_mode == "playing"
+            assert len(play_calls) == calls_before + 1
             card_height_countdown = card.region.height
 
-            card._tick_countdown()
-            card._tick_countdown()
-            card._tick_countdown()
+            # The native snapshot, not a Textual timer, transitions the card
+            # after the arm-time pre-roll is complete.
+            card._mode = "playing"
+            card._rerender(force=True)
             await pilot.pause(0.2)
 
             assert app.playback_mode == "playing"

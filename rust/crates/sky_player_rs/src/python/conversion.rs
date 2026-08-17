@@ -78,6 +78,7 @@ pub(super) fn strict_scan_codes(
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[allow(dead_code)]
 pub(super) fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
     strict_scan_codes(
         value,
@@ -183,6 +184,7 @@ pub(super) fn parse_schedule(py_actions: &Bound<'_, PyAny>) -> PyResult<RuntimeS
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[allow(dead_code)]
 pub(super) fn parse_schedule_with_allowlist(
     py_actions: &Bound<'_, PyAny>,
     allowed_scan_codes: &Bound<'_, PyAny>,

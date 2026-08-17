@@ -366,7 +366,7 @@ def test_published_result_populates_effective_native_floor(
         output_path=tmp_path / "raw.json", cache_path=tmp_path / "cache.json", fps=60
     )
 
-    assert published.effective_min_hold_us == 17_167
+    assert published.effective_min_hold_us == 16_967
 
     stressed = _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
     monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: stressed)

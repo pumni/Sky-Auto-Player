@@ -2,8 +2,8 @@ use super::conversion::*;
 use super::snapshot::ProgressSnapshotPy;
 use super::*;
 use crate::engine::{
-    FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
-    WaitOptions,
+    DispatchProfile, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
+    TimingOptions, WaitOptions,
 };
 
 #[pyclass(name = "DispatchSession", frozen)]
@@ -46,8 +46,10 @@ impl NativeDispatchSessionPy {
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
-        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
-        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
+        // Python materializes the authored hold (frame duration plus the
+        // calibrated static margin). Rust receives that value verbatim and
+        // only validates it in the QPC tick domain.
+        let effective_min_hold_us = min_hold_us;
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
         let parsed_telemetry_mode = if config.telemetry {
@@ -59,8 +61,6 @@ impl NativeDispatchSessionPy {
         let priority_mode = PriorityMode::Auto;
         let enable_waitable_timer = true;
         let enable_event_wait = true;
-        // Compatibility input only: estimator state is intentionally ignored.
-        let _deprecated_estimator_state_json = config.estimator_state_json.as_ref();
         let input_path_warn_us = 300;
         let strict_timing = parsed_profile.strict_timing();
         let strict_down_completion_late_us = 2_000;
@@ -76,6 +76,7 @@ impl NativeDispatchSessionPy {
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Production,
+            profile: parsed_profile,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
                 strict_timing,
@@ -91,6 +92,8 @@ impl NativeDispatchSessionPy {
                 enable_waitable_timer,
                 enable_event_wait,
                 supervisor_lease_timeout_us,
+                #[cfg(any(test, feature = "test-support"))]
+                test_spin_threshold_us: None,
             },
             telemetry: TelemetryOptions {
                 mode: parsed_telemetry_mode,
@@ -126,8 +129,10 @@ impl NativeDispatchSessionPy {
         })
     }
 
-    fn start(&self) -> PyResult<()> {
-        self.session.start().map_err(PyRuntimeError::new_err)
+    fn arm(&self, pre_roll_us: StrictU64) -> PyResult<()> {
+        self.session
+            .arm(pre_roll_us.0)
+            .map_err(PyRuntimeError::new_err)
     }
 
     fn pause(&self) -> PyResult<()> {
@@ -228,14 +233,26 @@ impl NativeDispatchSessionPy {
         dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
         dict.set_item("elapsed_us", snap.elapsed_us)?;
         dict.set_item("total_us", snap.total_us)?;
+        dict.set_item("pre_roll_remaining_us", snap.pre_roll_remaining_us)?;
         dict.set_item("lateness_us", snap.lateness_us)?;
         dict.set_item("max_lateness_us", snap.max_lateness_us)?;
         dict.set_item("late_2ms", snap.late_2ms)?;
         dict.set_item("late_5ms", snap.late_5ms)?;
         dict.set_item("late_10ms", snap.late_10ms)?;
+        dict.set_item(
+            "max_sendinput_pre_call_lateness_us",
+            snap.max_sendinput_pre_call_lateness_us,
+        )?;
+        dict.set_item("pre_call_late_2ms", snap.pre_call_late_2ms)?;
+        dict.set_item("pre_call_late_5ms", snap.pre_call_late_5ms)?;
+        dict.set_item("pre_call_late_10ms", snap.pre_call_late_10ms)?;
         dict.set_item("release_max_us", snap.release_max_us)?;
         dict.set_item("release_late_2ms", snap.release_late_2ms)?;
         dict.set_item("recent_latencies_us", snap.recent_latencies_us)?;
+        dict.set_item(
+            "recent_latency_samples_available",
+            snap.recent_latency_samples_available,
+        )?;
         dict.set_item("is_running", snap.is_running)?;
         dict.set_item("is_finished", snap.is_finished)?;
         dict.set_item("is_paused", snap.is_paused)?;
@@ -419,7 +436,6 @@ impl NativeDispatchSessionPy {
         report.set_item("snapshot", self.snapshot(py)?)?;
         report.set_item("effective_config", self.effective_config.to_py_dict(py)?)?;
         report.set_item("telemetry_json", self.take_telemetry_json(py)?)?;
-        report.set_item("estimator_state_json", self.estimator_state_json()?)?;
         Ok(report)
     }
 
@@ -450,12 +466,6 @@ impl NativeDispatchSessionPy {
 
     fn take_telemetry_json(&self, py: Python<'_>) -> PyResult<String> {
         py.detach(|| self.session.take_telemetry_json())
-            .map_err(PyRuntimeError::new_err)
-    }
-
-    fn estimator_state_json(&self) -> PyResult<String> {
-        self.session
-            .estimator_state_json()
             .map_err(PyRuntimeError::new_err)
     }
 }
@@ -554,8 +564,9 @@ impl TestDispatchSessionPy {
                 ));
             }
         };
-        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
-        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
+        // Test support follows the production boundary: the caller owns
+        // authored-hold materialization and Rust validates that value verbatim.
+        let effective_min_hold_us = min_hold_us;
         let (schedule, _allowed_scan_codes) =
             parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, effective_min_hold_us)?;
@@ -566,6 +577,7 @@ impl TestDispatchSessionPy {
                 latency_per_key_us: mock_latency_per_key_us,
                 fault_script,
             },
+            profile: DispatchProfile::MockTest,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
                 strict_timing: false,
@@ -581,6 +593,11 @@ impl TestDispatchSessionPy {
                 enable_waitable_timer,
                 enable_event_wait,
                 supervisor_lease_timeout_us: 3_000_000,
+                #[cfg(any(test, feature = "test-support"))]
+                // Test-support sessions use a fixed, test-only precision
+                // margin so correctness fixtures do not become host-wake
+                // latency probes. Production keeps its locked 700 us value.
+                test_spin_threshold_us: Some(20_000),
             },
             telemetry: TelemetryOptions {
                 mode: crate::engine::TelemetryMode::Ring,
@@ -600,8 +617,14 @@ impl TestDispatchSessionPy {
         })
     }
 
+    fn arm(&self, pre_roll_us: StrictU64) -> PyResult<()> {
+        self.session
+            .arm(pre_roll_us.0)
+            .map_err(PyRuntimeError::new_err)
+    }
+
     fn start(&self) -> PyResult<()> {
-        self.session.start().map_err(PyRuntimeError::new_err)
+        self.arm(StrictU64(0))
     }
 
     /// Keep the test-support session's supervisor lease alive for acceptance

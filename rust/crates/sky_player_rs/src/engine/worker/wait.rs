@@ -1,10 +1,51 @@
-use super::{lease_bounded_ticks, wait_failure_message};
+use super::{WorkerTimingState, lease_bounded_ticks, wait_failure_message};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
 use std::sync::atomic::AtomicU64;
+
+pub(crate) fn wait_to_precision_boundary(
+    qpc_clock: QpcClock,
+    waiter: &HybridWaiter,
+    interrupt: &OwnedEvent,
+    physical_target_qpc: QpcTicks,
+    timing: &WorkerTimingState,
+    local_metrics: &mut WorkerMetricsLocal,
+) -> Result<(), super::DispatchStep> {
+    let spin_target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
+    );
+    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+        qpc_clock,
+        spin_target_qpc,
+        DurationTicks::ZERO,
+        interrupt,
+    );
+    match wait_result.outcome {
+        WaitOutcome::Deadline => Ok(()),
+        WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+            Err(super::DispatchStep::Continue)
+        }
+        WaitOutcome::Failed(failure) => {
+            if matches!(failure, WaitFailure::Clock) {
+                local_metrics.wait_clock_failures =
+                    local_metrics.wait_clock_failures.saturating_add(1);
+            } else {
+                local_metrics.wait_backend_failures =
+                    local_metrics.wait_backend_failures.saturating_add(1);
+            }
+            Err(super::DispatchStep::Terminate(wait_failure_message(
+                failure,
+            )))
+        }
+    }
+}
 
 pub(crate) enum WaitBoundary {
     Due {
@@ -30,11 +71,11 @@ pub struct WaitObservation {
 
 pub(crate) struct WaitDeadline {
     pub(crate) physical_target_qpc: Option<QpcTicks>,
+    pub(crate) admission_guard_ticks: DurationTicks,
     pub(crate) qpc_clock: QpcClock,
 }
 
 pub(crate) struct WaitTiming<'a> {
-    pub(crate) effective_spin_threshold_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
@@ -85,11 +126,11 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     } = context;
     let WaitDeadline {
         physical_target_qpc,
+        admission_guard_ticks,
         qpc_clock,
         ..
     } = deadline;
     let WaitTiming {
-        effective_spin_threshold_ticks,
         lease_timeout_ticks,
         supervisor_heartbeat_ticks,
     } = timing;
@@ -100,10 +141,15 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         terminal_error,
     } = mutable;
 
-    let target_qpc = match physical_target_qpc {
+    let physical_target_qpc = match physical_target_qpc {
         Some(target) => target,
         None => return WaitBoundary::Exit,
     };
+    let target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(admission_guard_ticks.as_u64()),
+    );
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -115,7 +161,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     if target_sample_ticks >= target_qpc {
         return WaitBoundary::Due {
             wait_result: None,
-            target_qpc,
+            target_qpc: physical_target_qpc,
             dispatch_qpc: target_sample_ticks,
         };
     }
@@ -131,7 +177,9 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         bounded_target,
-        effective_spin_threshold_ticks,
+        // Admission is a low-occupancy wait to T - guard. The only busy-spin
+        // in production is the final authored precision stage.
+        DurationTicks::ZERO,
         interrupt,
     );
     match wait_result.outcome {
@@ -139,7 +187,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             let dispatch_qpc = wait_result.wake_qpc.unwrap_or(target_qpc);
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
-                target_qpc,
+                target_qpc: physical_target_qpc,
                 dispatch_qpc,
             }
         }
@@ -176,6 +224,17 @@ mod tests {
     use sky_dispatch_win32::event::OwnedEvent;
     use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure};
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn admission_wait_has_no_busy_spin_threshold() {
+        let source = include_str!("wait.rs");
+        let body = source
+            .split("pub(crate) fn wait_for_next_boundary")
+            .nth(1)
+            .expect("admission wait implementation");
+        assert!(body.contains("DurationTicks::ZERO"));
+        assert!(!body.contains("effective_spin_threshold_ticks"));
+    }
 
     #[test]
     fn lease_boundary_is_not_a_dispatch_deadline() {
@@ -248,10 +307,10 @@ mod tests {
                         .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
                         .expect("target"),
                 ),
+                admission_guard_ticks: DurationTicks::ZERO,
                 qpc_clock,
             },
             timing: WaitTiming {
-                effective_spin_threshold_ticks: DurationTicks::ZERO,
                 lease_timeout_ticks: qpc_clock.duration_from_us(1_000).expect("lease conversion"),
                 supervisor_heartbeat_ticks: &heartbeat,
             },

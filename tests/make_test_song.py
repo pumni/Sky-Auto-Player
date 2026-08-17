@@ -90,7 +90,7 @@ def rolled_chord(keys=(0, 2, 4, 6), spread_ms=18, blocks=8, block_gap=1500):
 write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 
 # Floor probe: same-key repeats around the frame-aware min_hold floor. Under the current
-# completion-anchor contract, intervals below min_hold are intentionally infeasible; this probe is
+# authored-hold contract, intervals below min_hold are intentionally infeasible; this probe is
 # now mainly for synthetic boundary/forensics work. Real-song acceptance should use
 # TEST_repeat_clean_* and the corpus gate in tests/acceptance_completion_anchor.py.
 #   144fps local_precise: min_hold = ceil(1e6/144) + 500us margin = 7445 us (~7.4 ms)

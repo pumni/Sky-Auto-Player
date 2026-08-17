@@ -1,8 +1,9 @@
 """Run schema-compatible native benchmark A/B on one Windows runner.
 
-The candidate checkout supplies the benchmark harness for both legs.  Only the
-native wheel changes between legs, so the reports distinguish harness Git SHA
-from the native build commit instead of conflating the two.
+The candidate checkout supplies the benchmark harness for both legs. Only the
+native wheel changes between legs. Real-SendInput runs go through the
+historical-reference bridge so exact legacy native ABIs can be measured without
+pretending their adaptive runtime policy matches the current candidate.
 """
 
 from __future__ import annotations
@@ -68,12 +69,15 @@ def _build_wheel(
     *,
     env_file: Path | None,
     expected_sha: str,
+    test_support: bool = False,
     runner: RunCommand | None = None,
 ) -> Path:
     command = ["uv", "run"]
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
-    command.extend(["python", "scripts/build_rust_wheel.py", "--test-support"])
+    command.extend(["python", "scripts/build_rust_wheel.py"])
+    if test_support:
+        command.append("--test-support")
     build_env = os.environ.copy()
     build_env["GITHUB_SHA"] = expected_sha
     run = _run if runner is None else runner
@@ -81,7 +85,12 @@ def _build_wheel(
     if result.returncode != 0:
         raise RuntimeError(f"native wheel build failed for {repo}: {result.returncode}")
     wheel_dir_candidates = (repo / "target" / "wheels", repo / "rust" / "target" / "wheels")
-    wheels = [wheel for directory in wheel_dir_candidates if directory.exists() for wheel in directory.glob("sky_player_rs-*.whl")]
+    wheels = [
+        wheel
+        for directory in wheel_dir_candidates
+        if directory.exists()
+        for wheel in directory.glob("sky_player_rs-*.whl")
+    ]
     if not wheels:
         raise RuntimeError(f"native wheel build produced no wheel in {repo}")
     return max(wheels, key=lambda path: path.stat().st_mtime_ns)
@@ -108,10 +117,15 @@ def _benchmark_command(
     env_file = ROOT / ".env"
     if env_file.exists():
         command.extend(["--env-file", ".env"])
+    benchmark_script = (
+        "scripts/bench_native_reference_bridge.py"
+        if args.backend == "sendinput"
+        else "scripts/bench_native_acceptance.py"
+    )
     command.extend(
         [
             "python",
-            "scripts/bench_native_acceptance.py",
+            benchmark_script,
             "--backend",
             args.backend,
             "--actions",
@@ -219,7 +233,15 @@ def _host_fingerprint() -> dict[str, str]:
 
 
 def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    real_backend = args.backend == "sendinput"
+    frame_period_us = (1_000_000 + args.game_fps - 1) // args.game_fps
+    cycle_us = (
+        60_000
+        if args.gap_profile == "cold"
+        else max(10_000, frame_period_us + 500 + 2_500)
+    )
+    materialized_hold_us = cycle_us - 2_500 if args.gap_profile == "hot" else cycle_us // 2
+    matrix: dict[str, Any] = {
         "actions": args.actions,
         "dispatch_repeats": args.dispatch_repeats,
         "command_samples": args.command_samples,
@@ -227,13 +249,27 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "backend": args.backend,
         "allow_real_input": args.allow_real_input,
         "game_fps": args.game_fps,
-        "lead_mode": args.lead_mode,
-        "fixed_lead_us": args.fixed_lead_us,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
-        "rt_priority_mode": args.rt_priority_mode,
+        "native_profile": "strict_timing_diagnostic" if real_backend else "mock_test",
+        "native_build_flavor": "production" if real_backend else "test_support",
+        "require_focus": real_backend,
+        "materialized_min_hold_us": materialized_hold_us,
         "budget_seconds": args.budget_seconds,
     }
+    if real_backend:
+        matrix["native_policy_source"] = "per-leg benchmark report"
+    else:
+        matrix.update(
+            {
+                "lead_mode": args.lead_mode,
+                "fixed_lead_us": args.fixed_lead_us,
+                "rt_priority_mode": args.rt_priority_mode,
+                "adaptive_spin": True,
+                "native_policy_source": "test-support CLI",
+            }
+        )
+    return matrix
 
 
 def _ab_provenance(
@@ -253,6 +289,9 @@ def _ab_provenance(
         "command_line": list(sys.argv),
         "benchmark_matrix": _benchmark_matrix(args),
         "backend": args.backend,
+        "native_build_flavor": (
+            "production" if args.backend == "sendinput" else "test_support"
+        ),
         "real_input_qualification": args.backend == "sendinput" and args.allow_real_input,
     }
 
@@ -376,11 +415,15 @@ def main() -> int:
                 worktree,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=baseline_sha,
+                test_support=args.backend != "sendinput",
                 runner=role_runner("baseline"),
             )
             provenance["roles"]["baseline"] = {
                 "native_build_commit": baseline_sha,
                 "wheel": baseline_wheel.name,
+                "native_build_flavor": (
+                    "production" if args.backend == "sendinput" else "test_support"
+                ),
             }
 
             stage = "baseline_benchmark"
@@ -412,11 +455,15 @@ def main() -> int:
                 ROOT,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=candidate_sha,
+                test_support=args.backend != "sendinput",
                 runner=role_runner("candidate"),
             )
             provenance["roles"]["candidate"] = {
                 "native_build_commit": candidate_sha,
                 "wheel": candidate_wheel.name,
+                "native_build_flavor": (
+                    "production" if args.backend == "sendinput" else "test_support"
+                ),
             }
 
             stage = "candidate_benchmark"

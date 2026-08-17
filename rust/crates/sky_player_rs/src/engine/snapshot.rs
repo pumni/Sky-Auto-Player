@@ -7,14 +7,20 @@ use std::collections::HashMap;
 pub struct EngineSnapshot {
     pub elapsed_us: u64,
     pub total_us: u64,
+    pub pre_roll_remaining_us: u64,
     pub lateness_us: u64,
     pub max_lateness_us: u64,
     pub late_2ms: u64,
     pub late_5ms: u64,
     pub late_10ms: u64,
+    pub max_sendinput_pre_call_lateness_us: u64,
+    pub pre_call_late_2ms: u64,
+    pub pre_call_late_5ms: u64,
+    pub pre_call_late_10ms: u64,
     pub release_max_us: u64,
     pub release_late_2ms: u64,
     pub recent_latencies_us: Vec<i64>,
+    pub recent_latency_samples_available: bool,
     pub is_running: bool,
     pub is_finished: bool,
     pub is_paused: bool,
@@ -102,7 +108,7 @@ pub struct EngineSnapshot {
     pub observer_duration_max_us: u64,
     /// Observations dropped because the fixed queue was full (§8.13).
     pub observer_dropped_samples: u64,
-    /// High-watermark of the fixed observer queue (§8.13).
+    /// High-watermark of the diagnostic fixed observer queue (§8.13).
     pub observer_queue_high_watermark: u64,
     pub terminal_error: Option<String>,
     pub secondary_errors: Vec<String>,
@@ -115,20 +121,24 @@ pub struct EngineSnapshot {
 }
 
 /// Allocation-light frequent polling shape. It deliberately excludes final
-/// report maps, release provenance, and build metadata.  The deprecated
-/// estimator compatibility field is intentionally absent from this polling
-/// shape.
+/// report maps, release provenance, and build metadata.
 #[derive(Debug, Clone)]
 pub struct EngineProgressSnapshot {
     pub elapsed_us: u64,
     pub total_us: u64,
+    pub pre_roll_remaining_us: u64,
     pub max_lateness_us: u64,
     pub late_2ms: u64,
     pub late_5ms: u64,
     pub late_10ms: u64,
+    pub max_sendinput_pre_call_lateness_us: u64,
+    pub pre_call_late_2ms: u64,
+    pub pre_call_late_5ms: u64,
+    pub pre_call_late_10ms: u64,
     pub release_max_us: u64,
     pub release_late_2ms: u64,
     pub recent_latencies_us: Vec<i64>,
+    pub recent_latency_samples_available: bool,
     pub is_running: bool,
     pub is_finished: bool,
     pub is_paused: bool,

@@ -50,7 +50,7 @@ fn frozen_core_dispatch_vectors_match_rust_core() {
     .expect("golden corpus must be valid JSON");
 
     assert_eq!(corpus.schema_version, 1);
-    assert_eq!(corpus.scenarios.len(), 11);
+    assert_eq!(corpus.scenarios.len(), 12);
 
     for scenario in corpus.scenarios {
         let actions: Vec<KeyActionInput> = scenario

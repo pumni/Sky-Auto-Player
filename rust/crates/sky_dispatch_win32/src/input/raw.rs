@@ -116,7 +116,6 @@ pub fn send_input_raw_with_clock(
     }
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::SetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
@@ -159,7 +158,6 @@ pub fn send_input_raw_with_clock(
             }
         };
 
-        unsafe { SetLastError(0) };
         let inserted =
             unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested) as u8;
         let win32_error = if u32::from(inserted) != requested {

@@ -12,7 +12,7 @@ class _FakeSession:
     def __init__(self, *_args, **_kwargs) -> None:
         return None
 
-    def start(self) -> None:
+    def arm(self, _pre_roll_us: int) -> None:
         return None
 
     def join(self, timeout_ms: int) -> bool:

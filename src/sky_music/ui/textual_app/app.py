@@ -97,6 +97,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         super().__init__()
         self.unified_mode = unified_mode
         self.controls = controls
+        if type(countdown_seconds) is not int or countdown_seconds < 0:
+            raise ValueError("countdown_seconds must be a non-negative integer")
         self.countdown_seconds = countdown_seconds
         self.cfg = cfg or load_config()
         self.scan_code_mode = scan_code_mode
@@ -570,6 +572,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._restore_picker_after_playback()
             return
         if self.playback_mode == PlaybackMode.COUNTDOWN:
+            self._shutting_down_playback = True
+            bridge = self._active_playback_commands
+            if bridge is not None:
+                bridge.request("quit")
+                return
             self._restore_picker_after_playback()
             return
         if self.playback_mode == PlaybackMode.PLAYING:
@@ -768,6 +775,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             min_hold_us=int(plan.active_policy.min_hold_us),
             min_hold_margin_us=int(plan.active_policy.min_hold_margin_us),
             min_hold_margin_source=plan.active_policy.min_hold_margin_source,
+            pre_roll_us=max(0, int(self.countdown_seconds)) * 1_000_000,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
@@ -816,21 +824,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 result_callback=handle_playback_result,
                 command_bridge=command_bridge,
                 schedule_warnings=plan.sched_meta.warnings,
+                pre_roll_us=max(0, int(self.countdown_seconds)) * 1_000_000,
             )
 
         if not is_dry_run:
-            # Discovery is read-only at startup. Do not steal foreground focus;
-            # the explicit refocus hotkey is the only path that calls the
-            # minimal Windows foreground API.
-            from sky_music.platform.win32 import window_target
-
-            if not window_target.is_sky_active():
-                self.notify(
-                    "Sky is not focused. Click the Sky window before playback; "
-                    f"use {self.controls.refocus.display if self.controls is not None else 'your configured refocus key'} only if you explicitly request refocus.",
-                    severity="warning",
-                    timeout=8,
-                )
             try:
                 if self.controls is not None:
                     self.controls.start()
@@ -848,11 +845,22 @@ class SkyPickerApp(App[SongPickerResult | None]):
                     f"Playback was not started because global hotkeys could not be registered: {exc}",
                 )
                 return
-        if not is_dry_run and self.countdown_seconds > 0:
-            card = self._show_playback_card(PlaybackMode.COUNTDOWN)
-            card.start_countdown(self.countdown_seconds, run_playback)
-        else:
-            run_playback()
+            prepare_focus = getattr(engine, "prepare_focus_for_playback", None)
+            if callable(prepare_focus) and not prepare_focus():
+                if self.controls is not None:
+                    with contextlib.suppress(Exception):
+                        self.controls.close()
+                self._active_playback_commands = None
+                self._shutting_down_playback = False
+                if picker is not None:
+                    picker.rearm()
+                self._restore_picker_after_playback()
+                self._show_playback_error(
+                    "Focus Error",
+                    "Playback was not started because the validated Sky window could not be focused and verified.",
+                )
+                return
+        run_playback()
 
     def update_session_state(self, picker_result: SongPickerResult) -> None:
         main_mod = _get_main_module()

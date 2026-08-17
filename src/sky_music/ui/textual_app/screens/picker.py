@@ -1402,7 +1402,7 @@ class PickerScreen(Screen[SongPickerResult]):
                     f"Worst measured bucket: {published.worst_bucket}\n"
                     f"Calibrated device margin: {published.margin_us} \u00b5s\n"
                     f"Policy guard: {published.guard_us} \u00b5s\n"
-                    f"Effective runtime floor: {published.effective_min_hold_us} \u00b5s (max selected hold + calibrated margin, configured-FPS frame + 500 \u00b5s)\n"
+                    f"Materialized authored hold: {published.effective_min_hold_us} \u00b5s (selected frame hold + calibrated margin)\n"
                     f"Clean pairs per required bucket: {published.sample_count}\n"
                     f"Evidence: {published.evidence_kind}\n"
                     f"Cache: {published.cache_path}",

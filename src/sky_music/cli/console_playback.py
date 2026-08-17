@@ -46,7 +46,6 @@ from sky_music.ui.hud import (
 from sky_music.ui.picker_helpers import (
     SONG_DIR,
     SUPPORTED_EXTENSIONS,
-    countdown_before_playback,
 )
 from sky_music.ui.picker_theme import get_theme_preset
 
@@ -440,13 +439,20 @@ def play_selected_song(
 
     def build_schedule(session_ctx, policy, tempo):
         try:
-            return build_key_actions(
+            sched_meta = build_key_actions(
                 song,
                 policy=policy,
                 scan_code_mode=session_ctx.scan_code_mode,
                 resolver=resolver,
                 tempo_scale=tempo,
             )
+            if not is_dry_run and sched_meta.impossible_same_key_repeats > 0:
+                print(
+                    "\n[FATAL] Real playback rejects infeasible same-key repeats "
+                    "before focus or worker startup."
+                )
+                return None
+            return sched_meta
         except ScheduleBuildError as exc:
             print(f"\n[FATAL] Schedule build failed: {exc}")
             if exc.recommended_tempo_scale is not None:
@@ -561,10 +567,9 @@ def play_selected_song(
             _console.print(f"[red]Playback aborted: global hotkeys could not be registered: {exc}[/red]")
             return PLAYBACK_QUIT
 
-    # Check window/readiness only if we are NOT running dry-run mode
-    if not is_dry_run:
-        countdown_before_playback(countdown_seconds)
-    else:
+    # The native session owns the absolute epoch. The UI countdown is now
+    # display-only pre-roll, so the engine is launched immediately below.
+    if is_dry_run:
         print(f"[simulation] DRY-RUN enabled. Simulating playback of {song.name}...")
 
     user_cfg = load_config()
@@ -614,6 +619,12 @@ def play_selected_song(
         min_hold_us=int(active_policy.min_hold_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,
+        target_hwnd=(
+            int(_window_target.cached_target_hwnd())
+            if not is_dry_run
+            else None
+        ),
+        pre_roll_us=max(0, int(countdown_seconds)) * 1_000_000,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 

@@ -16,18 +16,17 @@ class NativeDispatchError(RuntimeError):
         *,
         snapshot: Mapping[str, object] | None = None,
         telemetry: Mapping[str, object] | None = None,
-        estimator_state_json: str | None = None,
     ) -> None:
         super().__init__(message)
         self.snapshot = snapshot
         self.telemetry = telemetry
-        self.estimator_state_json = estimator_state_json
 
 
 class NativeSessionStatus(StrEnum):
     """Lifecycle values produced by the Rust session boundary."""
 
     READY = "ready"
+    PREROLL = "preroll"
     PLAYING = "playing"
     PAUSED = "paused"
     FINISHED = "finished"
@@ -39,7 +38,7 @@ class NativeSessionStatus(StrEnum):
 
 
 LIVE_NATIVE_STATUSES = frozenset(
-    {NativeSessionStatus.PLAYING, NativeSessionStatus.PAUSED}
+    {NativeSessionStatus.PREROLL, NativeSessionStatus.PLAYING, NativeSessionStatus.PAUSED}
 )
 TERMINAL_NATIVE_STATUSES = frozenset(
     {

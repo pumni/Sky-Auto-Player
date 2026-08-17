@@ -1,9 +1,10 @@
-use super::config::NativeSessionOptions;
+use super::config::{DispatchProfile, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
 };
 use super::worker::Worker;
 use super::*;
+use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, validate_timing_constants};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
@@ -41,6 +42,7 @@ pub(crate) fn validate_native_schedule_timing(
 
 pub struct NativeDispatchSession {
     config: Mutex<Option<NativeSessionOptions>>,
+    profile: DispatchProfile,
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -48,6 +50,7 @@ pub struct NativeDispatchSession {
 
 impl NativeDispatchSession {
     pub(crate) fn new(options: NativeSessionOptions) -> Result<Self, String> {
+        validate_timing_constants()?;
         // This is the authoritative native admission boundary.  Python calls
         // the same core validator before crossing into Rust, but direct native
         // callers must not be able to construct a session that can only fail
@@ -100,15 +103,18 @@ impl NativeDispatchSession {
                 progress_clock: super::shared::SharedProgressClock::default(),
                 telemetry_output: Mutex::new(None),
                 priority_acquired: Mutex::new("pending".to_string()),
-                estimator_output: Mutex::new(None),
                 supervisor_heartbeat_ticks: AtomicU64::new(initial_heartbeat_ticks.as_u64()),
                 startup_requested_ticks: AtomicU64::new(0),
+                epoch_qpc: AtomicU64::new(0),
+                pre_roll_us: AtomicU64::new(0),
+                armed: AtomicBool::new(false),
                 startup_ready_ticks: AtomicU64::new(0),
                 startup_latency_us: AtomicU64::new(0),
                 startup_ready: AtomicBool::new(false),
             },
         });
         Ok(Self {
+            profile: options.profile,
             config: Mutex::new(Some(options)),
             generation_count,
             shared,
@@ -141,7 +147,21 @@ impl NativeDispatchSession {
         (anchor.elapsed_us(now_qpc, qpc_clock), exposed_paused)
     }
 
-    pub fn start(&self) -> Result<(), String> {
+    pub fn arm(&self, requested_pre_roll_us: u64) -> Result<(), String> {
+        validate_timing_constants()?;
+        let qpc_clock = QpcClock::initialize()
+            .map_err(|error| format!("QPC arm admission failed: {error:?}"))?;
+        let effective_pre_roll_us = requested_pre_roll_us.max(MIN_PRODUCTION_PREROLL_US);
+        let arm_qpc = qpc_clock
+            .now()
+            .map_err(|error| format!("QPC arm sample failed: {error:?}"))?;
+        let epoch_qpc = arm_qpc
+            .checked_add_duration(
+                qpc_clock
+                    .duration_from_us(effective_pre_roll_us)
+                    .map_err(|error| format!("pre-roll conversion failed: {error:?}"))?,
+            )
+            .map_err(|error| format!("pre-roll epoch arithmetic failed: {error}"))?;
         self.shared
             .lifecycle
             .lifecycle
@@ -161,32 +181,29 @@ impl NativeDispatchSession {
         };
 
         let shared = Arc::clone(&self.shared);
-        let startup_requested_ticks = match sky_dispatch_win32::clock::qpc_now_ticks_checked() {
-            Ok(value) => value,
-            Err(error) => {
-                self.shared
-                    .lifecycle
-                    .lifecycle
-                    .store(LIFECYCLE_POISONED, Ordering::Release);
-                return Err(format!(
-                    "QPC admission failed before worker start: {error:?}"
-                ));
-            }
-        };
         self.shared
             .publication
             .supervisor_heartbeat_ticks
-            .store(startup_requested_ticks.as_u64(), Ordering::Release);
+            .store(arm_qpc.as_u64(), Ordering::Release);
         self.shared
             .publication
             .startup_requested_ticks
-            .store(startup_requested_ticks.as_u64(), Ordering::Release);
+            .store(arm_qpc.as_u64(), Ordering::Release);
+        self.shared
+            .publication
+            .epoch_qpc
+            .store(epoch_qpc.as_u64(), Ordering::Release);
+        self.shared
+            .publication
+            .pre_roll_us
+            .store(effective_pre_roll_us, Ordering::Release);
+        self.shared.publication.armed.store(true, Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
             .spawn(move || {
                 let worker_result = catch_unwind(AssertUnwindSafe(|| {
-                    Worker::new(config, shared.as_ref()).run()
+                    Worker::new(config, shared.as_ref(), epoch_qpc).run()
                 }));
                 let (worker_outcome, panic_message) = match worker_result {
                     Ok(outcome) => (outcome, None),
@@ -250,6 +267,45 @@ impl NativeDispatchSession {
                 Err(format!("failed to spawn native dispatch worker: {error}"))
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> Result<(), String> {
+        self.arm(0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn epoch_qpc_for_test(&self) -> QpcTicks {
+        QpcTicks::from_raw(self.shared.publication.epoch_qpc.load(Ordering::Acquire))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pre_roll_us_for_test(&self) -> u64 {
+        self.shared.publication.pre_roll_us.load(Ordering::Acquire)
+    }
+
+    fn pre_roll_remaining_us(&self) -> u64 {
+        let epoch_raw = self.shared.publication.epoch_qpc.load(Ordering::Acquire);
+        if epoch_raw == 0 {
+            return 0;
+        }
+        let Ok(clock) = QpcClock::initialize() else {
+            return 0;
+        };
+        let Ok(now) = clock.now() else {
+            return 0;
+        };
+        let epoch = QpcTicks::from_raw(epoch_raw);
+        let Ok(remaining) = epoch.checked_duration_since(now) else {
+            return 0;
+        };
+        clock.duration_to_us(remaining).unwrap_or_default()
+    }
+
+    fn is_preroll(&self, lifecycle: u8) -> bool {
+        lifecycle == LIFECYCLE_RUNNING
+            && self.shared.publication.armed.load(Ordering::Acquire)
+            && self.pre_roll_remaining_us() > 0
     }
 
     fn signal_worker(&self) -> Result<(), String> {
@@ -422,6 +478,7 @@ impl NativeDispatchSession {
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
         let (elapsed_us, paused) = self.playback_projection();
+        let pre_roll_remaining_us = self.pre_roll_remaining_us();
         let outcome = self
             .shared
             .lifecycle
@@ -429,6 +486,7 @@ impl NativeDispatchSession {
             .load(Ordering::Acquire);
         let status = match lifecycle {
             LIFECYCLE_NEW => "ready",
+            LIFECYCLE_RUNNING if self.is_preroll(lifecycle) => "preroll",
             LIFECYCLE_RUNNING if paused => "paused",
             LIFECYCLE_RUNNING => "playing",
             LIFECYCLE_FINISHED => match outcome {
@@ -454,13 +512,19 @@ impl NativeDispatchSession {
         EngineProgressSnapshot {
             elapsed_us,
             total_us: local.total_us,
+            pre_roll_remaining_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
             late_5ms: local.late_5ms,
             late_10ms: local.late_10ms,
+            max_sendinput_pre_call_lateness_us: local.max_sendinput_pre_call_lateness_us,
+            pre_call_late_2ms: local.pre_call_late_2ms,
+            pre_call_late_5ms: local.pre_call_late_5ms,
+            pre_call_late_10ms: local.pre_call_late_10ms,
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
+            recent_latency_samples_available: self.profile.observer_enabled(),
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -530,6 +594,7 @@ impl NativeDispatchSession {
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
         let (elapsed_us, paused) = self.playback_projection();
+        let pre_roll_remaining_us = self.pre_roll_remaining_us();
         let outcome = self
             .shared
             .lifecycle
@@ -537,6 +602,7 @@ impl NativeDispatchSession {
             .load(Ordering::Acquire);
         let status = match lifecycle {
             LIFECYCLE_NEW => "ready",
+            LIFECYCLE_RUNNING if self.is_preroll(lifecycle) => "preroll",
             LIFECYCLE_RUNNING if paused => "paused",
             LIFECYCLE_RUNNING => "playing",
             LIFECYCLE_FINISHED => match outcome {
@@ -567,14 +633,20 @@ impl NativeDispatchSession {
         EngineSnapshot {
             elapsed_us,
             total_us: local.total_us,
+            pre_roll_remaining_us,
             lateness_us: local.lateness_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
             late_5ms: local.late_5ms,
             late_10ms: local.late_10ms,
+            max_sendinput_pre_call_lateness_us: local.max_sendinput_pre_call_lateness_us,
+            pre_call_late_2ms: local.pre_call_late_2ms,
+            pre_call_late_5ms: local.pre_call_late_5ms,
+            pre_call_late_10ms: local.pre_call_late_10ms,
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
+            recent_latency_samples_available: self.profile.observer_enabled(),
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -786,23 +858,6 @@ impl NativeDispatchSession {
             OUTCOME_ERROR => Some("error"),
             _ => Some("error"),
         }
-    }
-
-    pub fn estimator_state_json(&self) -> Result<String, String> {
-        let (done_lock, _) = &self.shared.lifecycle.completed;
-        let done = done_lock
-            .lock()
-            .map_err(|_| "session completion lock was poisoned".to_string())?;
-        if !*done {
-            return Err("estimator state is available only after worker termination".to_string());
-        }
-        drop(done);
-        self.shared
-            .publication
-            .estimator_output
-            .lock()
-            .clone()
-            .ok_or_else(|| "native estimator state is unavailable".to_string())
     }
 }
 

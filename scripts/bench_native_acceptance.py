@@ -13,8 +13,10 @@ JSON files::
     uv run --env-file .env python scripts/bench_native_acceptance.py \
         --repeats 2 --actions 128 --output native-followup.json
 
-The completion-error percentiles are a host-side proxy. They do not measure
-when a game samples Windows input, renders a frame, or produces audio.
+The primary qualification metric is the signed pre-call residual
+(`pre_call_qpc - physical_target_qpc`) from strict diagnostic telemetry. It is
+a host-side sender boundary, not a Windows insertion, game receipt, render, or
+audio timestamp.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 5
+BENCHMARK_SCHEMA_VERSION = 7
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -53,12 +55,26 @@ TRANSPORT_REFERENCE_SHA = "109f1c33d5410e92bbb9669632ebed7037852a16"
 SAME_SEMANTICS = "SAME_SEMANTICS"
 TRANSPORT_REFERENCE = "TRANSPORT_REFERENCE"
 ABSOLUTE_WAKE_P99_LIMIT_US = 300
+ABSOLUTE_PRE_CALL_P99_LIMIT_US = 250
+ABSOLUTE_PRE_CALL_P999_LIMIT_US = 750
+ABSOLUTE_PRE_CALL_LATE_ABORT_US = 2_000
 COMMAND_TIMING_DOMAIN = "native_qpc_v1"
 LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
 BENCHMARK_HOLD_GUARD_US = 2_500
+MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
+
+
+def _native_build_flavor() -> str:
+    import sky_player_rs
+
+    return (
+        "test_support"
+        if callable(getattr(sky_player_rs, "TestDispatchSession", None))
+        else "production"
+    )
 
 
 def _normalize_historical_native_trace(
@@ -111,6 +127,13 @@ def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
     return max(HOT_CYCLE_US, frame_period_us + 500 + BENCHMARK_HOLD_GUARD_US)
 
 
+def _materialized_hold_us(*, game_fps: int, gap_profile: str) -> int:
+    cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
+    if gap_profile == "hot":
+        return cycle_us - BENCHMARK_HOLD_GUARD_US
+    return cycle_us // 2
+
+
 def _actions(
     count: int,
     polyphony: int,
@@ -123,11 +146,7 @@ def _actions(
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
-    hold_us = (
-        cycle_us - BENCHMARK_HOLD_GUARD_US
-        if gap_profile == "hot"
-        else cycle_us // 2
-    )
+    hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
         scan_codes = [
@@ -180,21 +199,44 @@ def _benchmark_config(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
 ) -> dict[str, Any]:
+    if args.backend == "sendinput":
+        # DispatchSession owns these production settings; the legacy CLI
+        # knobs are not passed through to the real backend.
+        effective_priority = "auto"
+        effective_adaptive_spin = False
+        effective_lead_mode = "fixed"
+        effective_fixed_lead_us = 0
+        native_profile = "strict_timing_diagnostic"
+    else:
+        effective_priority = args.rt_priority_mode
+        effective_adaptive_spin = not args.no_adaptive_spin
+        effective_lead_mode = args.lead_mode
+        effective_fixed_lead_us = args.fixed_lead_us
+        native_profile = "mock_test"
     return {
         "backend": args.backend,
         "game_fps": args.game_fps,
-        "rt_priority_mode": args.rt_priority_mode,
-        "adaptive_spin": not args.no_adaptive_spin,
+        "rt_priority_mode": effective_priority,
+        "adaptive_spin": effective_adaptive_spin,
         "waitable_timer": True,
         "event_wait": True,
         "mock_base_latency_us": mock_base_latency_us,
         "mock_per_key_latency_us": mock_per_key_latency_us,
         "actions": args.actions,
         "polyphony": polyphonies,
-        "lead_mode": args.lead_mode,
-        "fixed_lead_us": args.fixed_lead_us,
+        "lead_mode": effective_lead_mode,
+        "fixed_lead_us": effective_fixed_lead_us,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
+        "native_profile": native_profile,
+        "native_build_flavor": (
+            "production" if args.backend == "sendinput" else "test_support"
+        ),
+        "require_focus": args.backend == "sendinput",
+        "materialized_min_hold_us": _materialized_hold_us(
+            game_fps=args.game_fps,
+            gap_profile=args.gap_profile,
+        ),
     }
 
 
@@ -553,6 +595,16 @@ def _completion_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any
     return result
 
 
+def _pre_call_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any]:
+    report = _completion_error_report_pairs(rows)
+    signed = [value for _, value in rows]
+    report["early_count"] = sum(value < 0 for value in signed)
+    report["late_over_2ms_count"] = sum(
+        value > ABSOLUTE_PRE_CALL_LATE_ABORT_US for value in signed
+    )
+    return report
+
+
 def _nonnegative_metric_report(rows: list[tuple[str, int]], name: str) -> dict[str, Any]:
     values: list[int] = []
     for _kind, value in rows:
@@ -593,6 +645,15 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
                 "invalid timestamp ordering: sender_completed_us < sender_started_us"
             )
         rows["wake_error_us"].append((kind, _required_int(record.wake_error_us, "wake_error_us")))
+        rows["pre_call_lateness_us"].append(
+            (
+                kind,
+                _required_int(
+                    record.dispatch_start_error_us,
+                    "dispatch_start_error_us",
+                ),
+            )
+        )
         rows["pre_send_software_latency_us"].append(
             (kind, sender_started_us - wake_us)
         )
@@ -617,9 +678,11 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
 
 def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
     rows = [row for run in runs for row in run["_metric_rows"][name]]
-    if name in {"wake_error_us", "sender_completion_error_us"}:
+    if name in {"wake_error_us", "sender_completion_error_us", "pre_call_lateness_us"}:
         if name == "sender_completion_error_us":
             return _completion_error_report_pairs(rows)
+        if name == "pre_call_lateness_us":
+            return _pre_call_error_report_pairs(rows)
         signed = [value for _, value in rows]
         return {
             "signed": _required_stats(signed, name),
@@ -693,9 +756,15 @@ def _new_session(
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
+    gap_profile: str = "hot",
     fault_mode: str = "none",
 ) -> Any:
     import sky_player_rs
+
+    materialized_min_hold_us = _materialized_hold_us(
+        game_fps=game_fps,
+        gap_profile=gap_profile,
+    )
 
     if backend == "mock":
         test_session = getattr(sky_player_rs, "TestDispatchSession", None)
@@ -707,7 +776,7 @@ def _new_session(
         return test_session(
             actions,
             list(SKY_15_SCAN_CODES),
-            min_hold_us=100,
+            min_hold_us=materialized_min_hold_us,
             game_fps=game_fps,
             mock_latency_base_us=mock_base_latency_us,
             mock_latency_per_key_us=mock_per_key_latency_us,
@@ -720,16 +789,23 @@ def _new_session(
             enable_dispatch_cost_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
         )
-    target_hwnd = _real_input_target_hwnd() if backend == "sendinput" else 0
+    if backend != "sendinput":
+        raise ValueError(f"unsupported native benchmark backend: {backend}")
+    if callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        raise RuntimeError(
+            "SendInput qualification requires a production native wheel; "
+            "test-support is not a valid physical timing path"
+        )
+    target_hwnd = _real_input_target_hwnd()
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=game_fps,
-            min_hold_us=100,
-            require_focus=False,
+            min_hold_us=materialized_min_hold_us,
+            require_focus=True,
             target_hwnd=target_hwnd,
             telemetry=True,
-            profile="production",
+            profile="strict_timing_diagnostic",
         ),
     )
 
@@ -761,6 +837,7 @@ def _run_dispatch(
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
+    gap_profile: str = "hot",
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
@@ -776,6 +853,7 @@ def _run_dispatch(
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
+        gap_profile=gap_profile,
         fault_mode=fault_mode,
     )
     snapshot: dict[str, Any] | None = None
@@ -865,6 +943,9 @@ def _run_dispatch(
             "_telemetry_integrity": diagnostics,
             "correctness": _correctness_counters(snapshot, diagnostics),
             "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
+            "pre_call_lateness_us": _pre_call_error_report_pairs(
+                metric_rows["pre_call_lateness_us"]
+            ),
             "completion_error_us": _completion_error_report_pairs(completion_error_rows),
             "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
             "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
@@ -951,9 +1032,15 @@ def _measure_command_interrupt(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
 ) -> dict[str, int]:
-    # The deadline is intentionally far away; the only expected wake is the
-    # command event. No input can be emitted before the pause is observed.
-    actions = [(0, "down", 10_000_000, [int(SKY_15_SCAN_CODES[0])], "interrupt")]
+    # Put the first Down in a controlled future slot, then measure the pause
+    # command after that first musical commit.  Pre-roll Pause now cancels the
+    # start attempt by contract, so this probe must exercise the mid-play
+    # command path rather than the preroll cancellation path.
+    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
+    actions = [
+        (0, "down", 100_000, interrupt_key, "interrupt-down"),
+        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
+    ]
     session = _new_session(
         actions,
         backend=backend,
@@ -965,11 +1052,30 @@ def _measure_command_interrupt(
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
     )
-    session.start()
+    # Test-only epoch choice made before worker arm; the frozen authored
+    # timestamps remain unchanged and production callers do not use this path.
+    session.arm(500_000)
     deadline = time.perf_counter() + 2.0
     while not bool(dict(session.snapshot()).get("startup_ready")):
         if time.perf_counter() >= deadline:
             raise RuntimeError("native worker did not publish startup-ready boundary")
+        time.sleep(0.001)
+
+    commit_deadline = time.perf_counter() + 2.0
+    while True:
+        progress = dict(session.snapshot())
+        if progress.get("recent_latencies_us") or int(progress.get("active_count", 0)) > 0:
+            break
+        if bool(progress.get("is_finished")):
+            session.join(timeout_ms=5_000)
+            raise RuntimeError(
+                "native worker terminated before first musical commit: "
+                f"{progress.get('terminal_error')}"
+            )
+        if time.perf_counter() >= commit_deadline:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native worker did not publish first musical commit")
         time.sleep(0.001)
 
     pause_with_timing_token = getattr(session, "pause_with_timing_token", None)
@@ -1018,6 +1124,47 @@ def _measure_command_interrupt(
     if any(int(result[key]) < 0 for key in required[4:]):
         raise RuntimeError("native pause timing latency must be non-negative")
     return {key: int(result[key]) for key in required}
+
+
+def _measure_preroll_pause_cancellation(
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+    rt_priority_mode: str,
+) -> dict[str, Any]:
+    """Verify the locked pre-roll Pause cancellation contract."""
+    key = [int(SKY_15_SCAN_CODES[0])]
+    session = _new_session(
+        [(0, "down", 10_000_000, key, "preroll-cancel")],
+        backend=backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
+    )
+    session.start()
+    deadline = time.perf_counter() + 2.0
+    while not bool(dict(session.snapshot()).get("startup_ready")):
+        if time.perf_counter() >= deadline:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native worker did not publish startup-ready boundary")
+        time.sleep(0.001)
+    session.pause()
+    while True:
+        snapshot = dict(session.snapshot())
+        if bool(snapshot.get("is_finished")):
+            break
+        if time.perf_counter() >= deadline + 2.0:
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native preroll pause did not cancel the start attempt")
+        time.sleep(0.001)
+    if not session.join(timeout_ms=5_000):
+        raise RuntimeError("native preroll cancellation session did not terminate")
+    return snapshot
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1187,6 +1334,17 @@ def _report_sha(report: dict[str, Any]) -> str:
     raise SystemExit("benchmark report is missing an exact candidate SHA")
 
 
+def _require_native_build_flavor(backend: str) -> str:
+    flavor = _native_build_flavor()
+    required = "production" if backend == "sendinput" else "test_support"
+    if flavor != required:
+        raise SystemExit(
+            f"{backend} benchmark requires the {required} native wheel; "
+            f"loaded flavor is {flavor}"
+        )
+    return flavor
+
+
 def _timeline_semantics_version(report: dict[str, Any]) -> int:
     sha = _report_sha(report)
     value = report.get("timeline_semantics_version")
@@ -1271,6 +1429,52 @@ def _assert_absolute_wake_slo(report: dict[str, Any]) -> None:
             )
 
 
+def _assert_absolute_pre_call_slo(report: dict[str, Any]) -> None:
+    metric = report.get("pre_call_lateness_us")
+    if not isinstance(metric, dict):
+        raise SystemExit("pre_call_lateness_us is required for the timing SLO")
+    early_count = metric.get("early_count")
+    if early_count != 0:
+        raise SystemExit(f"early physical send detected: count={early_count}")
+    late_over_2ms_count = metric.get("late_over_2ms_count")
+    if late_over_2ms_count != 0:
+        raise SystemExit(
+            "pre-call lateness safety SLO failed: "
+            f">2ms={late_over_2ms_count}"
+        )
+    p99 = _metric_at(metric, ("late", "p99"))
+    p999 = _metric_at(metric, ("late", "p999"))
+    if p99 > ABSOLUTE_PRE_CALL_P99_LIMIT_US:
+        raise SystemExit(
+            "absolute pre-call p99 SLO failed: "
+            f"p99={p99:g}us limit={ABSOLUTE_PRE_CALL_P99_LIMIT_US}us"
+        )
+    if p999 > ABSOLUTE_PRE_CALL_P999_LIMIT_US:
+        raise SystemExit(
+            "absolute pre-call p99.9 SLO failed: "
+            f"p99.9={p999:g}us limit={ABSOLUTE_PRE_CALL_P999_LIMIT_US}us"
+        )
+
+
+def _qualification_boundary_gate(*, backend: str, measured_boundaries: int) -> bool:
+    """Return whether a report has enough physical samples for qualification."""
+
+    return backend != "sendinput" or measured_boundaries >= MIN_QUALIFICATION_PHYSICAL_BOUNDARIES
+
+
+def _assert_minimum_qualification_boundaries(
+    *, backend: str, measured_boundaries: int
+) -> None:
+    if not _qualification_boundary_gate(
+        backend=backend, measured_boundaries=measured_boundaries
+    ):
+        raise SystemExit(
+            "SendInput qualification requires at least "
+            f"{MIN_QUALIFICATION_PHYSICAL_BOUNDARIES} physical boundaries; "
+            f"measured={measured_boundaries}"
+        )
+
+
 def _comparison_metadata(
     candidate_sha: str, baseline_path: Path | None
 ) -> dict[str, Any]:
@@ -1319,7 +1523,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 5"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 7"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -1352,6 +1556,10 @@ def _assert_baseline_compatible(
         "fixed_lead_us",
         "gap_profile",
         "warmup_cycles",
+        "native_profile",
+        "native_build_flavor",
+        "require_focus",
+        "materialized_min_hold_us",
     )
     baseline_config = baseline.get("benchmark_config")
     report_config = report.get("benchmark_config")
@@ -1427,6 +1635,8 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
     _assert_baseline_compatible(report, baseline)
     _assert_report_correctness(report)
     _assert_absolute_wake_slo(report)
+    if report.get("comparison_role") != TRANSPORT_REFERENCE:
+        _assert_absolute_pre_call_slo(report)
     comparison_role = report["comparison_role"]
     signed_metrics = (
         ("wake_error_us", "absolute", "p99", 0.05, 5),
@@ -1598,6 +1808,18 @@ def main() -> int:
     comparison_metadata = _comparison_metadata(expected_native_commit, args.baseline)
 
     polyphonies = _parse_polyphony(args.polyphony)
+    benchmark_config = _benchmark_config(
+        args=args,
+        polyphonies=polyphonies,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+    )
+    benchmark_config["native_build_flavor"] = _require_native_build_flavor(args.backend)
+    if args.backend == "sendinput" and command_samples:
+        raise SystemExit(
+            "SendInput qualification uses a production wheel; use "
+            "--skip-command-samples because QPC pause instrumentation is test-support only"
+        )
     run_deadline = time.monotonic() + args.budget_seconds
 
     def next_timeout_ms() -> int:
@@ -1638,6 +1860,7 @@ def main() -> int:
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
+                    gap_profile=args.gap_profile,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                     native_build_commit=expected_native_commit,
@@ -1756,18 +1979,14 @@ def main() -> int:
             "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
             "label": args.label,
             "backend": args.backend,
+            "native_build_flavor": benchmark_config["native_build_flavor"],
             "actions_per_polyphony": args.actions * 2,
             "polyphony": polyphonies,
             "dispatch_repeats": dispatch_repeats,
             "command_samples": command_samples,
             "warmup_cycles": args.warmup_cycles,
             "budget_seconds": args.budget_seconds,
-            "benchmark_config": _benchmark_config(
-                args=args,
-                polyphonies=polyphonies,
-                mock_base_latency_us=mock_base_latency_us,
-                mock_per_key_latency_us=mock_per_key_latency_us,
-            ),
+            "benchmark_config": benchmark_config,
             **validity,
             "requested_dispatch_suites": dispatch_repeats,
             "successful_dispatch_suites": len(successful_suites),
@@ -1807,6 +2026,7 @@ def main() -> int:
         for suite in successful_suites
         for run in suite["dispatch"].values()
     ]
+    physical_boundaries = sum(run["measurement_records"] for run in dispatch_runs)
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
         actions = _actions(
@@ -1825,15 +2045,19 @@ def main() -> int:
             "comparison_role": comparison_metadata["comparison_role"],
             "fps": args.game_fps,
             "latency_class": args.gap_profile,
-            "priority_mode": args.rt_priority_mode,
-            "lead_mode": lead_mode,
+            "priority_mode": benchmark_config["rt_priority_mode"],
+            "lead_mode": benchmark_config["lead_mode"],
             "actions": len(actions),
             "warmup_cycles": args.warmup_cycles,
             "warmup_records": args.warmup_cycles * 2,
             "measurement_records": sum(run["measurement_records"] for run in runs),
+            "physical_boundaries": sum(run["measurement_records"] for run in runs),
             "wake_error_us": _aggregate_metric(runs, "wake_error_us"),
             "pre_send_software_latency_us": _aggregate_metric(
                 runs, "pre_send_software_latency_us"
+            ),
+            "pre_call_lateness_us": _aggregate_metric(
+                runs, "pre_call_lateness_us"
             ),
             "sendinput_call_duration_us": _aggregate_metric(
                 runs, "sendinput_call_duration_us"
@@ -1904,7 +2128,7 @@ def main() -> int:
             "correctness": _aggregate_correctness(runs),
             "guards": {
                 "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
-                "rt_priority_mode": args.rt_priority_mode,
+                "rt_priority_mode": benchmark_config["rt_priority_mode"],
                 "waitable_timer": True,
                 "event_wait": True,
                 "correctness_checked_before_percentiles": True,
@@ -1915,6 +2139,7 @@ def main() -> int:
         "label": args.label,
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "backend": args.backend,
+        "native_build_flavor": benchmark_config["native_build_flavor"],
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
         "dispatch_repeats": dispatch_repeats,
@@ -1924,12 +2149,7 @@ def main() -> int:
         **comparison_metadata,
         "command_timing_domain": COMMAND_TIMING_DOMAIN,
         "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
-        "benchmark_config": _benchmark_config(
-            args=args,
-            polyphonies=polyphonies,
-            mock_base_latency_us=mock_base_latency_us,
-            mock_per_key_latency_us=mock_per_key_latency_us,
-        ),
+        "benchmark_config": benchmark_config,
         **validity,
         "requested_dispatch_suites": dispatch_repeats,
         "successful_dispatch_suites": len(successful_suites),
@@ -1937,15 +2157,28 @@ def main() -> int:
         "requested_command_samples": command_samples,
         "successful_command_samples": len(command_runs),
         "failed_command_samples": 0,
-        "statistics_eligible": True,
+        "statistics_eligible": _qualification_boundary_gate(
+            backend=args.backend, measured_boundaries=physical_boundaries
+        ),
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
         "warmup_records": args.warmup_cycles * 2 * len(polyphonies) * dispatch_repeats,
-        "measurement_records": sum(run["measurement_records"] for run in dispatch_runs),
+        "measurement_records": physical_boundaries,
+        "physical_boundaries": physical_boundaries,
+        "qualification_gate": {
+            "minimum_physical_boundaries": MIN_QUALIFICATION_PHYSICAL_BOUNDARIES,
+            "measured_physical_boundaries": physical_boundaries,
+            "passed": _qualification_boundary_gate(
+                backend=args.backend, measured_boundaries=physical_boundaries
+            ),
+        },
         "wake_error_us": _aggregate_metric(dispatch_runs, "wake_error_us"),
         "pre_send_software_latency_us": _aggregate_metric(
             dispatch_runs, "pre_send_software_latency_us"
+        ),
+        "pre_call_lateness_us": _aggregate_metric(
+            dispatch_runs, "pre_call_lateness_us"
         ),
         "sendinput_call_duration_us": _aggregate_metric(
             dispatch_runs, "sendinput_call_duration_us"
@@ -1973,7 +2206,7 @@ def main() -> int:
         "correctness": _aggregate_correctness(dispatch_runs),
         "guards": {
             "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
-            "rt_priority_mode": args.rt_priority_mode,
+            "rt_priority_mode": benchmark_config["rt_priority_mode"],
             "waitable_timer": True,
             "event_wait": True,
             "correctness_checked_before_percentiles": True,
@@ -2051,7 +2284,9 @@ def main() -> int:
         if args.backend == "mock"
         else None,
         "by_polyphony": by_polyphony,
-        "evidence_scope": "sender_completion",
+        "evidence_scope": (
+            "sender_pre_call" if args.backend == "sendinput" else "sender_completion"
+        ),
         "git_sha": git_info["git_sha"],
         "native_build_commit": native_info["native_build_commit"],
         "expected_native_build_commit": expected_native_commit,
@@ -2059,15 +2294,22 @@ def main() -> int:
         "candidate_or_baseline_role": args.label,
         "rustc_version": native_info["rustc_version"],
         "native_schema_version": native_info["schema_version"],
-        "backend_evidence": "real_sendinput_sender_completion"
+        "backend_evidence": "real_sendinput_strict_diagnostic_pre_call"
         if args.backend == "sendinput"
         else "deterministic_coordinator_delivery_simulation",
         "host_fingerprint": host_info,
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
+    if not report["statistics_eligible"]:
+        encoded = json.dumps(report, indent=2)
+        print(encoded)
+        if args.output is not None:
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+        return 1
     _assert_report_correctness(report)
     _assert_absolute_wake_slo(report)
+    _assert_absolute_pre_call_slo(report)
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
     encoded = json.dumps(report, indent=2)

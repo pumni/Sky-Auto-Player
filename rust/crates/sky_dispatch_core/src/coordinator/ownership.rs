@@ -92,8 +92,6 @@ impl RuntimeDispatchCoordinator {
         dispatch_completed: TimelineTicks,
         excluded_mask: u16,
     ) -> Result<(), CoordinatorError> {
-        let release_not_before_ticks =
-            dispatch_completed.checked_add_duration(self.min_hold_ticks)?;
         let batch = self
             .schedule
             .batches
@@ -111,6 +109,8 @@ impl RuntimeDispatchCoordinator {
             .get(batch_index)
             .copied()
             .ok_or(CoordinatorError::InvalidBatchIndex { index: batch_index })?;
+        let release_not_before_ticks =
+            scheduled_down_ticks.checked_add_duration(self.min_hold_ticks)?;
         for intent_index in start..end {
             let compact = *self
                 .schedule
@@ -165,9 +165,6 @@ impl RuntimeDispatchCoordinator {
         dispatch_started_ticks: TimelineTicks,
         dispatch_completed_ticks: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        let release_not_before_ticks =
-            dispatch_completed_ticks.checked_add_duration(self.min_hold_ticks)?;
-
         for intent in intents {
             let Some(generation_id) = intent.generation_id else {
                 continue;
@@ -193,6 +190,8 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::InvalidBatchIndex {
                     index: intent.compiled_batch_index,
                 })?;
+            let release_not_before_ticks =
+                scheduled_down_ticks.checked_add_duration(self.min_hold_ticks)?;
             self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
                 generation_id,
                 scan_code: intent.scan_code,

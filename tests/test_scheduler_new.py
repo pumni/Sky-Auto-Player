@@ -25,16 +25,12 @@ def _policy(
     *,
     margin_us: int = 500,
     same_key_conflict_policy: str = "drop_chord",
-    chord_stagger_us: int = 0,
-    chord_stagger_max_us: int = 15_000,
 ) -> FrameTimingPolicy:
     return FrameTimingPolicy.from_hold_frames(
         hold_frames,
         fps,
         margin_us=margin_us,
         same_key_conflict_policy=same_key_conflict_policy,  # type: ignore[arg-type]
-        chord_stagger_us=chord_stagger_us,
-        chord_stagger_max_us=chord_stagger_max_us,
     )
 
 
@@ -158,22 +154,6 @@ def test_validation_rejects_hold_shorter_than_one_frame() -> None:
 
     violations = validate_key_actions(actions, policy=policy)
     assert any(violation.code == "insufficient_hold" for violation in violations)
-
-
-def test_chord_stagger_is_preserved_without_profile_configuration() -> None:
-    song = Song(
-        "Stagger",
-        notes=(
-            Note(Millis(1000), NoteKey("Key0")),
-            Note(Millis(1000), NoteKey("Key1")),
-            Note(Millis(1000), NoteKey("Key2")),
-        ),
-    )
-    result = build_key_actions(song, policy=_policy(chord_stagger_us=2500, chord_stagger_max_us=5000))
-    downs = [action for action in result.actions if action.kind == "down"]
-
-    assert len(downs) == 3
-    assert [action.at_us for action in downs] == [1_000_000, 1_002_500, 1_005_000]
 
 
 def test_timing_policy_construction_is_explicit_and_typed() -> None:

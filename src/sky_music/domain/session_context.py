@@ -14,8 +14,6 @@ from sky_music.domain.hold_timing import (
     validate_hold_frames,
 )
 from sky_music.domain.scheduler_types import (
-    DEFAULT_CHORD_STAGGER_MAX_US,
-    DEFAULT_CHORD_STAGGER_US,
     DEFAULT_FOCUS_RESTORE_GRACE_US,
     FrameTimingPolicy,
     TimingPolicy,
@@ -35,8 +33,6 @@ class PlaybackSessionContext:
     scan_code_mode: str = "physical"
     same_key_conflict_policy: ConflictPolicy = "drop_chord"
     focus_restore_grace_us: int = DEFAULT_FOCUS_RESTORE_GRACE_US
-    chord_stagger_us: int = DEFAULT_CHORD_STAGGER_US
-    chord_stagger_max_us: int = DEFAULT_CHORD_STAGGER_MAX_US
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hold_frames", validate_hold_frames(self.hold_frames))
@@ -71,8 +67,6 @@ class PlaybackSessionContext:
             scan_code_mode=str(args.scan_code_mode),
             same_key_conflict_policy=getattr(args, "same_key_conflict_policy", "drop_chord"),
             focus_restore_grace_us=DEFAULT_FOCUS_RESTORE_GRACE_US,
-            chord_stagger_us=max(0, int(getattr(args, "chord_stagger_us", None) or DEFAULT_CHORD_STAGGER_US)),
-            chord_stagger_max_us=max(0, int(getattr(args, "chord_stagger_max_us", None) or DEFAULT_CHORD_STAGGER_MAX_US)),
         )
 
     def with_hold_frames(self, hold_frames: float) -> PlaybackSessionContext:
@@ -101,8 +95,6 @@ class PlaybackSessionContext:
             self.tempo_scale,
             self.scan_code_mode,
             self.same_key_conflict_policy,
-            self.chord_stagger_us,
-            self.chord_stagger_max_us,
         )
 
     def resolve_effective_policy(
@@ -117,8 +109,6 @@ class PlaybackSessionContext:
             hold_frames=self.hold_frames,
             focus_restore_grace_us=Microseconds(self.focus_restore_grace_us),
             same_key_conflict_policy=self.same_key_conflict_policy,
-            chord_stagger_us=Microseconds(self.chord_stagger_us),
-            chord_stagger_max_us=Microseconds(self.chord_stagger_max_us),
             min_hold_margin_us=Microseconds(max(0, calibrated_margin_us if calibrated_margin_us is not None else 500)),
             min_hold_margin_source=calibrated_margin_source if calibrated_margin_us is not None else "default_500",
         )

@@ -34,8 +34,13 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) startup_target_selected: bool,
     pub(crate) focus_loss_fault: bool,
+    pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
+    /// Test-only direct-boundary admission for frozen-plan correctness tests.
+    /// This field and its branch are absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) test_direct_boundary: bool,
 }
 
 /// Snapshot of the prepared authored batch plus the projection of the
@@ -82,16 +87,19 @@ pub(crate) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
+#[cfg(test)]
+pub(crate) use authored::handle_final_focus_loss;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 
-use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
+use super::super::{ActionKind, DurationTicks, QpcClock, QpcTicks, TimelineTicks, TrackedKeyState};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
+use sky_dispatch_win32::clock::QpcError;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 #[derive(Clone, Debug)]
@@ -106,4 +114,78 @@ pub(crate) enum PhysicalCommit {
         release_mask: u16,
         due_ticks: TimelineTicks,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpinSendError {
+    Qpc(QpcError),
+    DownHardLateAbort,
+}
+
+#[inline]
+fn hard_late_down_abort_reached(
+    now_ticks: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> bool {
+    latest_allowed_down_qpc.is_some_and(|latest| now_ticks > latest)
+}
+
+#[inline]
+pub(crate) fn spin_and_send_prepared(
+    qpc_clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+    backend: &mut TrackedKeyState,
+    prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
+) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, SpinSendError> {
+    loop {
+        let now_ticks = qpc_clock.now().map_err(SpinSendError::Qpc)?;
+        if now_ticks >= physical_target_qpc {
+            if hard_late_down_abort_reached(now_ticks, latest_allowed_down_qpc) {
+                return Err(SpinSendError::DownHardLateAbort);
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            return Ok(backend.send_prepared_physical_packet_with_start_and_cutoff(
+                prepared_packet,
+                now_ticks,
+                latest_allowed_down_qpc,
+            ));
+            #[cfg(not(any(test, feature = "test-support")))]
+            return Ok(backend.send_prepared_physical_packet_with_cutoff(
+                prepared_packet,
+                latest_allowed_down_qpc,
+            ));
+        }
+        std::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hard_late_down_abort_reached;
+    use sky_dispatch_win32::clock::QpcTicks;
+
+    #[test]
+    fn hard_late_down_cutoff_allows_exact_boundary() {
+        assert!(!hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_000),
+            Some(QpcTicks::from_raw(20_000))
+        ));
+    }
+
+    #[test]
+    fn hard_late_down_cutoff_rejects_one_tick_after_boundary() {
+        assert!(hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_001),
+            Some(QpcTicks::from_raw(20_000))
+        ));
+    }
+
+    #[test]
+    fn up_only_dispatch_has_no_hard_down_cutoff() {
+        assert!(!hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_001),
+            None
+        ));
+    }
 }

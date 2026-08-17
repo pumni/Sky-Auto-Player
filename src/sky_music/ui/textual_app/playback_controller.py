@@ -71,6 +71,20 @@ def prepare_playback(
 
     actions = sched_meta.actions
 
+    # Native dispatch is fail-closed and has no runtime drop/degraded conflict
+    # mode. Reject infeasible repeats before quiescing the picker or focusing
+    # a target. Dry-run keeps the diagnostic schedule for inspection.
+    if not is_dry_run and sched_meta.impossible_same_key_repeats > 0:
+        return PlaybackError(
+            code="validation_failed",
+            message=(
+                f"Detected {sched_meta.impossible_same_key_repeats} infeasible same-key repeat(s): "
+                "the authored interval is shorter than the configured hold."
+            ),
+            recommended_tempo_scale=sched_meta.recommended_tempo_scale,
+            recommended_hold_frames=sched_meta.recommended_hold_frames,
+        )
+
     violations = validate_key_actions(actions, policy=active_policy)
     if violations:
         fatal_violations = [v for v in violations if getattr(v, "severity", "fatal") == "fatal"]

@@ -16,11 +16,12 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_admission_qpc` | One authoritative QPC sample taken immediately before final admission and supplied to the packetized SendInput call. |
-| `sendinput_completion_qpc` | QPC sample returned after the packetized SendInput call. |
-| `admission_to_completion` | The interval from `final_admission_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
+| `final_proof_qpc` | QPC sample after final target/focus/control proof and before the final spin. It authorizes the frozen plan but is not a syscall-entry timestamp. |
+| `pre_call_qpc` | Authoritative QPC sample taken inside the trusted prepared sender after payload resolution; only the Down hard-late cutoff comparison may follow it before `SendInput`. |
+| `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
+| `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `effective_release` | Release deadline after the completion-anchored hold floor. |
+| `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
 `physical_target`. Historical `dispatch_lead_us`, estimator state, and lead
@@ -33,27 +34,29 @@ requested hold, and passes:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold = max(requested_min_hold_us, frame_us + 500)
+effective_min_hold = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
 ```
 
-For every successful Down packet:
+For every authored same-key Down→Up pair:
 
 ```text
-release_floor = sendinput_completion_qpc + effective_min_hold
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold
 ```
 
-The release floor is a sender-side contract. A completion sample does not prove
-kernel delivery or game observation. A slow Down can defer its own release but
-cannot shift unrelated future authored actions.
+The static margin is applied once while materializing the authored schedule.
+PyO3 receives that materialized value verbatim; the native admission validator
+checks this relationship before worker start in
+the same QPC tick domain used by dispatch. If the interval is invalid, native
+admission fails before any musical packet can be sent; the worker never
+reschedules the Up target.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
-that share one authored timestamp. Runtime completion lateness is handled
-separately: an Up that misses its authored floor becomes one per-key pending
-release, while an unrelated Down remains eligible at its own authored
-boundary. A same-key Down whose release floor cannot be met is rejected
-fail-closed with physical deadline infeasibility.
+that share one authored timestamp. Runtime completion lateness is evidence for
+sender-side telemetry and ownership accounting only. Runtime deadline/overdue
+policy may terminate a missed boundary, but it never invents a
+completion-relative hold deadline, moves an authored timestamp, or emits a
+catch-up burst.
 
 ## 2.1 Host delivery calibration
 
@@ -63,7 +66,7 @@ audio, or network latency. The sender boundary is measured as:
 
 ```text
 validate/build/tag packet -> arm sequence -> SetLastError(0)
--> start_qpc -> SendInput -> completion_qpc -> validate receipt
+-> pre_call_qpc -> SendInput -> sendinput_completion_qpc -> validate receipt
 ```
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
@@ -121,12 +124,19 @@ The final physical path is ordered and fail-closed:
 
 1. Recheck command, target generation, focus (Down only), and the prepared
    packet against the current coordinator state.
-2. Take one authoritative QPC `final_admission_qpc` sample.
-3. Evaluate the lease using that same sample.
-4. Call the packetized `SendInput` transport with that supplied start sample.
-5. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
-6. Commit coordinator ownership using the confirmed transport result.
-7. Enqueue one bounded raw observation and return to orchestration.
+2. Take the final target/focus/control proof QPC `final_proof_qpc`.
+3. Evaluate the lease using that proof sample.
+4. Spin to the authored physical target. The final spin rejects a Down-bearing
+   packet that is already beyond its hard-late cutoff; Up-only safety release
+   remains exempt.
+5. Enter the trusted prepared sender and take the authoritative `pre_call_qpc`
+   after payload pointer/length resolution. Recheck the same Down cutoff
+   against that exact sample so a preemption between the outer spin and the
+   syscall cannot late-send a Down. No second QPC sample or control work is
+   inserted between this check and `SendInput`.
+6. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
+7. Commit coordinator ownership using the confirmed transport result.
+8. Enqueue one bounded raw observation and return to orchestration.
 
 The transport sends Up entries before Down entries in one call. Partial Down or
 mixed integrity loss is never blindly retried. A skipped key that the
@@ -141,17 +151,22 @@ authorization.
 
 ## 5. Wait, wake, and spin
 
-The production wait path is a high-resolution waitable timer plus bounded QPC
-spin. The production spin threshold is fixed at `700 µs`; no adaptive probe,
-EMA, PID, or runtime threshold controller is allowed. Timer/wake guard is kept
-separate from the absolute physical target.
+The production wait path is a high-resolution waitable timer to the
+`T - 2,000 µs` admission boundary with zero waiter spin. The only production
+busy-spin is the final authored precision stage, fixed at `700 µs`; no adaptive
+probe, EMA, PID, or runtime threshold controller is allowed. Timer/wake guard
+is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
-The spin loop may use an interrupt-generation hint with `Relaxed` ordering and
-poll it every bounded group of iterations. The final interrupt/deadline gate is
-authoritative and uses `Acquire` ordering. Spin is bounded and cannot replace
-the QPC deadline check.
+The final spin loop performs only the QPC target/cutoff comparison and
+`spin_loop`; it does not poll interrupt generation, lease state, focus, or
+commands. Those invalidation decisions happen before the final proof and
+precision stage. The hard late cutoff is checked in the same bounded QPC loop
+for Down-bearing packets; Up-only safety release remains exempt. The trusted
+sender repeats only that cutoff predicate against its authoritative
+`pre_call_qpc`, closing the preemption window without adding another clock
+sample or adaptive controller.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter
@@ -167,32 +182,35 @@ SendInput-only security boundary.
 
 ## 6. Deferred observation
 
-After ownership commit, the dispatch thread pushes a raw observation into a
-fixed-capacity `crossbeam_queue::ArrayQueue` using a nonblocking operation.
-Capacity is bounded at 64 for the production observer. If full, the new
+Production does not enqueue observations or run an observer thread. After
+ownership commit it records only bounded scalar counters. Strict diagnostic
+mode pushes a raw observation into a fixed-capacity
+`crossbeam_queue::ArrayQueue` using a nonblocking operation. If full, the new
 observation is dropped and a counter is incremented; older observations remain
 queued. The producer does not drain, allocate, format strings, update health,
 sample `queue.len()`, or mutate the coordinator. Queue high-watermark and
 health-window calculations belong to the observer-side diagnostic path.
 
-A single observer consumer thread owns the queue drain, health windows,
-telemetry record materialization, shared metric publication, and observer
-timing counters. It uses its own local health state and metrics. On shutdown,
-the worker signals the consumer, joins it, merges its metrics, and only then
-publishes the final report. Observer output cannot authorize or reorder input.
+In diagnostic mode a single observer consumer thread owns the queue drain,
+health windows, telemetry record materialization, shared metric publication,
+and observer timing counters. It uses its own local health state and metrics.
+On shutdown, the worker signals the consumer, joins it, merges its metrics,
+and only then publishes the final report. Observer output cannot authorize or
+reorder input.
 
 ## 7. Observability and compatibility
 
 The authoritative sender-side metrics are:
 
-- `final_admission_qpc` and `sendinput_completion_qpc`;
-- signed `dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc`
-  as the primary dispatch timing metric;
-- `admission_to_completion = sendinput_completion_qpc - final_admission_qpc`;
+- `final_proof_qpc`, `pre_call_qpc`, and `sendinput_completion_qpc`;
+- signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
+  as the primary pre-call timing metric; it is not a syscall-entry or game-
+  receipt timestamp;
+- `pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc`;
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
 - release-floor/defer evidence; and
-- bounded observer queue/drop and telemetry counters.
+- diagnostic-only observer queue/drop and telemetry counters.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
 They must not be described as game-observed timing. The compatibility report
@@ -205,10 +223,11 @@ feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
 
 The serialized `send_started_ticks`, `send_completed_ticks`, and
 `send_duration_us` names remain compatibility aliases for older Python/API
-callers. They map to the same admission and completion boundaries above;
-production does not take a second QPC sample to preserve the old names.
+callers. They map to `pre_call_qpc`, `sendinput_completion_qpc`, and
+`pre_call_to_completion`; production does not take a second QPC sample to
+preserve the old names.
 The optional `dispatch_ready_qpc` and `core_post_send_duration_us` fields are
-diagnostic-only and are not sampled by the production sender.  The dispatch
+diagnostic-only and are not sampled by the production sender. The dispatch
 worker CPU metric is likewise captured during worker finalization, never by
 the deferred observer thread.
 

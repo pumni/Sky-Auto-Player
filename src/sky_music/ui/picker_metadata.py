@@ -134,8 +134,6 @@ def _session_signature(session: PlaybackSessionContext) -> tuple[Any, ...]:
         session.tempo_scale,
         session.scan_code_mode,
         session.same_key_conflict_policy,
-        session.chord_stagger_us,
-        session.chord_stagger_max_us,
     )
 
 
@@ -322,8 +320,6 @@ def _persistent_cache_key(
             session.fps,
             session.scan_code_mode,
             session.same_key_conflict_policy,
-            session.chord_stagger_us,
-            session.chord_stagger_max_us,
             PERSISTENT_CACHE_SCHEMA_VERSION,
             sys.platform,
         )
@@ -347,8 +343,6 @@ def _persistent_cache_key(
                 "fps": session.fps,
                 "scan_code_mode": session.scan_code_mode,
                 "same_key_conflict_policy": session.same_key_conflict_policy,
-                "chord_stagger_us": session.chord_stagger_us,
-                "chord_stagger_max_us": session.chord_stagger_max_us,
             },
             "effective_policy": _effective_policy_signature(session, cfg),
             "platform": sys.platform,
@@ -690,8 +684,6 @@ def session_to_worker_payload(session: PlaybackSessionContext) -> dict[str, Any]
         "fps": session.fps,
         "scan_code_mode": session.scan_code_mode,
         "same_key_conflict_policy": session.same_key_conflict_policy,
-        "chord_stagger_us": session.chord_stagger_us,
-        "chord_stagger_max_us": session.chord_stagger_max_us,
     }
 
 
@@ -706,8 +698,6 @@ def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionCont
         fps=payload.get("fps"),  # type: ignore[arg-type]
         scan_code_mode=str(payload.get("scan_code_mode", "physical")),
         same_key_conflict_policy=conflict_policy,  # type: ignore[arg-type]
-        chord_stagger_us=int(payload.get("chord_stagger_us", 0)),
-        chord_stagger_max_us=int(payload.get("chord_stagger_max_us", 15_000)),
     )
 
 

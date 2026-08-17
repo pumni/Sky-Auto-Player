@@ -5,7 +5,7 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
-use crate::engine::config::WorkerConfig;
+use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, WorkerConfig};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
@@ -36,6 +36,7 @@ use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[allow(dead_code)]
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
     pub(crate) resources: WorkerResources,
@@ -59,6 +60,7 @@ pub struct ProductionDispatchTestHarness {
     effective_now_ticks: TimelineTicks,
 }
 
+#[allow(dead_code)]
 impl ProductionDispatchTestHarness {
     pub fn new_down_only() -> Self {
         Self::create_harness(&[
@@ -171,94 +173,65 @@ impl ProductionDispatchTestHarness {
                 KeyActionInput {
                     source_action_index: 0,
                     kind: ActionKind::Down,
-                    scheduled_us: 0,
+                    scheduled_us: 100_000,
                     scan_codes: vec![0x15].into(),
                     reason: "deferred-seed".into(),
                 },
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Up,
-                    scheduled_us: 50_000,
+                    scheduled_us: 500_000,
                     scan_codes: vec![0x15].into(),
                     reason: "deferred-release".into(),
                 },
                 KeyActionInput {
                     source_action_index: 2,
                     kind: ActionKind::Down,
-                    scheduled_us: 50_000,
+                    scheduled_us: 500_000,
                     scan_codes: vec![0x16, 0x17].into(),
                     reason: "unrelated-chord".into(),
                 },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000_000,
+                    scan_codes: vec![0x16, 0x17].into(),
+                    reason: "unrelated-cleanup".into(),
+                },
             ],
-            100_000,
+            0,
         )
     }
 
-    /// Build an authored-feasible same-key hold whose release becomes
-    /// pending only because the completed Down arrived 300 us late.  This is
-    /// the production-shaped setup needed by pause/focus lifecycle tests: the
-    /// native admission floor accepts the authored 50 ms hold, while the
-    /// completion-anchored runtime floor moves the physical Up to 50.3 ms.
+    /// Build a healthy authored hold for lifecycle tests that explicitly seed
+    /// a pending safety release after the Down has been committed.
     pub fn new_admissible_dynamic_pending_release() -> Self {
-        let mut harness = Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 0,
-                    scan_codes: vec![0x15].into(),
-                    reason: "dynamic-pending-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: 50_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "dynamic-pending-up".into(),
-                },
-            ],
-            50_000,
-        );
-        let epoch = harness.resources.playback.epoch;
-        let late_completion = epoch
-            .checked_add_duration(
-                harness
-                    .resources
-                    .clock
-                    .duration_from_us(300)
-                    .expect("300 microseconds"),
-            )
-            .expect("late completion target");
-        let clock = harness.resources.clock;
-        let call_index = Arc::new(AtomicU64::new(0));
-        let emitter_index = Arc::clone(&call_index);
-        harness.resources.backend.set_packet_emitter(move |packet| {
-            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
-            let completed_ticks = if index == 0 {
-                late_completion
-            } else {
-                clock.now().expect("test QPC")
-            };
-            let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(completed_ticks),
-                    completed_ticks: Some(completed_ticks),
-                    timing_error: None,
-                },
-            }
-        });
-        harness
+        Self::create_harness_with_min_hold(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x15].into(),
+                reason: "dynamic-pending-down".into(),
+            }],
+            0,
+        )
+    }
+
+    pub fn seed_pending_release_for_test(&mut self, scan_code: u16, due_us: u64) {
+        let slot = PHYSICAL_INSTRUMENT_SCAN_CODES
+            .iter()
+            .position(|candidate| *candidate == scan_code)
+            .expect("test scan code is an instrument key") as u8;
+        let due_ticks = self
+            .resources
+            .clock
+            .duration_from_us(due_us)
+            .expect("pending release due conversion");
+        self.resources
+            .coordinator
+            .seed_pending_release_for_test(slot, TimelineTicks::from_raw(due_ticks.as_u64()))
+            .expect("seed pending release");
     }
 
     /// Build a pending release whose due boundary is shared with an authored
@@ -271,34 +244,28 @@ impl ProductionDispatchTestHarness {
                 KeyActionInput {
                     source_action_index: 0,
                     kind: ActionKind::Down,
-                    scheduled_us: 0,
+                    scheduled_us: 100_000,
                     scan_codes: vec![0x15].into(),
                     reason: "equal-boundary-a-down".into(),
                 },
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Down,
-                    scheduled_us: 1_000,
+                    scheduled_us: 200_000,
                     scan_codes: vec![0x16].into(),
                     reason: "equal-boundary-b-down".into(),
                 },
                 KeyActionInput {
                     source_action_index: 2,
                     kind: ActionKind::Up,
-                    scheduled_us: 20_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "equal-boundary-a-up".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Up,
-                    scheduled_us: 21_000,
+                    scheduled_us: 220_000,
                     scan_codes: vec![0x16].into(),
                     reason: "equal-boundary-b-up".into(),
                 },
             ],
-            1_000,
+            0,
         );
+        harness.align_next_plan_to_future_for_test(500_000);
         let epoch = harness.resources.playback.epoch;
         let one_us = harness
             .resources
@@ -308,13 +275,14 @@ impl ProductionDispatchTestHarness {
         let base_completion_us = harness
             .resources
             .clock
-            .duration_from_us(20_000)
+            .duration_from_us(200_000)
             .expect("base completion boundary");
         let equal_boundary_us = harness
             .resources
             .clock
-            .duration_from_us(21_000)
+            .duration_from_us(220_000)
             .expect("equal completion boundary");
+        let completion_clock = harness.resources.clock;
         let call_index = Arc::new(AtomicU64::new(0));
         let emitter_index = Arc::clone(&call_index);
         harness.resources.backend.set_packet_emitter(move |packet| {
@@ -329,6 +297,8 @@ impl ProductionDispatchTestHarness {
             let boundary = epoch
                 .checked_add_duration(completion_offset)
                 .expect("deterministic completion boundary");
+            let started = completion_clock.now().expect("completion QPC sample");
+            let completed = boundary.max(started);
             let requested_mask = packet.up_mask | packet.down_mask;
             SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -342,8 +312,8 @@ impl ProductionDispatchTestHarness {
                     retry_reason: PacketRetryReason::None,
                     first_win32_error: None,
                     last_win32_error: None,
-                    started_ticks: Some(boundary),
-                    completed_ticks: Some(boundary),
+                    started_ticks: Some(started),
+                    completed_ticks: Some(completed),
                     timing_error: None,
                 },
             }
@@ -351,10 +321,46 @@ impl ProductionDispatchTestHarness {
         harness
     }
 
-    /// Deterministic coalesced Mixed boundary: pending A Up and authored B
-    /// Down must be transported by one physical packet.
+    /// Build a schedule with a trailing stale Up boundary.  The stale batch
+    /// is metadata-only and exercises the frozen commit path without relying
+    /// on completion-derived hold deferral.
+    pub fn new_stale_metadata_boundary() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "metadata-leading-stale".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x15].into(),
+                reason: "metadata-seed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: vec![0x15].into(),
+                reason: "metadata-seed-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 300_000,
+                scan_codes: vec![0x15].into(),
+                reason: "metadata-trailing-stale".into(),
+            },
+        ])
+    }
+
+    /// Deterministic coalesced Mixed boundary: a seeded pending A Up and an
+    /// authored B Down must be transported by one physical packet.
     pub fn new_coalesced_pending_release_with_unrelated_down() -> Self {
-        let mut harness = Self::create_harness_with_min_hold(
+        Self::create_harness_with_min_hold(
             &[
                 KeyActionInput {
                     source_action_index: 0,
@@ -365,20 +371,13 @@ impl ProductionDispatchTestHarness {
                 },
                 KeyActionInput {
                     source_action_index: 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: 20_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "coalesced-a-up".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
                     kind: ActionKind::Down,
                     scheduled_us: 21_000,
                     scan_codes: vec![0x16].into(),
                     reason: "coalesced-b-down".into(),
                 },
                 KeyActionInput {
-                    source_action_index: 3,
+                    source_action_index: 2,
                     kind: ActionKind::Up,
                     scheduled_us: 30_000,
                     scan_codes: vec![0x16].into(),
@@ -386,49 +385,7 @@ impl ProductionDispatchTestHarness {
                 },
             ],
             1_000,
-        );
-        let epoch = harness.resources.playback.epoch;
-        let base_completion = harness
-            .resources
-            .clock
-            .duration_from_us(20_000)
-            .expect("base completion boundary");
-        let coalesced_boundary = harness
-            .resources
-            .clock
-            .duration_from_us(21_000)
-            .expect("coalesced completion boundary");
-        let call_index = Arc::new(AtomicU64::new(0));
-        let emitter_index = Arc::clone(&call_index);
-        harness.resources.backend.set_packet_emitter(move |packet| {
-            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
-            let boundary = epoch
-                .checked_add_duration(if index == 0 {
-                    base_completion
-                } else {
-                    coalesced_boundary
-                })
-                .expect("deterministic completion boundary");
-            let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(boundary),
-                    completed_ticks: Some(boundary),
-                    timing_error: None,
-                },
-            }
-        });
-        harness
+        )
     }
 
     /// Seed a Down observation while leaving a future Mixed packet for the
@@ -459,10 +416,11 @@ impl ProductionDispatchTestHarness {
             },
         ]);
         let plan = harness.plan_current_dispatch();
-        assert!(matches!(
-            harness.dispatch_authored_with_plan(&plan),
-            DispatchStep::Dispatched
-        ));
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+        assert!(
+            matches!(step, DispatchStep::Dispatched),
+            "initial harness dispatch failed: {step:?}"
+        );
         harness
     }
 
@@ -503,16 +461,15 @@ impl ProductionDispatchTestHarness {
             reason: "bench-down".into(),
         });
         let mut harness = Self::create_harness(&actions);
+        harness.align_next_plan_to_future_for_test(500_000);
         let plan = harness.plan_current_dispatch();
-        assert!(matches!(
-            harness.dispatch_authored_with_plan(&plan),
-            DispatchStep::Dispatched
-        ));
+        let step = harness.wait_and_dispatch_current_plan(&plan);
+        assert!(matches!(step, Ok(DispatchStep::Dispatched)));
         harness
     }
 
     pub fn new_uponly_release() -> Self {
-        Self::new_uponly_release_with_gap(1_000)
+        Self::new_uponly_release_with_gap(100_000)
     }
 
     pub fn new_uponly_release_with_gap(gap_us: u64) -> Self {
@@ -526,24 +483,26 @@ impl ProductionDispatchTestHarness {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
-                scheduled_us: 0,
+                scheduled_us: 200_000,
                 scan_codes: scan_codes.clone().into(),
                 reason: "down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: gap_us,
+                scheduled_us: 200_000 + gap_us,
                 scan_codes: scan_codes.into(),
                 reason: "up".into(),
             },
         ]);
         // Dispatch Down outside window
+        harness.align_next_plan_to_future_for_test(500_000);
         let plan = harness.plan_current_dispatch();
-        assert!(matches!(
-            harness.dispatch_authored_with_plan(&plan),
-            DispatchStep::Dispatched
-        ));
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+        assert!(
+            matches!(step, DispatchStep::Dispatched),
+            "initial UpOnly harness dispatch failed: {step:?}"
+        );
         harness
     }
 
@@ -585,9 +544,15 @@ impl ProductionDispatchTestHarness {
         backend.set_test_emitters();
         backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
         let waiter = HybridWaiter::new();
-        let playback =
-            PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
-                .expect("playback");
+        let test_margin = qpc_clock
+            .duration_from_us(500_000)
+            .expect("test epoch margin conversion");
+        let test_epoch = qpc_clock
+            .now()
+            .expect("qpc now")
+            .checked_add_duration(test_margin)
+            .expect("test epoch margin overflow");
+        let playback = PlaybackClockState::new(test_epoch, DurationTicks::ZERO).expect("playback");
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
         let scheduling = WorkerSchedulingGuards::create_test_guards();
 
@@ -605,7 +570,16 @@ impl ProductionDispatchTestHarness {
 
         let health_options = DispatchHealthOptions::default();
         let health = WorkerHealthState::new(health_options);
-        let timing = WorkerTimingState::create_test_timing();
+        let mut timing = WorkerTimingState::create_test_timing();
+        timing.admission_guard_ticks = qpc_clock
+            .duration_from_us(DEFAULT_ADMISSION_GUARD_US)
+            .expect("test admission guard conversion");
+        timing.hard_late_abort_threshold_ticks = qpc_clock
+            .duration_from_us(20_000)
+            .expect("test hard-late cutoff conversion");
+        timing.effective_spin_threshold_ticks = qpc_clock
+            .duration_from_us(20_000)
+            .expect("test spin threshold conversion");
 
         Self {
             config: WorkerConfig::default(),
@@ -672,6 +646,42 @@ impl ProductionDispatchTestHarness {
     pub fn set_effective_time_for_test(&mut self, ticks: TimelineTicks) {
         self.effective_now_ticks = ticks;
     }
+
+    /// Test-only clock setup: place the next authored boundary a fixed margin
+    /// into the future before the plan is frozen.  This removes harness
+    /// startup jitter without changing an already-frozen target.
+    pub fn align_next_plan_to_future_for_test(&mut self, margin_us: u64) {
+        let authored = self
+            .resources
+            .coordinator
+            .prepare_current_authored_frame()
+            .expect("authored frame")
+            .map(|frame| frame.authored_ticks);
+        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let Some(deadline) = (match (authored, pending) {
+            (Some(authored), Some(pending)) => Some(authored.min(pending)),
+            (Some(authored), None) => Some(authored),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        }) else {
+            return;
+        };
+        let now = self.resources.clock.now().expect("qpc now");
+        let margin = self
+            .resources
+            .clock
+            .duration_from_us(margin_us)
+            .expect("test epoch margin conversion");
+        // Keep direct frozen-plan sends out of the host's ordinary scheduler
+        // jitter window. This changes only the test epoch before planning;
+        // it never rewrites a plan after it has been frozen.
+        let epoch = now
+            .as_u64()
+            .saturating_sub(deadline.as_u64())
+            .saturating_add(margin.as_u64().max(2_000_000));
+        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
+    }
+
     pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
         self.runtime.set_deadline_wake_qpc_for_test(Some(ticks));
     }
@@ -860,10 +870,14 @@ impl ProductionDispatchTestHarness {
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
                 physical_target_qpc: plan.physical_target_qpc(),
+                admission_guard_ticks: if matches!(plan, NextDispatchPlan::Physical(_)) {
+                    self.timing.admission_guard_ticks
+                } else {
+                    DurationTicks::ZERO
+                },
                 qpc_clock: self.resources.clock,
             },
             timing: WaitTiming {
-                effective_spin_threshold_ticks: self.timing.effective_spin_threshold_ticks,
                 lease_timeout_ticks: self.timing.lease_timeout_ticks,
                 supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             },
@@ -921,23 +935,41 @@ impl ProductionDispatchTestHarness {
         let effective_now_ticks = self
             .resources
             .playback
-            .get_elapsed_allow_pre_epoch(now_ticks, false)
+            .get_elapsed_allow_pre_epoch(now_ticks, true)
             .map_err(|error| format!("benchmark timeline: {error}"))?;
         self.effective_now_ticks = effective_now_ticks;
-        Ok(self.dispatch_plan_at(plan, effective_now_ticks, now_ticks))
+        let step = self.dispatch_plan_at(plan, effective_now_ticks, now_ticks, true, None);
+        Ok(step)
     }
     fn align_epoch_to_deadline_for_test(&mut self, deadline: TimelineTicks, now_ticks: QpcTicks) {
-        let duration = DurationTicks::from_raw(deadline.as_u64());
-        let target = self
+        if self.runtime.awaiting_future_physical_boundary {
+            return;
+        }
+        let current_target = self
             .resources
             .playback
             .epoch
-            .checked_add_duration(duration)
-            .unwrap();
-        if target > now_ticks {
-            let raw = now_ticks.as_u64().checked_sub(deadline.as_u64()).unwrap();
-            self.resources.playback.epoch = QpcTicks::from_raw(raw);
+            .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+            .expect("test target arithmetic");
+        if current_target > now_ticks {
+            return;
         }
+        // Direct harness dispatch must exercise the same pre-deadline
+        // admission window as the worker. Keep the frozen target at least
+        // two seconds in the future; this is test-only epoch setup for a
+        // non-controlled QPC host. Tests that need an overdue boundary set
+        // that condition explicitly through their dedicated race helper.
+        let margin = self
+            .resources
+            .clock
+            .duration_from_us(500_000)
+            .expect("test dispatch margin conversion");
+        let raw = now_ticks
+            .as_u64()
+            .saturating_sub(deadline.as_u64())
+            .checked_add(margin.as_u64().max(2_000_000))
+            .expect("test epoch margin overflow");
+        self.resources.playback.epoch = QpcTicks::from_raw(raw);
     }
     fn align_epoch_to_selected_boundary_before_planning(&mut self) {
         let authored = self
@@ -970,6 +1002,8 @@ impl ProductionDispatchTestHarness {
         plan: &NextDispatchPlan,
         effective_now_ticks: TimelineTicks,
         now_ticks: QpcTicks,
+        allow_pre_deadline: bool,
+        test_physical_target_qpc: Option<QpcTicks>,
     ) -> DispatchStep {
         self.effective_now_ticks = effective_now_ticks;
         dispatch_due_from_plan(
@@ -992,15 +1026,42 @@ impl ProductionDispatchTestHarness {
             &self.desired_pause,
             &self.supervisor_heartbeat_ticks,
             self.timing.lease_timeout_ticks,
+            &self.interrupt,
             &self.progress_clock,
-            &mut self.observer,
+            Some(&self.observer),
+            allow_pre_deadline,
+            test_physical_target_qpc,
         )
     }
     /// Invoke the production frozen-plan helper without the kernel wait.
     /// Tests use this to cover all structural plan states directly.
     pub fn dispatch_due_from_plan_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
-        self.dispatch_plan_at(plan, self.effective_now_ticks, now_ticks)
+        let allow_pre_deadline = !self.runtime.awaiting_future_physical_boundary;
+        self.dispatch_plan_at(
+            plan,
+            self.effective_now_ticks,
+            now_ticks,
+            allow_pre_deadline,
+            None,
+        )
+    }
+
+    /// Invoke a frozen plan at its exact synthetic QPC boundary.  This keeps
+    /// metadata-only commit allocation tests independent of waiter setup and
+    /// wall-clock timer state.
+    pub fn dispatch_at_plan_target_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("plan target required for synthetic boundary");
+        let deadline = plan
+            .deadline_ticks()
+            .expect("plan deadline required for synthetic boundary");
+        self.runtime
+            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
+        // Use the frozen target as a test-controlled exact-boundary sample;
+        // this never re-anchors or rewrites the plan after it is frozen.
+        self.dispatch_plan_at(plan, deadline, target, true, Some(target))
     }
 
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
@@ -1022,6 +1083,8 @@ impl ProductionDispatchTestHarness {
             plan,
             plan.deadline_ticks().expect("physical deadline"),
             overdue_now,
+            false,
+            None,
         )
     }
     /// Query the current authored packet path without mutating state.
@@ -1049,15 +1112,18 @@ impl ProductionDispatchTestHarness {
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
+        let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
-            physical_target_qpc: plan.physical_target_qpc().expect("physical target QPC"),
+            physical_target_qpc,
             startup_target_selected: false,
             focus_loss_fault: false,
+            interrupt: &self.interrupt,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            test_direct_boundary: false,
         };
         dispatch_authored_packet(
             ctx,
@@ -1075,7 +1141,7 @@ impl ProductionDispatchTestHarness {
             &self.panic_requested,
             &self.desired_pause,
             &self.progress_clock,
-            &mut self.observer,
+            Some(&self.observer),
         )
     }
     pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {

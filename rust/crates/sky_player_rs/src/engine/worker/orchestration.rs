@@ -71,7 +71,6 @@ impl Worker<'_> {
             publication: FinalizePublication {
                 metrics: &shared.publication.metrics,
                 telemetry_output: &shared.publication.telemetry_output,
-                estimator_output: &shared.publication.estimator_output,
                 priority_acquired: &shared.publication.priority_acquired,
                 progress_clock: &shared.publication.progress_clock,
             },

@@ -7,17 +7,20 @@ use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
     WorkerRuntime, WorkerTimingState, final_control_admission_at, final_control_precheck,
-    final_down_target_admission, focus_matches, load_target_stamp, signed_ticks_to_us,
-    suspend_live_input, target_stamp_still_current,
+    final_down_target_admission, focus_matches, load_target_stamp,
+    record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
+    target_stamp_still_current, wait_to_precision_boundary,
 };
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::timing::interpret_down_send_timing;
-use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
+use super::{
+    AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue, SpinSendError,
+    spin_and_send_prepared,
+};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
     ctx: AuthoredPacketContext<'_>,
@@ -35,7 +38,7 @@ pub(crate) fn dispatch_authored_packet(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     progress_clock: &SharedProgressClock,
-    observer: &mut PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let AuthoredPacketContext {
         dispatch_plan,
@@ -44,19 +47,22 @@ pub(crate) fn dispatch_authored_packet(
         physical_target_qpc,
         startup_target_selected,
         focus_loss_fault,
+        interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
+        test_direct_boundary,
     } = ctx;
-
     let WorkerResources {
         clock: qpc_clock,
+        waiter,
         backend,
         coordinator,
         playback: clock_state,
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
-
+    runtime.allow_pre_epoch_startup_dispatch = now_ticks < clock_state.epoch;
     let Some(physical_plan) = dispatch_plan.physical() else {
         return DispatchStep::NoWork;
     };
@@ -77,6 +83,7 @@ pub(crate) fn dispatch_authored_packet(
         desired_pause,
         progress_clock,
         qpc_clock,
+        waiter,
         backend,
         coordinator,
         clock_state,
@@ -86,15 +93,15 @@ pub(crate) fn dispatch_authored_packet(
         startup_target_selected,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
+        interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
+        test_direct_boundary,
         observer,
     )
 }
 
-/// Admission gate + SendInput call + telemetry + health
-/// observation for an authored Down/Mixed batch.  Owns the physical send
-/// boundary; the orchestrator only sees a `DispatchStep` outcome.
 #[allow(clippy::too_many_arguments)]
 fn commit_down_send_outcome(
     view: &AuthoredBatchView,
@@ -112,6 +119,7 @@ fn commit_down_send_outcome(
     desired_pause: &AtomicBool,
     progress_clock: &SharedProgressClock,
     qpc_clock: QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
@@ -121,15 +129,16 @@ fn commit_down_send_outcome(
     _startup_target_selected: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    observer: &mut PendingObservationQueue,
+    #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
+    observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
     let admission = match admit_authored_down(
         view,
         config,
-        qpc_clock,
         backend,
         coordinator,
         clock_state,
@@ -156,6 +165,36 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
+    let admission = match finalize_authored_down_admission(
+        view,
+        config,
+        qpc_clock,
+        waiter,
+        interrupt,
+        backend,
+        coordinator,
+        clock_state,
+        runtime,
+        local_metrics,
+        focus_active,
+        target_hwnd,
+        target_generation,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        progress_clock,
+        timing,
+        physical_target_qpc,
+        supervisor_heartbeat_ticks,
+        lease_timeout_ticks,
+        #[cfg(any(test, feature = "test-support"))]
+        test_direct_boundary,
+        admission,
+    ) {
+        Ok(admission) => admission,
+        Err(step) => return step,
+    };
     record_down_send_outcome(
         view,
         config,
@@ -174,19 +213,19 @@ fn commit_down_send_outcome(
     )
 }
 
-/// Outcome returned by `admit_authored_down`.  `Allowed` carries the frozen
-/// dispatch budget plus the trace kind for the upcoming send; every other
-/// variant is a non-terminal redirect (`Continue`) handled by the worker.
-enum AdmissionOutcome {
+pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
-        final_admission_qpc: QpcTicks,
+        final_proof_qpc: QpcTicks,
+    },
+    Guarded {
+        trace_kind: u8,
+        preflight_target: Option<TargetStamp>,
     },
     BlockedUnfocused,
     FocusLost,
     TargetChanged,
     ControlRejected,
-    ConflictReject,
 }
 
 /// Pre-send admission gate: focus, preflight, hard-late abort, conflict
@@ -197,7 +236,6 @@ enum AdmissionOutcome {
 fn admit_authored_down(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
-    qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
@@ -219,12 +257,14 @@ fn admit_authored_down(
     preflight_target: Option<TargetStamp>,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
-    observer: &PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let trace_kind = trace_kind_for_view(view);
     let has_down_events = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
-    let has_physical_packet = true;
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
+        if !runtime.musical_physical_commit_started {
+            return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+        }
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         {
@@ -239,19 +279,21 @@ fn admit_authored_down(
         }
         progress_clock.publish(clock_state);
         runtime.focus_restore_started_ticks = None;
-        observer.push(
-            super::observation::DispatchObservation::BlockedUnfocused(
-                BlockedUnfocusedObservation {
-                    event_index: view.batch_source_action_index,
-                    authored_ticks: view.authored_batch_scheduled_ticks,
-                    effective_deadline_ticks: view.batch_scheduled_ticks,
-                    effective_now_ticks,
-                    polyphony: view.batch_intent_count,
-                },
-            ),
-            &mut local_metrics.observer_dropped_samples,
-            &mut local_metrics.observer_queue_high_watermark,
-        );
+        if let Some(observer) = observer {
+            observer.push(
+                super::observation::DispatchObservation::BlockedUnfocused(
+                    BlockedUnfocusedObservation {
+                        event_index: view.batch_source_action_index,
+                        authored_ticks: view.authored_batch_scheduled_ticks,
+                        effective_deadline_ticks: view.batch_scheduled_ticks,
+                        effective_now_ticks,
+                        polyphony: view.batch_intent_count,
+                    },
+                ),
+                &mut local_metrics.observer_dropped_samples,
+                &mut local_metrics.observer_queue_high_watermark,
+            );
+        }
         return Ok(AdmissionOutcome::BlockedUnfocused);
     }
     if has_down_events && focus_loss_fault && !runtime.focus_loss_fault_injected {
@@ -276,7 +318,8 @@ fn admit_authored_down(
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::TargetChanged);
     }
-    if config.timing.strict_timing
+    if has_down_events
+        && config.timing.strict_timing
         && effective_now_ticks
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
@@ -299,72 +342,191 @@ fn admit_authored_down(
             view.batch_source_action_index
         )));
     }
-    if has_physical_packet {
-        let control_signals = FinalControlSignals {
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            supervisor_heartbeat_ticks,
-        };
-        let control_admission = final_control_precheck(FinalControlSignals {
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            supervisor_heartbeat_ticks,
-        });
-        if !matches!(control_admission, FinalControlAdmission::Allowed) {
-            runtime.verified_target = None;
-            return Ok(AdmissionOutcome::ControlRejected);
-        }
-
-        if has_down_events {
-            let admission = final_down_target_admission(FinalTargetSignals {
-                expected: preflight_target,
-                require_focus: config.focus.require_focus,
-                focus_active,
-                target_hwnd,
-                target_generation,
-            });
-            match admission {
-                DownAdmission::Allowed => {}
-                DownAdmission::FocusLost => {
-                    return handle_final_focus_loss(
-                        qpc_clock,
-                        backend,
-                        coordinator,
-                        clock_state,
-                        runtime,
-                        target_hwnd,
-                        progress_clock,
-                    );
-                }
-                DownAdmission::TargetChanged => {
-                    runtime.verified_target = None;
-                    return Ok(AdmissionOutcome::TargetChanged);
-                }
-            }
-        }
-        let final_admission_qpc = qpc_clock.now().map_err(|error| {
-            DispatchStep::Terminate(format!("QPC send-start failure: {error:?}"))
-        })?;
-        let lease_admission =
-            final_control_admission_at(final_admission_qpc, lease_timeout_ticks, control_signals)
-                .map_err(|error| {
-                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
-            })?;
-        if !matches!(lease_admission, FinalControlAdmission::Allowed) {
-            runtime.verified_target = None;
-            return Ok(AdmissionOutcome::ControlRejected);
-        }
-        return Ok(finalize_allowed_admission(trace_kind, final_admission_qpc));
+    let control_signals = FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    };
+    let control_admission = final_control_precheck(FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    });
+    if !matches!(control_admission, FinalControlAdmission::Allowed) {
+        runtime.verified_target = None;
+        return Ok(AdmissionOutcome::ControlRejected);
     }
-    Ok(AdmissionOutcome::ConflictReject)
+    let guard_lease = final_control_admission_at(now_ticks, lease_timeout_ticks, control_signals)
+        .map_err(|error| {
+        DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+    })?;
+    if !matches!(guard_lease, FinalControlAdmission::Allowed) {
+        runtime.verified_target = None;
+        return Ok(AdmissionOutcome::ControlRejected);
+    }
+    Ok(AdmissionOutcome::Guarded {
+        trace_kind,
+        preflight_target: has_down_events.then_some(preflight_target),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_final_focus_loss(
+fn finalize_authored_down_admission(
+    view: &AuthoredBatchView,
+    config: &WorkerConfig,
+    qpc_clock: QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    focus_active: &AtomicBool,
+    target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    desired_pause: &AtomicBool,
+    progress_clock: &SharedProgressClock,
+    timing: &WorkerTimingState,
+    physical_target_qpc: QpcTicks,
+    supervisor_heartbeat_ticks: &AtomicU64,
+    lease_timeout_ticks: DurationTicks,
+    #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
+    admission: AdmissionOutcome,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    let AdmissionOutcome::Guarded {
+        trace_kind,
+        preflight_target,
+    } = admission
+    else {
+        return Ok(admission);
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    if !test_direct_boundary
+        && let Err(step) = wait_to_precision_boundary(
+            qpc_clock,
+            waiter,
+            interrupt,
+            physical_target_qpc,
+            timing,
+            local_metrics,
+        )
+    {
+        return match step {
+            DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
+            other => Err(other),
+        };
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    wait_to_precision_boundary(
+        qpc_clock,
+        waiter,
+        interrupt,
+        physical_target_qpc,
+        timing,
+        local_metrics,
+    )?;
+
+    let control_signals = FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    };
+    let control_admission = final_control_precheck(FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_heartbeat_ticks,
+    });
+    if !matches!(control_admission, FinalControlAdmission::Allowed) {
+        runtime.verified_target = None;
+        return Ok(AdmissionOutcome::ControlRejected);
+    }
+    let view_has_down = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
+    if view_has_down {
+        let Some(expected) = preflight_target else {
+            return Err(DispatchStep::Terminate(
+                "down-bearing dispatch reached final admission without frozen target proof"
+                    .to_string(),
+            ));
+        };
+        match final_down_target_admission(FinalTargetSignals {
+            expected,
+            require_focus: config.focus.require_focus,
+            focus_active,
+            target_hwnd,
+            target_generation,
+        }) {
+            DownAdmission::Allowed => {}
+            DownAdmission::FocusLost => {
+                return handle_final_focus_loss(
+                    qpc_clock,
+                    backend,
+                    coordinator,
+                    clock_state,
+                    runtime,
+                    target_hwnd,
+                    progress_clock,
+                );
+            }
+            DownAdmission::TargetChanged => {
+                runtime.verified_target = None;
+                return Ok(AdmissionOutcome::TargetChanged);
+            }
+        }
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    let final_proof_qpc = if test_direct_boundary {
+        // The test harness supplied the already-frozen target as a synthetic
+        // exact-boundary sample. It does not rebase the epoch or mutate the
+        // plan after arm; it only avoids host waiter jitter in correctness
+        // tests.
+        physical_target_qpc
+    } else {
+        qpc_clock.now().map_err(|error| {
+            DispatchStep::Terminate(format!("QPC final proof failure: {error:?}"))
+        })?
+    };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let final_proof_qpc = qpc_clock
+        .now()
+        .map_err(|error| DispatchStep::Terminate(format!("QPC final proof failure: {error:?}")))?;
+    let lease_admission =
+        final_control_admission_at(final_proof_qpc, lease_timeout_ticks, control_signals).map_err(
+            |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
+        )?;
+    if !matches!(lease_admission, FinalControlAdmission::Allowed) {
+        runtime.verified_target = None;
+        return Ok(AdmissionOutcome::ControlRejected);
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    let deadline_missed = final_proof_qpc >= physical_target_qpc && !test_direct_boundary;
+    #[cfg(not(any(test, feature = "test-support")))]
+    let deadline_missed = final_proof_qpc >= physical_target_qpc;
+    if view_has_down && deadline_missed {
+        runtime.verified_target = None;
+        return Err(DispatchStep::TerminateStatic(
+            "down_deadline_missed_before_send",
+        ));
+    }
+    Ok(AdmissionOutcome::Allowed {
+        trace_kind,
+        final_proof_qpc,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_final_focus_loss(
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -374,6 +536,9 @@ fn handle_final_focus_loss(
     progress_clock: &SharedProgressClock,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     runtime.verified_target = None;
+    if !runtime.musical_physical_commit_started {
+        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+    }
     let focus_ticks = qpc_clock
         .now()
         .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
@@ -391,21 +556,11 @@ fn handle_final_focus_loss(
     Ok(AdmissionOutcome::FocusLost)
 }
 
-/// Contstructs the allowed admission from the frozen dispatch budget and the
-/// packet trace kind.  Extracted to keep `admit_authored_down` under the per
-/// dispatch-function line limit.
 fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     match view.prepared_batch.packet_kind {
         sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
         sky_dispatch_core::model::PhysicalPacketKind::DownOnly => TRACE_KIND_DOWN,
         sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
-    }
-}
-
-fn finalize_allowed_admission(trace_kind: u8, final_admission_qpc: QpcTicks) -> AdmissionOutcome {
-    AdmissionOutcome::Allowed {
-        trace_kind,
-        final_admission_qpc,
     }
 }
 
@@ -424,24 +579,57 @@ fn record_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
     admission: &AdmissionOutcome,
-    observer: &mut PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         trace_kind,
-        final_admission_qpc,
+        final_proof_qpc,
     } = admission
     else {
         return DispatchStep::Continue;
     };
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
+    let latest_allowed_down_qpc = if packet.down_mask != 0 {
+        match physical_target_qpc.checked_add_duration(timing.hard_late_abort_threshold_ticks) {
+            Ok(latest) => Some(latest),
+            Err(_) => {
+                return DispatchStep::TerminateStatic("down_hard_late_abort_boundary_overflow");
+            }
+        }
+    } else {
+        None
+    };
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result =
-        backend.send_prepared_physical_packet_with_start(prepared_packet, *final_admission_qpc);
+    let result = match spin_and_send_prepared(
+        qpc_clock,
+        physical_target_qpc,
+        latest_allowed_down_qpc,
+        backend,
+        prepared_packet,
+    ) {
+        Ok(result) => result,
+        Err(SpinSendError::DownHardLateAbort) => {
+            return DispatchStep::TerminateStatic("down_hard_late_abort");
+        }
+        Err(SpinSendError::Qpc(error)) => {
+            return DispatchStep::Terminate(format!("QPC spin failure: {error:?}"));
+        }
+    };
+    if let Some(started_qpc) = result.evidence.started_ticks
+        && let Err(error) = record_sendinput_pre_call_lateness(
+            qpc_clock,
+            physical_target_qpc,
+            started_qpc,
+            local_metrics,
+        )
+    {
+        return DispatchStep::Terminate(error);
+    }
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
@@ -480,6 +668,7 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
+        *final_proof_qpc,
         trace_kind,
         result_success,
         result.status,
@@ -508,6 +697,7 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    final_proof_qpc: QpcTicks,
     trace_kind: u8,
     result_success: bool,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
@@ -519,7 +709,7 @@ fn finalize_down_send_outcome(
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
-    observer: &mut PendingObservationQueue,
+    observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let timing_proof = match interpret_down_send_timing(
         view,
@@ -528,6 +718,7 @@ fn finalize_down_send_outcome(
         runtime,
         qpc_clock,
         physical_target_qpc,
+        final_proof_qpc,
         coordinator,
         health,
         timing,
@@ -545,11 +736,10 @@ fn finalize_down_send_outcome(
         Ok(value) => value,
         Err(step) => return step,
     };
-    #[cfg(any(test, feature = "test-support"))]
-    let capture_dispatch_ready_qpc = config.timing.strict_timing
-        || !matches!(config.telemetry.mode, super::super::TelemetryMode::Off);
-    #[cfg(not(any(test, feature = "test-support")))]
-    let capture_dispatch_ready_qpc = false;
+    if view.packet_masks.down_mask != 0 {
+        runtime.musical_physical_commit_started = true;
+    }
+    let capture_dispatch_ready_qpc = config.profile.observer_enabled();
     publisher_down_send_outcome(
         view,
         runtime,

@@ -24,10 +24,8 @@ from typing import Any
 from sky_music.config import DEFAULT_GAME_FPS
 from sky_music.domain.hold_timing import (
     DEFAULT_HOLD_FRAMES,
-    frame_duration_us,
     materialize_hold_us,
 )
-from sky_music.domain.validation import ABSOLUTE_MIN_HOLD_US
 from sky_music.infrastructure.calibration_loader import (
     MARGIN_CEILING_US,
     MARGIN_FLOOR_US,
@@ -1070,10 +1068,7 @@ def run_published_native_calibration(
         worst_bucket=summary.worst_bucket,
         global_shrink_p99_us=summary.global_shrink_p99_us,
         guard_us=summary.guard_us,
-        effective_min_hold_us=max(
-            materialize_hold_us(hold_frames, fps, summary.margin_us),
-            frame_duration_us(fps) + ABSOLUTE_MIN_HOLD_US,
-        ),
+        effective_min_hold_us=materialize_hold_us(hold_frames, fps, summary.margin_us),
     )
 
 

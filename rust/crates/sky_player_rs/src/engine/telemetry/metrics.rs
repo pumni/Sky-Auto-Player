@@ -44,6 +44,12 @@ pub struct WorkerMetricsLocal {
     pub late_2ms: u64,
     pub late_5ms: u64,
     pub late_10ms: u64,
+    /// Essential production scalar evidence measured immediately before the
+    /// prepared SendInput call.
+    pub max_sendinput_pre_call_lateness_us: u64,
+    pub pre_call_late_2ms: u64,
+    pub pre_call_late_5ms: u64,
+    pub pre_call_late_10ms: u64,
     pub release_max_us: u64,
     pub release_late_2ms: u64,
     pub active_count: u64,
@@ -132,9 +138,9 @@ pub struct WorkerMetricsLocal {
     /// Peak wall-clock duration of a single deferred observer drain step.
     pub observer_duration_max_us: u64,
     /// How many `DispatchObservation` samples were dropped because the fixed
-    /// observer queue was full (drop-new policy).
+    /// diagnostic observer queue was full (drop-new policy).
     pub observer_dropped_samples: u64,
-    /// Largest number of entries ever held by the fixed observer queue.
+    /// Largest number of entries ever held by the diagnostic observer queue.
     pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,
 }

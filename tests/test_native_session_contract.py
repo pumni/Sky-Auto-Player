@@ -84,16 +84,16 @@ def test_dispatch_constructor_rejects_the_removed_external_allowlist() -> None:
         sky_player_rs.DispatchSession([], list(SKY_15_SCAN_CODES))  # type: ignore[attr-defined]
 
 
-def test_native_constructor_rejects_same_key_hold_below_effective_floor() -> None:
+def test_native_constructor_rejects_same_key_hold_below_materialized_hold() -> None:
     with pytest.raises(ValueError, match="same-key hold too short"):
         sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             [
                 (0, "down", 0, [SKY_15_SCAN_CODES[0]], "down"),
-                (1, "up", 100, [SKY_15_SCAN_CODES[0]], "up"),
+                (1, "up", 4_666, [SKY_15_SCAN_CODES[0]], "up"),
             ],
             config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
                 game_fps=240,
-                min_hold_us=100,
+                min_hold_us=4_667,
             ),
         )
 
@@ -112,6 +112,29 @@ def test_native_constructor_accepts_exact_effective_hold_boundary() -> None:
     assert session is not None
 
 
+@pytest.mark.parametrize("margin_us", [300, 400, 499, 500])
+def test_native_constructor_accepts_python_materialized_calibration_margin(
+    margin_us: int,
+) -> None:
+    # Python authors one-frame hold + static calibrated margin. PyO3 must
+    # accept that exact value instead of adding a second frame-relative floor.
+    materialized_hold_us = 16_667 + margin_us
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [SKY_15_SCAN_CODES[0]], "down"),
+            (1, "up", materialized_hold_us, [SKY_15_SCAN_CODES[0]], "up"),
+        ],
+        config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            game_fps=60,
+            min_hold_us=materialized_hold_us,
+            require_focus=False,
+        ),
+    )
+    # Construction itself is the pre-start/native validation gate. Do not arm
+    # a production session in this contract test merely to inspect telemetry.
+    assert session is not None
+
+
 def test_session_reports_lite_progress_then_one_final_report() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [],
@@ -123,7 +146,7 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
             telemetry=True,
         ),
     )
-    session.start()
+    session.arm(0)  # type: ignore[attr-defined]
     assert session.join(timeout_ms=5_000) is True
 
     live = session.snapshot_lite()  # type: ignore[attr-defined]
@@ -137,13 +160,12 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
         "snapshot",
         "effective_config",
         "telemetry_json",
-        "estimator_state_json",
     }
     assert dict(report["snapshot"])["is_finished"] is True
     assert report["effective_config"] == {
         "game_fps": 60,
         "requested_min_hold_us": 100,
-        "effective_min_hold_us": 17_167,
+        "effective_min_hold_us": 100,
         "require_focus": False,
         "focus_restore_grace_us": 1_234,
         "telemetry_mode": "ring",

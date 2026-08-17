@@ -15,11 +15,12 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 fn physical_target_qpc_for_work(
     target: Option<sky_dispatch_win32::clock::QpcTicks>,
     now: sky_dispatch_win32::clock::QpcTicks,
+    allow_pre_deadline: bool,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
     let Some(target) = target else {
         return Ok(None);
     };
-    Ok((target <= now).then_some(target))
+    Ok((allow_pre_deadline || target <= now).then_some(target))
 }
 
 #[inline]
@@ -30,6 +31,22 @@ fn physical_deadline_admission_is_allowed(
     arrived_via_deadline_wait: bool,
 ) -> bool {
     !(awaiting_future_physical_boundary && physical_target <= now && !arrived_via_deadline_wait)
+}
+
+#[inline]
+pub(crate) const fn startup_focus_loss_is_terminal(
+    focus_ok: bool,
+    musical_physical_commit_started: bool,
+) -> bool {
+    !focus_ok && !musical_physical_commit_started
+}
+
+#[inline]
+pub(crate) const fn preroll_manual_pause_cancels(
+    manual_pause: bool,
+    musical_physical_commit_started: bool,
+) -> bool {
+    manual_pause && !musical_physical_commit_started
 }
 
 pub(crate) fn preflight_prepared_plan(
@@ -104,8 +121,13 @@ pub(crate) fn dispatch_due_from_plan(
     desired_pause: &AtomicBool,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
     progress_clock: &crate::engine::shared::SharedProgressClock,
-    observer: &mut super::dispatch::PendingObservationQueue,
+    observer: Option<&super::dispatch::PendingObservationQueue>,
+    allow_pre_deadline: bool,
+    #[cfg(any(test, feature = "test-support"))] test_physical_target_qpc: Option<
+        sky_dispatch_win32::clock::QpcTicks,
+    >,
 ) -> super::DispatchStep {
     if let super::planning::NextDispatchPlan::Metadata(metadata) = plan {
         if metadata.physical_target_qpc > now_ticks {
@@ -126,14 +148,30 @@ pub(crate) fn dispatch_due_from_plan(
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
-    let physical_target_qpc =
-        match physical_target_qpc_for_work(plan.physical_target_qpc(), now_ticks) {
-            Ok(Some(target)) => target,
-            Ok(None) => {
-                return super::DispatchStep::NoWork;
+    #[cfg(any(test, feature = "test-support"))]
+    let test_direct_boundary = test_physical_target_qpc.is_some();
+    let physical_target_qpc = match physical_target_qpc_for_work(
+        if allow_pre_deadline {
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
             }
-            Err(error) => return super::DispatchStep::Terminate(error),
-        };
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                plan.physical_target_qpc()
+            }
+        } else {
+            plan.physical_target_qpc()
+        },
+        now_ticks,
+        allow_pre_deadline,
+    ) {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            return super::DispatchStep::NoWork;
+        }
+        Err(error) => return super::DispatchStep::Terminate(error),
+    };
 
     let arrived_via_deadline_wait = runtime.last_dispatch_deadline_wake_qpc.is_some()
         && runtime.last_dispatch_deadline_target_qpc == Some(physical_target_qpc);
@@ -156,8 +194,11 @@ pub(crate) fn dispatch_due_from_plan(
             physical_target_qpc,
             startup_target_selected,
             focus_loss_fault,
+            interrupt,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            #[cfg(any(test, feature = "test-support"))]
+            test_direct_boundary,
         },
         config,
         resources,
@@ -289,6 +330,14 @@ pub(super) fn dispatch(
 
             let now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
+            if startup_focus_loss_is_terminal(
+                focus_ok,
+                core.runtime.musical_physical_commit_started,
+            ) {
+                core.runtime.force_full_cleanup = true;
+                core.runtime.terminal_error = Some("focus_lost_during_preroll".to_string());
+                break;
+            }
             let manual_pause = desired_pause.load(Ordering::Acquire);
             #[cfg(any(test, feature = "test-support"))]
             if command_timing.needs_observation() {
@@ -302,6 +351,15 @@ pub(super) fn dispatch(
                     }
                 };
                 command_timing.observe_pause(observed_ticks);
+            }
+
+            if preroll_manual_pause_cancels(
+                manual_pause,
+                core.runtime.musical_physical_commit_started,
+            ) {
+                core.runtime.force_full_cleanup = true;
+                core.runtime.terminal_error = Some("manual_pause_during_preroll".to_string());
+                break;
             }
 
             if !focus_ok {
@@ -570,7 +628,7 @@ pub(super) fn dispatch(
                     match super::dispatch_stale_packet(
                         prepared,
                         &mut resources.coordinator,
-                        &core.observer.pending,
+                        core.observer.pending.as_ref(),
                         &mut core.metrics.observer_dropped_samples,
                         &mut core.metrics.observer_queue_high_watermark,
                         stale_now,
@@ -629,8 +687,11 @@ pub(super) fn dispatch(
             };
             // Wait evidence is also deferred through the nonblocking producer
             // path. The observer consumer owns all conversion and health work.
-            if let Some(wait_observation) = core.runtime.pending_wait_observation.take() {
-                core.observer.pending.push_wait(
+            if let (Some(wait_observation), Some(observer)) = (
+                core.runtime.pending_wait_observation.take(),
+                core.observer.pending.as_ref(),
+            ) {
+                observer.push_wait(
                     wait_observation,
                     &mut core.metrics.observer_dropped_samples,
                     &mut core.metrics.observer_queue_high_watermark,
@@ -690,8 +751,12 @@ pub(super) fn dispatch(
                 desired_pause,
                 supervisor_heartbeat_ticks,
                 timing.lease_timeout_ticks,
+                interrupt,
                 &shared.publication.progress_clock,
-                &mut core.observer.pending,
+                core.observer.pending.as_ref(),
+                false,
+                #[cfg(any(test, feature = "test-support"))]
+                None,
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
@@ -721,10 +786,17 @@ pub(super) fn dispatch(
             match wait_for_next_boundary(WaitBoundaryInput {
                 deadline: WaitDeadline {
                     physical_target_qpc: dispatch_plan.physical_target_qpc(),
+                    admission_guard_ticks: if matches!(
+                        dispatch_plan,
+                        super::planning::NextDispatchPlan::Physical(_)
+                    ) {
+                        timing.admission_guard_ticks
+                    } else {
+                        DurationTicks::ZERO
+                    },
                     qpc_clock,
                 },
                 timing: WaitTiming {
-                    effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
                     lease_timeout_ticks: timing.lease_timeout_ticks,
                     supervisor_heartbeat_ticks,
                 },
@@ -761,14 +833,16 @@ pub(super) fn dispatch(
                     if let Some(wait_result) = wait_result {
                         core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
                         core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                        core.runtime.pending_wait_observation = Some(WaitObservation {
-                            outcome: wait_result.outcome,
-                            wake_qpc: wait_result.wake_qpc,
-                            spin_ticks: wait_result.spin_ticks,
-                            deadline_ticks: wait_deadline_ticks,
-                            epoch_qpc: resources.playback.epoch,
-                            allow_pre_epoch_startup_dispatch: true,
-                        });
+                        if core.observer.pending.is_some() {
+                            core.runtime.pending_wait_observation = Some(WaitObservation {
+                                outcome: wait_result.outcome,
+                                wake_qpc: wait_result.wake_qpc,
+                                spin_ticks: wait_result.spin_ticks,
+                                deadline_ticks: wait_deadline_ticks,
+                                epoch_qpc: resources.playback.epoch,
+                                allow_pre_epoch_startup_dispatch: true,
+                            });
+                        }
                     }
                     if genuine_future_physical_wait {
                         // A real future-target wait crossed this exact
@@ -811,8 +885,12 @@ pub(super) fn dispatch(
                         desired_pause,
                         supervisor_heartbeat_ticks,
                         timing.lease_timeout_ticks,
+                        interrupt,
                         &shared.publication.progress_clock,
-                        &mut core.observer.pending,
+                        core.observer.pending.as_ref(),
+                        true,
+                        #[cfg(any(test, feature = "test-support"))]
+                        None,
                     ) {
                         super::DispatchStep::Terminate(error) => {
                             core.runtime.force_full_cleanup = true;
@@ -944,6 +1022,7 @@ mod tests {
             physical_target_qpc_for_work(
                 Some(QpcTicks::from_raw(1_000)),
                 QpcTicks::from_raw(1_200),
+                false,
             )
             .expect("authored target")
             .expect("authored deadline"),
@@ -956,6 +1035,7 @@ mod tests {
         let target = physical_target_qpc_for_work(
             Some(QpcTicks::from_raw(10_000)),
             QpcTicks::from_raw(9_540),
+            false,
         )
         .expect("target arithmetic");
 
@@ -964,9 +1044,12 @@ mod tests {
 
     #[test]
     fn future_selected_target_is_not_replaced_with_now() {
-        let target =
-            physical_target_qpc_for_work(Some(QpcTicks::from_raw(1_000)), QpcTicks::from_raw(900))
-                .expect("prepared target");
+        let target = physical_target_qpc_for_work(
+            Some(QpcTicks::from_raw(1_000)),
+            QpcTicks::from_raw(900),
+            false,
+        )
+        .expect("prepared target");
 
         assert_eq!(target, None);
     }

@@ -12,20 +12,22 @@ coordinator state only at the defined planning and ownership boundaries. It
 must not perform telemetry formatting, unbounded allocation, observer health
 updates, or learned timing estimation on the physical path.
 
-The observer is a separate consumer thread. A bounded
-`crossbeam_queue::ArrayQueue<DispatchObservation>` (production capacity 64) is
-shared between them:
+Strict-timing diagnostics use a separate consumer thread. A bounded
+`crossbeam_queue::ArrayQueue<DispatchObservation>` (capacity 64) is shared
+between the diagnostic dispatch path and that consumer:
 
 ```text
 dispatch thread --nonblocking push--> ArrayQueue --single consumer--> observer thread
                                       full: drop new observation
 ```
 
-The producer records a drop and continues. It never waits for slack and never
-evicts an older observation. The consumer owns health windows, telemetry
-materialization, shared observer metrics, and its own local timing state. It
-cannot authorize, reorder, retry, or commit physical input. Shutdown signals
-the consumer, joins it, merges its local metrics, and then publishes the final
+The diagnostic producer records a drop and continues. It never waits for slack
+and never evicts an older observation. Production allocates neither this queue
+nor an observer thread; it retains only bounded scalar worker counters. The
+diagnostic consumer owns health windows, telemetry materialization, shared
+observer metrics, and its own local timing state. It cannot authorize,
+reorder, retry, or commit physical input. Diagnostic shutdown signals the
+consumer, joins it, merges its local metrics, and then publishes the final
 report.
 
 ## 2. Immutable plan
@@ -40,7 +42,7 @@ invalidate it and cause a replan.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored timestamps are used as authored. Release deadlines
-include only the completion-anchored hold floor. Any remaining lead-shaped
+include only the authored minimum-hold policy. Any remaining lead-shaped
 arguments are test-only
 compatibility seams; production coordinator APIs do not accept a dispatch lead
 and the publication adapter reports the historical applied-lead field as zero.
@@ -70,25 +72,28 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 frozen plan
   -> fresh command/target/lease checks
   -> Down target + foreground validation when required
-  -> one QPC final_admission_qpc sample
-  -> lease admission using that exact admission sample
+  -> final_proof_qpc target/focus/control proof
+  -> lease admission using that proof sample
+  -> QPC spin to the authored target and one pre_call_qpc sample
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
   -> terminal fail-closed cleanup on transport anomaly
-  -> bounded observation enqueue
+  -> essential scalar state commit
+  -> diagnostic-only bounded observation enqueue
 ```
 
-The supplied `final_admission_qpc` sample is the physical admission boundary.
+The supplied `pre_call_qpc` sample is the physical pre-call boundary, not a
+Windows syscall-entry or game-receipt timestamp.
 The transport reports `sendinput_completion_qpc`; production does not subtract
 a learned send cost from the target. Completion is used for diagnostics and
-release ownership.
+ownership evidence only; it does not create a completion-relative hold floor.
 
 The primary sender-side timing evidence is the signed start residual:
 
 ```text
-dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc
-admission_to_completion = sendinput_completion_qpc - final_admission_qpc
+dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc
+pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc
 completion_error = sendinput_completion_qpc - physical_target_qpc  # diagnostic only
 ```
 
@@ -156,34 +161,35 @@ non-terminal outcome. After startup, focus polling only publishes observed
 state; it never reclaims foreground focus automatically. Explicit manual
 refocus remains the user-controlled retry path.
 
-## 4. Completion-anchored hold model
+## 4. Authored timestamp and minimum-hold model
 
 Python materializes the fixed floor before native startup:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
+effective_min_hold_us = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
 ```
 
-Native checked tick arithmetic enforces:
+Native admission checked tick arithmetic enforces before worker start:
 
 ```text
-release_floor = down_completed + effective_min_hold
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold
 ```
 
-This is a sender-side visibility floor, not game-observed timing. A slow Down
-can defer its own Up; it does not move an unrelated future authored action.
-Deferred releases are stored in a fixed `[Option; 15]` per-key table with a
-mask and generation ownership. A pending release is selected independently,
-and cannot head-of-line block an unrelated authored Down chord. If the same
-key is retriggered before its floor, planning fails closed with physical
-deadline infeasibility. There is no transport retry state.
+The static margin is materialized once into the authored schedule. An invalid
+interval fails native admission before any musical SendInput. The worker never
+combines Down completion with the authored hold to create a second floor, never
+creates a completion-derived minimum-hold terminal state, and never rewrites an
+authored Up target. Runtime
+deadline/overdue policy handles a late boundary; recovery-only pending
+releases are stored in a fixed `[Option; 15]` per-key table with mask and
+generation ownership. There is no transport retry state.
 
 ## 5. Wait and interrupt ordering
 
-The worker uses a high-resolution waitable timer, event interruption, and a
-bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
+The worker uses a high-resolution waitable timer and event interruption to the
+`T - 2,000 µs` admission boundary with zero waiter spin. The final authored
+precision stage has a bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
 the final QPC deadline gate
 decides whether to wait again or enter the physical path. A wake that is only
 for lease, command, focus, pause, or interrupt replans and cannot dispatch the
@@ -194,10 +200,11 @@ target, the waiter returns `Deadline`. Final command, target, focus, and lease
 admission remains authoritative after that result and may still reject
 `SendInput`.
 
-The spin path may read an interrupt generation hint with `Relaxed` ordering
-every bounded group (currently 32 iterations). The final generation/deadline
-decision uses the authoritative `Acquire` path. This optimization is only a
-wake hint; the QPC deadline check runs first and cannot be bypassed by an event.
+The final precision spin performs only its QPC target/cutoff comparison and
+`spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
+are completed before that stage; no interrupt-generation polling or control
+branch is inserted into the final spin. The QPC deadline check remains
+authoritative and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
@@ -234,14 +241,15 @@ active/possibly-active keys and verifies the resulting state before successful
 completion. The ready boundary is published only after startup gates and the
 required physical ownership and cleanup state are complete.
 
-Observer failure, telemetry overflow, or metric conversion failure cannot
+Production has no observer failure or queue-overflow path. Diagnostic observer
+failure, telemetry overflow, or metric conversion failure cannot
 rewrite physical ownership. The worker terminates through the normal cleanup
 path and preserves the primary and secondary errors.
 
 The live snapshot is a small projection of authoritative playback state. The
-final report is materialized after worker and observer shutdown. The deprecated
-`estimator_state_json` field and historical lead fields exist only for Python
-compatibility; they are ignored by planning and contain no learned state.
+The diagnostic final report is materialized after worker and observer shutdown;
+the production report uses worker scalar state. Historical estimator plumbing
+is not part of the active production session contract and cannot affect timing.
 
 ## 8. Verification matrix
 
@@ -249,7 +257,7 @@ compatibility; they are ignored by planning and contain no learned state.
   ownership, stale/retrigger/mixed-packet, and soak tests.
 - `sky_dispatch_win32`: packet ordering, strict mask validation, QPC/wait,
   focus, and `SendInput` seam tests.
-- `sky_player_rs`: final-gate ordering, completion evidence, observer queue
+- `sky_player_rs`: final-gate ordering, completion evidence, diagnostic observer queue
   overflow, startup/stale handling, cleanup, and no-allocation dispatch tests.
 - Security audit: only the platform crate contains Win32 bindings and
   `SendInput`; forbidden hook/injection/process-tampering mechanisms remain

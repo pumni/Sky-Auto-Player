@@ -225,8 +225,8 @@ pub struct PreparedBatch {
 /// Authored-frame classification performed before timed waiting.
 ///
 /// The compiler packet remains an immutable authored frame, but its Up
-/// intents are classified per key against completion-anchored release floors.
-/// Preparation never mutates coordinator state.
+/// intents are classified per key against the pre-admitted authored hold
+/// floor and recovery ownership. Preparation never mutates coordinator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedAuthoredFrame {
     pub first_batch_index: usize,
@@ -263,8 +263,8 @@ pub struct PreparedAuthoredCommit {
     pub down_source_action_index: Option<u32>,
 }
 
-/// One completion-anchored release that is waiting for its own physical due
-/// boundary.  The table is bounded by the fifteen physical key slots.
+/// One authored release that is waiting for its own physical due boundary.
+/// The table is bounded by the fifteen physical key slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingRelease {
     pub generation_id: GenerationId,

@@ -92,10 +92,9 @@ def plan_same_key_hold(
         return PlannedKeyHold(hold_us=target_hold_us, risk="ok")
 
     max_hold_us = effective_delta_us
-    # Feasibility floor is exactly min_hold: a same-key repeat whose interval is below the key's own
-    # minimum hold cannot preserve that hold before the next down. No fixed latency margin is added
-    # on top — the runtime completion-anchor owns real dispatch latency, and a fixed 500us guess was
-    # both arbitrary and unhelpful (real songs sit far above this floor; see timing analysis).
+    # Feasibility floor is exactly the authored min_hold. A same-key repeat
+    # whose interval is below that hold is rejected for real playback during
+    # preparation; the runtime never derives a release target from completion.
     feasibility_floor_us = min_hold_us
     if max_hold_us < feasibility_floor_us:
         return PlannedKeyHold(
@@ -120,9 +119,6 @@ def plan_same_key_hold(
     )
 
 
-# apply_chord_stagger is removed as per Phase 1
-
-
 def build_key_actions(
     song: Song,
     profile: InstrumentProfile | None = None,
@@ -138,14 +134,10 @@ def build_key_actions(
 
     Caller must pass a resolved FrameTimingPolicy (e.g. via PlaybackSessionContext.resolve_effective_policy).
 
-    ### Same-Key Conflict Policies:
-    - **strict**: If a same-key repeat interval is shorter than the minimum hold time (min_hold_us),
-      raises a ScheduleBuildError and refuses to schedule.
-    - **drop_chord**: Preserves the timeline and rejects the whole conflicting chord at runtime,
-      so playback never substitutes a partial chord.
-    - **degraded**: Preserves the minimum hold time of the previous note, pushing its release to
-      `down_at_us + min_hold_us`. Since the next same-key press occurs before this release, the subsequent
-      press will conflict and be dropped at runtime (dropped_conflict) to avoid stuck keys.
+    Same-key conflict policies are retained for dry-run diagnostics and
+    persisted configuration compatibility. Real playback rejects an
+    infeasible same-key repeat during preparation; native dispatch never
+    drops a chord or performs a degraded runtime retry.
     """
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
@@ -205,63 +197,15 @@ def build_key_actions(
     deduplicated_note_count = len(drafts)
     duplicate_note_count = raw_draft_count - deduplicated_note_count
     
-    # Stage 1.5: calculate chord stagger offsets and produce shifted drafts.
-    chord_stagger_us = int(policy.chord_stagger_us) if hasattr(policy, "chord_stagger_us") else 0
-    chord_stagger_max_us = int(policy.chord_stagger_max_us) if hasattr(policy, "chord_stagger_max_us") else 0
-    
-    stagger_offset_by_source_index: dict[int, int] = {}
-    grouped_drafts: dict[int, list[ScheduledNoteDraft]] = {}
-    
-    # drafts is a tuple now because of normalise_note_drafts
-    for draft in drafts: # type: ignore
-        grouped_drafts.setdefault(draft.at_us, []).append(draft)
-        
-    shifted_drafts_list: list[ScheduledNoteDraft] = []
-    
-    for group in grouped_drafts.values():
-        if chord_stagger_us > 0 and len(group) > 1:
-            unique_scs = []
-            seen_scs = set()
-            for d in group:
-                if d.scan_code not in seen_scs:
-                    seen_scs.add(d.scan_code)
-                    unique_scs.append(d.scan_code)
-            
-            if len(unique_scs) > 1:
-                sc_to_offset = {}
-                for i, sc in enumerate(unique_scs):
-                    sc_to_offset[sc] = min(i * chord_stagger_us, chord_stagger_max_us)
-                
-                for d in group:
-                    offset = sc_to_offset[d.scan_code]
-                    stagger_offset_by_source_index[d.source_index] = offset
-                    shifted_drafts_list.append(ScheduledNoteDraft(
-                        at_us=d.at_us + offset,
-                        note_key=d.note_key,
-                        scan_code=d.scan_code,
-                        source_index=d.source_index
-                    ))
-            else:
-                for d in group:
-                    stagger_offset_by_source_index[d.source_index] = 0
-                    shifted_drafts_list.append(d)
-        else:
-            for d in group:
-                stagger_offset_by_source_index[d.source_index] = 0
-                shifted_drafts_list.append(d)
-                
-    shifted_drafts_list.sort(key=lambda d: d.at_us)
-    drafts = tuple(shifted_drafts_list) # type: ignore
-    
     # Stage 2: plan each physical-key lane and emit typed raw key events.
-    next_same_key_time = next_same_key_times(drafts)  # type: ignore[arg-type]
+    next_same_key_time = next_same_key_times(tuple(drafts))
 
     raw_events: list[RawKeyEvent] = []
     diagnostics: list[ScheduleDiagnostic] = []
     
     logical_bounds: list[tuple[int, int, int]] = [] # (time, kind(0=down, 1=up), scan_code)
 
-    for draft in drafts: # type: ignore
+    for draft in drafts:
         next_same_info = next_same_key_time[draft.source_index]
         sc = draft.scan_code
         down_at_us = draft.at_us
@@ -351,9 +295,8 @@ def build_key_actions(
             reason="repeat_release" if next_same_info is not None else "release",
         ))
         
-        offset = stagger_offset_by_source_index[draft.source_index]
-        logical_bounds.append((down_at_us - offset, 0, sc)) # 0 for down
-        logical_bounds.append((up_at_us - offset, 1, sc))   # 1 for up
+        logical_bounds.append((down_at_us, 0, sc))
+        logical_bounds.append((up_at_us, 1, sc))
 
     # Stage 3: group simultaneous events by (time, kind).  Reason is dropped from the key so
     # releases with different origins (e.g. "release" vs "repeat_release") at the same
@@ -382,7 +325,7 @@ def build_key_actions(
     key_actions_list.sort(key=lambda a: (a.at_us, a.kind == "down"))
     
     # Stage 5: derive metrics from the executable timeline.
-    # To keep logical chord size stable, use the pre-stagger logical bounds.
+    # Derive logical chord size from the authored executable timeline.
     logical_bounds.sort(key=lambda b: (b[0], b[1]))
     logical_active: set[int] = set()
     max_polyphony = 0
@@ -419,14 +362,9 @@ def build_key_actions(
             "consider lowering the tempo scale or accepting probabilistic repeat registration."
         )
 
-    # Stage 6 was removed (onset-only intra-chord micro-stagger is now handled in Stage 1.5).
-
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
-    # playback_duration_us is a Phase-5 compatibility alias of duration_us (telemetry/calibration
-    # read it by that name). Keep both in sync; do not "dedupe" without updating consumers.
     playback_duration_us = duration_us
-    # Use unshifted drafts to compute source duration
-    source_duration_us = Microseconds(max((d.at_us - stagger_offset_by_source_index[d.source_index] for d in drafts), default=0) + policy.hold_us)
+    source_duration_us = Microseconds(max((d.at_us for d in drafts), default=0) + policy.hold_us)
 
     rec_tempo_scale = None
     rec_hold_frames = None

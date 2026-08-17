@@ -361,8 +361,9 @@ pub(crate) fn prepare_pending_release_view(
 pub(crate) struct DownSendTiming {
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
-    pub(crate) final_admission_qpc: QpcTicks,
-    pub(crate) sendinput_completed_qpc: QpcTicks,
+    pub(crate) final_proof_qpc: QpcTicks,
+    pub(crate) pre_call_qpc: QpcTicks,
+    pub(crate) sendinput_completion_qpc: QpcTicks,
     pub(crate) completion_error_ticks_value: i64,
     pub(crate) strict_completion_late: bool,
 }
@@ -387,7 +388,7 @@ fn resolve_send_boundaries(
     ),
     DispatchStep,
 > {
-    let final_admission_ticks = match result_started_ticks {
+    let pre_call_ticks = match result_started_ticks {
         Some(ticks) => ticks,
         None => {
             return Err(DispatchStep::Terminate(
@@ -403,8 +404,8 @@ fn resolve_send_boundaries(
             ));
         }
     };
-    let admission_to_completion_ticks =
-        match completed_qpc_ticks.checked_duration_since(final_admission_ticks) {
+    let pre_call_to_completion_ticks =
+        match completed_qpc_ticks.checked_duration_since(pre_call_ticks) {
             Ok(duration) => duration,
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
@@ -412,10 +413,9 @@ fn resolve_send_boundaries(
                 )));
             }
         };
-    let final_admission_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
-        final_admission_ticks,
-        runtime.allow_pre_epoch_startup_dispatch,
-    ) {
+    let pre_call_effective_ticks = match clock_state
+        .get_elapsed_allow_pre_epoch(pre_call_ticks, runtime.allow_pre_epoch_startup_dispatch)
+    {
         Ok(ticks) => ticks,
         Err(error) => {
             return Err(DispatchStep::Terminate(format!(
@@ -438,37 +438,36 @@ fn resolve_send_boundaries(
         PhysicalCommit::Authored(commit) => coordinator
             .commit_prepared_authored_frame_success_frozen(
                 commit,
-                final_admission_effective_ticks,
+                pre_call_effective_ticks,
                 completed_effective_ticks,
             ),
         PhysicalCommit::PendingRelease {
             release_mask,
             due_ticks,
         } => {
-            if final_admission_effective_ticks < *due_ticks {
+            if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "pending release started before its due boundary".to_string(),
                 ));
             }
-            coordinator
-                .commit_pending_release_success(*release_mask, final_admission_effective_ticks)
+            coordinator.commit_pending_release_success(*release_mask, pre_call_effective_ticks)
         }
         PhysicalCommit::Coalesced {
             authored,
             release_mask,
             due_ticks,
         } => {
-            if final_admission_effective_ticks < *due_ticks {
+            if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "coalesced pending release started before its due boundary".to_string(),
                 ));
             }
             coordinator
-                .commit_pending_release_success(*release_mask, final_admission_effective_ticks)
+                .commit_pending_release_success(*release_mask, pre_call_effective_ticks)
                 .and_then(|_| {
                     coordinator.commit_prepared_authored_frame_success_frozen(
                         authored,
-                        final_admission_effective_ticks,
+                        pre_call_effective_ticks,
                         completed_effective_ticks,
                     )
                 })
@@ -483,9 +482,9 @@ fn resolve_send_boundaries(
         .checked_duration_since(view.batch_scheduled_ticks)
         .ok();
     Ok((
-        final_admission_effective_ticks,
+        pre_call_effective_ticks,
         completed_effective_ticks,
-        admission_to_completion_ticks,
+        pre_call_to_completion_ticks,
         completion_lateness_ticks,
     ))
 }
@@ -501,6 +500,7 @@ pub(crate) fn interpret_down_send_timing(
     runtime: &mut WorkerRuntime,
     _qpc_clock: QpcClock,
     physical_target_qpc: QpcTicks,
+    final_proof_qpc: QpcTicks,
     coordinator: &mut RuntimeDispatchCoordinator,
     _health: &WorkerHealthState,
     timing: &WorkerTimingState,
@@ -525,9 +525,9 @@ pub(crate) fn interpret_down_send_timing(
         ));
     }
     let (
-        _final_admission_effective_ticks,
+        _pre_call_effective_ticks,
         completed_effective_ticks,
-        _admission_to_completion_ticks,
+        _pre_call_to_completion_ticks,
         completion_lateness_ticks,
     ) = resolve_send_boundaries(
         view,
@@ -540,8 +540,8 @@ pub(crate) fn interpret_down_send_timing(
     // Expose the raw QPC sender-completion boundary for the deferred observer.
     // Guaranteed `Some` here: a missing boundary already terminated inside
     // `resolve_send_boundaries`.
-    let final_admission_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
-    let sendinput_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
+    let pre_call_qpc = result_started_ticks.unwrap_or(QpcTicks::ZERO);
+    let sendinput_completion_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
     let (completion_error_ticks_value, strict_completion_late) = if config.timing.strict_timing {
         let completion_error_ticks_value = match signed_timeline_delta_ticks(
             completed_effective_ticks,
@@ -589,8 +589,9 @@ pub(crate) fn interpret_down_send_timing(
     Ok(DownSendTiming {
         epoch_qpc: clock_state.epoch,
         allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
-        final_admission_qpc,
-        sendinput_completed_qpc,
+        final_proof_qpc,
+        pre_call_qpc,
+        sendinput_completion_qpc,
         completion_error_ticks_value,
         strict_completion_late,
     })

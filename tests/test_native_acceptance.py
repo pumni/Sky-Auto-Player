@@ -55,6 +55,26 @@ def test_real_backend_requires_explicit_physical_probe_target(
         ACCEPTANCE._real_input_target_hwnd()
 
 
+def test_sendinput_qualification_rejects_test_support_wheel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sky_player_rs,
+        "TestDispatchSession",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+    with pytest.raises(RuntimeError, match="production native wheel"):
+        ACCEPTANCE._new_session(
+            [],
+            backend="sendinput",
+            mock_base_latency_us=0,
+            mock_per_key_latency_us=0,
+            adaptive_spin=False,
+            rt_priority_mode="off",
+        )
+
+
 def test_mock_backend_defaults_preserve_latency_model() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",
@@ -123,13 +143,54 @@ def test_benchmark_default_priority_policy_is_off(
     assert ACCEPTANCE._parse_args().rt_priority_mode == "off"
 
 
+def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> None:
+    args = SimpleNamespace(
+        backend="sendinput",
+        game_fps=60,
+        rt_priority_mode="off",
+        no_adaptive_spin=True,
+        lead_mode="adaptive",
+        fixed_lead_us=0,
+        gap_profile="hot",
+        warmup_cycles=8,
+        actions=128,
+    )
+    config = ACCEPTANCE._benchmark_config(
+        args=args,
+        polyphonies=[1],
+        mock_base_latency_us=0,
+        mock_per_key_latency_us=0,
+    )
+    assert config["rt_priority_mode"] == "auto"
+    assert config["adaptive_spin"] is False
+    assert config["lead_mode"] == "fixed"
+    assert config["fixed_lead_us"] == 0
+    assert config["native_profile"] == "strict_timing_diagnostic"
+    assert config["require_focus"] is True
+    assert config["materialized_min_hold_us"] == 17_167
+
+
+def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
+    with pytest.raises(SystemExit, match="at least 10000 physical boundaries"):
+        ACCEPTANCE._assert_minimum_qualification_boundaries(
+            backend="sendinput", measured_boundaries=9_999
+        )
+
+    ACCEPTANCE._assert_minimum_qualification_boundaries(
+        backend="sendinput", measured_boundaries=10_000
+    )
+    ACCEPTANCE._assert_minimum_qualification_boundaries(
+        backend="mock", measured_boundaries=1
+    )
+
+
 def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
     args = SimpleNamespace(repeats=2, dispatch_repeats=3, command_samples=4)
     with pytest.raises(SystemExit, match="ambiguous"):
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_five_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
         "game_fps": 60,
@@ -145,9 +206,13 @@ def test_schema_five_baseline_requires_matching_timing_domain_and_config() -> No
         "fixed_lead_us": 0,
         "gap_profile": "hot",
         "warmup_cycles": 8,
+        "native_profile": "mock_test",
+        "native_build_flavor": "test_support",
+        "require_focus": False,
+        "materialized_min_hold_us": 17_167,
     }
     report = {
-        "benchmark_schema_version": 5,
+        "benchmark_schema_version": 7,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
@@ -184,14 +249,14 @@ def test_schema_five_baseline_requires_matching_timing_domain_and_config() -> No
 
 def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
     candidate = {
-        "benchmark_schema_version": 5,
+        "benchmark_schema_version": 7,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
         "timeline_semantics_version": 2,
     }
     baseline = {
-        "benchmark_schema_version": 5,
+        "benchmark_schema_version": 7,
         "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "timeline_semantics_version": 1,
     }
@@ -238,6 +303,32 @@ def test_absolute_fixed_hot_wake_slo_is_exact() -> None:
             {
                 "benchmark_config": config,
                 "wake_error_us": {"absolute": {"p99": 301}},
+            }
+        )
+
+
+def test_absolute_pre_call_slo_rejects_early_or_late_samples() -> None:
+    base = {
+        "early_count": 0,
+        "late_over_2ms_count": 0,
+        "late": {"p99": 250, "p999": 750},
+    }
+    ACCEPTANCE._assert_absolute_pre_call_slo({"pre_call_lateness_us": base})
+    with pytest.raises(SystemExit, match="early physical send"):
+        ACCEPTANCE._assert_absolute_pre_call_slo(
+            {"pre_call_lateness_us": {**base, "early_count": 1}}
+        )
+    with pytest.raises(SystemExit, match=r">2ms"):
+        ACCEPTANCE._assert_absolute_pre_call_slo(
+            {"pre_call_lateness_us": {**base, "late_over_2ms_count": 1}}
+        )
+    with pytest.raises(SystemExit, match=r"p99\.9"):
+        ACCEPTANCE._assert_absolute_pre_call_slo(
+            {
+                "pre_call_lateness_us": {
+                    **base,
+                    "late": {"p99": 250, "p999": 751},
+                }
             }
         )
 
@@ -311,6 +402,7 @@ def _trace_fixture(**overrides: object) -> SimpleNamespace:
         "wake_error_us": -2,
         "sender_started_us": 110,
         "sender_completed_us": 130,
+        "dispatch_start_error_us": 4,
         "sendinput_call_duration_us": 20,
         "core_post_send_duration_us": 4,
         "sender_completion_error_us": 3,
@@ -323,6 +415,7 @@ def _trace_fixture(**overrides: object) -> SimpleNamespace:
 def test_trace_metrics_calculate_pre_send_latency() -> None:
     rows = ACCEPTANCE._trace_metric_rows([_trace_fixture()])
     assert rows["pre_send_software_latency_us"] == [("down", 10)]
+    assert rows["pre_call_lateness_us"] == [("down", 4)]
 
 
 def test_trace_metrics_reject_invalid_timestamp_ordering() -> None:
@@ -446,16 +539,16 @@ def test_test_support_pause_timing_smoke_uses_100_fresh_sessions() -> None:
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
     for _ in range(100):
-        result = ACCEPTANCE._measure_command_interrupt(
+        snapshot = ACCEPTANCE._measure_preroll_pause_cancellation(
             backend="mock",
             mock_base_latency_us=80,
             mock_per_key_latency_us=40,
             adaptive_spin=True,
             rt_priority_mode="off",
         )
-        assert result["requested_ticks"] <= result["observed_ticks"]
-        assert result["observed_ticks"] <= result["acknowledged_ticks"]
-        assert result["generation"] > 0
+        assert snapshot["terminal_error"] == "manual_pause_during_preroll"
+        assert snapshot["timeline_rebase_count"] == 0
+        assert snapshot["active_count"] == 0
 
 
 @pytest.mark.windows
@@ -490,7 +583,12 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
 
-    actions = ACCEPTANCE._actions(4, 3, gap_profile="cold", game_fps=60)
+    actions = [
+        (index, kind, at_us * 4 + 100_000, scan_codes, reason)
+        for index, kind, at_us, scan_codes, reason in ACCEPTANCE._actions(
+            4, 3, gap_profile="cold", game_fps=60
+        )
+    ]
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
         actions,
         list(ACCEPTANCE.SKY_15_SCAN_CODES),
@@ -501,7 +599,9 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
         telemetry_capacity=256,
         fault_mode=fault_mode,
     )
-    session.start()
+    # Test-only epoch setup before arm; this fixture validates fault counters,
+    # not first-boundary wake latency.
+    session.arm(500_000)
     deadline = ACCEPTANCE.time.perf_counter() + 5.0
     while not bool(dict(session.snapshot()).get("is_finished")):
         session.heartbeat()

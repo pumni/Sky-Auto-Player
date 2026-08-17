@@ -2,7 +2,16 @@ use super::telemetry::TelemetryMode;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
+pub(crate) const DEFAULT_ADMISSION_GUARD_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 700;
+pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
+
+pub(crate) fn validate_timing_constants() -> Result<(), String> {
+    if DEFAULT_ADMISSION_GUARD_US <= DEFAULT_SPIN_THRESHOLD_US {
+        return Err("admission guard must be greater than spin threshold".to_string());
+    }
+    Ok(())
+}
 
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
@@ -39,6 +48,15 @@ impl DispatchProfile {
     pub(crate) fn strict_timing(self) -> bool {
         matches!(self, Self::StrictTimingDiagnostic)
     }
+
+    pub(crate) fn observer_enabled(self) -> bool {
+        match self {
+            Self::Production => false,
+            Self::StrictTimingDiagnostic => true,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::MockTest => true,
+        }
+    }
 }
 
 pub(crate) enum BackendConfig {
@@ -54,6 +72,7 @@ pub(crate) enum BackendConfig {
 pub(crate) struct NativeSessionOptions {
     pub(crate) schedule: RuntimeSchedule,
     pub(crate) backend: BackendConfig,
+    pub(crate) profile: DispatchProfile,
     pub(crate) timing: TimingOptions,
     pub(crate) focus: FocusOptions,
     pub(crate) wait: WaitOptions,
@@ -71,6 +90,7 @@ pub(crate) struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
+    pub(crate) boot_delay_us: AtomicU64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -90,10 +110,16 @@ impl StartupOrderingHook {
                 .store(self.next_sequence(), Ordering::SeqCst);
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_boot_delay_us(&self, delay_us: u64) {
+        self.boot_delay_us.store(delay_us, Ordering::SeqCst);
+    }
 }
 
 pub(crate) struct WorkerConfig {
     pub(super) backend: BackendConfig,
+    pub(super) profile: DispatchProfile,
     pub(super) timing: TimingOptions,
     pub(super) focus: FocusOptions,
     pub(super) wait: WaitOptions,
@@ -106,6 +132,7 @@ impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             backend: BackendConfig::Production,
+            profile: DispatchProfile::Production,
             timing: TimingOptions {
                 min_hold_us: 10_000,
                 strict_timing: false,
@@ -121,6 +148,8 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
+                #[cfg(any(test, feature = "test-support"))]
+                test_spin_threshold_us: None,
             },
             telemetry: TelemetryOptions {
                 mode: TelemetryMode::Ring,
@@ -150,6 +179,12 @@ pub(crate) struct WaitOptions {
     pub(crate) enable_waitable_timer: bool,
     pub(crate) enable_event_wait: bool,
     pub(crate) supervisor_lease_timeout_us: u64,
+    /// Test-only early handoff margin. Production always uses the fixed
+    /// `DEFAULT_SPIN_THRESHOLD_US` value; this seam keeps mock-session tests
+    /// independent from host timer overshoot without changing authored
+    /// targets or the production wait policy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) test_spin_threshold_us: Option<u64>,
 }
 
 pub(crate) struct TelemetryOptions {
@@ -159,4 +194,15 @@ pub(crate) struct TelemetryOptions {
 
 pub(crate) struct PriorityOptions {
     pub(crate) mode: PriorityMode,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DispatchProfile;
+
+    #[test]
+    fn production_profile_has_no_deferred_observer() {
+        assert!(!DispatchProfile::Production.observer_enabled());
+        assert!(DispatchProfile::StrictTimingDiagnostic.observer_enabled());
+    }
 }

@@ -148,17 +148,29 @@ fn send_once(
 ) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
     let prepared = PreparedPhysicalPacket::try_new(packet)
         .expect("send_once receives a validated physical packet");
-    send_once_prepared(&prepared, clock, supplied_started_ticks)
+    match send_once_prepared(&prepared, clock, supplied_started_ticks, None) {
+        Ok(result) => Ok(result),
+        Err(PreparedSendFailure::Clock(start, error, called)) => Err((start, error, called)),
+        Err(PreparedSendFailure::DeadlineMissed { .. }) => {
+            unreachable!("prepared send cutoff is disabled for generic packets")
+        }
+    }
+}
+
+enum PreparedSendFailure {
+    Clock(Option<QpcTicks>, crate::clock::QpcError, bool),
+    DeadlineMissed { started_ticks: QpcTicks },
 }
 
 fn send_once_prepared(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
-) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> Result<PlatformSendResult, PreparedSendFailure> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+        use windows_sys::Win32::Foundation::GetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
 
         let requested = prepared.event_count();
@@ -167,10 +179,12 @@ fn send_once_prepared(
             Some(ticks) => ticks,
             None => match clock.now() {
                 Ok(ticks) => ticks,
-                Err(error) => return Err((None, error, false)),
+                Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
-        unsafe { SetLastError(0) };
+        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+            return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
+        }
         let inserted = unsafe {
             SendInput(
                 length as u32,
@@ -187,7 +201,9 @@ fn send_once_prepared(
         };
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
-            Err(error) => return Err((Some(started_ticks), error, true)),
+            Err(error) => {
+                return Err(PreparedSendFailure::Clock(Some(started_ticks), error, true));
+            }
         };
         Ok(PlatformSendResult {
             requested,
@@ -205,12 +221,21 @@ fn send_once_prepared(
             Some(ticks) => ticks,
             None => match clock.now() {
                 Ok(ticks) => ticks,
-                Err(error) => return Err((None, error, false)),
+                Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
+        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+            return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
+        }
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
-            Err(error) => return Err((Some(started_ticks), error, false)),
+            Err(error) => {
+                return Err(PreparedSendFailure::Clock(
+                    Some(started_ticks),
+                    error,
+                    false,
+                ));
+            }
         };
         Ok(PlatformSendResult {
             requested,
@@ -230,6 +255,7 @@ fn send_once_prepared(
 enum PacketSendAttempt {
     Outcome(PlatformSendResult),
     ClockFailure(Option<QpcTicks>, crate::clock::QpcError, bool),
+    DeadlineMissed(QpcTicks),
 }
 
 fn run_send_attempt(
@@ -247,10 +273,21 @@ fn run_prepared_send_attempt(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
+    latest_allowed_down_qpc: Option<QpcTicks>,
 ) -> PacketSendAttempt {
-    match send_once_prepared(prepared, clock, supplied_started_ticks) {
+    match send_once_prepared(
+        prepared,
+        clock,
+        supplied_started_ticks,
+        latest_allowed_down_qpc,
+    ) {
         Ok(res) => PacketSendAttempt::Outcome(res),
-        Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
+        Err(PreparedSendFailure::Clock(start, err, called)) => {
+            PacketSendAttempt::ClockFailure(start, err, called)
+        }
+        Err(PreparedSendFailure::DeadlineMissed { started_ticks }) => {
+            PacketSendAttempt::DeadlineMissed(started_ticks)
+        }
     }
 }
 
@@ -305,6 +342,9 @@ fn send_physical_packet_once_impl(
                 },
             };
         }
+        PacketSendAttempt::DeadlineMissed(_) => {
+            unreachable!("generic packet send has no prepared-packet cutoff")
+        }
     };
     let requested = usize::from(first.requested);
     let inserted = usize::from(first.inserted).min(requested);
@@ -326,6 +366,111 @@ fn send_physical_packet_once_impl(
         PacketRetryReason::None
     };
 
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted as u8,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason,
+            first_win32_error: win32_error,
+            last_win32_error: win32_error,
+            started_ticks: Some(first.started_ticks),
+            completed_ticks: first.completed_ticks,
+            timing_error: first.timing_error,
+        },
+    }
+}
+
+/// Trusted fast path for a packet that was validated and materialized before
+/// the precision boundary. This deliberately does not inspect the packet
+/// masks or recount events after the caller's final QPC sample.
+///
+/// In the production path `started_ticks` is `None`, so the authoritative
+/// `pre_call_qpc` is sampled here, after the prepared payload length and
+/// pointer have been resolved and immediately before `SendInput`. Test
+/// support may provide a controlled timestamp without changing production
+/// behavior.
+fn send_prepared_physical_packet_once_impl(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    let packet = prepared.packet();
+    let requested_mask = packet.up_mask | packet.down_mask;
+    let first =
+        match run_prepared_send_attempt(prepared, clock, started_ticks, latest_allowed_down_qpc) {
+            PacketSendAttempt::Outcome(res) => res,
+            PacketSendAttempt::DeadlineMissed(started_ticks) => {
+                return SendTransactionOutcome {
+                    status: SendTransactionStatus::DeadlineMissedBeforeSend,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: 0,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: Some(started_ticks),
+                        completed_ticks: None,
+                        timing_error: None,
+                    },
+                };
+            }
+            PacketSendAttempt::ClockFailure(start, err, called) => {
+                return SendTransactionOutcome {
+                    status: if called {
+                        SendTransactionStatus::ClockFailureAfterSend
+                    } else {
+                        SendTransactionStatus::ClockFailureBeforeSend
+                    },
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: u8::from(called),
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: start,
+                        completed_ticks: None,
+                        timing_error: Some(err),
+                    },
+                };
+            }
+        };
+    let requested = usize::from(first.requested);
+    let inserted = usize::from(first.inserted).min(requested);
+    let status = classify_send_status(
+        inserted,
+        requested,
+        first.win32_error,
+        Some(first.started_ticks),
+        first.completed_ticks,
+    );
+    let win32_error = (first.win32_error != 0).then_some(first.win32_error);
+    let retry_reason = if inserted == 0 && !matches!(status, SendTransactionStatus::Complete) {
+        PacketRetryReason::ZeroProgress
+    } else if inserted < requested {
+        PacketRetryReason::PartialProgress {
+            inserted_count: inserted as u8,
+        }
+    } else {
+        PacketRetryReason::None
+    };
     SendTransactionOutcome {
         status,
         evidence: SendEvidence {
@@ -402,6 +547,9 @@ fn send_physical_packet_retry_policy_impl(
                     timing_error: Some(err),
                 },
             };
+        }
+        PacketSendAttempt::DeadlineMissed(_) => {
+            unreachable!("retry policy has no prepared-packet cutoff")
         }
     };
     let first_win32 = (first.win32_error != 0).then_some(first.win32_error);
@@ -497,6 +645,9 @@ fn send_physical_packet_retry_policy_impl(
                 },
             };
         }
+        PacketSendAttempt::DeadlineMissed(_) => {
+            unreachable!("retry policy has no prepared-packet cutoff")
+        }
     };
     let second_win32 = (second.win32_error != 0).then_some(second.win32_error);
     let last_win32 = second_win32.or(first_win32);
@@ -557,9 +708,45 @@ pub fn send_prepared_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
-    send_physical_packet_once_impl(prepared.packet(), |_| {
-        run_prepared_send_attempt(prepared, clock, Some(started_ticks))
-    })
+    send_prepared_physical_packet_once_impl(prepared, clock, Some(started_ticks), None)
+}
+
+/// One trusted prepared packet attempt using a caller-supplied start boundary
+/// and a Down-only hard-late cutoff. The cutoff is checked against the same
+/// start timestamp that is used as the packet's authoritative pre-call
+/// evidence, before the Win32 syscall.
+pub fn send_prepared_physical_packet_once_with_start_and_cutoff(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(
+        prepared,
+        clock,
+        Some(started_ticks),
+        latest_allowed_down_qpc,
+    )
+}
+
+/// One trusted prepared packet attempt whose authoritative pre-call QPC is
+/// sampled inside the Win32 sender immediately before `SendInput`.
+pub fn send_prepared_physical_packet_once(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(prepared, clock, None, None)
+}
+
+/// One trusted prepared packet attempt whose authoritative pre-call QPC is
+/// sampled inside the Win32 sender and checked against the optional Down
+/// cutoff before `SendInput`.
+pub fn send_prepared_physical_packet_once_with_cutoff(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(prepared, clock, None, latest_allowed_down_qpc)
 }
 
 #[cfg(test)]
@@ -585,6 +772,41 @@ fn send_physical_packet_once_scripted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_send_path_is_trusted_after_final_qpc_boundary() {
+        let source = include_str!("packet.rs");
+        let trusted = source
+            .split("fn send_prepared_physical_packet_once_impl")
+            .nth(1)
+            .expect("trusted prepared-send primitive");
+        let body = trusted
+            .split("/// Test-only retry policy")
+            .next()
+            .expect("trusted primitive body");
+        assert!(body.contains("run_prepared_send_attempt"));
+        assert!(!body.contains("send_physical_packet_once_impl"));
+        assert!(!body.contains("valid_packet("));
+        assert!(!body.contains("event_count() == 0"));
+    }
+
+    #[test]
+    fn prepared_cutoff_is_checked_before_the_sendinput_call() {
+        let source = include_str!("packet.rs");
+        let trusted = source
+            .split("fn send_once_prepared(")
+            .nth(1)
+            .expect("trusted prepared-send primitive");
+        let body = trusted
+            .split("/// One low-level")
+            .next()
+            .expect("prepared-send primitive body");
+        let cutoff = body
+            .find("latest_allowed_down_qpc.is_some_and")
+            .expect("authoritative cutoff check");
+        let syscall = body.find("SendInput(").expect("direct SendInput call");
+        assert!(cutoff < syscall);
+    }
 
     #[test]
     fn physical_packet_accepts_at_most_thirty_events() {

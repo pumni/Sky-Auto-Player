@@ -174,24 +174,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     timing.add_argument(
         "--same-key-conflict-policy",
         choices=["drop_chord", "degraded", "strict"],
-        help="drop_chord = preserve chord fidelity (default), degraded = legacy partial chord, strict = reject and abort playback",
-    )
-    timing.add_argument(
-        "--chord-stagger-us",
-        type=int,
-        help=(
-            "Spread each chord's key-downs by this many microseconds per key so each note lands in "
-            "its own game tick (mitigates remote-listener note drops on dense chords). "
-            "0/unset = off (one SendInput per chord, local-optimal). Try 2000-3000 for online play."
-        ),
-    )
-    timing.add_argument(
-        "--chord-stagger-max-us",
-        type=int,
-        help=(
-            "Cap on total intra-chord spread in microseconds (default 15000 = ~15ms, below the "
-            "perceptual simultaneity threshold). Only used when --chord-stagger-us > 0."
-        ),
+        help="Conflict policy is diagnostic-only for dry-run; real playback rejects infeasible same-key repeats",
     )
     timing.add_argument(
         "--fps",
@@ -564,7 +547,7 @@ def _run_rust_selftest() -> int:
                 profile="production",
             ),
         )
-        session.start()
+        session.arm(0)  # type: ignore[attr-defined]
         if session.join(timeout_ms=5_000) is not True:
             raise RuntimeError("native mock session did not terminate")
         snapshot = session.snapshot()
