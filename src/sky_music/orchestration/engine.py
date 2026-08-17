@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -32,6 +33,8 @@ from sky_music.orchestration.native_models import (
 from sky_music.orchestration.telemetry import TelemetryLogger
 
 _LOGGER = logging.getLogger(__name__)
+
+FOCUS_PLATFORM_ERRORS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
 
 
 class PlaybackEngine:
@@ -169,16 +172,36 @@ class PlaybackEngine:
             window_target.reset_window_cache()
             if not window_target.is_sky_window_valid():
                 return False
-            if not bool(self.focus_guard.focus()):
-                return False
-            if not bool(window_target.is_foreground_cached_hwnd()):
-                return False
+
             target_hwnd = int(window_target.cached_target_hwnd())
             if target_hwnd <= 0:
                 return False
+
+            # Fast success path if already foreground.
+            if window_target.is_hwnd_foreground(target_hwnd):
+                self._prepared_target_hwnd = target_hwnd
+                return target_hwnd
+
+            # Request foreground once. Return value is diagnostic only.
+            with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
+                self.focus_guard.focus()
+
+            # Bounded read-only verification.
+            if not window_target.wait_for_foreground_hwnd(
+                target_hwnd,
+                timeout_ms=window_target.FOCUS_VERIFY_TIMEOUT_MS,
+                poll_ms=window_target.FOCUS_VERIFY_POLL_MS,
+            ):
+                return False
+
+            # Defensive invariant: cached candidate must still be the
+            # exact target captured before focus.
+            if int(window_target.cached_target_hwnd()) != target_hwnd:
+                return False
+
             self._prepared_target_hwnd = target_hwnd
             return target_hwnd
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        except FOCUS_PLATFORM_ERRORS:
             return False
 
     def _play_preview(self) -> str:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 from collections.abc import Iterable
 from ctypes import wintypes
 from pathlib import Path
@@ -34,6 +35,8 @@ else:
 
 SW_RESTORE = 9
 PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
+FOCUS_VERIFY_TIMEOUT_MS = 100
+FOCUS_VERIFY_POLL_MS = 5
 
 user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
 user32.MapVirtualKeyW.restype = wintypes.UINT
@@ -198,7 +201,10 @@ def focus_window() -> bool:
     if not is_sky_window_valid() or _target_hwnd is None:
         return False
     user32.ShowWindow(_target_hwnd, SW_RESTORE)
-    return bool(user32.SetForegroundWindow(_target_hwnd))
+    result = bool(user32.SetForegroundWindow(_target_hwnd))
+    if PLAYBACK_DEBUG:
+        debug_log(f"[focus] SetForegroundWindow target={_target_hwnd} result={result}")
+    return result
 
 
 def is_sky_active() -> bool:
@@ -207,6 +213,85 @@ def is_sky_active() -> bool:
 
 def is_foreground_cached_hwnd() -> bool:
     return bool(_target_hwnd) and user32.GetForegroundWindow() == _target_hwnd
+
+
+def is_hwnd_foreground(hwnd: int) -> bool:
+    """Check if the given HWND is currently the foreground window."""
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    return int(user32.GetForegroundWindow() or 0) == hwnd
+
+
+is_exact_hwnd_foreground = is_hwnd_foreground
+
+
+def wait_for_foreground_hwnd(
+    hwnd: int,
+    *,
+    timeout_ms: int = FOCUS_VERIFY_TIMEOUT_MS,
+    poll_ms: int = FOCUS_VERIFY_POLL_MS,
+) -> bool:
+    """Wait for an exact target HWND to become the active foreground window.
+
+    Performs bounded read-only polling without repeating SetForegroundWindow,
+    ShowWindow, or target cache discovery.
+    """
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    if type(timeout_ms) is not int or timeout_ms < 0:
+        raise ValueError("timeout_ms must be a non-negative integer")
+    if type(poll_ms) is not int or poll_ms <= 0:
+        raise ValueError("poll_ms must be a positive integer")
+
+    if is_hwnd_foreground(hwnd):
+        if PLAYBACK_DEBUG:
+            debug_log(f"[focus] target={hwnd} already foreground")
+        return True
+
+    deadline_ns = time.monotonic_ns() + timeout_ms * 1_000_000
+    poll_s = poll_ms / 1000.0
+
+    while True:
+        if _target_hwnd != hwnd:
+            if PLAYBACK_DEBUG:
+                debug_log(
+                    f"[focus] target changed during verification: "
+                    f"expected={hwnd}, current={_target_hwnd}"
+                )
+            return False
+
+        if not bool(user32.IsWindow(hwnd)):
+            if PLAYBACK_DEBUG:
+                debug_log(f"[focus] target window destroyed during verification: hwnd={hwnd}")
+            return False
+
+        foreground = int(user32.GetForegroundWindow() or 0)
+        if foreground == hwnd:
+            if PLAYBACK_DEBUG:
+                debug_log(f"[focus] verified target={hwnd} foreground after bounded wait")
+            return True
+
+        if time.monotonic_ns() >= deadline_ns:
+            break
+
+        time.sleep(poll_s)
+
+    if (
+        _target_hwnd == hwnd
+        and bool(user32.IsWindow(hwnd))
+        and int(user32.GetForegroundWindow() or 0) == hwnd
+    ):
+        if PLAYBACK_DEBUG:
+            debug_log(f"[focus] verified target={hwnd} foreground at deadline")
+        return True
+
+    if PLAYBACK_DEBUG:
+        current_fg = int(user32.GetForegroundWindow() or 0)
+        debug_log(f"[focus] verification timeout target={hwnd} foreground={current_fg}")
+    return False
+
+
+wait_for_exact_foreground = wait_for_foreground_hwnd
 
 
 def is_virtual_key_down(key_code: int) -> bool:
