@@ -263,7 +263,7 @@ pub(crate) fn record_lateness(
 /// Record the only per-send timing evidence retained by the production
 /// profile. Diagnostic profiles derive richer histograms and traces on the
 /// deferred observer instead.
-pub(crate) fn record_sendinput_entry_lateness(
+pub(crate) fn record_sendinput_pre_call_lateness(
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
     target_qpc: sky_dispatch_win32::clock::QpcTicks,
     started_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -271,21 +271,21 @@ pub(crate) fn record_sendinput_entry_lateness(
 ) -> Result<(), String> {
     let lateness_ticks = started_qpc
         .checked_duration_since(target_qpc)
-        .map_err(|_| "SendInput entry preceded authored target".to_string())?;
+        .map_err(|_| "SendInput pre-call preceded authored target".to_string())?;
     let lateness_us = qpc_clock
         .duration_to_us(lateness_ticks)
-        .map_err(|error| format!("SendInput entry lateness conversion failure: {error:?}"))?;
-    local_metrics.max_sendinput_entry_lateness_us = local_metrics
-        .max_sendinput_entry_lateness_us
+        .map_err(|error| format!("SendInput pre-call lateness conversion failure: {error:?}"))?;
+    local_metrics.max_sendinput_pre_call_lateness_us = local_metrics
+        .max_sendinput_pre_call_lateness_us
         .max(lateness_us);
     if lateness_us > 10_000 {
-        local_metrics.entry_late_10ms = local_metrics.entry_late_10ms.saturating_add(1);
+        local_metrics.pre_call_late_10ms = local_metrics.pre_call_late_10ms.saturating_add(1);
     }
     if lateness_us > 5_000 {
-        local_metrics.entry_late_5ms = local_metrics.entry_late_5ms.saturating_add(1);
+        local_metrics.pre_call_late_5ms = local_metrics.pre_call_late_5ms.saturating_add(1);
     }
     if lateness_us > 2_000 {
-        local_metrics.entry_late_2ms = local_metrics.entry_late_2ms.saturating_add(1);
+        local_metrics.pre_call_late_2ms = local_metrics.pre_call_late_2ms.saturating_add(1);
     }
     Ok(())
 }

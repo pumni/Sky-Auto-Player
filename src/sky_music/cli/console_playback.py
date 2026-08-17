@@ -439,13 +439,20 @@ def play_selected_song(
 
     def build_schedule(session_ctx, policy, tempo):
         try:
-            return build_key_actions(
+            sched_meta = build_key_actions(
                 song,
                 policy=policy,
                 scan_code_mode=session_ctx.scan_code_mode,
                 resolver=resolver,
                 tempo_scale=tempo,
             )
+            if not is_dry_run and sched_meta.impossible_same_key_repeats > 0:
+                print(
+                    "\n[FATAL] Real playback rejects infeasible same-key repeats "
+                    "before focus or worker startup."
+                )
+                return None
+            return sched_meta
         except ScheduleBuildError as exc:
             print(f"\n[FATAL] Schedule build failed: {exc}")
             if exc.recommended_tempo_scale is not None:
@@ -612,6 +619,11 @@ def play_selected_song(
         min_hold_us=int(active_policy.min_hold_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,
+        target_hwnd=(
+            int(_window_target.cached_target_hwnd())
+            if not is_dry_run
+            else None
+        ),
         pre_roll_us=max(0, int(countdown_seconds)) * 1_000_000,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)

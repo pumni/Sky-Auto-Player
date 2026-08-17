@@ -33,7 +33,7 @@ requested hold, and passes:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold = max(requested_min_hold_us, frame_us + 500)
+effective_min_hold = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
 ```
 
 For every authored same-key Down→Up pair:
@@ -43,7 +43,8 @@ authored_up >= authored_down + effective_min_hold
 ```
 
 The static margin is applied once while materializing the authored schedule.
-The native admission validator checks this relationship before worker start in
+PyO3 receives that materialized value verbatim; the native admission validator
+checks this relationship before worker start in
 the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
@@ -142,10 +143,11 @@ authorization.
 
 ## 5. Wait, wake, and spin
 
-The production wait path is a high-resolution waitable timer plus bounded QPC
-spin. The production spin threshold is fixed at `700 µs`; no adaptive probe,
-EMA, PID, or runtime threshold controller is allowed. Timer/wake guard is kept
-separate from the absolute physical target.
+The production wait path is a high-resolution waitable timer to the
+`T - 2,000 µs` admission boundary with zero waiter spin. The only production
+busy-spin is the final authored precision stage, fixed at `700 µs`; no adaptive
+probe, EMA, PID, or runtime threshold controller is allowed. Timer/wake guard
+is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
@@ -189,8 +191,9 @@ reorder input.
 The authoritative sender-side metrics are:
 
 - `final_admission_qpc` and `sendinput_completion_qpc`;
-- signed `dispatch_start_error_ticks = final_admission_qpc - physical_target_qpc`
-  as the primary dispatch timing metric;
+- signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
+  as the primary pre-call timing metric; it is not a syscall-entry or game-
+  receipt timestamp;
 - `admission_to_completion = sendinput_completion_qpc - final_admission_qpc`;
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;

@@ -44,11 +44,12 @@ pub struct WorkerMetricsLocal {
     pub late_2ms: u64,
     pub late_5ms: u64,
     pub late_10ms: u64,
-    /// Essential production scalar evidence measured at SendInput entry.
-    pub max_sendinput_entry_lateness_us: u64,
-    pub entry_late_2ms: u64,
-    pub entry_late_5ms: u64,
-    pub entry_late_10ms: u64,
+    /// Essential production scalar evidence measured immediately before the
+    /// prepared SendInput call.
+    pub max_sendinput_pre_call_lateness_us: u64,
+    pub pre_call_late_2ms: u64,
+    pub pre_call_late_5ms: u64,
+    pub pre_call_late_10ms: u64,
     pub release_max_us: u64,
     pub release_late_2ms: u64,
     pub active_count: u64,

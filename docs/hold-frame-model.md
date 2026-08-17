@@ -9,7 +9,7 @@ For a selected ratio and FPS, Python first materializes the requested hold:
 ```text
 frame_us = ceil(1_000_000 / fps)
 requested_min_hold_us = round(hold_frames * frame_us) + margin_us
-effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
+effective_min_hold_us = requested_min_hold_us
 ```
 
 The default margin is `500 µs`; calibration may provide a validated margin.
@@ -19,7 +19,9 @@ each bucket. Its recommended margin is the global positive p99 hold shrink plus
 `100 µs`, clamped to `300–2,000 µs`; cache v1 or incomplete/dirty evidence
 falls back to the unchanged `500 µs` default.
 The native worker receives only the materialized `effective_min_hold_us` and
-uses it as a fixed duration. It does not learn or subtract SendInput cost.
+uses it as a fixed duration. PyO3 does not add another frame-relative floor;
+Rust only range-checks and validates this value in QPC ticks. It does not learn
+or subtract SendInput cost.
 
 At 60 FPS with the default margin:
 

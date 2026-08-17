@@ -69,6 +69,7 @@ def _runtime(session: Any) -> RustDispatchRuntime:
     runtime._pre_roll_us = 0
     runtime._renderer = None
     runtime._require_focus = False
+    runtime._target_hwnd = None
     runtime._sleep_s = 0.002
     runtime._song_name = "test"
     runtime._total_us = 1
@@ -112,6 +113,7 @@ def _focus_runtime(
     runtime._require_focus = True
     runtime._has_played = has_played
     runtime._last_hwnd = 123
+    runtime._target_hwnd = 123
     runtime._last_focus_active = True
     guard = FakeFocusGuard()
     runtime._focus_guard = guard
@@ -309,7 +311,7 @@ def test_runtime_publishes_actual_foreground_without_focusing(
     assert runtime._last_focus_active is actual_foreground
 
 
-def test_initial_focus_refreshes_changed_target(
+def test_initial_target_does_not_reenumerate_changed_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, guard, state = _focus_runtime(monkeypatch)
@@ -320,9 +322,9 @@ def test_initial_focus_refreshes_changed_target(
     runtime._publish_focus()
 
     assert guard.focus_calls == 0
-    assert runtime._last_hwnd == 456
-    assert runtime._last_focus_active is True
-    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 456
+    assert runtime._last_hwnd == 123
+    assert runtime._last_focus_active is False
+    assert cast(FakeSession, runtime._session).target_hwnd_calls[-1] == 123
 
 
 def test_terminal_error_report_is_materialized_before_error() -> None:
@@ -387,6 +389,7 @@ def test_focus_hint_publishes_foreground_transition_when_hwnd_is_unchanged(
     runtime = _runtime(session)
     runtime._require_focus = True
     runtime._last_hwnd = 123
+    runtime._target_hwnd = 123
     runtime._last_focus_active = True
 
     foreground = True

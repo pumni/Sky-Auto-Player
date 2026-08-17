@@ -13,7 +13,6 @@ from sky_music.domain.hold_timing import (
 )
 
 DEFAULT_FOCUS_RESTORE_GRACE_US = 100_000
-DEFAULT_SPIN_THRESHOLD_US = 800
 DEFAULT_SAME_KEY_CONFLICT_POLICY = "drop_chord"
 
 

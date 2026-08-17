@@ -2003,6 +2003,69 @@ fn final_down_target_admission_checks_target_before_focus() {
 }
 
 #[test]
+fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+
+    // The supervisor hint is stale-true, but the final foreground proof
+    // observes that the exact target is no longer foreground.
+    let focus_active = AtomicBool::new(true);
+    let target_hwnd = AtomicIsize::new(123);
+    let target_generation = AtomicU64::new(1);
+    let final_admission = final_down_target_admission(FinalTargetSignals {
+        expected: TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        },
+        require_focus: true,
+        focus_active: &focus_active,
+        target_hwnd: &target_hwnd,
+        target_generation: &target_generation,
+    });
+    assert_eq!(final_admission, DownAdmission::FocusLost);
+
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let epoch = qpc_clock.now().expect("epoch sample");
+    let mut clock_state =
+        sky_dispatch_core::clock::PlaybackClockState::new(epoch, DurationTicks::ZERO)
+            .expect("playback clock");
+    let original_epoch = clock_state.epoch;
+    let schedule =
+        sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
+    let mut coordinator =
+        sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
+            schedule,
+            0,
+            DurationTicks::ZERO,
+            |_| Ok(TimelineTicks::ZERO),
+        )
+        .expect("coordinator");
+    let mut backend = TrackedKeyState::new();
+    let mut runtime = super::worker::WorkerRuntime::default();
+    let target = AtomicIsize::new(123);
+    let progress_clock = super::shared::SharedProgressClock::default();
+
+    let result = super::worker::handle_final_focus_loss(
+        qpc_clock,
+        &mut backend,
+        &mut coordinator,
+        &mut clock_state,
+        &mut runtime,
+        &target,
+        &progress_clock,
+    );
+
+    assert!(matches!(
+        result,
+        Err(super::worker::DispatchStep::TerminateStatic(
+            "focus_lost_during_preroll"
+        ))
+    ));
+    assert_eq!(clock_state.epoch, original_epoch);
+    assert!(!clock_state.is_paused());
+}
+
+#[test]
 fn final_control_admission_rejects_each_command_state_in_priority_order() {
     let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let quit_requested = AtomicBool::new(false);
@@ -2883,9 +2946,7 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
     assert_eq!(harness.backend_active_mask() & 0b001, 0b001);
 
     let authored_chord_plan = harness.plan_current_dispatch();
-    let authored_chord_step = harness
-        .wait_and_dispatch_current_plan(&authored_chord_plan)
-        .expect("wait for unrelated authored chord");
+    let authored_chord_step = harness.dispatch_at_plan_target_for_test(&authored_chord_plan);
     assert!(
         matches!(authored_chord_step, super::worker::DispatchStep::Dispatched),
         "unrelated chord step: {authored_chord_step:?}"
@@ -2896,9 +2957,7 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
 
     harness.align_next_plan_to_future_for_test(500_000);
     let cleanup_plan = harness.plan_current_dispatch();
-    let cleanup_step = harness
-        .wait_and_dispatch_current_plan(&cleanup_plan)
-        .expect("wait for authored cleanup");
+    let cleanup_step = harness.dispatch_at_plan_target_for_test(&cleanup_plan);
     assert!(
         matches!(cleanup_step, super::worker::DispatchStep::Dispatched),
         "cleanup step: {cleanup_step:?}"
@@ -2924,9 +2983,7 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
     ));
 
     let authored_plan = harness.plan_current_dispatch();
-    let authored_step = harness
-        .wait_and_dispatch_current_plan(&authored_plan)
-        .expect("wait for authored chord");
+    let authored_step = harness.dispatch_at_plan_target_for_test(&authored_plan);
     assert!(
         matches!(authored_step, super::worker::DispatchStep::Dispatched),
         "unrelated chord packet step: {authored_step:?}"
@@ -2934,9 +2991,7 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
 
     harness.align_next_plan_to_future_for_test(500_000);
     let cleanup_plan = harness.plan_current_dispatch();
-    let cleanup_result = harness
-        .wait_and_dispatch_current_plan(&cleanup_plan)
-        .expect("authored cleanup dispatch");
+    let cleanup_result = harness.dispatch_at_plan_target_for_test(&cleanup_plan);
     assert!(
         matches!(cleanup_result, super::worker::DispatchStep::Dispatched),
         "cleanup step: {cleanup_result:?}"

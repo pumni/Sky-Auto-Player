@@ -74,10 +74,10 @@ class NativeProgressSnapshotProtocol(Protocol):
     late_2ms: int
     late_5ms: int
     late_10ms: int
-    max_sendinput_entry_lateness_us: int
-    entry_late_2ms: int
-    entry_late_5ms: int
-    entry_late_10ms: int
+    max_sendinput_pre_call_lateness_us: int
+    pre_call_late_2ms: int
+    pre_call_late_5ms: int
+    pre_call_late_10ms: int
     release_max_us: int
     release_late_2ms: int
     recent_latencies_us: Sequence[int]
@@ -120,6 +120,7 @@ class RustDispatchRuntime:
         "_session",
         "_sleep_s",
         "_song_name",
+        "_target_hwnd",
         "_total_us",
     )
 
@@ -138,8 +139,12 @@ class RustDispatchRuntime:
         telemetry_enabled: bool = False,
         focus_restore_grace_us: int = 100_000,
         pre_roll_us: int = 0,
+        target_hwnd: int | None = None,
     ) -> None:
         import sky_player_rs  # type: ignore[import-not-found]
+
+        if require_focus and (type(target_hwnd) is not int or target_hwnd <= 0):
+            raise ValueError("target_hwnd must be the validated positive HWND when focus is required")
 
         native_actions = (
             (
@@ -159,6 +164,7 @@ class RustDispatchRuntime:
                 min_hold_us=min_hold_us,
                 require_focus=require_focus,
                 focus_restore_grace_us=focus_restore_grace_us,
+                target_hwnd=target_hwnd or 0,
                 telemetry=telemetry_enabled,
                 profile="production",
             ),
@@ -168,6 +174,7 @@ class RustDispatchRuntime:
         if type(pre_roll_us) is not int or pre_roll_us < 0:
             raise ValueError("pre_roll_us must be a non-negative integer")
         self._pre_roll_us = pre_roll_us
+        self._target_hwnd = target_hwnd if require_focus else None
         self._require_focus = require_focus
         self._focus_guard = focus_guard
         self._controls = controls
@@ -182,7 +189,7 @@ class RustDispatchRuntime:
     def _attempt_refocus_and_refresh(self) -> None:
         with contextlib.suppress(*FOCUS_PLATFORM_ERRORS):
             self._focus_guard.focus()
-        self._set_initial_target()
+        self._refresh_target_after_explicit_refocus()
         self._publish_focus()
 
     def _publish_focus(self) -> None:
@@ -191,8 +198,14 @@ class RustDispatchRuntime:
         try:
             from sky_music.platform.win32 import window_target
 
-            hwnd = window_target.cached_target_hwnd()
-            focus_active = bool(window_target.is_foreground_cached_hwnd())
+            expected_hwnd = self._target_hwnd or 0
+            cached_hwnd = int(window_target.cached_target_hwnd())
+            hwnd = expected_hwnd
+            focus_active = (
+                expected_hwnd > 0
+                and cached_hwnd == expected_hwnd
+                and bool(window_target.is_foreground_cached_hwnd())
+            )
         except FOCUS_PLATFORM_ERRORS:
             hwnd = 0
             focus_active = False
@@ -206,6 +219,14 @@ class RustDispatchRuntime:
     def _set_initial_target(self) -> None:
         if not self._require_focus:
             return
+        target = int(self._target_hwnd or 0)
+        self._session.set_target_hwnd(target)
+        self._last_hwnd = target
+
+    def _refresh_target_after_explicit_refocus(self) -> None:
+        """Resolve a replacement HWND only after the explicit refocus command."""
+        if not self._require_focus:
+            return
         try:
             from sky_music.platform.win32 import window_target
 
@@ -215,11 +236,11 @@ class RustDispatchRuntime:
                 if window_target.is_sky_window_valid()
                 else 0
             )
-            self._session.set_target_hwnd(target)
-            self._last_hwnd = target
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-            self._session.set_target_hwnd(0)
-            self._last_hwnd = 0
+        except FOCUS_PLATFORM_ERRORS:
+            target = 0
+        self._target_hwnd = target if target > 0 else None
+        self._session.set_target_hwnd(target)
+        self._last_hwnd = target
 
     def _handle_command(self, command: str | None) -> str | None:
         def terminal_race_is_done() -> bool:
@@ -348,22 +369,22 @@ class RustDispatchRuntime:
                                     int(
                                         getattr(
                                             live,
-                                            "max_sendinput_entry_lateness_us",
+                                            "max_sendinput_pre_call_lateness_us",
                                             0,
                                         )
                                     ),
                                 ),
                                 late_2ms=max(
                                     live.late_2ms,
-                                    int(getattr(live, "entry_late_2ms", 0)),
+                                    int(getattr(live, "pre_call_late_2ms", 0)),
                                 ),
                                 late_5ms=max(
                                     live.late_5ms,
-                                    int(getattr(live, "entry_late_5ms", 0)),
+                                    int(getattr(live, "pre_call_late_5ms", 0)),
                                 ),
                                 late_10ms=max(
                                     live.late_10ms,
-                                    int(getattr(live, "entry_late_10ms", 0)),
+                                    int(getattr(live, "pre_call_late_10ms", 0)),
                                 ),
                                 release_max_us=live.release_max_us,
                                 release_late_2ms=live.release_late_2ms,

@@ -43,6 +43,8 @@ use control::{
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch::drain_one_observer;
+#[cfg(test)]
+pub(crate) use dispatch::handle_final_focus_loss;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, dispatch_authored_packet, dispatch_stale_packet,
 };
@@ -59,7 +61,7 @@ pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
     HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
-    publish_backend_metrics, record_lateness, record_sendinput_entry_lateness,
+    publish_backend_metrics, record_lateness, record_sendinput_pre_call_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
@@ -171,6 +173,10 @@ pub(crate) struct WorkerRuntime {
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
+    /// True only after the first successful authored musical commit. A
+    /// final foreground mismatch before that point is startup failure, not a
+    /// pause/rebase event.
+    pub(crate) musical_physical_commit_started: bool,
     allow_pre_epoch_startup_dispatch: bool,
     pending_wait_observation: Option<wait::WaitObservation>,
     chord_integrity_lost: u64,

@@ -92,10 +92,9 @@ def plan_same_key_hold(
         return PlannedKeyHold(hold_us=target_hold_us, risk="ok")
 
     max_hold_us = effective_delta_us
-    # Feasibility floor is exactly min_hold: a same-key repeat whose interval is below the key's own
-    # minimum hold cannot preserve that hold before the next down. No fixed latency margin is added
-    # on top — the runtime completion-anchor owns real dispatch latency, and a fixed 500us guess was
-    # both arbitrary and unhelpful (real songs sit far above this floor; see timing analysis).
+    # Feasibility floor is exactly the authored min_hold. A same-key repeat
+    # whose interval is below that hold is rejected for real playback during
+    # preparation; the runtime never derives a release target from completion.
     feasibility_floor_us = min_hold_us
     if max_hold_us < feasibility_floor_us:
         return PlannedKeyHold(
@@ -135,14 +134,10 @@ def build_key_actions(
 
     Caller must pass a resolved FrameTimingPolicy (e.g. via PlaybackSessionContext.resolve_effective_policy).
 
-    ### Same-Key Conflict Policies:
-    - **strict**: If a same-key repeat interval is shorter than the minimum hold time (min_hold_us),
-      raises a ScheduleBuildError and refuses to schedule.
-    - **drop_chord**: Preserves the timeline and rejects the whole conflicting chord at runtime,
-      so playback never substitutes a partial chord.
-    - **degraded**: Preserves the minimum hold time of the previous note, pushing its release to
-      `down_at_us + min_hold_us`. Since the next same-key press occurs before this release, the subsequent
-      press will conflict and be dropped at runtime (dropped_conflict) to avoid stuck keys.
+    Same-key conflict policies are retained for dry-run diagnostics and
+    persisted configuration compatibility. Real playback rejects an
+    infeasible same-key repeat during preparation; native dispatch never
+    drops a chord or performs a degraded runtime retry.
     """
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")

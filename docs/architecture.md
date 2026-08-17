@@ -63,12 +63,12 @@ For an authored same-key Down→Up pair, the schedule must satisfy:
 authored_up >= authored_down + effective_min_hold
 ```
 
-`effective_min_hold` is materialized and validated at the Python/native
-boundary as `max(requested_min_hold_us, ceil(1_000_000 / game_fps) + 500)`.
-The static margin is applied once while building the authored schedule. Native
-admission rejects an invalid interval before worker start; SendInput completion
-is evidence only and never creates a second hold floor or a replacement
-deadline.
+`effective_min_hold` is materialized by Python as the selected frame hold plus
+the calibrated static margin. PyO3 passes that value verbatim; Rust only
+range-checks it and validates the authored interval in QPC ticks. The static
+margin is applied once while building the authored schedule. Native admission
+rejects an invalid interval before worker start; SendInput completion is
+evidence only and never creates a second hold floor or a replacement deadline.
 
 The worker owns active key masks, stale-Up suppression,
 zero/partial progress handling, focus-loss pause and restore safety release,

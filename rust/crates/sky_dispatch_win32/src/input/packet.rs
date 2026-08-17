@@ -348,6 +348,84 @@ fn send_physical_packet_once_impl(
     }
 }
 
+/// Trusted fast path for a packet that was validated and materialized before
+/// the precision boundary. This deliberately does not inspect the packet
+/// masks or recount events after the caller's final QPC sample.
+fn send_prepared_physical_packet_once_impl(
+    prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+) -> SendTransactionOutcome {
+    let packet = prepared.packet();
+    let requested_mask = packet.up_mask | packet.down_mask;
+    let first = match run_prepared_send_attempt(prepared, clock, Some(started_ticks)) {
+        PacketSendAttempt::Outcome(res) => res,
+        PacketSendAttempt::ClockFailure(start, err, called) => {
+            return SendTransactionOutcome {
+                status: if called {
+                    SendTransactionStatus::ClockFailureAfterSend
+                } else {
+                    SendTransactionStatus::ClockFailureBeforeSend
+                },
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: u8::from(called),
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: start,
+                    completed_ticks: None,
+                    timing_error: Some(err),
+                },
+            };
+        }
+    };
+    let requested = usize::from(first.requested);
+    let inserted = usize::from(first.inserted).min(requested);
+    let status = classify_send_status(
+        inserted,
+        requested,
+        first.win32_error,
+        Some(first.started_ticks),
+        first.completed_ticks,
+    );
+    let win32_error = (first.win32_error != 0).then_some(first.win32_error);
+    let retry_reason = if inserted == 0 && !matches!(status, SendTransactionStatus::Complete) {
+        PacketRetryReason::ZeroProgress
+    } else if inserted < requested {
+        PacketRetryReason::PartialProgress {
+            inserted_count: inserted as u8,
+        }
+    } else {
+        PacketRetryReason::None
+    };
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted as u8,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason,
+            first_win32_error: win32_error,
+            last_win32_error: win32_error,
+            started_ticks: Some(first.started_ticks),
+            completed_ticks: first.completed_ticks,
+            timing_error: first.timing_error,
+        },
+    }
+}
+
 /// Test-only retry policy retained to exercise the fail-closed transport
 /// matrix. Production callers use `send_physical_packet_once_with_clock`; the
 /// worker/recovery state machines own any retry decision.
@@ -556,9 +634,7 @@ pub fn send_prepared_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
-    send_physical_packet_once_impl(prepared.packet(), |_| {
-        run_prepared_send_attempt(prepared, clock, Some(started_ticks))
-    })
+    send_prepared_physical_packet_once_impl(prepared, clock, started_ticks)
 }
 
 #[cfg(test)]
@@ -584,6 +660,23 @@ fn send_physical_packet_once_scripted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_send_path_is_trusted_after_final_qpc_boundary() {
+        let source = include_str!("packet.rs");
+        let trusted = source
+            .split("fn send_prepared_physical_packet_once_impl")
+            .nth(1)
+            .expect("trusted prepared-send primitive");
+        let body = trusted
+            .split("/// Test-only retry policy")
+            .next()
+            .expect("trusted primitive body");
+        assert!(body.contains("run_prepared_send_attempt"));
+        assert!(!body.contains("send_physical_packet_once_impl"));
+        assert!(!body.contains("valid_packet("));
+        assert!(!body.contains("event_count() == 0"));
+    }
 
     #[test]
     fn physical_packet_accepts_at_most_thirty_events() {

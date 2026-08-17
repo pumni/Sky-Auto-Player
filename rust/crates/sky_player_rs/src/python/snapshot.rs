@@ -53,13 +53,13 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) late_10ms: u64,
     #[pyo3(get)]
-    pub(super) max_sendinput_entry_lateness_us: u64,
+    pub(super) max_sendinput_pre_call_lateness_us: u64,
     #[pyo3(get)]
-    pub(super) entry_late_2ms: u64,
+    pub(super) pre_call_late_2ms: u64,
     #[pyo3(get)]
-    pub(super) entry_late_5ms: u64,
+    pub(super) pre_call_late_5ms: u64,
     #[pyo3(get)]
-    pub(super) entry_late_10ms: u64,
+    pub(super) pre_call_late_10ms: u64,
     #[pyo3(get)]
     pub(super) release_max_us: u64,
     #[pyo3(get)]
@@ -171,10 +171,10 @@ impl ProgressSnapshotPy {
             late_2ms: snapshot.late_2ms,
             late_5ms: snapshot.late_5ms,
             late_10ms: snapshot.late_10ms,
-            max_sendinput_entry_lateness_us: snapshot.max_sendinput_entry_lateness_us,
-            entry_late_2ms: snapshot.entry_late_2ms,
-            entry_late_5ms: snapshot.entry_late_5ms,
-            entry_late_10ms: snapshot.entry_late_10ms,
+            max_sendinput_pre_call_lateness_us: snapshot.max_sendinput_pre_call_lateness_us,
+            pre_call_late_2ms: snapshot.pre_call_late_2ms,
+            pre_call_late_5ms: snapshot.pre_call_late_5ms,
+            pre_call_late_10ms: snapshot.pre_call_late_10ms,
             release_max_us: snapshot.release_max_us,
             release_late_2ms: snapshot.release_late_2ms,
             recent_latencies_us: snapshot.recent_latencies_us.clone(),

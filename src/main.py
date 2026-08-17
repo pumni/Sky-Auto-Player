@@ -174,7 +174,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     timing.add_argument(
         "--same-key-conflict-policy",
         choices=["drop_chord", "degraded", "strict"],
-        help="drop_chord = preserve chord fidelity (default), degraded = legacy partial chord, strict = reject and abort playback",
+        help="Conflict policy is diagnostic-only for dry-run; real playback rejects infeasible same-key repeats",
     )
     timing.add_argument(
         "--fps",

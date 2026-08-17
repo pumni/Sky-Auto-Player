@@ -37,6 +37,9 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
+    /// Test-only direct-boundary admission for frozen-plan correctness tests.
+    /// Production always waits to the final spin boundary.
+    pub(crate) test_direct_boundary: bool,
 }
 
 /// Snapshot of the prepared authored batch plus the projection of the
@@ -83,6 +86,8 @@ pub(crate) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
+#[cfg(test)]
+pub(crate) use authored::handle_final_focus_loss;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]

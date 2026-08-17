@@ -61,6 +61,7 @@ class PlaybackEngine:
         min_hold_margin_source: str = "default_500",
         dry_run: bool = False,
         pre_roll_us: int = 0,
+        target_hwnd: int | None = None,
     ) -> None:
         self.song = song
         self.actions = tuple(actions)
@@ -84,6 +85,9 @@ class PlaybackEngine:
         self.total_time_us = max((int(action.at_us) for action in self.actions), default=0)
         self._input_path_degraded = False
         self._last_snapshot: dict[str, Any] = {}
+        if target_hwnd is not None and (type(target_hwnd) is not int or target_hwnd <= 0):
+            raise ValueError("target_hwnd must be a positive HWND when provided")
+        self._prepared_target_hwnd: int | None = target_hwnd
 
         self.telemetry = TelemetryLogger(
             song.name,
@@ -124,6 +128,7 @@ class PlaybackEngine:
             require_focus=self.require_focus,
             focus_restore_grace_us=self.focus_restore_grace_us,
             pre_roll_us=self.pre_roll_us,
+            target_hwnd=self._prepared_target_hwnd,
             focus_guard=self.focus_guard,
             controls=self.controls,
             renderer=self.renderer,
@@ -154,8 +159,8 @@ class PlaybackEngine:
             )
         return outcome
 
-    def prepare_focus_for_playback(self) -> bool:
-        """Resolve, focus, and verify the target once at playback commit."""
+    def prepare_focus_for_playback(self) -> int | bool:
+        """Resolve, focus, and verify one exact target at playback commit."""
         if self.dry_run or not self.require_focus:
             return True
         try:
@@ -166,7 +171,13 @@ class PlaybackEngine:
                 return False
             if not bool(self.focus_guard.focus()):
                 return False
-            return bool(window_target.is_foreground_cached_hwnd())
+            if not bool(window_target.is_foreground_cached_hwnd()):
+                return False
+            target_hwnd = int(window_target.cached_target_hwnd())
+            if target_hwnd <= 0:
+                return False
+            self._prepared_target_hwnd = target_hwnd
+            return target_hwnd
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return False
 

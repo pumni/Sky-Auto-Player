@@ -111,6 +111,26 @@ def test_prepare_playback_high_risk() -> None:
     assert isinstance(plan, PlaybackPlan)
     assert plan.risk_report.severity == "high"
 
+
+def test_real_playback_rejects_infeasible_same_key_repeat_before_start() -> None:
+    song = Song(
+        name="Infeasible Repeat Song",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(2), key=NoteKey("Key0")),
+        ),
+    )
+    result = prepare_playback(
+        song,
+        PlaybackSessionContext.default(tempo_scale=1.0),
+        AppConfig(),
+        is_dry_run=False,
+    )
+
+    assert isinstance(result, PlaybackError)
+    assert result.code == "validation_failed"
+    assert "infeasible same-key" in result.message
+
 def test_prepare_playback_dry_run_with_violations() -> None:
     # A song with negative timestamp under dry-run should return PlaybackPlan and keep violations
     song = Song(

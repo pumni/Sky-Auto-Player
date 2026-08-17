@@ -41,10 +41,10 @@ class ProgressSnapshot:
     late_2ms: int
     late_5ms: int
     late_10ms: int
-    max_sendinput_entry_lateness_us: int
-    entry_late_2ms: int
-    entry_late_5ms: int
-    entry_late_10ms: int
+    max_sendinput_pre_call_lateness_us: int
+    pre_call_late_2ms: int
+    pre_call_late_5ms: int
+    pre_call_late_10ms: int
     release_max_us: int
     release_late_2ms: int
     recent_latencies_us: Sequence[int]

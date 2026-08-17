@@ -7,8 +7,9 @@ use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
     WorkerRuntime, WorkerTimingState, final_control_admission_at, final_control_precheck,
-    final_down_target_admission, focus_matches, load_target_stamp, record_sendinput_entry_lateness,
-    signed_ticks_to_us, suspend_live_input, target_stamp_still_current,
+    final_down_target_admission, focus_matches, load_target_stamp,
+    record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
+    target_stamp_still_current,
 };
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
@@ -47,6 +48,7 @@ pub(crate) fn dispatch_authored_packet(
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        test_direct_boundary,
     } = ctx;
 
     let WorkerResources {
@@ -98,6 +100,7 @@ pub(crate) fn dispatch_authored_packet(
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        test_direct_boundary,
         observer,
     )
 }
@@ -135,6 +138,7 @@ fn commit_down_send_outcome(
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    test_direct_boundary: bool,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
@@ -190,6 +194,7 @@ fn commit_down_send_outcome(
         physical_target_qpc,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        test_direct_boundary,
         admission,
     ) {
         Ok(admission) => admission,
@@ -216,7 +221,7 @@ fn commit_down_send_outcome(
 /// Outcome returned by `admit_authored_down`.  `Allowed` carries the frozen
 /// dispatch budget plus the trace kind for the upcoming send; every other
 /// variant is a non-terminal redirect (`Continue`) handled by the worker.
-enum AdmissionOutcome {
+pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
     },
@@ -396,6 +401,7 @@ fn finalize_authored_down_admission(
     physical_target_qpc: QpcTicks,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    test_direct_boundary: bool,
     admission: AdmissionOutcome,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let AdmissionOutcome::Guarded {
@@ -405,35 +411,37 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    let spin_target_qpc = QpcTicks::from_raw(
-        physical_target_qpc
-            .as_u64()
-            .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
-    );
-    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
-        qpc_clock,
-        spin_target_qpc,
-        DurationTicks::ZERO,
-        interrupt,
-    );
-    match wait_result.outcome {
-        sky_dispatch_win32::wait::WaitOutcome::Deadline => {}
-        sky_dispatch_win32::wait::WaitOutcome::Interrupted => {
-            local_metrics.wait_interrupted_count =
-                local_metrics.wait_interrupted_count.saturating_add(1);
-            return Ok(AdmissionOutcome::ControlRejected);
-        }
-        sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
-            if matches!(failure, sky_dispatch_win32::wait::WaitFailure::Clock) {
-                local_metrics.wait_clock_failures =
-                    local_metrics.wait_clock_failures.saturating_add(1);
-            } else {
-                local_metrics.wait_backend_failures =
-                    local_metrics.wait_backend_failures.saturating_add(1);
+    if !test_direct_boundary {
+        let spin_target_qpc = QpcTicks::from_raw(
+            physical_target_qpc
+                .as_u64()
+                .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
+        );
+        let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+            qpc_clock,
+            spin_target_qpc,
+            DurationTicks::ZERO,
+            interrupt,
+        );
+        match wait_result.outcome {
+            sky_dispatch_win32::wait::WaitOutcome::Deadline => {}
+            sky_dispatch_win32::wait::WaitOutcome::Interrupted => {
+                local_metrics.wait_interrupted_count =
+                    local_metrics.wait_interrupted_count.saturating_add(1);
+                return Ok(AdmissionOutcome::ControlRejected);
             }
-            return Err(DispatchStep::Terminate(super::super::wait_failure_message(
-                failure,
-            )));
+            sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
+                if matches!(failure, sky_dispatch_win32::wait::WaitFailure::Clock) {
+                    local_metrics.wait_clock_failures =
+                        local_metrics.wait_clock_failures.saturating_add(1);
+                } else {
+                    local_metrics.wait_backend_failures =
+                        local_metrics.wait_backend_failures.saturating_add(1);
+                }
+                return Err(DispatchStep::Terminate(super::super::wait_failure_message(
+                    failure,
+                )));
+            }
         }
     }
 
@@ -488,9 +496,17 @@ fn finalize_authored_down_admission(
             }
         }
     }
-    let final_admission_qpc = qpc_clock
-        .now()
-        .map_err(|error| DispatchStep::Terminate(format!("QPC final proof failure: {error:?}")))?;
+    let final_admission_qpc = if test_direct_boundary {
+        // The test harness supplied the already-frozen target as a synthetic
+        // exact-boundary sample. It does not rebase the epoch or mutate the
+        // plan after arm; it only avoids host waiter jitter in correctness
+        // tests.
+        physical_target_qpc
+    } else {
+        qpc_clock.now().map_err(|error| {
+            DispatchStep::Terminate(format!("QPC final proof failure: {error:?}"))
+        })?
+    };
     let lease_admission =
         final_control_admission_at(final_admission_qpc, lease_timeout_ticks, control_signals)
             .map_err(|error| {
@@ -500,13 +516,13 @@ fn finalize_authored_down_admission(
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::ControlRejected);
     }
-    if view_has_down && final_admission_qpc >= physical_target_qpc {
+    if view_has_down && !test_direct_boundary && final_admission_qpc >= physical_target_qpc {
         runtime.verified_target = None;
         return Err(DispatchStep::TerminateStatic(
             "down_deadline_missed_before_send",
         ));
     }
-    if !view_has_down && final_admission_qpc >= physical_target_qpc {
+    if !view_has_down && !test_direct_boundary && final_admission_qpc >= physical_target_qpc {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         {
@@ -522,7 +538,7 @@ fn finalize_authored_down_admission(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_final_focus_loss(
+pub(crate) fn handle_final_focus_loss(
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -532,6 +548,9 @@ fn handle_final_focus_loss(
     progress_clock: &SharedProgressClock,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     runtime.verified_target = None;
+    if !runtime.musical_physical_commit_started {
+        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+    }
     let focus_ticks = qpc_clock
         .now()
         .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
@@ -610,7 +629,7 @@ fn record_down_send_outcome(
             Err(error) => return DispatchStep::Terminate(format!("QPC spin failure: {error:?}")),
         };
     if let Some(started_qpc) = result.evidence.started_ticks
-        && let Err(error) = record_sendinput_entry_lateness(
+        && let Err(error) = record_sendinput_pre_call_lateness(
             qpc_clock,
             physical_target_qpc,
             started_qpc,
@@ -722,6 +741,9 @@ fn finalize_down_send_outcome(
         Ok(value) => value,
         Err(step) => return step,
     };
+    if view.packet_masks.down_mask != 0 {
+        runtime.musical_physical_commit_started = true;
+    }
     let capture_dispatch_ready_qpc = config.profile.observer_enabled();
     publisher_down_send_outcome(
         view,

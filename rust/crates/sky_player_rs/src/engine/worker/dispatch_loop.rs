@@ -130,6 +130,7 @@ pub(crate) fn dispatch_due_from_plan(
     }
     /* stale authored metadata is drained by the outer global metadata phase */
     let startup_target_selected = false;
+    let test_direct_boundary = test_physical_target_qpc.is_some();
     let physical_target_qpc = match physical_target_qpc_for_work(
         if allow_pre_deadline {
             test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
@@ -170,6 +171,7 @@ pub(crate) fn dispatch_due_from_plan(
             interrupt,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            test_direct_boundary,
         },
         config,
         resources,
@@ -755,7 +757,6 @@ pub(super) fn dispatch(
                     qpc_clock,
                 },
                 timing: WaitTiming {
-                    effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
                     lease_timeout_ticks: timing.lease_timeout_ticks,
                     supervisor_heartbeat_ticks,
                 },

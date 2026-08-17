@@ -35,7 +35,6 @@ pub(crate) struct WaitDeadline {
 }
 
 pub(crate) struct WaitTiming<'a> {
-    pub(crate) effective_spin_threshold_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
@@ -91,7 +90,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         ..
     } = deadline;
     let WaitTiming {
-        effective_spin_threshold_ticks,
         lease_timeout_ticks,
         supervisor_heartbeat_ticks,
     } = timing;
@@ -138,7 +136,9 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         bounded_target,
-        effective_spin_threshold_ticks,
+        // Admission is a low-occupancy wait to T - guard. The only busy-spin
+        // in production is the final authored precision stage.
+        DurationTicks::ZERO,
         interrupt,
     );
     match wait_result.outcome {
@@ -183,6 +183,17 @@ mod tests {
     use sky_dispatch_win32::event::OwnedEvent;
     use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure};
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn admission_wait_has_no_busy_spin_threshold() {
+        let source = include_str!("wait.rs");
+        let body = source
+            .split("pub(crate) fn wait_for_next_boundary")
+            .nth(1)
+            .expect("admission wait implementation");
+        assert!(body.contains("DurationTicks::ZERO"));
+        assert!(!body.contains("effective_spin_threshold_ticks"));
+    }
 
     #[test]
     fn lease_boundary_is_not_a_dispatch_deadline() {
@@ -259,7 +270,6 @@ mod tests {
                 qpc_clock,
             },
             timing: WaitTiming {
-                effective_spin_threshold_ticks: DurationTicks::ZERO,
                 lease_timeout_ticks: qpc_clock.duration_from_us(1_000).expect("lease conversion"),
                 supervisor_heartbeat_ticks: &heartbeat,
             },

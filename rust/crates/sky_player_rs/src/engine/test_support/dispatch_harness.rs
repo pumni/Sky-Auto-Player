@@ -416,9 +416,7 @@ impl ProductionDispatchTestHarness {
             },
         ]);
         let plan = harness.plan_current_dispatch();
-        let step = harness
-            .wait_and_dispatch_current_plan(&plan)
-            .expect("initial UpOnly harness wait");
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "initial harness dispatch failed: {step:?}"
@@ -500,9 +498,7 @@ impl ProductionDispatchTestHarness {
         // Dispatch Down outside window
         harness.align_next_plan_to_future_for_test(500_000);
         let plan = harness.plan_current_dispatch();
-        let step = harness
-            .wait_and_dispatch_current_plan(&plan)
-            .expect("initial UpOnly harness wait");
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "initial UpOnly harness dispatch failed: {step:?}"
@@ -879,7 +875,6 @@ impl ProductionDispatchTestHarness {
                 qpc_clock: self.resources.clock,
             },
             timing: WaitTiming {
-                effective_spin_threshold_ticks: self.timing.effective_spin_threshold_ticks,
                 lease_timeout_ticks: self.timing.lease_timeout_ticks,
                 supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             },
@@ -1061,7 +1056,9 @@ impl ProductionDispatchTestHarness {
             .expect("plan deadline required for synthetic boundary");
         self.runtime
             .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-        self.dispatch_plan_at(plan, deadline, target, true, None)
+        // Use the frozen target as a test-controlled exact-boundary sample;
+        // this never re-anchors or rewrites the plan after it is frozen.
+        self.dispatch_plan_at(plan, deadline, target, true, Some(target))
     }
 
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
@@ -1123,6 +1120,7 @@ impl ProductionDispatchTestHarness {
             interrupt: &self.interrupt,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            test_direct_boundary: false,
         };
         dispatch_authored_packet(
             ctx,

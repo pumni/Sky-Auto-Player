@@ -46,8 +46,10 @@ impl NativeDispatchSessionPy {
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
-        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
-        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
+        // Python materializes the authored hold (frame duration plus the
+        // calibrated static margin). Rust receives that value verbatim and
+        // only validates it in the QPC tick domain.
+        let effective_min_hold_us = min_hold_us;
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
         let parsed_telemetry_mode = if config.telemetry {
@@ -238,12 +240,12 @@ impl NativeDispatchSessionPy {
         dict.set_item("late_5ms", snap.late_5ms)?;
         dict.set_item("late_10ms", snap.late_10ms)?;
         dict.set_item(
-            "max_sendinput_entry_lateness_us",
-            snap.max_sendinput_entry_lateness_us,
+            "max_sendinput_pre_call_lateness_us",
+            snap.max_sendinput_pre_call_lateness_us,
         )?;
-        dict.set_item("entry_late_2ms", snap.entry_late_2ms)?;
-        dict.set_item("entry_late_5ms", snap.entry_late_5ms)?;
-        dict.set_item("entry_late_10ms", snap.entry_late_10ms)?;
+        dict.set_item("pre_call_late_2ms", snap.pre_call_late_2ms)?;
+        dict.set_item("pre_call_late_5ms", snap.pre_call_late_5ms)?;
+        dict.set_item("pre_call_late_10ms", snap.pre_call_late_10ms)?;
         dict.set_item("release_max_us", snap.release_max_us)?;
         dict.set_item("release_late_2ms", snap.release_late_2ms)?;
         dict.set_item("recent_latencies_us", snap.recent_latencies_us)?;
@@ -562,8 +564,9 @@ impl TestDispatchSessionPy {
                 ));
             }
         };
-        let frame_period_us = 1_000_000u64.div_ceil(u64::from(game_fps));
-        let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
+        // Test support follows the production boundary: the caller owns
+        // authored-hold materialization and Rust validates that value verbatim.
+        let effective_min_hold_us = min_hold_us;
         let (schedule, _allowed_scan_codes) =
             parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, effective_min_hold_us)?;

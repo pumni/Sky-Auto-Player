@@ -72,7 +72,7 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 frozen plan
   -> fresh command/target/lease checks
   -> Down target + foreground validation when required
-  -> one QPC final_admission_qpc sample
+  -> one QPC pre_call_qpc sample
   -> lease admission using that exact admission sample
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
@@ -82,7 +82,8 @@ frozen plan
   -> diagnostic-only bounded observation enqueue
 ```
 
-The supplied `final_admission_qpc` sample is the physical admission boundary.
+The supplied `pre_call_qpc` sample is the physical pre-call boundary, not a
+Windows syscall-entry or game-receipt timestamp.
 The transport reports `sendinput_completion_qpc`; production does not subtract
 a learned send cost from the target. Completion is used for diagnostics and
 ownership evidence only; it does not create a completion-relative hold floor.
@@ -165,7 +166,7 @@ Python materializes the fixed floor before native startup:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
+effective_min_hold_us = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
@@ -185,8 +186,9 @@ generation ownership. There is no transport retry state.
 
 ## 5. Wait and interrupt ordering
 
-The worker uses a high-resolution waitable timer, event interruption, and a
-bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
+The worker uses a high-resolution waitable timer and event interruption to the
+`T - 2,000 µs` admission boundary with zero waiter spin. The final authored
+precision stage has a bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
 the final QPC deadline gate
 decides whether to wait again or enter the physical path. A wake that is only
 for lease, command, focus, pause, or interrupt replans and cannot dispatch the
