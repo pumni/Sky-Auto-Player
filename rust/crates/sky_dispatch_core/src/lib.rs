@@ -9,6 +9,7 @@ pub mod coordinator;
 pub mod model;
 pub mod testing;
 pub mod time;
+pub mod validation;
 
 pub const SCHEMA_VERSION: u32 = 4;
 

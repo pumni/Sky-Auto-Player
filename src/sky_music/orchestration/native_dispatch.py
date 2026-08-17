@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
 from sky_music.domain.scheduler_types import KeyAction
-from sky_music.orchestration.estimator_cache import load_estimator_state
 from sky_music.orchestration.native_models import (
     LIVE_NATIVE_STATUSES,
     PLAYBACK_ERROR,
@@ -134,11 +133,6 @@ class RustDispatchRuntime:
     ) -> None:
         import sky_player_rs  # type: ignore[import-not-found]
 
-        native_info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
-        estimator_state_json = load_estimator_state(
-            native_abi=str(native_info.get("native_abi", "")),
-        )
-
         native_actions = (
             (
                 index,
@@ -159,7 +153,9 @@ class RustDispatchRuntime:
                 focus_restore_grace_us=focus_restore_grace_us,
                 telemetry=telemetry_enabled,
                 profile="production",
-                estimator_state_json=estimator_state_json,
+                # Compatibility input is deliberately not loaded: production
+                # dispatch has no learned lead/estimator control path.
+                estimator_state_json=None,
             ),
         )
         self._song_name = song_name

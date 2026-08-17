@@ -339,7 +339,7 @@ def test_hot_and_cold_action_spacing() -> None:
     hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
     cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
     assert hot[2][2] - hot[0][2] == 19_667
-    assert hot[1][2] - hot[0][2] == 9_833
+    assert hot[1][2] - hot[0][2] == 17_167
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
@@ -490,7 +490,7 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
         pytest.skip("requires the test-support native wheel")
 
-    actions = ACCEPTANCE._actions(4, 3, gap_profile="hot", game_fps=60)
+    actions = ACCEPTANCE._actions(4, 3, gap_profile="cold", game_fps=60)
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
         actions,
         list(ACCEPTANCE.SKY_15_SCAN_CODES),

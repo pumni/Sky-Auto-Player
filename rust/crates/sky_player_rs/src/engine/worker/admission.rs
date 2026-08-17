@@ -111,11 +111,11 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
 }
 
 pub(crate) fn final_control_admission_at(
-    started_qpc: QpcTicks,
+    final_admission_qpc: QpcTicks,
     lease_timeout_ticks: DurationTicks,
     signals: FinalControlSignals<'_>,
 ) -> Result<FinalControlAdmission, QpcError> {
-    classify_final_control(started_qpc, lease_timeout_ticks, signals)
+    classify_final_control(final_admission_qpc, lease_timeout_ticks, signals)
 }
 
 /// Compatibility wrapper for test seams and non-physical callers. Production

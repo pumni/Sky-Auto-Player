@@ -59,6 +59,7 @@ pub(super) struct StartupResources {
 
 pub(super) fn initialize_startup(
     priority_mode: PriorityMode,
+    production_wait: bool,
     enable_waitable_timer: bool,
     enable_event_wait: bool,
     priority_acquired: &Mutex<String>,
@@ -74,7 +75,11 @@ pub(super) fn initialize_startup(
     };
     let power_throttling_disabled = scheduling.is_power_active();
     *priority_acquired.lock() = scheduling.priority_label().to_string();
-    let waiter = HybridWaiter::with_options(enable_waitable_timer, enable_event_wait);
+    let waiter = if production_wait {
+        HybridWaiter::production()
+    } else {
+        HybridWaiter::with_options(enable_waitable_timer, enable_event_wait)
+    };
     *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
     StartupResources {
         scheduling,

@@ -15,6 +15,22 @@ pub struct HybridWaiter {
 }
 
 impl HybridWaiter {
+    /// Construct the production waiter.  Production has no timer-resolution
+    /// fallback: failure to create the high-resolution waitable timer is a
+    /// startup error, never a reason to enter coarse sleep polling.
+    pub fn production() -> Self {
+        let (timer, initial_failure) = match WaitableTimer::new_with_error() {
+            Ok(timer) => (Some(timer), None),
+            Err(win32_error) => (None, Some(WaitFailure::TimerCreate { win32_error })),
+        };
+        Self {
+            timer,
+            _timer_resolution: None,
+            event_wait_enabled: true,
+            initial_failure,
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_options(true, true)
     }

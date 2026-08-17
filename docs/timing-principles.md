@@ -47,6 +47,14 @@ The release floor is a sender-side contract. A completion sample does not prove
 kernel delivery or game observation. A slow Down can defer its own release but
 cannot shift unrelated future authored actions.
 
+Before a native session starts, the boundary validator rejects every authored
+same-key Down→Up interval below `effective_min_hold_us`, including intervals
+that share one authored timestamp. Runtime completion lateness is handled
+separately: an Up that misses its authored floor becomes one per-key pending
+release, while an unrelated Down remains eligible at its own authored
+boundary. A same-key Down whose release floor cannot be met is rejected
+fail-closed with physical deadline infeasibility.
+
 ## 2.1 Host delivery calibration
 
 Calibration is a separate native, app-owned Raw Input proxy. It measures
@@ -81,11 +89,13 @@ published only after the complete matrix and cache have both passed validation.
 
 ## 3. Planning and physical target
 
-Each worker epoch freezes one typed plan. It contains the current authored
-deadline, physical path, polyphony, health budget, prepared packet, and
-absolute QPC target. The same deadline and frozen target are used for waiting,
-due selection, final target validation, and observation. The coordinator
-remains the sole owner of schedule and key-generation state.
+Each worker epoch freezes one typed plan: `NoWork`, a metadata boundary, or a
+physical boundary. A physical plan contains one prepared packet view (authored
+Up/Down or pending Up), its commit proof, and one absolute QPC target. Health
+budgets are observer diagnostics and are not part of the physical admission
+plan. The same frozen target is used for waiting, due selection, final target
+validation, and observation. The coordinator remains the sole owner of
+schedule and key-generation state.
 
 The physical target is normally:
 
@@ -99,6 +109,11 @@ dispatch target offset and is not reported as applied lead. The startup path
 uses the same epoch/target rule and reserves no special adaptive startup lead.
 Stale-Up metadata with an empty physical packet is committed as metadata and
 does not consume a physical target.
+
+After a successful physical dispatch, a later physical target that is already
+overdue without an authoritative deadline-wait handoff is a missed schedule,
+not permission to emit a catch-up burst. The worker terminates fail-closed and
+does not replay overdue boundaries.
 
 ## 4. Authoritative send ordering
 
@@ -127,7 +142,9 @@ authorization.
 ## 5. Wait, wake, and spin
 
 The production wait path is a high-resolution waitable timer plus bounded QPC
-spin. Timer/wake guard is kept separate from the absolute physical target.
+spin. The production spin threshold is fixed at `700 µs`; no adaptive probe,
+EMA, PID, or runtime threshold controller is allowed. Timer/wake guard is kept
+separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
@@ -155,7 +172,8 @@ fixed-capacity `crossbeam_queue::ArrayQueue` using a nonblocking operation.
 Capacity is bounded at 64 for the production observer. If full, the new
 observation is dropped and a counter is incremented; older observations remain
 queued. The producer does not drain, allocate, format strings, update health,
-or mutate the coordinator.
+sample `queue.len()`, or mutate the coordinator. Queue high-watermark and
+health-window calculations belong to the observer-side diagnostic path.
 
 A single observer consumer thread owns the queue drain, health windows,
 telemetry record materialization, shared metric publication, and observer

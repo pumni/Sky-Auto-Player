@@ -181,7 +181,7 @@ fn current_authored_packet_can_be_prepared_before_its_deadline() {
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
 
     let prepared = coordinator
-        .prepare_current_authored_packet()
+        .prepare_current_authored_batch()
         .expect("current packet preparation")
         .expect("future packet exists");
     assert_eq!(prepared.effective_scheduled_ticks.as_u64(), 10_000);
@@ -561,7 +561,7 @@ fn owned_and_stale_up_with_down_is_mixed_with_physical_count_two() {
 }
 
 #[test]
-fn mixed_packet_waits_until_release_not_before_without_shifting_following_action() {
+fn authored_mixed_packet_keeps_its_authored_deadline() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -606,33 +606,15 @@ fn mixed_packet_waits_until_release_not_before_without_shifting_following_action
         .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(20))
         .unwrap();
 
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
-            .unwrap()
-            .is_none()
-    );
     let mixed = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(mixed.packet_kind, PhysicalPacketKind::Mixed);
-    coordinator
-        .commit_packet_success(
-            mixed,
-            TimelineTicks::from_raw(120),
-            TimelineTicks::from_raw(130),
-        )
-        .unwrap();
-    let following = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(199), DurationTicks::ZERO)
-        .unwrap();
-    assert!(following.is_none());
-    let following = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(200), DurationTicks::ZERO)
-        .unwrap()
-        .unwrap();
-    assert_eq!(following.effective_scheduled_ticks.as_u64(), 200);
+    assert_eq!(
+        mixed.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]
@@ -686,7 +668,7 @@ fn authored_packet_lifecycle_has_no_pending_release_state() {
 }
 
 #[test]
-fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
+fn authored_up_only_packet_keeps_its_authored_deadline() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -727,23 +709,21 @@ fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
     let lead = DurationTicks::from_raw(50);
     assert_eq!(
         coordinator.next_authored_ticks(lead).unwrap(),
-        Some(TimelineTicks::from_raw(120))
-    );
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
-            .unwrap()
-            .is_none()
+        Some(TimelineTicks::from_raw(100))
     );
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+        .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
         .unwrap()
         .unwrap();
     assert_eq!(prepared.packet_kind, PhysicalPacketKind::UpOnly);
+    assert_eq!(
+        prepared.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]
-fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
+fn authored_mixed_packet_deadline_is_not_shifted_by_dispatch_lead() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -784,17 +764,330 @@ fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
     let lead = DurationTicks::from_raw(50);
     assert_eq!(
         coordinator.next_authored_ticks(lead).unwrap(),
-        Some(TimelineTicks::from_raw(120))
-    );
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
-            .unwrap()
-            .is_none()
+        Some(TimelineTicks::from_raw(100))
     );
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+        .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
         .unwrap()
         .unwrap();
     assert_eq!(prepared.packet_kind, PhysicalPacketKind::Mixed);
+    assert_eq!(
+        prepared.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
+}
+
+#[test]
+fn unrelated_deferred_release_does_not_move_authored_down_chord() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "late release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x16, 0x17].into(),
+                reason: "independent chord".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    )
+    .unwrap();
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .unwrap();
+
+    let prepared = coordinator
+        .prepare_current_authored_frame()
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(100));
+    assert_eq!(prepared.immediate_up_mask, 0);
+    assert_eq!(prepared.deferred_up_mask, 0b001);
+    assert_eq!(prepared.down_mask, 0b110);
+}
+
+#[test]
+fn same_key_infeasible_retrigger_fails_before_down_send() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "retrigger release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "retrigger chord".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .unwrap();
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .unwrap();
+
+    assert!(matches!(
+        coordinator.prepare_current_authored_frame(),
+        Err(CoordinatorError::PhysicalDeadlineInfeasible {
+            authored_ticks: TimelineTicks { .. },
+            blocked_mask: 0b01,
+            latest_required_release_ticks: TimelineTicks { .. },
+        })
+    ));
+}
+
+#[test]
+fn deferred_up_only_frame_is_metadata_and_does_not_block_later_down() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "deferred release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 200,
+                scan_codes: vec![0x16].into(),
+                reason: "independent down".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .unwrap();
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .unwrap();
+
+    let release_frame = coordinator
+        .prepare_current_authored_frame()
+        .unwrap()
+        .unwrap();
+    assert_eq!(release_frame.deferred_up_mask, 0b01);
+    assert_eq!(release_frame.down_mask, 0);
+    coordinator
+        .commit_authored_frame_metadata(release_frame)
+        .unwrap();
+
+    assert_eq!(coordinator.pending_release_mask(), 0b01);
+    assert_eq!(
+        coordinator.earliest_pending_release_ticks(),
+        Some(TimelineTicks::from_raw(600))
+    );
+    let next = coordinator
+        .prepare_current_authored_frame()
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.authored_ticks, TimelineTicks::from_raw(200));
+    assert_eq!(next.down_mask, 0b10);
+}
+
+#[test]
+fn pending_release_queries_preserve_distinct_and_equal_boundaries() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "chord".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "release".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .unwrap();
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
+        .unwrap();
+    let release = coordinator
+        .prepare_current_authored_frame()
+        .unwrap()
+        .unwrap();
+    coordinator.commit_authored_frame_metadata(release).unwrap();
+
+    assert_eq!(
+        coordinator.pending_release_mask_due_at(TimelineTicks::from_raw(600)),
+        0b11
+    );
+    assert_eq!(
+        coordinator.pending_release_mask_due_at(TimelineTicks::from_raw(601)),
+        0
+    );
+    coordinator
+        .commit_pending_release_success(0b11, TimelineTicks::from_raw(600))
+        .unwrap();
+    assert_eq!(coordinator.pending_release_mask(), 0);
+    assert_eq!(coordinator.active_mask, 0);
+}
+
+fn coordinator_with_pending_release() -> RuntimeDispatchCoordinator {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "suspension down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "suspension up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid suspension schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 300, 0, TimelineTicks::from_raw);
+    let down = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("prepare suspension down")
+        .expect("suspension down is due");
+    coordinator
+        .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(1_000))
+        .expect("commit suspension down");
+    let up = coordinator
+        .prepare_current_authored_frame()
+        .expect("prepare suspension up")
+        .expect("suspension up exists");
+    assert_eq!(up.deferred_up_mask, 0b01);
+    coordinator
+        .commit_authored_frame_metadata(up)
+        .expect("register suspension pending release");
+    assert_eq!(coordinator.pending_release_mask(), 0b01);
+    coordinator
+        .check_invariants()
+        .expect("pending release has valid ownership");
+    coordinator
+}
+
+#[test]
+fn cancel_live_generations_clears_pending_release_ownership() {
+    let mut coordinator = coordinator_with_pending_release();
+
+    let cancelled = coordinator
+        .cancel_live_generations()
+        .expect("cancel live generations");
+    assert_eq!(cancelled, vec![0]);
+    assert_eq!(coordinator.pending_release_mask(), 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
+    assert!(coordinator.pending_release_for_slot(0).is_none());
+    coordinator
+        .check_invariants()
+        .expect("cancelled coordinator remains consistent");
+    assert!(coordinator.is_finished());
+}
+
+#[test]
+fn cancel_all_clears_pending_release_ownership() {
+    let mut coordinator = coordinator_with_pending_release();
+
+    let cancelled = coordinator.cancel_all().expect("cancel all generations");
+    assert_eq!(cancelled, vec![0]);
+    assert_eq!(coordinator.pending_release_mask(), 0);
+    assert_eq!(coordinator.pending_release_count(), 0);
+    assert!(coordinator.pending_release_for_slot(0).is_none());
+    coordinator
+        .check_post_cleanup_invariants()
+        .expect("cancel-all cleanup is complete");
+    assert!(coordinator.is_finished());
+}
+
+#[test]
+fn pending_release_invariants_require_a_matching_active_owner() {
+    let mut coordinator = coordinator_with_pending_release();
+    coordinator.active_by_slot[0] = None;
+
+    let error = coordinator
+        .check_invariants()
+        .expect_err("orphan pending release must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("pending slot 0 has no active owner")
+    );
+}
+
+#[test]
+fn terminal_cleanup_never_reports_clean_with_pending_residue() {
+    let mut coordinator = coordinator_with_pending_release();
+    coordinator.active_by_slot.fill(None);
+    coordinator.active_mask = 0;
+    coordinator.blocked_mask = 0;
+
+    assert!(coordinator.check_post_cleanup_invariants().is_err());
+    assert_eq!(coordinator.pending_release_mask(), 0b01);
 }

@@ -63,22 +63,26 @@ pub(crate) use health::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
+pub(crate) use planning::TargetProof;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
-pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected, plan_structure_is_valid};
+#[cfg(test)]
+pub(crate) use planning::plan_structure_is_valid;
+pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::derive_spin_threshold_us;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
     deadline_target_ticks, exact_sender_durations,
 };
 pub(crate) use timing::{
-    derive_spin_threshold_us, lease_bounded_ticks, publish_wake_error_stats, signed_delta,
-    signed_ticks_to_us, signed_timeline_delta_ticks, supervisor_lease_expired,
-    wait_failure_message, wake_lateness_ticks,
+    lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
+    supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -159,6 +163,11 @@ pub(crate) struct WorkerRuntime {
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
+    /// A successful physical send arms the no-catch-up guard. It is cleared
+    /// only by a genuine future-target deadline wait for that target.
+    pub(crate) awaiting_future_physical_boundary: bool,
+    future_physical_wait_target_qpc: Option<QpcTicks>,
+    last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
@@ -182,6 +191,26 @@ impl WorkerRuntime {
 
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
+        self.last_dispatch_deadline_target_qpc = ticks;
+    }
+
+    pub(crate) fn set_deadline_wait_evidence_for_test(
+        &mut self,
+        wake_qpc: Option<QpcTicks>,
+        target_qpc: Option<QpcTicks>,
+    ) {
+        self.last_dispatch_deadline_wake_qpc = wake_qpc;
+        self.last_dispatch_deadline_target_qpc = target_qpc;
+    }
+
+    /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
+    /// was classified but before the waiter could block.  The worker clears
+    /// the pending future-target handoff for this outcome, while deliberately
+    /// leaving the no-catch-up guard armed.
+    pub(crate) fn record_due_without_wait_for_test(&mut self) {
+        self.last_dispatch_deadline_wake_qpc = None;
+        self.last_dispatch_deadline_target_qpc = None;
+        self.future_physical_wait_target_qpc = None;
     }
 }
 
@@ -194,8 +223,8 @@ pub(super) struct WorkerErrorState {
 
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
+    pub(super) strict_timing: bool,
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
-    pub(super) retry_late_threshold_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -212,8 +241,8 @@ pub(crate) struct WorkerTimingState {
 impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
+            strict_timing: false,
             hard_late_abort_threshold_ticks: DurationTicks::ZERO,
-            retry_late_threshold_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
@@ -229,9 +258,6 @@ impl WorkerTimingState {
 }
 
 /// Fixed observer guard converted to QPC ticks during worker admission.
-pub(super) const ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
-    crate::engine::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
-
 pub(crate) struct WorkerHealthState {
     pub(super) options: DispatchHealthOptions,
     pub(super) sendinput_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,

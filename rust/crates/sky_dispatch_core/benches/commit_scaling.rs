@@ -9,9 +9,8 @@
 use serde_json::json;
 use sky_dispatch_core::compile::compile_runtime_intents;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
-use sky_dispatch_core::model::{ActionKind, CompactIntent, KeyActionInput, MAX_KEYS};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use smallvec::SmallVec;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -89,31 +88,16 @@ fn measure(generation_count: usize, polyphony: usize, samples: usize) -> serde_j
         .expect("coordinator construction");
         let mut coordinator = coordinator;
         let prepared = coordinator
-            .prepare_current_authored_packet()
+            .prepare_current_authored_frame()
             .expect("current packet preparation")
             .expect("first packet");
-        let packet = coordinator
-            .schedule
-            .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)
-            .expect("first packet view");
-        let up_intents = packet
-            .up_intents
-            .iter()
-            .copied()
-            .collect::<SmallVec<[CompactIntent; MAX_KEYS]>>();
-        let down_intents = packet
-            .down_intents
-            .iter()
-            .copied()
-            .collect::<SmallVec<[CompactIntent; MAX_KEYS]>>();
-        let down_source_action_index = packet.header.down_source_action_index;
+        let commit = coordinator
+            .prepare_authored_commit(prepared)
+            .expect("freeze authored commit");
         let started = Instant::now();
         coordinator
-            .commit_prepared_packet_success_parts(
-                prepared,
-                &up_intents,
-                &down_intents,
-                down_source_action_index,
+            .commit_prepared_authored_frame_success_frozen(
+                &commit,
                 TimelineTicks::ZERO,
                 TimelineTicks::ZERO,
             )

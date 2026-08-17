@@ -24,6 +24,7 @@ pub enum DispatchStep {
     Dispatched,
     Continue,
     Terminate(String),
+    TerminateStatic(&'static str),
 }
 
 pub(crate) struct AuthoredPacketContext<'a> {
@@ -40,29 +41,23 @@ pub(crate) struct AuthoredPacketContext<'a> {
 /// Snapshot of the prepared authored batch plus the projection of the
 /// schedule view used by admission, send, and telemetry.
 ///
-/// Built once per authored epoch by `timing::prepare_authored_batch_view`;
-/// the send/admission/telemetry helpers consume it without re-querying the
-/// coordinator schedule.
+/// Built once per authored epoch by the typed frame-view helpers in
+/// `timing`; the send/admission/telemetry helpers consume it without
+/// re-querying the coordinator schedule.
 #[cfg(not(any(test, feature = "test-support")))]
 #[derive(Debug)]
 pub(crate) struct AuthoredBatchView {
     pub(super) prepared_batch: PreparedBatch,
     pub(super) batch_source_action_index: u32,
-    pub(super) down_source_action_index: Option<u32>,
     pub(super) batch_intent_count: usize,
     pub(super) batch_kind: ActionKind,
     pub(super) batch_scheduled_ticks: TimelineTicks,
     pub(super) authored_batch_scheduled_ticks: TimelineTicks,
     pub(super) conflict_mask: u16,
     pub(super) dispatch_path: DispatchPath,
-    pub(super) packet_masks: Option<PhysicalPacket>,
-    pub(super) up_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(super) down_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(super) prepared_packet: Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
+    pub(super) packet_masks: PhysicalPacket,
+    pub(super) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
+    pub(super) commit: PhysicalCommit,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -70,21 +65,15 @@ pub(crate) struct AuthoredBatchView {
 pub(crate) struct AuthoredBatchView {
     pub(crate) prepared_batch: PreparedBatch,
     pub(crate) batch_source_action_index: u32,
-    pub(crate) down_source_action_index: Option<u32>,
     pub(crate) batch_intent_count: usize,
     pub(crate) batch_kind: ActionKind,
     pub(crate) batch_scheduled_ticks: TimelineTicks,
     pub(crate) authored_batch_scheduled_ticks: TimelineTicks,
     pub(crate) conflict_mask: u16,
     pub(crate) dispatch_path: DispatchPath,
-    pub(crate) packet_masks: Option<PhysicalPacket>,
-    pub(crate) up_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(crate) down_intents: smallvec::SmallVec<
-        [sky_dispatch_core::model::CompactIntent; sky_dispatch_core::model::MAX_KEYS],
-    >,
-    pub(crate) prepared_packet: Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
+    pub(crate) packet_masks: PhysicalPacket,
+    pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
+    pub(crate) commit: PhysicalCommit,
 }
 
 /// `Err(None)` indicates an unrecoverable terminal step; `Ok(None)` means the
@@ -102,5 +91,19 @@ pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_sta
 use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
-use sky_dispatch_core::coordinator::PreparedBatch;
+use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_win32::input::PhysicalPacket;
+
+#[derive(Clone, Debug)]
+pub(crate) enum PhysicalCommit {
+    Authored(PreparedAuthoredCommit),
+    PendingRelease {
+        release_mask: u16,
+        due_ticks: TimelineTicks,
+    },
+    Coalesced {
+        authored: PreparedAuthoredCommit,
+        release_mask: u16,
+        due_ticks: TimelineTicks,
+    },
+}

@@ -3,14 +3,13 @@ use super::super::create_mock_backend;
 use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
     PlaybackClockState, QpcClock, QpcError, QpcTicks, RuntimeDispatchCoordinator,
-    STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US, SharedMetrics, TelemetryCollector,
-    TrackedKeyState, WaitOptions, current_process_cpu_time_us, current_thread_cpu_time_us,
-    qpc_frequency_checked,
+    STARTUP_WAKE_GUARD_US, SharedMetrics, TelemetryCollector, TrackedKeyState, WaitOptions,
+    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
-    WorkerResources, WorkerTimingState, derive_spin_threshold_us, describe_release_outcome,
-    initialize_startup, publish_wake_error_stats, release_state_verified, wait_failure_message,
+    WorkerResources, WorkerTimingState, describe_release_outcome, initialize_startup,
+    release_state_verified, wait_failure_message,
 };
 use std::sync::atomic::Ordering;
 
@@ -100,6 +99,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         power_throttling_disabled,
     } = initialize_startup(
         worker.config.priority.mode,
+        matches!(&worker.config.backend, &BackendConfig::Production),
         worker.config.wait.enable_waitable_timer,
         worker.config.wait.enable_event_wait,
         priority_acquired,
@@ -116,8 +116,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     core.metrics.power_throttling_disabled = power_throttling_disabled;
     // Python materializes the frame-rate floor before crossing the FFI
-    // boundary. The worker consumes that effective value verbatim so the
-    // authored timestamp and release floor share one contract.
+    // boundary. The worker consumes that effective minimum hold verbatim and
+    // converts it once into the captured QPC tick domain.
     let effective_min_hold_us = config.timing.min_hold_us;
     let min_hold_ticks = match qpc_clock.duration_from_us(effective_min_hold_us) {
         Ok(ticks) => ticks,
@@ -137,17 +137,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                     &mut backend,
                     metrics,
                     format!("hard late-abort threshold conversion failed: {error:?}"),
-                );
-            }
-        };
-    let retry_late_threshold_ticks =
-        match qpc_clock.duration_from_us(STRICT_RETRY_LATE_THRESHOLD_US) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("retry-late threshold conversion failed: {error:?}"),
                 );
             }
         };
@@ -250,17 +239,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         config.telemetry.capacity,
     )));
     core.errors.abort_counts.reserve(6);
-    let mut effective_spin_threshold_us = config.timing.spin_threshold_us;
+    // Production dispatch uses one fixed QPC spin handoff.  Wake probing and
+    // adaptive lead control are diagnostic-only and cannot alter this path.
+    let effective_spin_threshold_us = super::super::config::DEFAULT_SPIN_THRESHOLD_US;
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
-    if config.wait.enable_adaptive_spin
-        && let Some(stats) =
-            waiter.probe_wake_error_stats(qpc_clock, interrupt, super::ADAPTIVE_SPIN_PROBE_SAMPLES)
-    {
-        publish_wake_error_stats(stats, &mut core.metrics);
-        effective_spin_threshold_us =
-            derive_spin_threshold_us(stats.p95_us, config.timing.spin_floor_us);
-    }
     core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     let initial_now_ticks = match qpc_clock.now() {
         Ok(now) => now,
@@ -353,8 +336,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
     core.timing = Some(WorkerTimingState {
+        strict_timing: config.timing.strict_timing,
         hard_late_abort_threshold_ticks,
-        retry_late_threshold_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
         focus_restore_grace_ticks,
@@ -463,7 +446,6 @@ mod tests {
         WaitOptions {
             enable_waitable_timer,
             enable_event_wait,
-            enable_adaptive_spin: false,
             supervisor_lease_timeout_us: 0,
         }
     }

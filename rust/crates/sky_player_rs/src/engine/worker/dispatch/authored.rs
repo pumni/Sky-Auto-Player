@@ -57,14 +57,10 @@ pub(crate) fn dispatch_authored_packet(
     } = resources;
     let qpc_clock = *qpc_clock;
 
-    let Some(frozen_budget) = dispatch_plan.authored_budget.as_ref() else {
-        return DispatchStep::Terminate("authored dispatch plan has no health budget".to_string());
-    };
-
-    let Some(view) = dispatch_plan.authored_view.as_ref() else {
+    let Some(physical_plan) = dispatch_plan.physical() else {
         return DispatchStep::NoWork;
     };
-
+    let view = &physical_plan.authored_view;
     commit_down_send_outcome(
         view,
         config,
@@ -89,8 +85,7 @@ pub(crate) fn dispatch_authored_packet(
         physical_target_qpc,
         startup_target_selected,
         focus_loss_fault,
-        frozen_budget,
-        dispatch_plan.preflight_target,
+        physical_plan.target_proof.verified_target(),
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         observer,
@@ -125,7 +120,6 @@ fn commit_down_send_outcome(
     physical_target_qpc: QpcTicks,
     _startup_target_selected: bool,
     focus_loss_fault: bool,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     preflight_target: Option<TargetStamp>,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
@@ -154,7 +148,6 @@ fn commit_down_send_outcome(
         timing,
         has_conflicts,
         focus_loss_fault,
-        frozen_budget,
         preflight_target,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
@@ -186,9 +179,8 @@ fn commit_down_send_outcome(
 /// variant is a non-terminal redirect (`Continue`) handled by the worker.
 enum AdmissionOutcome {
     Allowed {
-        frozen_budget: crate::engine::worker::health::FrozenDispatchBudget,
         trace_kind: u8,
-        started_qpc: QpcTicks,
+        final_admission_qpc: QpcTicks,
     },
     BlockedUnfocused,
     FocusLost,
@@ -224,18 +216,14 @@ fn admit_authored_down(
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     preflight_target: Option<TargetStamp>,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     observer: &PendingObservationQueue,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let trace_kind = trace_kind_for_view(view);
-    let has_down_events = view
-        .packet_masks
-        .is_some_and(|packet| packet.down_mask != 0)
-        || view.batch_kind == ActionKind::Down;
-    let has_physical_packet = view.packet_masks.is_some();
+    let has_down_events = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
+    let has_physical_packet = true;
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if let Err(error) =
             suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
@@ -358,22 +346,19 @@ fn admit_authored_down(
                 }
             }
         }
-        let started_qpc = qpc_clock.now().map_err(|error| {
+        let final_admission_qpc = qpc_clock.now().map_err(|error| {
             DispatchStep::Terminate(format!("QPC send-start failure: {error:?}"))
         })?;
         let lease_admission =
-            final_control_admission_at(started_qpc, lease_timeout_ticks, control_signals).map_err(
-                |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
-            )?;
+            final_control_admission_at(final_admission_qpc, lease_timeout_ticks, control_signals)
+                .map_err(|error| {
+                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+            })?;
         if !matches!(lease_admission, FinalControlAdmission::Allowed) {
             runtime.verified_target = None;
             return Ok(AdmissionOutcome::ControlRejected);
         }
-        return Ok(finalize_allowed_admission(
-            frozen_budget,
-            trace_kind,
-            started_qpc,
-        ));
+        return Ok(finalize_allowed_admission(trace_kind, final_admission_qpc));
     }
     Ok(AdmissionOutcome::ConflictReject)
 }
@@ -417,15 +402,10 @@ fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     }
 }
 
-fn finalize_allowed_admission(
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
-    trace_kind: u8,
-    started_qpc: QpcTicks,
-) -> AdmissionOutcome {
+fn finalize_allowed_admission(trace_kind: u8, final_admission_qpc: QpcTicks) -> AdmissionOutcome {
     AdmissionOutcome::Allowed {
-        frozen_budget: *frozen_budget,
         trace_kind,
-        started_qpc,
+        final_admission_qpc,
     }
 }
 
@@ -447,29 +427,21 @@ fn record_down_send_outcome(
     observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
-        frozen_budget,
         trace_kind,
-        started_qpc,
+        final_admission_qpc,
     } = admission
     else {
         return DispatchStep::Continue;
     };
-    let Some(packet) = view.packet_masks else {
-        return DispatchStep::Terminate(
-            "authored physical dispatch has no canonical packet".to_string(),
-        );
-    };
-    let Some(prepared_packet) = view.prepared_packet.as_ref() else {
-        return DispatchStep::Terminate(
-            "authored physical dispatch has no prepared Win32 packet".to_string(),
-        );
-    };
+    let packet = view.packet_masks;
+    let prepared_packet = &view.prepared_packet;
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result = backend.send_prepared_physical_packet_with_start(prepared_packet, *started_qpc);
+    let result =
+        backend.send_prepared_physical_packet_with_start(prepared_packet, *final_admission_qpc);
     if let Some(error) = backend.timing_error.take() {
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
@@ -508,7 +480,6 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
-        frozen_budget,
         trace_kind,
         result_success,
         result.status,
@@ -537,7 +508,6 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
     result_success: bool,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
@@ -589,8 +559,8 @@ fn finalize_down_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         capture_dispatch_ready_qpc,
-        frozen_budget,
         trace_kind,
+        result_status,
         result_confirmed_mask,
         result_skipped_mask,
         result_send_attempts,
@@ -605,7 +575,6 @@ fn finalize_down_send_outcome(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_slo_terminal_step(
     result_chord_integrity_lost: bool,
-    retry_late_abort: bool,
     strict_completion_late: bool,
     _saturation_abort: bool,
     qpc_clock: QpcClock,
@@ -618,20 +587,6 @@ pub(super) fn resolve_slo_terminal_step(
         return DispatchStep::Terminate(format!(
             "SendInput split authored chord at action {}",
             view.batch_source_action_index
-        ));
-    }
-    if retry_late_abort {
-        let completion_error_us = match signed_ticks_to_us(qpc_clock, completion_error_ticks) {
-            Ok(value) => value,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "note-on terminal timing conversion failure: {error}"
-                ));
-            }
-        };
-        return DispatchStep::Terminate(format!(
-            "strict timing rejected zero-progress retry at action {}: completion was {}us late",
-            view.batch_source_action_index, completion_error_us
         ));
     }
     if strict_completion_late {
@@ -658,9 +613,11 @@ pub(super) fn resolve_slo_terminal_step(
 
 #[cfg(test)]
 mod tests {
+    use super::super::PhysicalCommit;
     use super::*;
-    use sky_dispatch_core::coordinator::PreparedBatch;
+    use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
     use sky_dispatch_core::model::PhysicalPacketKind;
+    use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
     use std::num::NonZeroU64;
 
     #[test]
@@ -674,23 +631,36 @@ mod tests {
                 packet_index: 0,
             },
             batch_source_action_index: 0,
-            down_source_action_index: Some(0),
             batch_intent_count: 1,
             batch_kind: ActionKind::Down,
             batch_scheduled_ticks: TimelineTicks::ZERO,
             authored_batch_scheduled_ticks: TimelineTicks::ZERO,
             conflict_mask: 0,
             dispatch_path: DispatchPath::DownOnly { down_count: 1 },
-            packet_masks: None,
-            up_intents: smallvec::SmallVec::new(),
-            down_intents: smallvec::SmallVec::new(),
-            prepared_packet: None,
+            packet_masks: PhysicalPacket::new(0, 0b001),
+            prepared_packet: PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001))
+                .unwrap(),
+            commit: PhysicalCommit::Authored(PreparedAuthoredCommit {
+                frame: sky_dispatch_core::coordinator::PreparedAuthoredFrame {
+                    first_batch_index: 0,
+                    packet_index: 0,
+                    packet_batch_count: 1,
+                    authored_ticks: TimelineTicks::ZERO,
+                    immediate_up_mask: 0,
+                    deferred_up_mask: 0,
+                    down_mask: 0b001,
+                    stale_up_count: 0,
+                },
+                immediate_up_intents: smallvec::SmallVec::new(),
+                deferred_up_intents: smallvec::SmallVec::new(),
+                down_intents: smallvec::SmallVec::new(),
+                down_source_action_index: Some(0),
+            }),
         };
         let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
         let mut runtime = WorkerRuntime::default();
 
         let step = resolve_slo_terminal_step(
-            false,
             false,
             false,
             false,

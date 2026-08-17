@@ -109,6 +109,18 @@ pub enum CoordinatorError {
     GenerationCountOverflow,
     #[error("time conversion failed: {0}")]
     TimeConversion(String),
+    #[error(
+        "physical deadline infeasible at authored tick {authored_ticks:?}: blocked_mask=0x{blocked_mask:04x}, latest_required_release={latest_required_release_ticks:?}"
+    )]
+    PhysicalDeadlineInfeasible {
+        authored_ticks: TimelineTicks,
+        blocked_mask: u16,
+        latest_required_release_ticks: TimelineTicks,
+    },
+    #[error("pending release already exists for key slot {slot}")]
+    PendingReleaseAlreadyRegistered { slot: KeySlot },
+    #[error("pending release does not match active generation for key slot {slot}")]
+    PendingReleaseOwnershipMismatch { slot: KeySlot },
 }
 
 pub fn physical_packet_kind(
@@ -210,6 +222,58 @@ pub struct PreparedBatch {
     pub packet_kind: PhysicalPacketKind,
 }
 
+/// Authored-frame classification performed before timed waiting.
+///
+/// The compiler packet remains an immutable authored frame, but its Up
+/// intents are classified per key against completion-anchored release floors.
+/// Preparation never mutates coordinator state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedAuthoredFrame {
+    pub first_batch_index: usize,
+    pub packet_index: usize,
+    pub packet_batch_count: usize,
+    pub authored_ticks: TimelineTicks,
+    pub immediate_up_mask: u16,
+    pub deferred_up_mask: u16,
+    pub down_mask: u16,
+    pub stale_up_count: u8,
+}
+
+/// Frozen authored commit evidence.  The worker builds this while preparing
+/// the immutable dispatch plan; the post-SendInput path applies it directly to
+/// the bounded generation ledger without rediscovering schedule ranges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedDeferredReleaseIntent {
+    pub intent: CompactIntent,
+    pub source_action_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedDownIntent {
+    pub intent: CompactIntent,
+    pub scan_code: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAuthoredCommit {
+    pub frame: PreparedAuthoredFrame,
+    pub immediate_up_intents: SmallVec<[CompactIntent; MAX_KEYS]>,
+    pub deferred_up_intents: SmallVec<[PreparedDeferredReleaseIntent; MAX_KEYS]>,
+    pub down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]>,
+    pub down_source_action_index: Option<u32>,
+}
+
+/// One completion-anchored release that is waiting for its own physical due
+/// boundary.  The table is bounded by the fifteen physical key slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingRelease {
+    pub generation_id: GenerationId,
+    pub key_slot: KeySlot,
+    pub authored_release_ticks: TimelineTicks,
+    pub due_ticks: TimelineTicks,
+    pub source_action_index: u32,
+}
+
 /// One compiler packet containing only unmatched Up metadata.
 ///
 /// Stale packets are coordinator metadata, not physical work.  Keeping a
@@ -246,6 +310,8 @@ pub struct RuntimeDispatchCoordinator {
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     up_intent_locations: Box<[Option<(usize, usize)>]>,
+    pending_release_by_slot: [Option<PendingRelease>; MAX_KEYS],
+    pending_release_mask: u16,
 }
 
 #[cfg(test)]
@@ -350,6 +416,8 @@ impl RuntimeDispatchCoordinator {
             generation_states,
             generation_count,
             up_intent_locations: up_intent_locations.into_boxed_slice(),
+            pending_release_by_slot: [None; MAX_KEYS],
+            pending_release_mask: 0,
         })
     }
 
@@ -364,5 +432,20 @@ impl RuntimeDispatchCoordinator {
 
     pub fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
         self.active_by_slot[usize::from(slot)].as_ref()
+    }
+
+    pub fn pending_release_for_slot(&self, slot: KeySlot) -> Option<PendingRelease> {
+        self.pending_release_by_slot
+            .get(usize::from(slot))
+            .copied()
+            .flatten()
+    }
+
+    pub fn pending_release_mask(&self) -> u16 {
+        self.pending_release_mask
+    }
+
+    pub fn pending_release_count(&self) -> usize {
+        self.pending_release_mask.count_ones() as usize
     }
 }

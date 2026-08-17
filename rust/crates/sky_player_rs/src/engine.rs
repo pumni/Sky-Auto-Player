@@ -14,8 +14,8 @@ pub use config::DispatchProfile;
 pub(crate) use config::StartupOrderingHook;
 use config::WorkerConfig;
 pub(crate) use config::{
-    BackendConfig, DEFAULT_SPIN_FLOOR_US, DEFAULT_SPIN_THRESHOLD_US, FocusOptions,
-    NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
+    BackendConfig, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
+    TimingOptions, WaitOptions,
 };
 pub use session::NativeDispatchSession;
 pub use snapshot::{EngineProgressSnapshot, EngineSnapshot};
@@ -57,14 +57,12 @@ pub mod dispatch_primitives {
 
     /// Production timing policy constants shared by diagnostic benchmarks.
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
-    pub const PRODUCTION_SPIN_FLOOR_US: u64 = super::config::DEFAULT_SPIN_FLOOR_US;
-    pub const PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES: usize =
-        super::config::ADAPTIVE_SPIN_PROBE_SAMPLES;
+    pub const LEGACY_ADAPTIVE_SPIN_FLOOR_US: u64 = 700;
 
-    /// Derive the production adaptive threshold without duplicating its
-    /// policy or magic numbers in a benchmark.
-    pub fn production_spin_threshold_us(wake_error_us: u64) -> u64 {
-        super::worker::derive_spin_threshold_us(wake_error_us, super::config::DEFAULT_SPIN_FLOOR_US)
+    /// Derive the retired adaptive policy for A/B diagnostics only. It is not
+    /// part of the production worker configuration or control path.
+    pub fn legacy_adaptive_spin_threshold_us(wake_error_us: u64) -> u64 {
+        super::worker::derive_spin_threshold_us(wake_error_us, LEGACY_ADAPTIVE_SPIN_FLOOR_US)
     }
 }
 
@@ -123,7 +121,6 @@ const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
-const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 #[cfg(test)]

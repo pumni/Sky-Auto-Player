@@ -15,7 +15,6 @@ from sky_music.infrastructure.focus import (
     NoopFocusGuard,
     Win32SkyFocusGuard,
 )
-from sky_music.orchestration.estimator_cache import save_estimator_state
 from sky_music.orchestration.native_dispatch import (
     NativeDispatchError,
     RustDispatchRuntime,
@@ -127,7 +126,7 @@ class PlaybackEngine:
             telemetry_enabled=self.telemetry.enabled,
         )
         try:
-            outcome, snapshot, native_telemetry, estimator_state_json = runtime.run()
+            outcome, snapshot, native_telemetry, _deprecated_estimator_state_json = runtime.run()
         except NativeDispatchError as exc:
             # The native supervisor has already joined and materialized the
             # final report before raising a terminal worker error. Ingest it
@@ -144,15 +143,6 @@ class PlaybackEngine:
         self._last_snapshot = snapshot
         self._input_path_degraded = bool(snapshot.get("input_path_degraded", False))
         self._ingest_native_report(snapshot, native_telemetry)
-        if (
-            outcome == PLAYBACK_FINISHED
-            and estimator_state_json is not None
-            and snapshot.get("terminal_error") is None
-        ):
-            save_estimator_state(
-                estimator_state_json,
-                native_abi=str(snapshot.get("native_abi", "")),
-            )
         if outcome == PLAYBACK_ERROR:
             raise NativeDispatchError(
                 str(snapshot.get("terminal_error") or "native dispatch failed")

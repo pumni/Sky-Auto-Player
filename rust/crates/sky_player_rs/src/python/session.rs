@@ -50,7 +50,6 @@ impl NativeDispatchSessionPy {
         let effective_min_hold_us = min_hold_us.max(frame_period_us.saturating_add(500));
         let require_focus = config.require_focus;
         let focus_restore_grace_us = config.focus_restore_grace_us;
-        let spin_threshold_us = crate::engine::DEFAULT_SPIN_THRESHOLD_US;
         let parsed_telemetry_mode = if config.telemetry {
             crate::engine::TelemetryMode::Ring
         } else {
@@ -60,8 +59,6 @@ impl NativeDispatchSessionPy {
         let priority_mode = PriorityMode::Auto;
         let enable_waitable_timer = true;
         let enable_event_wait = true;
-        let enable_adaptive_spin = true;
-        let spin_floor_us = crate::engine::DEFAULT_SPIN_FLOOR_US;
         // Compatibility input only: estimator state is intentionally ignored.
         let _deprecated_estimator_state_json = config.estimator_state_json.as_ref();
         let input_path_warn_us = 300;
@@ -85,8 +82,6 @@ impl NativeDispatchSessionPy {
                 strict_down_completion_late_us,
                 strict_up_completion_late_us,
                 input_path_warn_us,
-                spin_threshold_us,
-                spin_floor_us,
             },
             focus: FocusOptions {
                 require_focus,
@@ -95,7 +90,6 @@ impl NativeDispatchSessionPy {
             wait: WaitOptions {
                 enable_waitable_timer,
                 enable_event_wait,
-                enable_adaptive_spin,
                 supervisor_lease_timeout_us,
             },
             telemetry: TelemetryOptions {
@@ -485,7 +479,7 @@ impl TestDispatchSessionPy {
         mock_latency_per_key_us = StrictU64(40),
          telemetry_capacity = StrictU64(1024),
          dispatch_lead_us = StrictU64(0),
-         rt_priority_mode = "off",
+        rt_priority_mode = "off",
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = true,
@@ -509,7 +503,7 @@ impl TestDispatchSessionPy {
         enable_dispatch_cost_lead: bool,
         fault_mode: &str,
     ) -> PyResult<Self> {
-        let _ = enable_dispatch_cost_lead;
+        let _ = (enable_adaptive_spin, enable_dispatch_cost_lead);
         let min_hold_us = min_hold_us.0;
         let game_fps = u16::try_from(game_fps.0)
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
@@ -578,8 +572,6 @@ impl TestDispatchSessionPy {
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
                 input_path_warn_us: 300,
-                spin_threshold_us: 150,
-                spin_floor_us: 700,
             },
             focus: FocusOptions {
                 require_focus: false,
@@ -588,7 +580,6 @@ impl TestDispatchSessionPy {
             wait: WaitOptions {
                 enable_waitable_timer,
                 enable_event_wait,
-                enable_adaptive_spin,
                 supervisor_lease_timeout_us: 3_000_000,
             },
             telemetry: TelemetryOptions {

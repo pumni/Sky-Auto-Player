@@ -1,6 +1,5 @@
 use super::{lease_bounded_ticks, wait_failure_message};
 use crate::engine::telemetry::WorkerMetricsLocal;
-use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
@@ -11,6 +10,7 @@ pub(crate) enum WaitBoundary {
     Due {
         wait_result: Option<WaitResult>,
         target_qpc: QpcTicks,
+        dispatch_qpc: QpcTicks,
     },
     Replan {
         wait_result: WaitResult,
@@ -28,11 +28,9 @@ pub struct WaitObservation {
     pub allow_pre_epoch_startup_dispatch: bool,
 }
 
-pub(crate) struct WaitDeadline<'a> {
-    pub(crate) deadline_ticks: Option<TimelineTicks>,
+pub(crate) struct WaitDeadline {
+    pub(crate) physical_target_qpc: Option<QpcTicks>,
     pub(crate) qpc_clock: QpcClock,
-    pub(crate) clock_state: &'a mut PlaybackClockState,
-    pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 
 pub(crate) struct WaitTiming<'a> {
@@ -53,7 +51,7 @@ pub(crate) struct WaitMutable<'a> {
 }
 
 pub(crate) struct WaitBoundaryInput<'a> {
-    pub(crate) deadline: WaitDeadline<'a>,
+    pub(crate) deadline: WaitDeadline,
     pub(crate) timing: WaitTiming<'a>,
     pub(crate) signals: WaitSignals<'a>,
     pub(crate) mutable: WaitMutable<'a>,
@@ -86,10 +84,9 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         mutable,
     } = context;
     let WaitDeadline {
-        deadline_ticks,
+        physical_target_qpc,
         qpc_clock,
-        clock_state,
-        allow_pre_epoch_startup_dispatch,
+        ..
     } = deadline;
     let WaitTiming {
         effective_spin_threshold_ticks,
@@ -103,11 +100,10 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         terminal_error,
     } = mutable;
 
-    let Some(deadline_ticks) = deadline_ticks else {
-        return WaitBoundary::Exit;
+    let target_qpc = match physical_target_qpc {
+        Some(target) => target,
+        None => return WaitBoundary::Exit,
     };
-
-    // Sample QPC and logical elapsed time together to avoid shifting the target.
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -116,44 +112,13 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             return WaitBoundary::Exit;
         }
     };
-    let target_sample_elapsed_ticks = match clock_state
-        .get_elapsed_allow_pre_epoch(target_sample_ticks, allow_pre_epoch_startup_dispatch)
-    {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            *force_full_cleanup = true;
-            *terminal_error = Some(format!("playback clock failure: {error}"));
-            return WaitBoundary::Exit;
-        }
-    };
-    if deadline_ticks <= target_sample_elapsed_ticks {
-        let target_qpc = match clock_state
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
-        {
-            Ok(target) => target,
-            Err(error) => {
-                *force_full_cleanup = true;
-                *terminal_error = Some(format!("deadline arithmetic failure: {error}"));
-                return WaitBoundary::Exit;
-            }
-        };
+    if target_sample_ticks >= target_qpc {
         return WaitBoundary::Due {
             wait_result: None,
             target_qpc,
+            dispatch_qpc: target_sample_ticks,
         };
     }
-    let target_qpc = match clock_state
-        .epoch
-        .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
-    {
-        Ok(target) => target,
-        Err(error) => {
-            *force_full_cleanup = true;
-            *terminal_error = Some(format!("deadline arithmetic failure: {error}"));
-            return WaitBoundary::Exit;
-        }
-    };
     let bounded_target =
         match lease_bounded_ticks(target_qpc, lease_timeout_ticks, supervisor_heartbeat_ticks) {
             Ok(target) => target,
@@ -171,9 +136,11 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     );
     match wait_result.outcome {
         WaitOutcome::Deadline if dispatch_deadline_wake_is_due(bounded_target, target_qpc) => {
+            let dispatch_qpc = wait_result.wake_qpc.unwrap_or(target_qpc);
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
                 target_qpc,
+                dispatch_qpc,
             }
         }
         WaitOutcome::Deadline => WaitBoundary::Replan {
@@ -204,7 +171,6 @@ mod tests {
         dispatch_deadline_wake_is_due, record_wait_failure, wait_for_next_boundary,
     };
     use crate::engine::telemetry::WorkerMetricsLocal;
-    use sky_dispatch_core::clock::PlaybackClockState;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     use sky_dispatch_win32::event::OwnedEvent;
@@ -268,8 +234,6 @@ mod tests {
                 .expect("deadline conversion")
                 .as_u64(),
         );
-        let mut clock_state =
-            PlaybackClockState::new(epoch, DurationTicks::ZERO).expect("playback clock");
         let heartbeat = AtomicU64::new(epoch.as_u64());
         let waiter = HybridWaiter::new();
         let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
@@ -279,10 +243,12 @@ mod tests {
 
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
-                deadline_ticks: Some(deadline),
+                physical_target_qpc: Some(
+                    epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                        .expect("target"),
+                ),
                 qpc_clock,
-                clock_state: &mut clock_state,
-                allow_pre_epoch_startup_dispatch: false,
             },
             timing: WaitTiming {
                 effective_spin_threshold_ticks: DurationTicks::ZERO,

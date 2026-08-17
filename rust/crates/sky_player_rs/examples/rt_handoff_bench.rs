@@ -9,7 +9,7 @@
 #![cfg(feature = "test-support")]
 
 use serde_json::json;
-use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitResult, WakeErrorStats};
@@ -22,6 +22,15 @@ use std::time::Instant;
 
 const DEFAULT_ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
+const WAKE_PROBE_SAMPLES: usize = 32;
+
+fn due_us() -> u64 {
+    std::env::var("RT_HANDOFF_BENCH_DUE_US")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &u64| (1..=60_000).contains(value))
+        .unwrap_or(DUE_US)
+}
 
 fn iterations() -> usize {
     std::env::var("RT_HANDOFF_BENCH_ITERATIONS")
@@ -157,12 +166,16 @@ fn observation_enqueue_ab() -> serde_json::Value {
     }
 
     assert_eq!(available_dropped, 0);
-    assert_eq!(available_high_watermark, 1);
-    assert_eq!(saturated_high_watermark, OBSERVATION_QUEUE_CAPACITY as u64);
     assert_eq!(saturated_dropped, sample_count as u64);
+    // The precision producer intentionally does not call ArrayQueue::len()
+    // to maintain a watermark.  Keep the variables in the report for schema
+    // compatibility, but assert the Round 2 no-len contract instead.
+    assert_eq!(available_high_watermark, 0);
+    assert_eq!(saturated_high_watermark, 0);
     json!({
         "scope": "producer primitive only; observation construction, copying, and consumer drain excluded",
         "clock": "std::time::Instant",
+        "high_watermark_tracking": "disabled_in_precision_path",
         "iterations": sample_count,
         "baseline_bypass_ns": nanos_summary(bypass_ns),
         "available_queue_push_ns": nanos_summary(available_ns),
@@ -194,14 +207,27 @@ fn signed_qpc_us(
     if negative { -value } else { value }
 }
 
+fn signed_timeline_us(clock: QpcClock, end: TimelineTicks, start: TimelineTicks) -> i64 {
+    let (negative, ticks) = if end >= start {
+        (
+            false,
+            end.checked_duration_since(start)
+                .expect("timeline ordering"),
+        )
+    } else {
+        (
+            true,
+            start
+                .checked_duration_since(end)
+                .expect("timeline ordering"),
+        )
+    };
+    let value = clock.duration_to_us(ticks).expect("timeline conversion") as i64;
+    if negative { -value } else { value }
+}
+
 fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait: WaitResult) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
-    let signed_ticks_to_us = |value: i64| {
-        qpc_clock
-            .duration_to_us(DurationTicks::from_raw(value.unsigned_abs()))
-            .expect("timing conversion") as i64
-            * value.signum()
-    };
     match observation {
         DispatchObservation::Down(value) => {
             let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
@@ -213,9 +239,9 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             }).unwrap_or_else(|| {
                 panic!(
                     "missing Down wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
-                    value.trace.wake_ticks,
-                    value.trace.final_admission_ticks,
-                    value.trace.sendinput_completed_ticks
+                    value.wake_qpc,
+                    value.final_admission_qpc,
+                    value.sendinput_completed_qpc
                 )
             });
             samples.wake_to_admission_us.push(wake_to_admission_us);
@@ -232,17 +258,31 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             if value.final_admission_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
-            samples
-                .dispatch_start_error_us
-                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.dispatch_start_error_us.push(signed_qpc_us(
+                qpc_clock,
+                value.final_admission_qpc,
+                value.physical_target_qpc,
+            ));
             samples.admission_to_completion_us.push(
                 qpc_clock
-                    .duration_to_us(value.admission_to_completion_ticks)
+                    .duration_to_us(
+                        value
+                            .sendinput_completed_qpc
+                            .checked_duration_since(value.final_admission_qpc)
+                            .expect("QPC ordering"),
+                    )
                     .expect("duration"),
             );
-            samples
-                .completion_error_us
-                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
+            let completed_effective_ticks = value
+                .sendinput_completed_qpc
+                .checked_duration_since(value.epoch_qpc)
+                .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
+                .unwrap_or(TimelineTicks::ZERO);
+            samples.completion_error_us.push(signed_timeline_us(
+                qpc_clock,
+                completed_effective_ticks,
+                value.trace.effective_deadline_ticks,
+            ));
         }
         DispatchObservation::Up(value) => {
             let wake_to_admission_us = value.wake_qpc.and_then(|wake| {
@@ -254,9 +294,9 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             }).unwrap_or_else(|| {
                 panic!(
                     "missing Up wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
-                    value.trace.wake_ticks,
-                    value.trace.final_admission_ticks,
-                    value.trace.sendinput_completed_ticks
+                    value.wake_qpc,
+                    value.final_admission_qpc,
+                    value.sendinput_completed_qpc
                 )
             });
             samples.wake_to_admission_us.push(wake_to_admission_us);
@@ -273,17 +313,21 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             if value.final_admission_qpc < value.physical_target_qpc {
                 samples.early_dispatch_count += 1;
             }
-            samples
-                .dispatch_start_error_us
-                .push(signed_ticks_to_us(value.trace.dispatch_start_error_ticks));
+            samples.dispatch_start_error_us.push(signed_qpc_us(
+                qpc_clock,
+                value.final_admission_qpc,
+                value.physical_target_qpc,
+            ));
             samples.admission_to_completion_us.push(
                 qpc_clock
                     .duration_to_us(value.admission_to_completion_ticks)
                     .expect("duration"),
             );
-            samples
-                .completion_error_us
-                .push(signed_ticks_to_us(value.trace.completion_error_ticks));
+            samples.completion_error_us.push(signed_timeline_us(
+                qpc_clock,
+                value.completed_effective_ticks,
+                value.trace.effective_deadline_ticks,
+            ));
         }
         DispatchObservation::Wait(wait) => {
             panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")
@@ -306,7 +350,8 @@ fn plan_projected(
 fn run_down(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
-        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, DUE_US);
+        let mut harness =
+            ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -336,7 +381,7 @@ fn run_up(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let mut harness =
-            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, DUE_US);
+            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -369,7 +414,7 @@ fn run_mixed(event_count: usize, mode: WaitMode) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let mut harness =
-            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, DUE_US);
+            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -413,6 +458,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.wake_to_admission_us, 50, 100),
             "p95": quantile(&mut samples.wake_to_admission_us, 95, 100),
             "p99": quantile(&mut samples.wake_to_admission_us, 99, 100),
+            "p99_9": quantile(&mut samples.wake_to_admission_us, 999, 1000),
             "max": samples.wake_to_admission_us.iter().copied().max(),
             "samples": samples.wake_to_admission_us.len(),
         },
@@ -420,6 +466,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.final_spin_us, 50, 100),
             "p95": quantile(&mut samples.final_spin_us, 95, 100),
             "p99": quantile(&mut samples.final_spin_us, 99, 100),
+            "p99_9": quantile(&mut samples.final_spin_us, 999, 1000),
             "max": samples.final_spin_us.iter().copied().max(),
             "samples": samples.final_spin_us.len(),
         },
@@ -453,6 +500,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "p50": quantile(&mut samples.target_to_completion_us, 50, 100),
             "p95": quantile(&mut samples.target_to_completion_us, 95, 100),
             "p99": quantile(&mut samples.target_to_completion_us, 99, 100),
+            "p99_9": quantile(&mut samples.target_to_completion_us, 999, 1000),
             "max": samples.target_to_completion_us.iter().copied().max(),
             "samples": samples.target_to_completion_us.len(),
         },
@@ -472,18 +520,14 @@ fn build_wait_mode(
     let waiter = HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
-        .probe_wake_error_stats(
-            qpc_clock,
-            &interrupt,
-            sky_player_rs::engine::dispatch_primitives::PRODUCTION_ADAPTIVE_SPIN_PROBE_SAMPLES,
-        )
+        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
-        sky_player_rs::engine::dispatch_primitives::production_spin_threshold_us(
+        sky_player_rs::engine::dispatch_primitives::legacy_adaptive_spin_threshold_us(
             startup_wake_error.p95_us,
         )
     } else if event_wait_enabled {
-        sky_player_rs::engine::dispatch_primitives::PRODUCTION_SPIN_FLOOR_US
+        sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US
     } else {
         0
     };
@@ -493,6 +537,23 @@ fn build_wait_mode(
         event_wait_enabled,
         adaptive_spin_enabled,
         effective_spin_threshold_us,
+        startup_wake_error,
+    }
+}
+
+fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode {
+    let qpc_clock = QpcClock::initialize().expect("QPC");
+    let waiter = HybridWaiter::with_options(true, true);
+    let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
+    let startup_wake_error = waiter
+        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
+        .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
+    WaitMode {
+        name,
+        waitable_timer_enabled: true,
+        event_wait_enabled: true,
+        adaptive_spin_enabled: false,
+        effective_spin_threshold_us: spin_threshold_us,
         startup_wake_error,
     }
 }
@@ -512,8 +573,10 @@ fn main() {
     let qpc_frequency = qpc_frequency_checked().expect("QPC frequency");
     let modes = [
         build_wait_mode("production_adaptive_spin", true, true, true),
-        build_wait_mode("timer_only_spin_zero", true, false, false),
-        build_wait_mode("fixed_production_floor", true, true, false),
+        build_fixed_wait_mode("fixed_spin_250us", 250),
+        build_fixed_wait_mode("fixed_spin_400us", 400),
+        build_fixed_wait_mode("fixed_spin_700us", 700),
+        build_fixed_wait_mode("fixed_spin_1000us", 1_000),
     ];
     let mut mode_reports = serde_json::Map::new();
     for mode in modes {
@@ -552,7 +615,7 @@ fn main() {
                 "waitable_timer_enabled": mode.waitable_timer_enabled,
                 "event_wait_enabled": mode.event_wait_enabled,
                 "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-                "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_SPIN_FLOOR_US,
+                "spin_floor_us": sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US,
                 "effective_spin_threshold_us": mode.effective_spin_threshold_us,
                 "mmcss_mode": "off_test_guard",
                 "priority_mode": "off_test_guard",
@@ -570,7 +633,7 @@ fn main() {
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
         "iterations": iterations(),
-        "deadline_us": DUE_US,
+        "deadline_us": due_us(),
         "transport": "deterministic_mock",
         "observation_enqueue_ab": observation_enqueue_ab,
         "modes": mode_reports,

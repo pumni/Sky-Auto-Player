@@ -106,25 +106,18 @@ fn disable_counting() -> u64 {
 
 fn down_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Down(DownObservation {
-        path: DispatchPath::DownOnly { down_count: 1 },
+        epoch_qpc: QpcTicks::ZERO,
+        allow_pre_epoch_startup_dispatch: false,
         physical_target_qpc: QpcTicks::ZERO,
-        timeline_rebase_count: 0,
-        timeline_rebase_total_ticks: DurationTicks::ZERO,
-        timeline_rebase_max_ticks: DurationTicks::ZERO,
-        timeline_rebase_last_reason: 0,
         final_admission_qpc: QpcTicks::ZERO,
         sendinput_completed_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
-        admission_to_completion_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_packet: PhysicalPacket::new(0, 1),
         confirmed_mask: 1,
         skipped_mask: 0,
-        completed_effective_ticks: TimelineTicks::from_raw(n),
-        send_warn_us: 0,
-        core_post_send_warn_us: 0,
         trace: DownTraceObservation {
-            event_index: 0,
+            event_index: n as u32,
             trace_kind: 0,
             result_status: SendTransactionStatus::Complete,
             send_attempts: 1,
@@ -133,15 +126,6 @@ fn down_observation(n: u64) -> DispatchObservation {
             last_win32_error: 0,
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
-            wake_ticks: TimelineTicks::ZERO,
-            final_admission_ticks: Some(TimelineTicks::ZERO),
-            sendinput_completed_ticks: Some(TimelineTicks::ZERO),
-            dispatch_start_error_ticks: n as i64,
-            completion_error_ticks: 0,
-            authored_completion_error_ticks: 0,
-            recovered_retry_late: false,
-            recovered_partial_up: false,
-            strict_completion_late: false,
         },
     })
 }
@@ -162,8 +146,6 @@ fn up_observation(n: u64) -> DispatchObservation {
         scheduled_ticks: TimelineTicks::ZERO,
         deferred_ticks: DurationTicks::ZERO,
         up_completion_error_ticks: 0,
-        send_warn_us: 0,
-        core_post_send_warn_us: 0,
         recovery_pause_ticks: None,
         trace: UpTraceObservation {
             event_index: 0,
@@ -370,7 +352,7 @@ fn overflow_drops_newest_for_down_and_up() {
         let first = queue.pop_front().expect("queue remains non-empty");
         match first {
             DispatchObservation::Down(observation) => {
-                assert_eq!(observation.trace.dispatch_start_error_ticks, 0);
+                assert_eq!(observation.trace.event_index, 0);
             }
             DispatchObservation::Up(_) => panic!("unexpected Up observation in seeded queue"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
@@ -387,8 +369,8 @@ fn overflow_drops_newest_for_down_and_up() {
         match last.expect("newest observation must be retained") {
             DispatchObservation::Down(observation) => {
                 assert_eq!(
-                    observation.trace.dispatch_start_error_ticks,
-                    (OBSERVATION_QUEUE_CAPACITY - 1) as i64
+                    observation.trace.event_index,
+                    (OBSERVATION_QUEUE_CAPACITY - 1) as u32
                 )
             }
             DispatchObservation::Up(_) => panic!("newest Up observation must be dropped"),
@@ -426,7 +408,9 @@ fn burst_push_and_drain_no_alloc() {
     );
     assert_eq!(drained, BURST);
     assert_eq!(dropped, 0);
-    assert_eq!(high, BURST as u64);
+    // Producer paths no longer call queue.len(); high-watermark is an
+    // observer-side diagnostic and remains zero on this hard path.
+    assert_eq!(high, 0);
 }
 
 /// pop_front on an empty queue does not allocate.
@@ -570,4 +554,138 @@ fn production_deadline_handoff_up_no_alloc() {
 
     assert_eq!(allocs, 0);
     assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_fifteen_key_down_chord_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(15, 0);
+
+    enable_counting();
+    let plan = harness.plan_current_dispatch();
+    let step = harness.dispatch_authored_with_plan(&plan);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "15-key Down chord allocated {allocs} time(s)");
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_pending_release_up_only_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    let authored = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&authored),
+        Ok(DispatchStep::Dispatched)
+    ));
+
+    enable_counting();
+    let pending = harness.plan_current_dispatch();
+    assert_eq!(
+        pending.authored_path(),
+        Some(DispatchPath::UpOnly { up_count: 1 })
+    );
+    let step = harness.wait_and_dispatch_current_plan(&pending);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "pending Up-only path allocated {allocs} time(s)");
+    assert!(matches!(step, Ok(DispatchStep::Dispatched)));
+}
+
+#[test]
+fn production_coalesced_pending_up_and_authored_down_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness =
+        ProductionDispatchTestHarness::new_coalesced_pending_release_with_unrelated_down();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    let deferred = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&deferred),
+        Ok(DispatchStep::Dispatched)
+    ));
+
+    harness.advance_playback_time_us(1_000);
+    let coalesced = harness.plan_current_dispatch();
+    assert_eq!(
+        coalesced.authored_path(),
+        Some(DispatchPath::Mixed {
+            up_count: 1,
+            down_count: 1,
+        })
+    );
+    harness.set_deadline_wake_for_plan_for_test(&coalesced);
+    enable_counting();
+    let step = harness.dispatch_due_from_plan_for_test(&coalesced);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "coalesced Mixed path allocated {allocs} time(s)");
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_metadata_only_deferred_commit_at_equal_boundary_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_pending_release_with_metadata_boundary();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    let second = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&second),
+        Ok(DispatchStep::Dispatched)
+    ));
+    let deferred = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.wait_and_dispatch_current_plan(&deferred),
+        Ok(DispatchStep::Dispatched)
+    ));
+
+    harness.advance_playback_time_us(1_000);
+    let equal_boundary = harness.plan_current_dispatch();
+    harness.set_deadline_wake_for_plan_for_test(&equal_boundary);
+    enable_counting();
+    let step = harness.dispatch_due_from_plan_for_test(&equal_boundary);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "equal-boundary metadata commit allocated {allocs} time(s)"
+    );
+    assert!(matches!(step, DispatchStep::Dispatched));
+}
+
+#[test]
+fn production_backlog_abort_decision_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    harness.advance_playback_time_us(100_000);
+
+    enable_counting();
+    let overdue = harness.plan_current_dispatch();
+    let step = harness.dispatch_due_from_plan_for_test(&overdue);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "backlog decision allocated {allocs} time(s)");
+    assert!(match step {
+        DispatchStep::Terminate(error) => error.contains("catch-up"),
+        DispatchStep::TerminateStatic(error) => error.contains("catch-up"),
+        _ => false,
+    });
 }

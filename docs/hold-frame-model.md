@@ -48,11 +48,18 @@ own call duration from shortening the configured hold.
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
-The coordinator may defer an authored release until this floor after a slow
-Down; that defer does not move unrelated future authored actions. A transport
-zero/partial result is terminal and is handled by fail-closed cleanup; it is not
-retried in production. Strict timing evaluates completion residuals, while
-normal playback preserves the schedule when transport integrity remains valid.
+The native-boundary validator performs this check before the worker can send
+anything, including exact same-timestamp retriggers and timestamp overflow
+cases. The coordinator may defer an authored release until this floor after a
+slow Down; it records the defer in a fixed per-key generation table. That defer
+does not move unrelated future authored actions and cannot head-of-line block a
+Down chord on other keys. A same-key Down whose floor is infeasible fails
+closed before transport.
+
+A transport zero/partial result is terminal and is handled by fail-closed
+cleanup; it is not retried in production. Strict timing evaluates completion
+residuals, while normal playback preserves the schedule when transport
+integrity remains valid.
 
 The native observer reports sender-side start, completion, lateness, duration,
 and release-floor evidence. These values are not game-onset or audio-onset
