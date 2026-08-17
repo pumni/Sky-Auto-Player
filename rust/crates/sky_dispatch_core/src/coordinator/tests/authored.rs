@@ -181,7 +181,7 @@ fn current_authored_packet_can_be_prepared_before_its_deadline() {
         RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
 
     let prepared = coordinator
-        .prepare_current_authored_packet()
+        .prepare_current_authored_batch()
         .expect("current packet preparation")
         .expect("future packet exists");
     assert_eq!(prepared.effective_scheduled_ticks.as_u64(), 10_000);
@@ -561,7 +561,7 @@ fn owned_and_stale_up_with_down_is_mixed_with_physical_count_two() {
 }
 
 #[test]
-fn mixed_packet_waits_until_release_not_before_without_shifting_following_action() {
+fn authored_mixed_packet_keeps_its_authored_deadline() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -606,33 +606,15 @@ fn mixed_packet_waits_until_release_not_before_without_shifting_following_action
         .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(20))
         .unwrap();
 
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
-            .unwrap()
-            .is_none()
-    );
     let mixed = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(mixed.packet_kind, PhysicalPacketKind::Mixed);
-    coordinator
-        .commit_packet_success(
-            mixed,
-            TimelineTicks::from_raw(120),
-            TimelineTicks::from_raw(130),
-        )
-        .unwrap();
-    let following = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(199), DurationTicks::ZERO)
-        .unwrap();
-    assert!(following.is_none());
-    let following = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(200), DurationTicks::ZERO)
-        .unwrap()
-        .unwrap();
-    assert_eq!(following.effective_scheduled_ticks.as_u64(), 200);
+    assert_eq!(
+        mixed.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]
@@ -686,7 +668,7 @@ fn authored_packet_lifecycle_has_no_pending_release_state() {
 }
 
 #[test]
-fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
+fn authored_up_only_packet_keeps_its_authored_deadline() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -729,21 +711,19 @@ fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
         coordinator.next_authored_ticks(lead).unwrap(),
         Some(TimelineTicks::from_raw(100))
     );
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
-            .unwrap()
-            .is_none()
-    );
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+        .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
         .unwrap()
         .unwrap();
     assert_eq!(prepared.packet_kind, PhysicalPacketKind::UpOnly);
+    assert_eq!(
+        prepared.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]
-fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
+fn authored_mixed_packet_deadline_is_not_shifted_by_dispatch_lead() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -786,17 +766,15 @@ fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
         coordinator.next_authored_ticks(lead).unwrap(),
         Some(TimelineTicks::from_raw(100))
     );
-    assert!(
-        coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
-            .unwrap()
-            .is_none()
-    );
     let prepared = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+        .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
         .unwrap()
         .unwrap();
     assert_eq!(prepared.packet_kind, PhysicalPacketKind::Mixed);
+    assert_eq!(
+        prepared.effective_scheduled_ticks,
+        TimelineTicks::from_raw(100)
+    );
 }
 
 #[test]

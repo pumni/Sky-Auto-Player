@@ -218,6 +218,7 @@ pub(crate) fn wait_failure_message(failure: WaitFailure) -> String {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
     wake_error_us
         .saturating_add(200)

@@ -89,7 +89,7 @@ fn measure(generation_count: usize, polyphony: usize, samples: usize) -> serde_j
         .expect("coordinator construction");
         let mut coordinator = coordinator;
         let prepared = coordinator
-            .prepare_current_authored_packet()
+            .prepare_current_authored_batch()
             .expect("current packet preparation")
             .expect("first packet");
         let packet = coordinator

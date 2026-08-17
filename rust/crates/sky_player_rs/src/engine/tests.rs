@@ -40,8 +40,6 @@ fn test_session_options(
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
             input_path_warn_us: 300,
-            spin_threshold_us: 150,
-            spin_floor_us: 700,
         },
         focus: FocusOptions {
             require_focus: false,
@@ -50,7 +48,6 @@ fn test_session_options(
         wait: WaitOptions {
             enable_waitable_timer: true,
             enable_event_wait: true,
-            enable_adaptive_spin: false,
             supervisor_lease_timeout_us: 0,
         },
         telemetry: TelemetryOptions {
@@ -2855,11 +2852,10 @@ fn future_classification_then_waiter_entry_stall_sends_zero_second_boundary() {
         super::worker::DispatchStep::NoWork
     ));
 
-    // Replan after a deterministic stall: the waiter would enter with B
-    // already due and therefore returns Due { wait_result: None } semantics.
-    harness.advance_playback_time_us(100_000);
-    let overdue = harness.plan_current_dispatch();
-    let step = harness.dispatch_due_from_plan_for_test(&overdue);
+    // Keep the same frozen B plan.  Model a stall before waiter entry so the
+    // waiter returns Due { wait_result: None } for this already-overdue
+    // target; the guard must remain armed and reject the second send.
+    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
     assert!(match step {
         super::worker::DispatchStep::TerminateStatic(error) => error.contains("catch-up"),
         super::worker::DispatchStep::Terminate(error) => error.contains("catch-up"),
@@ -3753,6 +3749,43 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
 }
 
 #[test]
+fn native_min_hold_admission_uses_runtime_qpc_tick_domain() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 1,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "qpc-rounding-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 101,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "qpc-rounding-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid authored schedule");
+    assert!(
+        sky_dispatch_core::validation::validate_min_hold_feasibility(&schedule, 100).is_ok(),
+        "the microsecond-only validator must expose the rounding mismatch"
+    );
+
+    let qpc_clock = QpcClock::from_frequency_hz(
+        std::num::NonZeroU64::new(3_125_000).expect("non-zero test frequency"),
+    );
+    let result = super::session::validate_native_schedule_timing(&schedule, 100, qpc_clock);
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("same-key hold too short")),
+        "tick-domain admission must reject before worker creation: {result:?}"
+    );
+}
+
+#[test]
 fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
     let actions = vec![
         KeyActionInput {
@@ -4312,7 +4345,7 @@ fn late_first_event_does_not_move_second_event() {
 }
 
 #[test]
-fn release_floor_does_not_move_unrelated_future_action() {
+fn pending_release_does_not_move_unrelated_future_authored_action() {
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4366,30 +4399,28 @@ fn release_floor_does_not_move_unrelated_future_action() {
         )
         .unwrap();
 
-    let p_up_a = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(25_000))
+    let up_frame = coordinator
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
+    assert_eq!(up_frame.authored_ticks, TimelineTicks::from_raw(20_000));
+    let up_commit = coordinator.prepare_authored_commit(up_frame).unwrap();
+    coordinator
+        .commit_prepared_authored_frame_metadata_frozen(&up_commit)
+        .unwrap();
     assert_eq!(
-        p_up_a.effective_scheduled_ticks,
-        TimelineTicks::from_raw(25_000)
+        coordinator.earliest_pending_release_ticks(),
+        Some(TimelineTicks::from_raw(25_000))
     );
     coordinator
-        .commit_packet_success(
-            p_up_a,
-            TimelineTicks::from_raw(25_000),
-            TimelineTicks::from_raw(25_050),
-        )
+        .commit_pending_release_success(0b001, TimelineTicks::from_raw(25_000))
         .unwrap();
 
-    let p_down_b = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(30_000))
+    let down_b = coordinator
+        .prepare_current_authored_frame()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        p_down_b.effective_scheduled_ticks,
-        TimelineTicks::from_raw(30_000)
-    );
+    assert_eq!(down_b.authored_ticks, TimelineTicks::from_raw(30_000));
 }
 
 #[test]

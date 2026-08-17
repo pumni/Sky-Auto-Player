@@ -921,6 +921,28 @@ impl ProductionDispatchTestHarness {
         let now_ticks = self.resources.clock.now().expect("qpc now");
         self.dispatch_plan_at(plan, self.effective_now_ticks, now_ticks)
     }
+
+    /// Inject the exact waiter-entry race for a still-frozen physical plan:
+    /// it was future when classified, the worker stalled before the waiter's
+    /// first QPC read, and the waiter therefore returned `Due(None)` at an
+    /// already-overdue target.  No wall-clock sleep or replan is involved.
+    pub fn dispatch_same_frozen_plan_after_due_without_wait_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("waiter-entry race requires a physical target");
+        let overdue_now = target
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("overdue test target arithmetic");
+        self.runtime.record_due_without_wait_for_test();
+        self.dispatch_plan_at(
+            plan,
+            plan.deadline_ticks().expect("physical deadline"),
+            overdue_now,
+        )
+    }
     /// Query the current authored packet path without mutating state.
     pub fn current_authored_path(&self) -> Option<DispatchPath> {
         let (up_mask, down_mask) = self.resources.coordinator.next_authored_packet_masks()?;

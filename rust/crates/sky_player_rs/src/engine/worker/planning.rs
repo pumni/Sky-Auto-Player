@@ -57,7 +57,7 @@ pub struct PhysicalDispatchPlan {
 
 #[derive(Debug)]
 pub struct MetadataBoundaryPlan {
-    pub(crate) frame: sky_dispatch_core::coordinator::PreparedAuthoredFrame,
+    pub(crate) commit: sky_dispatch_core::coordinator::PreparedAuthoredCommit,
     pub(crate) deadline_ticks: TimelineTicks,
     pub(crate) physical_target_qpc: QpcTicks,
 }
@@ -247,13 +247,14 @@ pub(crate) fn plan_next_dispatch_projected(
     };
     let authored_is_physical = frame.immediate_up_mask != 0 || frame.down_mask != 0;
     if !authored_is_physical && coalesced_pending_mask == 0 {
+        let commit = coordinator.prepare_authored_commit(frame)?;
         let physical_target_qpc = epoch_qpc
             .checked_add_duration(DurationTicks::from_raw(frame.authored_ticks.as_u64()))
             .map_err(|error| {
                 PlanningError::Prepared(format!("metadata target arithmetic failure: {error}"))
             })?;
         return Ok(NextDispatchPlan::Metadata(MetadataBoundaryPlan {
-            frame,
+            commit,
             deadline_ticks: frame.authored_ticks,
             physical_target_qpc,
         }));

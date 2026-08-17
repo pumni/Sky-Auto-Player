@@ -56,28 +56,21 @@ pub struct DownTraceObservation {
     pub last_win32_error: u32,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
-    pub wake_ticks: TimelineTicks,
-    pub final_admission_ticks: Option<TimelineTicks>,
-    pub sendinput_completed_ticks: Option<TimelineTicks>,
-    pub recovered_retry_late: bool,
-    pub recovered_partial_up: bool,
-    pub strict_completion_late: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct DownObservation {
-    pub path: DispatchPath,
+    pub epoch_qpc: QpcTicks,
+    pub allow_pre_epoch_startup_dispatch: bool,
     pub physical_target_qpc: QpcTicks,
     pub final_admission_qpc: QpcTicks,
     pub sendinput_completed_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
-    pub admission_to_completion_ticks: DurationTicks,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
     pub requested_packet: PhysicalPacket,
     pub confirmed_mask: u16,
     pub skipped_mask: u16,
-    pub completed_effective_ticks: TimelineTicks,
     pub trace: DownTraceObservation,
 }
 
@@ -88,6 +81,25 @@ impl DownTraceObservation {
 }
 
 impl DownObservation {
+    pub(super) const fn path(self) -> DispatchPath {
+        match (
+            self.requested_packet.up_mask != 0,
+            self.requested_packet.down_mask != 0,
+        ) {
+            (true, false) => DispatchPath::UpOnly {
+                up_count: self.requested_packet.up_mask.count_ones() as usize,
+            },
+            (false, true) => DispatchPath::DownOnly {
+                down_count: self.requested_packet.down_mask.count_ones() as usize,
+            },
+            (true, true) => DispatchPath::Mixed {
+                up_count: self.requested_packet.up_mask.count_ones() as usize,
+                down_count: self.requested_packet.down_mask.count_ones() as usize,
+            },
+            (false, false) => DispatchPath::UpOnly { up_count: 0 },
+        }
+    }
+
     pub(super) const fn requested_count(self) -> usize {
         down_transport_counts(
             self.requested_packet,
@@ -135,6 +147,67 @@ pub(super) const fn down_transport_counts(
         },
         skipped_mask.count_ones() as usize,
     )
+}
+
+pub(super) fn down_effective_ticks(
+    observation: &DownObservation,
+    qpc_ticks: QpcTicks,
+) -> Result<TimelineTicks, DispatchStep> {
+    if observation.allow_pre_epoch_startup_dispatch && qpc_ticks < observation.epoch_qpc {
+        return Ok(TimelineTicks::ZERO);
+    }
+    qpc_ticks
+        .checked_duration_since(observation.epoch_qpc)
+        .map(|duration| TimelineTicks::from_raw(duration.as_u64()))
+        .map_err(|error| DispatchStep::Terminate(format!("observer QPC ordering failure: {error}")))
+}
+
+pub(super) fn down_observer_evidence(
+    observation: &DownObservation,
+) -> (usize, usize, usize, DispatchObservationEvidence) {
+    let counts = (
+        observation.requested_count(),
+        observation.confirmed_count(),
+        observation.skipped_count(),
+    );
+    let evidence = DispatchObservationEvidence {
+        status: observation.trace.result_status,
+        attempts: observation.trace.send_attempts,
+        retry_reason: observation.trace.retry_reason,
+        requested_count: counts.0,
+        confirmed_count: counts.1,
+        skipped_count: counts.2,
+        timing_valid: true,
+        transport_anomaly: observation.trace.last_win32_error != 0,
+        recovery_used: !matches!(observation.trace.retry_reason, PacketRetryReason::None),
+        chord_integrity_lost: observation.trace.chord_integrity_lost,
+    };
+    (counts.0, counts.1, counts.2, evidence)
+}
+
+pub(super) fn record_down_recovery_metrics(
+    observation: &DownObservation,
+    recovered_retry_late: bool,
+    recovered_partial_up: bool,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if recovered_retry_late {
+        local_metrics.recovered_zero_progress_but_late = local_metrics
+            .recovered_zero_progress_but_late
+            .saturating_add(1);
+    }
+    if matches!(
+        observation.trace.retry_reason,
+        PacketRetryReason::ZeroProgress
+    ) {
+        local_metrics.recovered_zero_progress_retries = local_metrics
+            .recovered_zero_progress_retries
+            .saturating_add(1);
+    }
+    if recovered_partial_up {
+        local_metrics.recovered_partial_up_retries =
+            local_metrics.recovered_partial_up_retries.saturating_add(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,13 +259,19 @@ pub(super) fn record_down_send_telemetry(
     dispatch_start_error_ticks: i64,
     completion_error_ticks: i64,
     authored_completion_error_ticks: i64,
+    final_admission_ticks: Option<TimelineTicks>,
+    sendinput_completed_ticks: Option<TimelineTicks>,
+    wake_ticks: TimelineTicks,
+    recovered_retry_late: bool,
+    recovered_partial_up: bool,
+    strict_completion_late: bool,
 ) -> Result<(&'static str, bool), DispatchStep> {
     let trace = observation.trace;
-    let down_outcome = if trace.recovered_retry_late {
+    let down_outcome = if recovered_retry_late {
         "recovered_zero_progress_but_late"
-    } else if trace.recovered_partial_up {
+    } else if recovered_partial_up {
         "recovered_partial_up_retry"
-    } else if trace.strict_completion_late {
+    } else if strict_completion_late {
         "strict_completion_slo_exceeded"
     } else if trace.chord_integrity_lost {
         "chord_integrity_lost"
@@ -210,7 +289,7 @@ pub(super) fn record_down_send_telemetry(
     if trace.result_success() && observation.confirmed_count() == observation.requested_count() {
         trace_flags |= TRACE_FLAG_SENT_FULL;
     }
-    if trace.recovered_retry_late || trace.chord_integrity_lost {
+    if recovered_retry_late || trace.chord_integrity_lost {
         trace_flags |= TRACE_FLAG_RECOVERY;
     }
     if down_outcome != "sent" {
@@ -229,9 +308,9 @@ pub(super) fn record_down_send_telemetry(
             TraceTiming {
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
-                wake_ticks: trace.wake_ticks,
-                final_admission_ticks: trace.final_admission_ticks,
-                sendinput_completed_ticks: trace.sendinput_completed_ticks,
+                wake_ticks,
+                final_admission_ticks,
+                sendinput_completed_ticks,
                 completion_residual_us,
                 core_post_send_duration_us: core_post_send_us,
                 post_send_metrics_available,

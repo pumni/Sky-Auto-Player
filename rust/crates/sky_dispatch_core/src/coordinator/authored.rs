@@ -55,8 +55,8 @@ impl RuntimeDispatchCoordinator {
     }
 
     /// Return the next authored dispatch deadline in the playback tick domain.
-    /// The authored schedule remains immutable; physical release floors are
-    /// applied only to the current canonical packet.
+    /// Completion-anchored releases are represented by the separate pending
+    /// release table and never rewrite this authored timestamp.
     pub(crate) fn next_authored_ticks_uncompensated(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
@@ -79,13 +79,8 @@ impl RuntimeDispatchCoordinator {
         self.next_authored_ticks_uncompensated()
     }
 
-    /// Return the earliest upcoming physical boundary from the authored and
-    /// completion-floor projections.
-    ///
-    /// Planning uses this projection to classify the interval that will
-    /// actually precede the next physical operation. Release floors are
-    /// represented by authored batch deadlines. Production planning never
-    /// subtracts a dispatch lead or scans recovery state.
+    /// Return the next authored boundary. Pending release boundaries are
+    /// queried independently by the planner and selected per key.
     pub fn next_uncompensated_deadline_ticks(
         &self,
     ) -> Result<Option<TimelineTicks>, CoordinatorError> {
@@ -403,6 +398,38 @@ impl RuntimeDispatchCoordinator {
             });
         }
         self.register_deferred_releases(prepared)?;
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
+    /// Consume a metadata-only authored frame from frozen commit evidence.
+    ///
+    /// The planner builds this token before the timed wait.  The deadline
+    /// path only registers the already-identified deferred releases and
+    /// advances the cursor; it does not rediscover packet ranges or intents.
+    pub fn commit_prepared_authored_frame_metadata_frozen(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+    ) -> Result<(), CoordinatorError> {
+        let prepared = commit.frame;
+        if prepared.immediate_up_mask != 0
+            || prepared.down_mask != 0
+            || !commit.immediate_up_intents.is_empty()
+            || !commit.down_intents.is_empty()
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "frozen metadata commit contains physical authored work".into(),
+                ),
+            ));
+        }
+        self.register_deferred_releases_frozen(prepared, &commit.deferred_up_intents)?;
         self.cursor =
             self.cursor
                 .checked_add(prepared.packet_batch_count)
@@ -906,10 +933,10 @@ impl RuntimeDispatchCoordinator {
             .map(|index| (index, 0))
     }
 
-    /// Prepare the current physical authored packet without consulting the
-    /// current clock.  The worker uses this before entering its timed wait so
-    /// packet identity, masks, and effective deadline are frozen together.
-    pub fn prepare_current_authored_packet(
+    /// Prepare the current authored batch without consulting the current
+    /// clock.  The authored timestamp is immutable; per-key completion floors
+    /// are represented by pending releases in the new dispatch path.
+    pub fn prepare_current_authored_batch(
         &self,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         if self.cursor >= self.schedule.batches.len() {
@@ -942,8 +969,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let effective_scheduled_ticks =
-            self.packet_effective_deadline_ticks_uncompensated(packet_index)?;
+        let effective_scheduled_ticks = self.effective_batch_scheduled_ticks(index)?;
         let packet_kind = physical_packet_kind(packet.up_mask, packet.down_mask)?;
         Ok(Some(PreparedBatch {
             index,
@@ -958,7 +984,7 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         now: TimelineTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
-        let Some(prepared) = self.prepare_current_authored_packet()? else {
+        let Some(prepared) = self.prepare_current_authored_batch()? else {
             return Ok(None);
         };
         if prepared.effective_scheduled_ticks > now {
@@ -1251,7 +1277,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        if self.packet_effective_deadline_ticks_uncompensated(prepared.packet_index)?
+        if self.effective_batch_scheduled_ticks(prepared.index)?
             != prepared.effective_scheduled_ticks
         {
             return Err(CoordinatorError::Invariant(

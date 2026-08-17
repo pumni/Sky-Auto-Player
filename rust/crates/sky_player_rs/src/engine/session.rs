@@ -20,6 +20,25 @@ fn timeline_rebase_reason(_code: u8) -> Option<String> {
     None
 }
 
+pub(crate) fn validate_native_schedule_timing(
+    schedule: &sky_dispatch_core::model::RuntimeSchedule,
+    effective_min_hold_us: u64,
+    qpc_clock: QpcClock,
+) -> Result<(), String> {
+    sky_dispatch_core::validation::validate_min_hold_feasibility(schedule, effective_min_hold_us)
+        .map_err(|error| format!("native schedule admission failed: {error}"))?;
+    let effective_min_hold_ticks = qpc_clock
+        .duration_from_us(effective_min_hold_us)
+        .map_err(|error| format!("native hold-floor conversion failed: {error:?}"))?;
+    sky_dispatch_core::validation::validate_min_hold_feasibility_ticks(
+        schedule,
+        effective_min_hold_us,
+        effective_min_hold_ticks,
+        |microseconds| qpc_clock.timeline_from_us(microseconds).ok(),
+    )
+    .map_err(|error| format!("native tick-domain admission failed: {error}"))
+}
+
 pub struct NativeDispatchSession {
     config: Mutex<Option<NativeSessionOptions>>,
     generation_count: u64,
@@ -33,15 +52,14 @@ impl NativeDispatchSession {
         // the same core validator before crossing into Rust, but direct native
         // callers must not be able to construct a session that can only fail
         // after the worker has started.
-        sky_dispatch_core::validation::validate_min_hold_feasibility(
-            &options.schedule,
-            options.timing.min_hold_us,
-        )
-        .map_err(|error| format!("native schedule admission failed: {error}"))?;
+        let qpc_clock = QpcClock::initialize()
+            .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
+        validate_native_schedule_timing(&options.schedule, options.timing.min_hold_us, qpc_clock)?;
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
-        let initial_heartbeat_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+        let initial_heartbeat_ticks = qpc_clock
+            .now()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;

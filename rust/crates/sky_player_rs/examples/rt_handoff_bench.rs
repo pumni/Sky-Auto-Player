@@ -239,9 +239,9 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             }).unwrap_or_else(|| {
                 panic!(
                     "missing Down wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
-                    value.trace.wake_ticks,
-                    value.trace.final_admission_ticks,
-                    value.trace.sendinput_completed_ticks
+                    value.wake_qpc,
+                    value.final_admission_qpc,
+                    value.sendinput_completed_qpc
                 )
             });
             samples.wake_to_admission_us.push(wake_to_admission_us);
@@ -265,12 +265,22 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             ));
             samples.admission_to_completion_us.push(
                 qpc_clock
-                    .duration_to_us(value.admission_to_completion_ticks)
+                    .duration_to_us(
+                        value
+                            .sendinput_completed_qpc
+                            .checked_duration_since(value.final_admission_qpc)
+                            .expect("QPC ordering"),
+                    )
                     .expect("duration"),
             );
+            let completed_effective_ticks = value
+                .sendinput_completed_qpc
+                .checked_duration_since(value.epoch_qpc)
+                .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
+                .unwrap_or(TimelineTicks::ZERO);
             samples.completion_error_us.push(signed_timeline_us(
                 qpc_clock,
-                value.completed_effective_ticks,
+                completed_effective_ticks,
                 value.trace.effective_deadline_ticks,
             ));
         }
@@ -284,9 +294,9 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             }).unwrap_or_else(|| {
                 panic!(
                     "missing Up wake sample: wake={:?}, final_admission={:?}, sendinput_completed={:?}",
-                    value.trace.wake_ticks,
-                    value.trace.final_admission_ticks,
-                    value.trace.sendinput_completed_ticks
+                    value.wake_qpc,
+                    value.final_admission_qpc,
+                    value.sendinput_completed_qpc
                 )
             });
             samples.wake_to_admission_us.push(wake_to_admission_us);
@@ -513,11 +523,11 @@ fn build_wait_mode(
         .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
-        sky_player_rs::engine::dispatch_primitives::production_spin_threshold_us(
+        sky_player_rs::engine::dispatch_primitives::legacy_adaptive_spin_threshold_us(
             startup_wake_error.p95_us,
         )
     } else if event_wait_enabled {
-        sky_player_rs::engine::dispatch_primitives::PRODUCTION_SPIN_FLOOR_US
+        sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US
     } else {
         0
     };
@@ -605,7 +615,7 @@ fn main() {
                 "waitable_timer_enabled": mode.waitable_timer_enabled,
                 "event_wait_enabled": mode.event_wait_enabled,
                 "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-                "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_SPIN_FLOOR_US,
+                "spin_floor_us": sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US,
                 "effective_spin_threshold_us": mode.effective_spin_threshold_us,
                 "mmcss_mode": "off_test_guard",
                 "priority_mode": "off_test_guard",

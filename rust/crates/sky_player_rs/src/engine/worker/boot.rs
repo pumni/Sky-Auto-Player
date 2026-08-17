@@ -117,8 +117,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     core.metrics.power_throttling_disabled = power_throttling_disabled;
     // Python materializes the frame-rate floor before crossing the FFI
-    // boundary. The worker consumes that effective value verbatim so the
-    // authored timestamp and release floor share one contract.
+    // boundary. The worker consumes that effective minimum hold verbatim and
+    // converts it once into the captured QPC tick domain.
     let effective_min_hold_us = config.timing.min_hold_us;
     let min_hold_ticks = match qpc_clock.duration_from_us(effective_min_hold_us) {
         Ok(ticks) => ticks,
@@ -348,6 +348,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
     core.timing = Some(WorkerTimingState {
+        strict_timing: config.timing.strict_timing,
         hard_late_abort_threshold_ticks,
         retry_late_threshold_ticks,
         strict_down_completion_late_ticks,
@@ -458,7 +459,6 @@ mod tests {
         WaitOptions {
             enable_waitable_timer,
             enable_event_wait,
-            enable_adaptive_spin: false,
             supervisor_lease_timeout_us: 0,
         }
     }

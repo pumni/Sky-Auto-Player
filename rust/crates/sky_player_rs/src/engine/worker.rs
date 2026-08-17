@@ -73,15 +73,16 @@ pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::derive_spin_threshold_us;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
     deadline_target_ticks, exact_sender_durations,
 };
 pub(crate) use timing::{
-    derive_spin_threshold_us, lease_bounded_ticks, signed_delta, signed_ticks_to_us,
-    signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
-    wake_lateness_ticks,
+    lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
+    supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -201,6 +202,16 @@ impl WorkerRuntime {
         self.last_dispatch_deadline_wake_qpc = wake_qpc;
         self.last_dispatch_deadline_target_qpc = target_qpc;
     }
+
+    /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
+    /// was classified but before the waiter could block.  The worker clears
+    /// the pending future-target handoff for this outcome, while deliberately
+    /// leaving the no-catch-up guard armed.
+    pub(crate) fn record_due_without_wait_for_test(&mut self) {
+        self.last_dispatch_deadline_wake_qpc = None;
+        self.last_dispatch_deadline_target_qpc = None;
+        self.future_physical_wait_target_qpc = None;
+    }
 }
 
 #[derive(Default)]
@@ -212,6 +223,7 @@ pub(super) struct WorkerErrorState {
 
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
+    pub(super) strict_timing: bool,
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
     pub(super) retry_late_threshold_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
@@ -230,6 +242,7 @@ pub(crate) struct WorkerTimingState {
 impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
+            strict_timing: false,
             hard_late_abort_threshold_ticks: DurationTicks::ZERO,
             retry_late_threshold_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,

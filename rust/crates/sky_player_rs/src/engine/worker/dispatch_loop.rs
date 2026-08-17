@@ -120,7 +120,7 @@ pub(crate) fn dispatch_due_from_plan(
         }
         return resources
             .coordinator
-            .commit_authored_frame_metadata(metadata.frame)
+            .commit_prepared_authored_frame_metadata_frozen(&metadata.commit)
             .map(|()| super::DispatchStep::Dispatched)
             .unwrap_or_else(|error| {
                 super::DispatchStep::Terminate(format!(

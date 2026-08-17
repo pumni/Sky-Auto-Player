@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 use crate::model::{ActionKind, GenerationId, MAX_KEYS, NO_GENERATION_ID, RuntimeSchedule};
+use crate::time::{DurationTicks, TimelineTicks};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ScheduleTimingError {
@@ -39,6 +40,7 @@ struct OpenGeneration {
     scan_code: u16,
     down_source_action_index: u32,
     down_scheduled_us: u64,
+    down_scheduled_ticks: TimelineTicks,
 }
 
 /// Validate every authored same-key Down→Up interval against the native floor.
@@ -51,6 +53,30 @@ pub fn validate_min_hold_feasibility(
     schedule: &RuntimeSchedule,
     effective_min_hold_us: u64,
 ) -> Result<(), ScheduleTimingError> {
+    validate_min_hold_feasibility_ticks(
+        schedule,
+        effective_min_hold_us,
+        DurationTicks::from_raw(effective_min_hold_us),
+        |microseconds| Some(TimelineTicks::from_raw(microseconds)),
+    )
+}
+
+/// Validate same-key holds in the timing domain used by the runtime.
+///
+/// Authored timestamps are expressed in microseconds, but the worker places
+/// both authored timestamps and the minimum-hold floor into QPC ticks using a
+/// ceiling conversion.  Validating the subtraction in microseconds is not
+/// equivalent to validating `ceil(down) + ceil(floor) <= ceil(up)`.  Native
+/// admission supplies the exact runtime conversion and floor in ticks.
+pub fn validate_min_hold_feasibility_ticks<F>(
+    schedule: &RuntimeSchedule,
+    effective_min_hold_us: u64,
+    effective_min_hold_ticks: DurationTicks,
+    mut microseconds_to_ticks: F,
+) -> Result<(), ScheduleTimingError>
+where
+    F: FnMut(u64) -> Option<TimelineTicks>,
+{
     let last_scheduled_us = schedule
         .batches
         .last()
@@ -78,6 +104,8 @@ pub fn validate_min_hold_feasibility(
         // physical order makes same-timestamp retriggers validate correctly.
         for expected_kind in [ActionKind::Up, ActionKind::Down] {
             for batch in batches.iter().filter(|batch| batch.kind == expected_kind) {
+                let batch_ticks = microseconds_to_ticks(batch.scheduled_us)
+                    .ok_or(ScheduleTimingError::TimestampOverflow)?;
                 let intent_start = usize::try_from(batch.intent_start)
                     .map_err(|_| ScheduleTimingError::InvalidBatchRange { packet_index })?;
                 let intent_len = usize::from(batch.intent_len);
@@ -123,7 +151,11 @@ pub fn validate_min_hold_feasibility(
 
                             let interval_us =
                                 batch.scheduled_us.saturating_sub(active.down_scheduled_us);
-                            if interval_us < effective_min_hold_us {
+                            let earliest_release_ticks = active
+                                .down_scheduled_ticks
+                                .checked_add_duration(effective_min_hold_ticks)
+                                .map_err(|_| ScheduleTimingError::TimestampOverflow)?;
+                            if earliest_release_ticks > batch_ticks {
                                 return Err(ScheduleTimingError::SameKeyHoldTooShort {
                                     scan_code: active.scan_code,
                                     down_source_action_index: active.down_source_action_index,
@@ -149,6 +181,7 @@ pub fn validate_min_hold_feasibility(
                                 scan_code,
                                 down_source_action_index: batch.source_action_index,
                                 down_scheduled_us: batch.scheduled_us,
+                                down_scheduled_ticks: batch_ticks,
                             });
                         }
                     }

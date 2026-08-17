@@ -13,11 +13,11 @@ use super::super::{
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
     BlockedUnfocusedObservation, DispatchObservation, DownObservation, DownTraceObservation,
-    OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation, UpObservation,
-    record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
-    up_transport_counts,
+    OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation, UpObservation, down_effective_ticks,
+    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
+    record_release_telemetry, up_dispatch_evidence, up_transport_counts,
 };
-use super::timing::{DispatchObservationEvidence, DownSendTiming, is_clean_dispatch_observation};
+use super::timing::{DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use crossbeam_queue::ArrayQueue;
 use sky_dispatch_win32::input::PacketRetryReason;
@@ -61,7 +61,7 @@ pub(crate) fn publisher_down_send_outcome(
     _health: &mut WorkerHealthState,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
-    effective_now_ticks: TimelineTicks,
+    _effective_now_ticks: TimelineTicks,
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
     capture_dispatch_ready_qpc: bool,
     trace_kind: u8,
@@ -76,19 +76,11 @@ pub(crate) fn publisher_down_send_outcome(
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
     let requested_packet = view.packet_masks;
-    let DownSendTiming {
-        final_admission_qpc,
-        sendinput_completed_qpc,
-        final_admission_effective_ticks,
-        completed_effective_ticks,
-        admission_to_completion_ticks,
-        completion_error_ticks_value,
-        recovered_partial_up,
-        recovered_retry_late,
-        retry_late_abort,
-        strict_completion_late,
-        ..
-    } = *timing_proof;
+    let final_admission_qpc = timing_proof.final_admission_qpc;
+    let sendinput_completed_qpc = timing_proof.sendinput_completed_qpc;
+    let retry_late_abort = timing_proof.retry_late_abort;
+    let strict_completion_late = timing_proof.strict_completion_late;
+    let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
     let wake_qpc = take_deadline_wake_qpc(runtime, final_admission_qpc);
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
@@ -105,17 +97,16 @@ pub(crate) fn publisher_down_send_outcome(
     // here on, only a fixed raw observation enqueue and terminal policy may
     // run on this call stack.
     let observation = DownObservation {
-        path: view.dispatch_path,
+        epoch_qpc: timing_proof.epoch_qpc,
+        allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
         physical_target_qpc,
         final_admission_qpc,
         sendinput_completed_qpc,
         dispatch_ready_qpc,
-        admission_to_completion_ticks,
         wake_qpc,
         requested_packet,
         confirmed_mask: result_confirmed_mask,
         skipped_mask: result_skipped_mask,
-        completed_effective_ticks,
         trace: DownTraceObservation {
             event_index: view.batch_source_action_index,
             trace_kind,
@@ -126,12 +117,6 @@ pub(crate) fn publisher_down_send_outcome(
             last_win32_error: result_last_win32_error.unwrap_or(0),
             authored_ticks: view.authored_batch_scheduled_ticks,
             effective_deadline_ticks: view.batch_scheduled_ticks,
-            wake_ticks: effective_now_ticks,
-            final_admission_ticks: Some(final_admission_effective_ticks),
-            sendinput_completed_ticks: Some(completed_effective_ticks),
-            recovered_retry_late,
-            recovered_partial_up,
-            strict_completion_late,
         },
     };
     observer.push(
@@ -435,51 +420,6 @@ pub fn reset_observer_test_hooks() {
     OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
 }
 
-fn down_observer_evidence(
-    observation: &DownObservation,
-) -> (usize, usize, usize, DispatchObservationEvidence) {
-    let counts = (
-        observation.requested_count(),
-        observation.confirmed_count(),
-        observation.skipped_count(),
-    );
-    let evidence = DispatchObservationEvidence {
-        status: observation.trace.result_status,
-        attempts: observation.trace.send_attempts,
-        retry_reason: observation.trace.retry_reason,
-        requested_count: counts.0,
-        confirmed_count: counts.1,
-        skipped_count: counts.2,
-        timing_valid: true,
-        transport_anomaly: observation.trace.last_win32_error != 0,
-        recovery_used: !matches!(observation.trace.retry_reason, PacketRetryReason::None),
-        chord_integrity_lost: observation.trace.chord_integrity_lost,
-    };
-    (counts.0, counts.1, counts.2, evidence)
-}
-
-fn record_down_recovery_metrics(
-    observation: &DownObservation,
-    local_metrics: &mut WorkerMetricsLocal,
-) {
-    if observation.trace.recovered_retry_late {
-        local_metrics.recovered_zero_progress_but_late = local_metrics
-            .recovered_zero_progress_but_late
-            .saturating_add(1);
-    }
-    if matches!(
-        observation.trace.retry_reason,
-        PacketRetryReason::ZeroProgress
-    ) {
-        local_metrics.recovered_zero_progress_retries = local_metrics
-            .recovered_zero_progress_retries
-            .saturating_add(1);
-    }
-    if observation.trace.recovered_partial_up {
-        local_metrics.recovered_partial_up_retries =
-            local_metrics.recovered_partial_up_retries.saturating_add(1);
-    }
-}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_down_send_outcome(
     observation: &DownObservation,
@@ -489,14 +429,22 @@ pub(crate) fn drain_down_send_outcome(
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_us: u64,
+    timing: &WorkerTimingState,
 ) -> Result<(), DispatchStep> {
-    let health_budget = build_dispatch_budget(observation.path, health.options);
+    let path = observation.path();
+    let health_budget = build_dispatch_budget(path, health.options);
     let send_warn_us = health_budget.send_warn_us;
     let core_post_send_warn_us = health_budget.core_post_send_warn_us;
     let (_requested_count, _confirmed_count, _skipped_count, _observation_evidence) =
         down_observer_evidence(observation);
+    let admission_to_completion_ticks = observation
+        .sendinput_completed_qpc
+        .checked_duration_since(observation.final_admission_qpc)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-on QPC ordering failure: {error}"))
+        })?;
     let admission_to_completion_us = qpc_clock
-        .duration_to_us(observation.admission_to_completion_ticks)
+        .duration_to_us(admission_to_completion_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
         })?;
@@ -516,8 +464,17 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
+    let final_admission_effective_ticks =
+        down_effective_ticks(observation, observation.final_admission_qpc)?;
+    let completed_effective_ticks =
+        down_effective_ticks(observation, observation.sendinput_completed_qpc)?;
+    let wake_ticks = observation
+        .wake_qpc
+        .map(|qpc| down_effective_ticks(observation, qpc))
+        .transpose()?
+        .unwrap_or(final_admission_effective_ticks);
     let completed_effective_us = qpc_clock
-        .timeline_to_us(observation.completed_effective_ticks)
+        .timeline_to_us(completed_effective_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-on completion conversion failure: {error:?}"))
         })?;
@@ -567,7 +524,7 @@ pub(crate) fn drain_down_send_outcome(
     local_metrics.sendinput_warn_threshold_us = send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
-    match observation.path {
+    match path {
         DispatchPath::DownOnly { .. } => {
             local_metrics.send_down_warn_threshold_us = send_warn_us;
         }
@@ -579,7 +536,47 @@ pub(crate) fn drain_down_send_outcome(
         }
     }
     local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    record_down_recovery_metrics(observation, local_metrics);
+    let completion_lateness_ticks = signed_timeline_delta_ticks(
+        completed_effective_ticks,
+        observation.trace.effective_deadline_ticks,
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "note-on observer completion conversion failure: {error}"
+        ))
+    })?;
+    let recovered_zero_progress = matches!(
+        observation.trace.retry_reason,
+        PacketRetryReason::ZeroProgress
+    );
+    let recovered_retry_late = recovered_zero_progress
+        && observation.trace.result_success()
+        && completion_lateness_ticks > 0
+        && completion_lateness_ticks as u64 > timing.retry_late_threshold_ticks.as_u64();
+    let recovered_partial_up = matches!(
+        (path, observation.trace.retry_reason),
+        (
+            DispatchPath::UpOnly { .. },
+            PacketRetryReason::PartialProgress { .. }
+        )
+    ) && observation.trace.result_success();
+    let clean_dispatch_sample = is_clean_dispatch_observation(_observation_evidence);
+    let strict_completion_late = timing.strict_timing
+        && clean_dispatch_sample
+        && completion_lateness_ticks > 0
+        && (completion_lateness_ticks as u64
+            > match path {
+                DispatchPath::UpOnly { .. } => timing.strict_up_completion_late_ticks.as_u64(),
+                DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+                    timing.strict_down_completion_late_ticks.as_u64()
+                }
+            });
+    record_down_recovery_metrics(
+        observation,
+        recovered_retry_late,
+        recovered_partial_up,
+        local_metrics,
+    );
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
         TimelineTicks::from_raw(observation.final_admission_qpc.as_u64()),
         TimelineTicks::from_raw(observation.physical_target_qpc.as_u64()),
@@ -590,7 +587,7 @@ pub(crate) fn drain_down_send_outcome(
         ))
     })?;
     let completion_error_ticks = signed_timeline_delta_ticks(
-        observation.completed_effective_ticks,
+        completed_effective_ticks,
         observation.trace.effective_deadline_ticks,
     )
     .map_err(|error| {
@@ -598,15 +595,13 @@ pub(crate) fn drain_down_send_outcome(
             "note-on observer completion conversion failure: {error}"
         ))
     })?;
-    let authored_completion_error_ticks = signed_timeline_delta_ticks(
-        observation.completed_effective_ticks,
-        observation.trace.authored_ticks,
-    )
-    .map_err(|error| {
-        DispatchStep::Terminate(format!(
-            "note-on observer authored-completion conversion failure: {error}"
-        ))
-    })?;
+    let authored_completion_error_ticks =
+        signed_timeline_delta_ticks(completed_effective_ticks, observation.trace.authored_ticks)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!(
+                    "note-on observer authored-completion conversion failure: {error}"
+                ))
+            })?;
     let (_, force_publish) = record_down_send_telemetry(
         observation,
         telemetry,
@@ -616,6 +611,12 @@ pub(crate) fn drain_down_send_outcome(
         dispatch_start_error_ticks,
         completion_error_ticks,
         authored_completion_error_ticks,
+        Some(final_admission_effective_ticks),
+        Some(completed_effective_ticks),
+        wake_ticks,
+        recovered_retry_late,
+        recovered_partial_up,
+        strict_completion_late,
     )?;
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
@@ -633,7 +634,7 @@ pub(crate) fn drain_down_send_outcome(
             send_duration_us: admission_to_completion_us,
             post_send_duration_us: core_post_send_us,
             post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
-            path: observation.path,
+            path,
             send_warn_us,
             core_post_send_warn_us,
             elapsed_us: completed_effective_us,
@@ -830,6 +831,7 @@ pub(crate) fn drain_one_observer(
             telemetry,
             qpc_clock,
             now_us,
+            timing,
         )?,
         DispatchObservation::Up(up) => drain_up_send_outcome(
             up,

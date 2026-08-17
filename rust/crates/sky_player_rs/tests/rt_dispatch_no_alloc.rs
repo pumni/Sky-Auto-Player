@@ -106,17 +106,16 @@ fn disable_counting() -> u64 {
 
 fn down_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Down(DownObservation {
-        path: DispatchPath::DownOnly { down_count: 1 },
+        epoch_qpc: QpcTicks::ZERO,
+        allow_pre_epoch_startup_dispatch: false,
         physical_target_qpc: QpcTicks::ZERO,
         final_admission_qpc: QpcTicks::ZERO,
         sendinput_completed_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
-        admission_to_completion_ticks: DurationTicks::from_raw(n),
         wake_qpc: None,
         requested_packet: PhysicalPacket::new(0, 1),
         confirmed_mask: 1,
         skipped_mask: 0,
-        completed_effective_ticks: TimelineTicks::from_raw(n),
         trace: DownTraceObservation {
             event_index: n as u32,
             trace_kind: 0,
@@ -127,12 +126,6 @@ fn down_observation(n: u64) -> DispatchObservation {
             last_win32_error: 0,
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
-            wake_ticks: TimelineTicks::ZERO,
-            final_admission_ticks: Some(TimelineTicks::ZERO),
-            sendinput_completed_ticks: Some(TimelineTicks::ZERO),
-            recovered_retry_late: false,
-            recovered_partial_up: false,
-            strict_completion_late: false,
         },
     })
 }
