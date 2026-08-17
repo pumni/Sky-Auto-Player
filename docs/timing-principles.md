@@ -20,7 +20,7 @@ microsecond conversions.
 | `sendinput_completion_qpc` | QPC sample returned after the packetized SendInput call. |
 | `admission_to_completion` | The interval from `final_admission_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `effective_release` | Release deadline after the authored minimum-hold floor. |
+| `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
 `physical_target`. Historical `dispatch_lead_us`, estimator state, and lead
@@ -36,26 +36,25 @@ frame_us = ceil(1_000_000 / game_fps)
 effective_min_hold = max(requested_min_hold_us, frame_us + 500)
 ```
 
-For every authored Down packet:
+For every authored same-key Down→Up pair:
 
 ```text
-release_floor = authored_down + effective_min_hold
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold
 ```
 
-The release floor is an authored sender-side contract. A completion sample
-does not prove kernel delivery or game observation. The worker checks the
-completion against the authored floor for feasibility; a slow Down may enter
-per-key recovery state only when its authored release remains feasible. It
-cannot shift unrelated future authored actions.
+The static margin is applied once while materializing the authored schedule.
+The native admission validator checks this relationship before worker start in
+the same QPC tick domain used by dispatch. If the interval is invalid, native
+admission fails before any musical packet can be sent; the worker never
+reschedules the Up target.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
-that share one authored timestamp. Runtime completion lateness is handled
-separately: an Up that remains feasible after its authored floor may become
-one per-key pending release, while an unrelated Down remains eligible at its
-own authored boundary. A same-key Up whose authored floor cannot be met is
-rejected fail-closed with physical deadline infeasibility.
+that share one authored timestamp. Runtime completion lateness is evidence for
+sender-side telemetry and ownership accounting only. Runtime deadline/overdue
+policy may terminate a missed boundary, but it never invents a
+completion-relative hold deadline, moves an authored timestamp, or emits a
+catch-up burst.
 
 ## 2.1 Host delivery calibration
 

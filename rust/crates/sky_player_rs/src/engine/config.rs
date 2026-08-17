@@ -148,6 +148,8 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
+                #[cfg(any(test, feature = "test-support"))]
+                test_spin_threshold_us: None,
             },
             telemetry: TelemetryOptions {
                 mode: TelemetryMode::Ring,
@@ -177,6 +179,12 @@ pub(crate) struct WaitOptions {
     pub(crate) enable_waitable_timer: bool,
     pub(crate) enable_event_wait: bool,
     pub(crate) supervisor_lease_timeout_us: u64,
+    /// Test-only early handoff margin. Production always uses the fixed
+    /// `DEFAULT_SPIN_THRESHOLD_US` value; this seam keeps mock-session tests
+    /// independent from host timer overshoot without changing authored
+    /// targets or the production wait policy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) test_spin_threshold_us: Option<u64>,
 }
 
 pub(crate) struct TelemetryOptions {

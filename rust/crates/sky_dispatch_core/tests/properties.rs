@@ -23,7 +23,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     /// Source IDs are metadata, every valid generation reaches one terminal
-    /// state, and a physical Up never precedes its completion-anchored floor.
+    /// state, and a physical Up preserves the pre-admitted authored hold.
     #[test]
     fn authored_lifecycle_preserves_generation_and_min_hold_invariants(
         mut scan_codes in prop::collection::vec(2_u16..=16, 1..=15),
@@ -33,6 +33,7 @@ proptest! {
         min_hold_us in 1_u64..=50_000,
         send_latency_us in 0_u64..=5_000,
     ) {
+        prop_assume!(authored_hold_us >= min_hold_us);
         scan_codes.sort_unstable();
         scan_codes.dedup();
         let down_scheduled_us = 1_000;
@@ -86,13 +87,13 @@ proptest! {
                         && event.generation_ids.contains(&Some(generation_id))
                 })
                 .expect("each generation must have an Up event");
-            let release_floor = down
-                .completed_us
+            let authored_floor = down
+                .scheduled_us
                 .checked_add(min_hold_us)
                 .expect("bounded generated timestamps cannot overflow");
             prop_assert!(
-                up.actual_us >= release_floor,
-                "generation {generation_id} released at {} before floor {release_floor}",
+                up.actual_us >= authored_floor,
+                "generation {generation_id} released at {} before authored floor {authored_floor}",
                 up.actual_us,
             );
         }

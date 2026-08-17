@@ -59,6 +59,10 @@ pub fn simulate_schedule(
     send_latency_us: u64,
 ) -> Result<SimulationResult, crate::compile::CompileError> {
     let schedule = crate::compile::compile_runtime_intents(actions, allowed_scan_codes)?;
+    // Mirror the native session admission boundary.  Invalid authored holds
+    // must be rejected before the simulation can produce a physical event.
+    crate::validation::validate_min_hold_feasibility(&schedule, min_hold_us)
+        .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
     let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         min_hold_us,

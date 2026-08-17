@@ -46,7 +46,28 @@
       }
     },
     {
-      "name": "minimum_hold_extension",
+      "name": "minimum_hold_authored_boundary",
+      "allowed_scan_codes": [1],
+      "config": {"min_hold_us": 5000, "send_latency_us": 10},
+      "actions": [
+        {"source_action_index": 0, "kind": "down", "at_us": 0, "scan_codes": [1], "reason": "d"},
+        {"source_action_index": 1, "kind": "up", "at_us": 5000, "scan_codes": [1], "reason": "u"}
+      ],
+      "expected": {
+        "outcome": "finished",
+        "result": {
+          "events": [
+            {"step": 0, "kind": "down", "scheduled_us": 0, "actual_us": 0, "completed_us": 10, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"},
+            {"step": 1, "kind": "up", "scheduled_us": 5000, "actual_us": 5000, "completed_us": 5010, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
+          ],
+          "status_counts": {"active": 0, "cancelled": 0, "dropped_backend": 0, "dropped_conflict": 0, "dropped_expired": 0, "released": 1, "scheduled": 0},
+          "total_generations": 1,
+          "is_finished": true
+        }
+      }
+    },
+    {
+      "name": "authored_hold_below_floor_rejected_before_send",
       "allowed_scan_codes": [1],
       "config": {"min_hold_us": 5000, "send_latency_us": 10},
       "actions": [
@@ -54,16 +75,8 @@
         {"source_action_index": 1, "kind": "up", "at_us": 100, "scan_codes": [1], "reason": "u"}
       ],
       "expected": {
-        "outcome": "finished",
-        "result": {
-          "events": [
-            {"step": 0, "kind": "down", "scheduled_us": 0, "actual_us": 0, "completed_us": 10, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"},
-            {"step": 1, "kind": "up", "scheduled_us": 5010, "actual_us": 5010, "completed_us": 5020, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
-          ],
-          "status_counts": {"active": 0, "cancelled": 0, "dropped_backend": 0, "dropped_conflict": 0, "dropped_expired": 0, "released": 1, "scheduled": 0},
-          "total_generations": 1,
-          "is_finished": true
-        }
+        "outcome": "error",
+        "error_contains": "same-key hold too short"
       }
     },
     {

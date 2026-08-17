@@ -85,7 +85,7 @@ frozen plan
 The supplied `final_admission_qpc` sample is the physical admission boundary.
 The transport reports `sendinput_completion_qpc`; production does not subtract
 a learned send cost from the target. Completion is used for diagnostics and
-release ownership.
+ownership evidence only; it does not create a completion-relative hold floor.
 
 The primary sender-side timing evidence is the signed start residual:
 
@@ -168,21 +168,20 @@ frame_us = ceil(1_000_000 / game_fps)
 effective_min_hold_us = max(requested_min_hold_us, frame_us + 500)
 ```
 
-Native checked tick arithmetic enforces:
+Native admission checked tick arithmetic enforces before worker start:
 
 ```text
-release_floor = authored_down + effective_min_hold
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold
 ```
 
-The authored floor is the musical timeline, not a sender-cost correction. The
-worker checks whether actual Down completion plus the configured hold floor is
-still feasible at the authored Up target. If not, it records terminal
-minimum-hold infeasibility, performs safety release, and stops; it never
-rewrites the authored target. Recovery-only pending releases are stored in a
-fixed `[Option; 15]` per-key table with mask and generation ownership. Healthy
-completion latency does not create a replacement musical deadline, and there
-is no transport retry state.
+The static margin is materialized once into the authored schedule. An invalid
+interval fails native admission before any musical SendInput. The worker never
+combines Down completion with the authored hold to create a second floor, never
+creates a completion-derived minimum-hold terminal state, and never rewrites an
+authored Up target. Runtime
+deadline/overdue policy handles a late boundary; recovery-only pending
+releases are stored in a fixed `[Option; 15]` per-key table with mask and
+generation ownership. There is no transport retry state.
 
 ## 5. Wait and interrupt ordering
 

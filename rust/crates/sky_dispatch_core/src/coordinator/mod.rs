@@ -117,14 +117,6 @@ pub enum CoordinatorError {
         blocked_mask: u16,
         latest_required_release_ticks: TimelineTicks,
     },
-    #[error(
-        "min_hold_infeasible_after_late_down at authored tick {authored_ticks:?}: blocked_mask=0x{blocked_mask:04x}, required_release={required_release_ticks:?}"
-    )]
-    MinHoldInfeasibleAfterLateDown {
-        authored_ticks: TimelineTicks,
-        blocked_mask: u16,
-        required_release_ticks: TimelineTicks,
-    },
     #[error("pending release already exists for key slot {slot}")]
     PendingReleaseAlreadyRegistered { slot: KeySlot },
     #[error("pending release does not match active generation for key slot {slot}")]
@@ -233,8 +225,8 @@ pub struct PreparedBatch {
 /// Authored-frame classification performed before timed waiting.
 ///
 /// The compiler packet remains an immutable authored frame, but its Up
-/// intents are classified per key against authored minimum-hold floors and
-/// runtime feasibility evidence. Preparation never mutates coordinator state.
+/// intents are classified per key against the pre-admitted authored hold
+/// floor and recovery ownership. Preparation never mutates coordinator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedAuthoredFrame {
     pub first_batch_index: usize,

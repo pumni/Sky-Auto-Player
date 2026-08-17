@@ -29,32 +29,29 @@ At 60 FPS with the default margin:
 | 1.25 frames | 21,334 µs | 21,334 µs |
 | 1.5 frames | 25,500 µs | 25,500 µs |
 
-## Authored minimum-hold floor
+## Authored minimum-hold validation
 
-For an authored Down at timestamp `A`, a same-key release cannot be committed
-before:
+For an authored Down at timestamp `A`, the authored same-key Up target must
+already satisfy:
 
 ```text
-release_floor = A + effective_min_hold_us
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold_us
 ```
 
-The floor is checked in QPC ticks with checked arithmetic. It is an authored
-sender-side contract and does not claim to measure when Sky or the game render
-loop observed the input. The native worker records the actual Down completion
-only as feasibility evidence; if a late completion makes the authored Up
-impossible, the session fails closed and never moves that Up target.
+The static margin is materialized once while building the authored schedule.
+The native boundary validates this interval in checked QPC ticks before the
+worker starts. An invalid schedule is rejected; the runtime never delays or
+replaces the authored Up target to repair it.
 
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
 The native-boundary validator performs this check before the worker can send
 anything, including exact same-timestamp retriggers and timestamp overflow
-cases. Runtime completion is checked against the same authored floor. A
-late-completion release that is still feasible may use the coordinator's
-per-key recovery state, but it does not move the authored release or block an
-unrelated Down chord. A same-key Down whose floor is infeasible fails closed
-before transport.
+cases. Runtime completion is evidence for sender-side telemetry and ownership
+accounting only; it does not create a completion-relative hold floor or a new
+deadline. Runtime deadline/overdue policy handles a late boundary without
+rewriting authored timestamps or emitting a catch-up send.
 
 A transport zero/partial result is terminal and is handled by fail-closed
 cleanup; it is not retried in production. Strict timing evaluates completion

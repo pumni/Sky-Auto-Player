@@ -57,17 +57,18 @@ authored timestamps or used as a healthy release floor. The compatibility `send_
 `send_completed_ticks` fields refer to these same two boundaries; they do not
 cause an additional production QPC sample.
 
-For an authored Down, a release is not allowed before:
+For an authored same-key Down→Up pair, the schedule must satisfy:
 
 ```text
-release_floor = authored_down + effective_min_hold
-effective_release = max(authored_release, release_floor)
+authored_up >= authored_down + effective_min_hold
 ```
 
 `effective_min_hold` is materialized and validated at the Python/native
 boundary as `max(requested_min_hold_us, ceil(1_000_000 / game_fps) + 500)`.
-If actual Down completion makes the authored Up infeasible, native safety
-cleanup is terminal; the authored Up target is never moved.
+The static margin is applied once while building the authored schedule. Native
+admission rejects an invalid interval before worker start; SendInput completion
+is evidence only and never creates a second hold floor or a replacement
+deadline.
 
 The worker owns active key masks, stale-Up suppression,
 zero/partial progress handling, focus-loss pause and restore safety release,
@@ -78,8 +79,9 @@ completion while cleanup residue remains.
 
 The coordinator also owns a fixed per-key pending-release table for recovery
 state. It cannot move an authored Up or block an unrelated authored Down
-chord. Same-key retriggers whose authored hold is infeasible fail closed; no
-retry or catch-up burst is emitted.
+chord. Same-key retriggers whose authored interval is infeasible are rejected
+during schedule admission; no runtime reschedule, retry, or catch-up burst is
+emitted.
 
 ## Observer profiles
 

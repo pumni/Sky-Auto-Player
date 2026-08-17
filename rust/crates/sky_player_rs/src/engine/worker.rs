@@ -185,10 +185,12 @@ impl WorkerRuntime {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn chord_integrity_lost_count(&self) -> u64 {
         self.chord_integrity_lost
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
         self.last_dispatch_deadline_target_qpc = ticks;

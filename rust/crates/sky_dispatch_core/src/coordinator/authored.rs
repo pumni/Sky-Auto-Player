@@ -156,8 +156,8 @@ impl RuntimeDispatchCoordinator {
     ///
     /// Release floors are evaluated per generation/key.  An unrelated
     /// deferred Up therefore does not change the authored target of a Down
-    /// chord.  A deferred release required by that chord is structurally
-    /// impossible and fails closed before any physical send.
+    /// chord.  Authored hold feasibility is admitted before worker start;
+    /// runtime completion remains evidence and never creates a new deadline.
     pub fn prepare_current_authored_frame(
         &self,
     ) -> Result<Option<PreparedAuthoredFrame>, CoordinatorError> {
@@ -232,16 +232,6 @@ impl RuntimeDispatchCoordinator {
                         "authored Up generation does not own its key slot".into(),
                     ),
                 ));
-            }
-            let actual_release_not_before_ticks = active
-                .down_dispatch_completed_ticks
-                .checked_add_duration(self.min_hold_ticks)?;
-            if actual_release_not_before_ticks > authored_ticks {
-                return Err(CoordinatorError::MinHoldInfeasibleAfterLateDown {
-                    authored_ticks,
-                    blocked_mask: bit,
-                    required_release_ticks: actual_release_not_before_ticks,
-                });
             }
             if active.release_not_before_ticks <= authored_ticks {
                 immediate_up_mask |= bit;
@@ -980,8 +970,8 @@ impl RuntimeDispatchCoordinator {
     }
 
     /// Prepare the current authored batch without consulting the current
-    /// clock.  The authored timestamp is immutable; per-key completion floors
-    /// are represented by pending releases in the new dispatch path.
+    /// clock.  The authored timestamp is immutable; recovery-only pending
+    /// releases are represented by the bounded per-key table.
     pub fn prepare_current_authored_batch(
         &self,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {

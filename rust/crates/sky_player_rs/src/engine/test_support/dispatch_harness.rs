@@ -5,7 +5,7 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
-use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, DEFAULT_SPIN_THRESHOLD_US, WorkerConfig};
+use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, WorkerConfig};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
@@ -36,6 +36,7 @@ use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[allow(dead_code)]
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
     pub(crate) resources: WorkerResources,
@@ -59,6 +60,7 @@ pub struct ProductionDispatchTestHarness {
     effective_now_ticks: TimelineTicks,
 }
 
+#[allow(dead_code)]
 impl ProductionDispatchTestHarness {
     pub fn new_down_only() -> Self {
         Self::create_harness(&[
@@ -321,7 +323,7 @@ impl ProductionDispatchTestHarness {
 
     /// Build a schedule with a trailing stale Up boundary.  The stale batch
     /// is metadata-only and exercises the frozen commit path without relying
-    /// on completion-late minimum-hold deferral.
+    /// on completion-derived hold deferral.
     pub fn new_stale_metadata_boundary() -> Self {
         Self::create_harness(&[
             KeyActionInput {
@@ -414,7 +416,9 @@ impl ProductionDispatchTestHarness {
             },
         ]);
         let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_authored_with_plan(&plan);
+        let step = harness
+            .wait_and_dispatch_current_plan(&plan)
+            .expect("initial UpOnly harness wait");
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "initial harness dispatch failed: {step:?}"
@@ -496,7 +500,9 @@ impl ProductionDispatchTestHarness {
         // Dispatch Down outside window
         harness.align_next_plan_to_future_for_test(500_000);
         let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_authored_with_plan(&plan);
+        let step = harness
+            .wait_and_dispatch_current_plan(&plan)
+            .expect("initial UpOnly harness wait");
         assert!(
             matches!(step, DispatchStep::Dispatched),
             "initial UpOnly harness dispatch failed: {step:?}"
@@ -573,7 +579,7 @@ impl ProductionDispatchTestHarness {
             .duration_from_us(DEFAULT_ADMISSION_GUARD_US)
             .expect("test admission guard conversion");
         timing.effective_spin_threshold_ticks = qpc_clock
-            .duration_from_us(DEFAULT_SPIN_THRESHOLD_US)
+            .duration_from_us(20_000)
             .expect("test spin threshold conversion");
 
         Self {
@@ -667,10 +673,13 @@ impl ProductionDispatchTestHarness {
             .clock
             .duration_from_us(margin_us)
             .expect("test epoch margin conversion");
+        // Keep direct frozen-plan sends out of the host's ordinary scheduler
+        // jitter window. This changes only the test epoch before planning;
+        // it never rewrites a plan after it has been frozen.
         let epoch = now
             .as_u64()
             .saturating_sub(deadline.as_u64())
-            .saturating_add(margin.as_u64());
+            .saturating_add(margin.as_u64().max(2_000_000));
         self.resources.playback.epoch = QpcTicks::from_raw(epoch);
     }
 
@@ -948,9 +957,10 @@ impl ProductionDispatchTestHarness {
             return;
         }
         // Direct harness dispatch must exercise the same pre-deadline
-        // admission window as the worker. Keep the frozen target safely in
-        // the future; tests that need an overdue boundary set that condition
-        // explicitly through their dedicated race helper.
+        // admission window as the worker. Keep the frozen target at least
+        // two seconds in the future; this is test-only epoch setup for a
+        // non-controlled QPC host. Tests that need an overdue boundary set
+        // that condition explicitly through their dedicated race helper.
         let margin = self
             .resources
             .clock
@@ -959,7 +969,7 @@ impl ProductionDispatchTestHarness {
         let raw = now_ticks
             .as_u64()
             .saturating_sub(deadline.as_u64())
-            .checked_add(margin.as_u64())
+            .checked_add(margin.as_u64().max(2_000_000))
             .expect("test epoch margin overflow");
         self.resources.playback.epoch = QpcTicks::from_raw(raw);
     }

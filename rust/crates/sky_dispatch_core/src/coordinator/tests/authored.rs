@@ -828,7 +828,7 @@ fn unrelated_deferred_release_does_not_move_authored_down_chord() {
 }
 
 #[test]
-fn same_key_infeasible_retrigger_fails_before_down_send() {
+fn late_down_completion_does_not_create_a_new_hold_deadline() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -841,14 +841,14 @@ fn same_key_infeasible_retrigger_fails_before_down_send() {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 100,
+                scheduled_us: 400,
                 scan_codes: vec![0x15].into(),
                 reason: "retrigger release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100,
+                scheduled_us: 400,
                 scan_codes: vec![0x15, 0x16].into(),
                 reason: "retrigger chord".into(),
             },
@@ -866,14 +866,13 @@ fn same_key_infeasible_retrigger_fails_before_down_send() {
         .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(300))
         .unwrap();
 
-    assert!(matches!(
-        coordinator.prepare_current_authored_frame(),
-        Err(CoordinatorError::MinHoldInfeasibleAfterLateDown {
-            authored_ticks: TimelineTicks { .. },
-            blocked_mask: 0b01,
-            required_release_ticks: TimelineTicks { .. },
-        })
-    ));
+    let prepared = coordinator
+        .prepare_current_authored_frame()
+        .expect("authored hold was admitted before worker start")
+        .expect("retrigger frame");
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(400));
+    assert_eq!(prepared.immediate_up_mask, 0b01);
+    assert_eq!(prepared.down_mask, 0b11);
 }
 
 #[test]

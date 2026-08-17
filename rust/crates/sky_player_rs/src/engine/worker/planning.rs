@@ -84,6 +84,7 @@ pub enum NextDispatchPlan {
 
 impl NextDispatchPlan {
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
     pub fn authored_path(&self) -> Option<DispatchPath> {
         self.physical().map(|plan| plan.authored.path)
     }

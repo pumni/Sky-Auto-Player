@@ -266,6 +266,12 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.errors.abort_counts.reserve(6);
     // Production dispatch uses one fixed QPC spin handoff.  Wake probing and
     // adaptive lead control are diagnostic-only and cannot alter this path.
+    #[cfg(any(test, feature = "test-support"))]
+    let effective_spin_threshold_us = config
+        .wait
+        .test_spin_threshold_us
+        .unwrap_or(super::super::config::DEFAULT_SPIN_THRESHOLD_US);
+    #[cfg(not(any(test, feature = "test-support")))]
     let effective_spin_threshold_us = super::super::config::DEFAULT_SPIN_THRESHOLD_US;
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
@@ -494,6 +500,8 @@ mod tests {
             enable_waitable_timer,
             enable_event_wait,
             supervisor_lease_timeout_us: 0,
+            #[cfg(any(test, feature = "test-support"))]
+            test_spin_threshold_us: None,
         }
     }
 

@@ -53,6 +53,7 @@ fn test_session_options(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            test_spin_threshold_us: Some(20_000),
         },
         telemetry: TelemetryOptions {
             mode: TelemetryMode::Ring,
@@ -458,9 +459,10 @@ fn run_startup_first_physical_lead_probe(
         session.heartbeat().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(1));
     }
+    let snapshot = session.snapshot();
     assert!(
         hook.first_physical_send_started.load(Ordering::Acquire) > 0,
-        "startup probe did not reach physical dispatch"
+        "startup probe did not reach physical dispatch: snapshot={snapshot:?}"
     );
     if !session.snapshot().is_finished {
         session.quit().expect("probe quit");
@@ -1134,6 +1136,10 @@ fn production_startup_matrix_preserves_first_physical_lead() {
             &[KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
+                // Keep the authored boundary well beyond worker startup and
+                // host timer quantization.  This is test isolation only; the
+                // authored target remains frozen and the worker never moves
+                // it after arm.
                 scheduled_us: scheduled_us + 100_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "startup-matrix-down".into(),
@@ -2841,7 +2847,9 @@ fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
     let authored_calls = authored.configure_send_counter();
     authored.advance_playback_time_us(100_000);
     let authored_plan = authored.plan_current_dispatch();
-    let authored_step = authored.dispatch_due_from_plan_for_test(&authored_plan);
+    let authored_step = authored
+        .wait_and_dispatch_current_plan(&authored_plan)
+        .expect("frozen authored wait");
     assert!(
         matches!(authored_step, super::worker::DispatchStep::Dispatched),
         "frozen authored dispatch failed: {authored_step:?}, awaiting={}, plan={authored_plan:?}",
@@ -3169,13 +3177,15 @@ fn frozen_dispatch_qpc_probe_has_no_redundant_effective_now_sample() {
     harness.configure_packet_capture();
     let plan = harness.plan_current_dispatch();
 
-    // The direct frozen-plan seam excludes wait setup.  Its healthy sequence
-    // is the harness handoff sample, final admission, SendInput completion,
-    // and the explicitly diagnostic dispatch-ready sample.  In particular,
-    // no extra QPC is permitted merely to reconstruct effective_now.
+    // The frozen-plan waiter/dispatch seam must retain the handoff sample,
+    // final admission, SendInput completion, and explicitly diagnostic
+    // dispatch-ready sample. In particular, no extra QPC is permitted merely
+    // to reconstruct effective_now.
     reset_qpc_read_count();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&plan),
+        harness
+            .wait_and_dispatch_current_plan(&plan)
+            .expect("frozen plan wait"),
         super::worker::DispatchStep::Dispatched
     ));
     assert!(
@@ -4045,7 +4055,7 @@ fn native_min_hold_admission_uses_runtime_qpc_tick_domain() {
 }
 
 #[test]
-fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
+fn late_down_completion_uses_overdue_policy_not_hold_failure() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -4082,8 +4092,9 @@ fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
         schedule,
         2,
         BackendConfig::Mock {
-            // The first Down completes late enough that completion + the
-            // native floor makes the same-key retrigger at 1ms impossible.
+            // The first Down completes close to the next authored boundary.
+            // Completion is evidence only; the overdue policy may terminate
+            // the missed boundary, but it must not report a hold failure.
             latency_base_us: 900,
             latency_per_key_us: 0,
             fault_script: FaultInjectionScript::none(),
@@ -4102,12 +4113,10 @@ fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
     assert_eq!(snapshot.chord_integrity_lost, 0);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
-    assert!(
-        snapshot
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.contains("min_hold_infeasible_after_late_down"))
-    );
+    assert_eq!(snapshot.outcome.as_deref(), Some("error"));
+    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
+        error.contains("physical deadline infeasible") && !error.contains("min_hold_infeasible")
+    }));
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -4120,39 +4129,40 @@ fn dynamically_infeasible_same_key_chord_sends_zero_physical_events() {
         .collect();
     assert_eq!(physical_records.len(), 1);
     assert_eq!(physical_records[0]["requested_count"].as_u64(), Some(1));
-    assert!(!physical_records.iter().any(|record| {
-        record["requested_count"].as_u64() == Some(2) || record["polyphony"].as_u64() == Some(2)
-    }));
 }
 
 #[test]
 fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
+    // Keep the authored epoch comfortably ahead of worker startup. This is a
+    // test-only epoch choice made before arm(); the worker must not rebase the
+    // frozen schedule after arm or derive a new target from observed runtime.
+    const TEST_AUTHORED_EPOCH_US: u64 = 2_000_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
-            scheduled_us: 0,
+            scheduled_us: TEST_AUTHORED_EPOCH_US,
             scan_codes: smallvec::smallvec![0x15],
             reason: "first-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 20_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 100_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 20_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 100_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 30_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 150_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "release".to_string().into(),
         },
@@ -4407,7 +4417,7 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
 }
 
 #[test]
-fn late_down_does_not_move_authored_note_off_floor() {
+fn late_down_completion_does_not_move_authored_note_off_target() {
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4456,27 +4466,19 @@ fn late_down_does_not_move_authored_note_off_floor() {
         .unwrap();
 
     let active = coordinator.active_for_slot(0).unwrap();
-    // The healthy floor stays on the authored Down timestamp.  Completion is
-    // retained only as evidence for the later infeasibility check.
+    // The authored floor is derived from the authored Down timestamp.  The
+    // completion sample is retained as evidence only and cannot create a
+    // completion-relative hold failure.
     assert_eq!(
         active.release_not_before_ticks,
         TimelineTicks::from_raw(11_000)
     );
-    let error = coordinator
+    let prepared = coordinator
         .prepare_current_authored_frame()
-        .expect_err("late Down must make the authored Up infeasible");
-    match error {
-        super::CoordinatorError::MinHoldInfeasibleAfterLateDown {
-            authored_ticks,
-            blocked_mask,
-            required_release_ticks,
-        } => {
-            assert_eq!(authored_ticks.as_u64(), 20_000);
-            assert_eq!(blocked_mask, 0b001);
-            assert_eq!(required_release_ticks.as_u64(), 25_000);
-        }
-        other => panic!("unexpected min-hold error: {other:?}"),
-    }
+        .expect("authored Up remains valid after a late Down completion")
+        .expect("authored Up frame");
+    assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(20_000));
+    assert_eq!(prepared.immediate_up_mask, 0b001);
 }
 
 #[test]

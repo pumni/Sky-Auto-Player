@@ -285,6 +285,7 @@ impl PendingObservationQueue {
         self.queue.pop()
     }
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.queue.len()
     }

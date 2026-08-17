@@ -90,6 +90,8 @@ impl NativeDispatchSessionPy {
                 enable_waitable_timer,
                 enable_event_wait,
                 supervisor_lease_timeout_us,
+                #[cfg(any(test, feature = "test-support"))]
+                test_spin_threshold_us: None,
             },
             telemetry: TelemetryOptions {
                 mode: parsed_telemetry_mode,
@@ -588,6 +590,8 @@ impl TestDispatchSessionPy {
                 enable_waitable_timer,
                 enable_event_wait,
                 supervisor_lease_timeout_us: 3_000_000,
+                #[cfg(any(test, feature = "test-support"))]
+                test_spin_threshold_us: None,
             },
             telemetry: TelemetryOptions {
                 mode: crate::engine::TelemetryMode::Ring,
