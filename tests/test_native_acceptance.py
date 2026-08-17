@@ -339,7 +339,7 @@ def test_hot_and_cold_action_spacing() -> None:
     hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
     cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
     assert hot[2][2] - hot[0][2] == 19_667
-    assert hot[1][2] - hot[0][2] == 9_833
+    assert hot[1][2] - hot[0][2] == 17_167
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US

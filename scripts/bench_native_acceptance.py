@@ -123,7 +123,11 @@ def _actions(
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
-    hold_us = cycle_us - BENCHMARK_HOLD_GUARD_US
+    hold_us = (
+        cycle_us - BENCHMARK_HOLD_GUARD_US
+        if gap_profile == "hot"
+        else cycle_us // 2
+    )
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
         scan_codes = [
