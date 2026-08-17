@@ -49,10 +49,13 @@ Song file
 The worker has one physical timing contract. The authored/effective timeline
 deadline is not advanced by a learned send-cost lead. After final target,
 focus, and control proof the worker takes `final_proof_qpc`; the lease is
-evaluated against that sample. It then spins to the authored physical target
-and takes `pre_call_qpc` immediately before the trusted prepared SendInput
-call. The Win32 sender returns `sendinput_completion_qpc`. Completion is used
-as sender-side ownership/diagnostic evidence only; it is not used for
+evaluated against that sample. It then spins to the authored physical target.
+The trusted Win32 sender takes the authoritative `pre_call_qpc` after the
+prepared payload pointer/length have been resolved. After that sample, a
+Down-bearing packet may perform only the hard-late cutoff comparison before
+the single `SendInput` call; Up-only safety release has no Down cutoff. The
+Win32 sender then returns `sendinput_completion_qpc`. Completion is used as
+sender-side ownership/diagnostic evidence only; it is not used for
 physical-hold feasibility, subtracted from future authored timestamps, or used
 as a healthy release floor.
 The compatibility `send_started_ticks` and `send_completed_ticks` fields refer

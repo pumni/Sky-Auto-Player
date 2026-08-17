@@ -1,8 +1,9 @@
 """Run schema-compatible native benchmark A/B on one Windows runner.
 
-The candidate checkout supplies the benchmark harness for both legs.  Only the
-native wheel changes between legs, so the reports distinguish harness Git SHA
-from the native build commit instead of conflating the two.
+The candidate checkout supplies the benchmark harness for both legs. Only the
+native wheel changes between legs. Real-SendInput runs go through the
+historical-reference bridge so exact legacy native ABIs can be measured without
+pretending their adaptive runtime policy matches the current candidate.
 """
 
 from __future__ import annotations
@@ -84,7 +85,12 @@ def _build_wheel(
     if result.returncode != 0:
         raise RuntimeError(f"native wheel build failed for {repo}: {result.returncode}")
     wheel_dir_candidates = (repo / "target" / "wheels", repo / "rust" / "target" / "wheels")
-    wheels = [wheel for directory in wheel_dir_candidates if directory.exists() for wheel in directory.glob("sky_player_rs-*.whl")]
+    wheels = [
+        wheel
+        for directory in wheel_dir_candidates
+        if directory.exists()
+        for wheel in directory.glob("sky_player_rs-*.whl")
+    ]
     if not wheels:
         raise RuntimeError(f"native wheel build produced no wheel in {repo}")
     return max(wheels, key=lambda path: path.stat().st_mtime_ns)
@@ -111,10 +117,15 @@ def _benchmark_command(
     env_file = ROOT / ".env"
     if env_file.exists():
         command.extend(["--env-file", ".env"])
+    benchmark_script = (
+        "scripts/bench_native_reference_bridge.py"
+        if args.backend == "sendinput"
+        else "scripts/bench_native_acceptance.py"
+    )
     command.extend(
         [
             "python",
-            "scripts/bench_native_acceptance.py",
+            benchmark_script,
             "--backend",
             args.backend,
             "--actions",
@@ -230,7 +241,7 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         else max(10_000, frame_period_us + 500 + 2_500)
     )
     materialized_hold_us = cycle_us - 2_500 if args.gap_profile == "hot" else cycle_us // 2
-    return {
+    matrix: dict[str, Any] = {
         "actions": args.actions,
         "dispatch_repeats": args.dispatch_repeats,
         "command_samples": args.command_samples,
@@ -238,20 +249,27 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "backend": args.backend,
         "allow_real_input": args.allow_real_input,
         "game_fps": args.game_fps,
-        "lead_mode": "fixed" if real_backend else args.lead_mode,
-        "fixed_lead_us": 0 if real_backend else args.fixed_lead_us,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
-        "rt_priority_mode": "auto" if real_backend else args.rt_priority_mode,
-        "adaptive_spin": not real_backend,
-        "native_profile": (
-            "strict_timing_diagnostic" if real_backend else "mock_test"
-        ),
+        "native_profile": "strict_timing_diagnostic" if real_backend else "mock_test",
         "native_build_flavor": "production" if real_backend else "test_support",
         "require_focus": real_backend,
         "materialized_min_hold_us": materialized_hold_us,
         "budget_seconds": args.budget_seconds,
     }
+    if real_backend:
+        matrix["native_policy_source"] = "per-leg benchmark report"
+    else:
+        matrix.update(
+            {
+                "lead_mode": args.lead_mode,
+                "fixed_lead_us": args.fixed_lead_us,
+                "rt_priority_mode": args.rt_priority_mode,
+                "adaptive_spin": True,
+                "native_policy_source": "test-support CLI",
+            }
+        )
+    return matrix
 
 
 def _ab_provenance(

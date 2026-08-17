@@ -17,7 +17,7 @@ microsecond conversions.
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
 | `final_proof_qpc` | QPC sample after final target/focus/control proof and before the final spin. It authorizes the frozen plan but is not a syscall-entry timestamp. |
-| `pre_call_qpc` | QPC sample taken at the final spin boundary immediately before the trusted prepared SendInput call. |
+| `pre_call_qpc` | Authoritative QPC sample taken inside the trusted prepared sender after payload resolution; only the Down hard-late cutoff comparison may follow it before `SendInput`. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
@@ -126,11 +126,17 @@ The final physical path is ordered and fail-closed:
    packet against the current coordinator state.
 2. Take the final target/focus/control proof QPC `final_proof_qpc`.
 3. Evaluate the lease using that proof sample.
-4. Spin to the authored physical target, take `pre_call_qpc`, and call the
-   trusted prepared `SendInput` transport immediately.
-5. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
-6. Commit coordinator ownership using the confirmed transport result.
-7. Enqueue one bounded raw observation and return to orchestration.
+4. Spin to the authored physical target. The final spin rejects a Down-bearing
+   packet that is already beyond its hard-late cutoff; Up-only safety release
+   remains exempt.
+5. Enter the trusted prepared sender and take the authoritative `pre_call_qpc`
+   after payload pointer/length resolution. Recheck the same Down cutoff
+   against that exact sample so a preemption between the outer spin and the
+   syscall cannot late-send a Down. No second QPC sample or control work is
+   inserted between this check and `SendInput`.
+6. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
+7. Commit coordinator ownership using the confirmed transport result.
+8. Enqueue one bounded raw observation and return to orchestration.
 
 The transport sends Up entries before Down entries in one call. Partial Down or
 mixed integrity loss is never blindly retried. A skipped key that the
@@ -157,7 +163,10 @@ The final spin loop performs only the QPC target/cutoff comparison and
 `spin_loop`; it does not poll interrupt generation, lease state, focus, or
 commands. Those invalidation decisions happen before the final proof and
 precision stage. The hard late cutoff is checked in the same bounded QPC loop
-for Down-bearing packets; Up-only safety release remains exempt.
+for Down-bearing packets; Up-only safety release remains exempt. The trusted
+sender repeats only that cutoff predicate against its authoritative
+`pre_call_qpc`, closing the preemption window without adding another clock
+sample or adaptive controller.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter
@@ -218,7 +227,7 @@ callers. They map to `pre_call_qpc`, `sendinput_completion_qpc`, and
 `pre_call_to_completion`; production does not take a second QPC sample to
 preserve the old names.
 The optional `dispatch_ready_qpc` and `core_post_send_duration_us` fields are
-diagnostic-only and are not sampled by the production sender.  The dispatch
+diagnostic-only and are not sampled by the production sender. The dispatch
 worker CPU metric is likewise captured during worker finalization, never by
 the deferred observer thread.
 
