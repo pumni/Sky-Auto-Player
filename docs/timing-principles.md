@@ -153,10 +153,11 @@ is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
-The spin loop may use an interrupt-generation hint with `Relaxed` ordering and
-poll it every bounded group of iterations. The final interrupt/deadline gate is
-authoritative and uses `Acquire` ordering. Spin is bounded and cannot replace
-the QPC deadline check.
+The final spin loop performs only the QPC target/cutoff comparison and
+`spin_loop`; it does not poll interrupt generation, lease state, focus, or
+commands. Those invalidation decisions happen before the final proof and
+precision stage. The hard late cutoff is checked in the same bounded QPC loop
+for Down-bearing packets; Up-only safety release remains exempt.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter

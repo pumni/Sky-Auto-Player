@@ -574,6 +574,9 @@ impl ProductionDispatchTestHarness {
         timing.admission_guard_ticks = qpc_clock
             .duration_from_us(DEFAULT_ADMISSION_GUARD_US)
             .expect("test admission guard conversion");
+        timing.hard_late_abort_threshold_ticks = qpc_clock
+            .duration_from_us(20_000)
+            .expect("test hard-late cutoff conversion");
         timing.effective_spin_threshold_ticks = qpc_clock
             .duration_from_us(20_000)
             .expect("test spin threshold conversion");

@@ -15,13 +15,12 @@ use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::timing::interpret_down_send_timing;
 use super::{
-    AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue,
+    AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue, SpinSendError,
     spin_and_send_prepared,
 };
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
     ctx: AuthoredPacketContext<'_>,
@@ -54,7 +53,6 @@ pub(crate) fn dispatch_authored_packet(
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
     } = ctx;
-
     let WorkerResources {
         clock: qpc_clock,
         waiter,
@@ -64,13 +62,7 @@ pub(crate) fn dispatch_authored_packet(
         ..
     } = resources;
     let qpc_clock = *qpc_clock;
-
-    // The first physical boundary may be reached from the pre-roll wait. The
-    // observation consumer must be allowed to interpret that wake as the
-    // intentional pre-epoch startup handoff; the authored send itself still
-    // cannot occur before its absolute target.
     runtime.allow_pre_epoch_startup_dispatch = now_ticks < clock_state.epoch;
-
     let Some(physical_plan) = dispatch_plan.physical() else {
         return DispatchStep::NoWork;
     };
@@ -609,16 +601,36 @@ fn record_down_send_outcome(
     };
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
+    let latest_allowed_down_qpc = if packet.down_mask != 0 {
+        match physical_target_qpc.checked_add_duration(timing.hard_late_abort_threshold_ticks) {
+            Ok(latest) => Some(latest),
+            Err(_) => {
+                return DispatchStep::TerminateStatic("down_hard_late_abort_boundary_overflow");
+            }
+        }
+    } else {
+        None
+    };
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result =
-        match spin_and_send_prepared(qpc_clock, physical_target_qpc, backend, prepared_packet) {
-            Ok(result) => result,
-            Err(error) => return DispatchStep::Terminate(format!("QPC spin failure: {error:?}")),
-        };
+    let result = match spin_and_send_prepared(
+        qpc_clock,
+        physical_target_qpc,
+        latest_allowed_down_qpc,
+        backend,
+        prepared_packet,
+    ) {
+        Ok(result) => result,
+        Err(SpinSendError::DownHardLateAbort) => {
+            return DispatchStep::TerminateStatic("down_hard_late_abort");
+        }
+        Err(SpinSendError::Qpc(error)) => {
+            return DispatchStep::Terminate(format!("QPC spin failure: {error:?}"));
+        }
+    };
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
             qpc_clock,

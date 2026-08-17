@@ -219,6 +219,14 @@ def _host_fingerprint() -> dict[str, str]:
 
 
 def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
+    real_backend = args.backend == "sendinput"
+    frame_period_us = (1_000_000 + args.game_fps - 1) // args.game_fps
+    cycle_us = (
+        60_000
+        if args.gap_profile == "cold"
+        else max(10_000, frame_period_us + 500 + 2_500)
+    )
+    materialized_hold_us = cycle_us - 2_500 if args.gap_profile == "hot" else cycle_us // 2
     return {
         "actions": args.actions,
         "dispatch_repeats": args.dispatch_repeats,
@@ -227,11 +235,17 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "backend": args.backend,
         "allow_real_input": args.allow_real_input,
         "game_fps": args.game_fps,
-        "lead_mode": args.lead_mode,
-        "fixed_lead_us": args.fixed_lead_us,
+        "lead_mode": "fixed" if real_backend else args.lead_mode,
+        "fixed_lead_us": 0 if real_backend else args.fixed_lead_us,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
-        "rt_priority_mode": args.rt_priority_mode,
+        "rt_priority_mode": "auto" if real_backend else args.rt_priority_mode,
+        "adaptive_spin": not real_backend,
+        "native_profile": (
+            "strict_timing_diagnostic" if real_backend else "mock_test"
+        ),
+        "require_focus": real_backend,
+        "materialized_min_hold_us": materialized_hold_us,
         "budget_seconds": args.budget_seconds,
     }
 

@@ -200,10 +200,11 @@ target, the waiter returns `Deadline`. Final command, target, focus, and lease
 admission remains authoritative after that result and may still reject
 `SendInput`.
 
-The spin path may read an interrupt generation hint with `Relaxed` ordering
-every bounded group (currently 32 iterations). The final generation/deadline
-decision uses the authoritative `Acquire` path. This optimization is only a
-wake hint; the QPC deadline check runs first and cannot be bypassed by an event.
+The final precision spin performs only its QPC target/cutoff comparison and
+`spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
+are completed before that stage; no interrupt-generation polling or control
+branch is inserted into the final spin. The QPC deadline check remains
+authoritative and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;

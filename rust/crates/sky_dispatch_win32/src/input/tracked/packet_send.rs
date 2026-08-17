@@ -3,10 +3,9 @@ use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
 use super::super::packet::send_prepared_physical_packet_once;
-use super::super::packet::{
-    PreparedPhysicalPacket, send_physical_packet_once_with_start,
-    send_prepared_physical_packet_once_with_start,
-};
+#[cfg(any(test, feature = "test-support"))]
+use super::super::packet::send_prepared_physical_packet_once_with_start;
+use super::super::packet::{PreparedPhysicalPacket, send_physical_packet_once_with_start};
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
     no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock,

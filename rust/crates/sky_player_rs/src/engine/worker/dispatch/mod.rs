@@ -99,6 +99,7 @@ use super::super::{ActionKind, DurationTicks, QpcClock, QpcTicks, TimelineTicks,
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
+use sky_dispatch_win32::clock::QpcError;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 #[derive(Clone, Debug)]
@@ -115,22 +116,69 @@ pub(crate) enum PhysicalCommit {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpinSendError {
+    Qpc(QpcError),
+    DownHardLateAbort,
+}
+
+#[inline]
+fn hard_late_down_abort_reached(
+    now_ticks: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> bool {
+    latest_allowed_down_qpc.is_some_and(|latest| now_ticks > latest)
+}
+
 #[inline]
 pub(crate) fn spin_and_send_prepared(
     qpc_clock: QpcClock,
     physical_target_qpc: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
     backend: &mut TrackedKeyState,
     prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
-) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, sky_dispatch_win32::clock::QpcError>
-{
+) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, SpinSendError> {
     loop {
-        let now_ticks = qpc_clock.now()?;
+        let now_ticks = qpc_clock.now().map_err(SpinSendError::Qpc)?;
         if now_ticks >= physical_target_qpc {
+            if hard_late_down_abort_reached(now_ticks, latest_allowed_down_qpc) {
+                return Err(SpinSendError::DownHardLateAbort);
+            }
             #[cfg(any(test, feature = "test-support"))]
             return Ok(backend.send_prepared_physical_packet_with_start(prepared_packet, now_ticks));
             #[cfg(not(any(test, feature = "test-support")))]
             return Ok(backend.send_prepared_physical_packet(prepared_packet));
         }
         std::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hard_late_down_abort_reached;
+    use sky_dispatch_win32::clock::QpcTicks;
+
+    #[test]
+    fn hard_late_down_cutoff_allows_exact_boundary() {
+        assert!(!hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_000),
+            Some(QpcTicks::from_raw(20_000))
+        ));
+    }
+
+    #[test]
+    fn hard_late_down_cutoff_rejects_one_tick_after_boundary() {
+        assert!(hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_001),
+            Some(QpcTicks::from_raw(20_000))
+        ));
+    }
+
+    #[test]
+    fn up_only_dispatch_has_no_hard_down_cutoff() {
+        assert!(!hard_late_down_abort_reached(
+            QpcTicks::from_raw(20_001),
+            None
+        ));
     }
 }
