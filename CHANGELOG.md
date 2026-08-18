@@ -4,6 +4,24 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-08-18
+
+Sky Auto Player v3.4.0 tightens deterministic playback timing and runtime recovery.
+
+### Added
+
+- Added independent per-key release scheduling and missed/hard-late key-down recovery.
+
+### Changed
+
+- Made authored dispatch timing deterministic with stricter minimum-hold and physical-feasibility validation.
+- Hardened focus recovery, calibration provenance, telemetry, and native dispatch validation.
+
+### Fixed
+
+- Kept hard-late recovery out of backend rejection health accounting.
+- Fixed missed-note counters in the playback progress renderer.
+
 ## [3.3.0] - 2026-08-12
 
 Sky Auto Player v3.3.0 delivers the native update path and the simplified
