@@ -122,7 +122,8 @@ jobs:
         shell: bash
         run: |
           uv run ruff check src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
-          uv run pytest tests/test_hud_ui.py tests/test_textual_playback.py -q
+          uv run pyright src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
+          uv run python -m compileall -q src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
           grep -F '.config/rust_architecture_allowlist.json)' .github/workflows/ci.yml
 
       - name: Commit focused fix and remove one-shot workflow
