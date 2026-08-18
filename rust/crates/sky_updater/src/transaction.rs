@@ -1,14 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{path_is_safe_under, sha256_file, validate_relative_path};
 use crate::error::{Result, UpdaterError};
+use crate::file_replace::{probe_new_destination, probe_replaceable};
 use crate::manifest::{Manifest, PreserveClass, classify_preserved};
-use crate::{MANIFEST_NAME, SCHEMA_VERSION};
+use crate::{CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION, UPDATER_EXE};
 
 pub const TRANSACTION_DIR: &str = ".sky-update-transaction";
 const JOURNAL_FILE_NAME: &str = "journal.json";
@@ -64,7 +65,7 @@ pub fn build_plan(old: Option<&Manifest>, new: &Manifest) -> Result<TransactionP
             add.insert(path.clone());
         }
     }
-    if old_files.contains_key(MANIFEST_NAME) {
+    if old.is_some() {
         replace.insert(MANIFEST_NAME.to_owned());
     } else {
         add.insert(MANIFEST_NAME.to_owned());
@@ -79,12 +80,49 @@ pub fn build_plan(old: Option<&Manifest>, new: &Manifest) -> Result<TransactionP
         .chain(&orphans)
         .cloned()
         .collect::<Vec<_>>();
+    let mut files_to_replace = replace.into_iter().collect::<Vec<_>>();
+    let mut files_to_add = add.into_iter().collect::<Vec<_>>();
+    order_managed_paths(&mut files_to_replace);
+    order_managed_paths(&mut files_to_add);
     Ok(TransactionPlan {
-        files_to_replace: replace.into_iter().collect(),
-        files_to_add: add.into_iter().collect(),
+        files_to_replace,
+        files_to_add,
         managed_orphans_to_delete: orphans.into_iter().collect(),
         backup_paths,
     })
+}
+
+fn order_managed_paths(paths: &mut [String]) {
+    paths.sort_by(|left, right| {
+        path_priority(left)
+            .cmp(&path_priority(right))
+            .then_with(|| left.cmp(right))
+    });
+}
+
+fn path_priority(path: &str) -> u8 {
+    match path {
+        MANIFEST_NAME => 4,
+        UPDATER_EXE => 3,
+        CALIBRATION_EXE => 2,
+        PRIMARY_EXE => 1,
+        _ => 0,
+    }
+}
+
+fn ordered_payload_paths(plan: &TransactionPlan) -> Vec<(String, bool)> {
+    let mut paths = plan
+        .files_to_replace
+        .iter()
+        .map(|path| (path.clone(), true))
+        .chain(plan.files_to_add.iter().map(|path| (path.clone(), false)))
+        .collect::<Vec<_>>();
+    paths.sort_by(|(left, _), (right, _)| {
+        path_priority(left)
+            .cmp(&path_priority(right))
+            .then_with(|| left.cmp(right))
+    });
+    paths
 }
 
 fn validate_no_file_directory_collisions<'a>(
@@ -130,6 +168,18 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
     }
     fs::create_dir_all(root.join("backup"))
         .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
+    let result = prepare_journal_inner(install_root, plan, &root);
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&root);
+    }
+    result
+}
+
+fn prepare_journal_inner(
+    install_root: &Path,
+    plan: &TransactionPlan,
+    root: &Path,
+) -> Result<Journal> {
     let mut backups = Vec::new();
     for (index, relative) in plan.backup_paths.iter().enumerate() {
         let source = safe_join(install_root, relative)?;
@@ -142,7 +192,10 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
             fs::create_dir_all(parent)
                 .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
         }
-        fs::copy(&source, &backup).map_err(|err| {
+        let expected_hash = sha256_file(&source).map_err(|err| {
+            UpdaterError::BackupFailed(format!("could not hash {source:?}: {err}"))
+        })?;
+        copy_backup(&source, &backup).map_err(|err| {
             UpdaterError::BackupFailed(format!(
                 "could not back up {} to {}: {err}",
                 source.display(),
@@ -159,22 +212,19 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
             fs::set_permissions(&backup, permissions)
                 .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
         }
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&backup)
-            .and_then(|file| file.sync_all())
-            .map_err(|err| {
-                UpdaterError::BackupFailed(format!(
-                    "could not flush backup {}: {err}",
-                    backup.display()
-                ))
-            })?;
         backups.push(BackupEntry {
             path: relative.clone(),
             backup_path: backup_relative,
-            sha256: sha256_file(&source)
-                .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?,
+            sha256: {
+                let actual = sha256_file(&backup)
+                    .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
+                if actual != expected_hash {
+                    return Err(UpdaterError::BackupFailed(format!(
+                        "backup changed while being created: {relative}"
+                    )));
+                }
+                expected_hash
+            },
         });
     }
     let new_paths = plan
@@ -198,6 +248,43 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
     Ok(journal)
 }
 
+fn copy_backup(source: &Path, backup: &Path) -> io::Result<()> {
+    let mut input = fs::File::open(source)?;
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(backup)?;
+    io::copy(&mut input, &mut output)?;
+    output.flush()?;
+    output.sync_all()
+}
+
+/// Prove every managed destination can participate in the upcoming atomic
+/// transaction before the prepared journal is created.
+pub fn preflight(install_root: &Path, plan: &TransactionPlan) -> Result<()> {
+    for relative in &plan.files_to_replace {
+        let destination = safe_join(install_root, relative)?;
+        if !probe_replaceable(&destination, relative)? {
+            return Err(UpdaterError::InstallTargetBusy {
+                path: relative.clone(),
+                os_code: 2,
+                message: "managed replacement target is missing".into(),
+            });
+        }
+    }
+    for relative in &plan.files_to_add {
+        let destination = safe_join(install_root, relative)?;
+        probe_new_destination(&destination, relative)?;
+    }
+    for relative in &plan.managed_orphans_to_delete {
+        let destination = safe_join(install_root, relative)?;
+        if destination.exists() {
+            probe_replaceable(&destination, relative)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn apply(
     install_root: &Path,
     staging: &Path,
@@ -210,8 +297,21 @@ pub fn apply(
             "transaction is not prepared".into(),
         ));
     }
-    for relative in plan.files_to_replace.iter().chain(plan.files_to_add.iter()) {
-        copy_managed_file(install_root, staging, relative)?;
+    let ordered_payloads = ordered_payload_paths(plan);
+    let mut index = 0usize;
+    for (relative, replaces_existing) in ordered_payloads
+        .iter()
+        .filter(|(relative, _)| relative != MANIFEST_NAME)
+    {
+        index += 1;
+        copy_managed_file(
+            install_root,
+            staging,
+            new_manifest,
+            relative,
+            *replaces_existing,
+            index,
+        )?;
     }
     for relative in &plan.managed_orphans_to_delete {
         let destination = safe_join(install_root, relative)?;
@@ -219,6 +319,20 @@ pub fn apply(
             fs::remove_file(destination)
                 .map_err(|err| UpdaterError::InstallCopyFailed(err.to_string()))?;
         }
+    }
+    if let Some((relative, replaces_existing)) = ordered_payloads
+        .iter()
+        .find(|(relative, _)| relative == MANIFEST_NAME)
+    {
+        index += 1;
+        copy_managed_file(
+            install_root,
+            staging,
+            new_manifest,
+            relative,
+            *replaces_existing,
+            index,
+        )?;
     }
     verify_installed_managed(install_root, new_manifest)?;
     let installed_manifest_path = safe_join(install_root, MANIFEST_NAME)
@@ -240,7 +354,14 @@ pub fn apply(
     Ok(())
 }
 
-fn copy_managed_file(install_root: &Path, staging: &Path, relative: &str) -> Result<()> {
+fn copy_managed_file(
+    install_root: &Path,
+    staging: &Path,
+    new_manifest: &Manifest,
+    relative: &str,
+    replaces_existing: bool,
+    index: usize,
+) -> Result<()> {
     if classify_preserved(relative) == PreserveClass::Preserved {
         return Err(UpdaterError::InstallCopyFailed(format!(
             "attempted to replace preserved path: {relative}"
@@ -256,10 +377,26 @@ fn copy_managed_file(install_root: &Path, staging: &Path, relative: &str) -> Res
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let destination = safe_join(install_root, relative)?;
-    fs::copy(source, destination)
-        .map_err(|err| UpdaterError::InstallCopyFailed(err.to_string()))?;
-    Ok(())
+    let expected_hash = if relative == MANIFEST_NAME {
+        sha256_file(&source)?
+    } else {
+        new_manifest
+            .files_by_path()
+            .get(relative)
+            .map(|file| file.sha256.clone())
+            .ok_or_else(|| {
+                UpdaterError::ManifestInvalid(format!(
+                    "managed path absent from manifest: {relative}"
+                ))
+            })?
+    };
+    let replacement =
+        crate::file_replace::prepare_replacement(&source, &destination, &expected_hash, relative)?;
+    if replaces_existing && destination.is_file() {
+        crate::file_replace::atomic_replace_existing(replacement, "apply", index)
+    } else {
+        crate::file_replace::atomic_install_new(replacement, "apply", index)
+    }
 }
 
 pub fn verify_installed_managed(install_root: &Path, manifest: &Manifest) -> Result<()> {

@@ -1,0 +1,523 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$FromPackage,
+    [Parameter(Mandatory = $true)]
+    [string]$ToPackage,
+    [string]$GitHubTargetVersion = "3.4.0",
+    [switch]$KeepEvidence,
+    [int]$TimeoutSeconds = 180
+)
+
+$ErrorActionPreference = "Stop"
+$script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$script:Timestamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$script:EvidenceRoot = Join-Path $script:RepoRoot "artifacts\updater-e2e\$script:Timestamp"
+$script:SandboxRoot = Join-Path ([IO.Path]::GetTempPath()) "sky-updater-e2e-$script:Timestamp-$PID"
+$script:Results = [ordered]@{}
+$script:AllPassed = $false
+$script:PreviousLocalAppData = $env:LOCALAPPDATA
+
+function Write-EvidenceJson {
+    param([string]$Name, [object]$Value)
+    $path = Join-Path $script:EvidenceRoot $Name
+    $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $path -Encoding utf8
+}
+
+function Get-RelativeFilePath {
+    param([string]$Root, [string]$Path)
+    [IO.Path]::GetRelativePath($Root, $Path).Replace("\", "/")
+}
+
+function Get-FileHashes {
+    param([string]$Root)
+    $hashes = [ordered]@{}
+    foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File) {
+        $relative = Get-RelativeFilePath $Root $file.FullName
+        $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return ,$hashes
+}
+
+function Get-ManifestObject {
+    param([string]$Root)
+    Get-Content -LiteralPath (Join-Path $Root "MANIFEST.json") -Raw | ConvertFrom-Json
+}
+
+function Save-ManifestWithCurrentHashes {
+    param([string]$Root)
+    $manifest = Get-ManifestObject $Root
+    $entries = @(
+        foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File) {
+            $relative = Get-RelativeFilePath $Root $file.FullName
+            if ($relative -eq "MANIFEST.json") { continue }
+            [ordered]@{
+                path = $relative
+                size = $file.Length
+                sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        }
+    )
+    $manifest.files = $entries
+    $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $Root "MANIFEST.json") -Encoding utf8
+}
+
+function Assert-ManifestFiles {
+    param([string]$Root, [object]$Manifest)
+    $hashes = Get-FileHashes $Root
+    foreach ($entry in @($Manifest.files)) {
+        if (-not $hashes.Contains($entry.path)) {
+            throw "manifest file is missing: $($entry.path)"
+        }
+        $path = Join-Path $Root ($entry.path.Replace("/", "\"))
+        if ((Get-Item -LiteralPath $path).Length -ne [int64]$entry.size) {
+            throw "manifest size mismatch: $($entry.path)"
+        }
+        if ($hashes[$entry.path] -ne $entry.sha256.ToLowerInvariant()) {
+            throw "manifest hash mismatch: $($entry.path)"
+        }
+    }
+    return ,$hashes
+}
+
+function Get-PackageRoot {
+    param([string]$Archive, [string]$Destination)
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force
+    $children = @(Get-ChildItem -LiteralPath $Destination -Force)
+    if ($children.Count -eq 1 -and $children[0].PSIsContainer) {
+        return $children[0].FullName
+    }
+    return $Destination
+}
+
+function Copy-TreeContents {
+    param([string]$Source, [string]$Destination)
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
+}
+
+function Add-PreservedFixture {
+    param([string]$Root)
+    [IO.File]::WriteAllText((Join-Path $Root "config.json"), '{"e2e":"preserve"}')
+    [IO.File]::WriteAllText((Join-Path $Root ".env"), "E2E_PRESERVED=1`r`n")
+    New-Item -ItemType Directory -Path (Join-Path $Root "songs") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Root "logs") -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Root "songs\user.skysheet"), "user song`r`n")
+    [IO.File]::WriteAllText((Join-Path $Root "logs\user.log"), "user log`r`n")
+}
+
+function New-Scenario {
+    param([string]$Name, [string]$FromRoot)
+    $root = Join-Path $script:SandboxRoot $Name
+    $local = Join-Path $root "localappdata"
+    $install = Join-Path $root "install"
+    Copy-TreeContents $FromRoot $install
+    Add-PreservedFixture $install
+    New-Item -ItemType Directory -Path $local -Force | Out-Null
+    $script:ScenarioLocalAppData = $local
+    $env:LOCALAPPDATA = $local
+    $beforeHashes = Get-FileHashes $install
+    $beforeManifest = Get-ManifestObject $install
+    Write-EvidenceJson "$Name-before-manifest.json" $beforeManifest
+    Write-EvidenceJson "$Name-before-hashes.json" $beforeHashes
+    [pscustomobject]@{
+        Name = $Name
+        Root = $root
+        Local = $local
+        Install = $install
+        BeforeHashes = $beforeHashes
+        BeforeManifest = $beforeManifest
+    }
+}
+
+function New-RunDirectory {
+    param([string]$Candidate)
+    $runs = Join-Path $env:LOCALAPPDATA "Sky-Auto-Player\update-runs"
+    $run = Join-Path $runs ("run-" + ([guid]::NewGuid().ToString("N")))
+    New-Item -ItemType Directory -Path $run -Force | Out-Null
+    Copy-Item -LiteralPath $Candidate -Destination (Join-Path $run "Sky-Auto-Player-Updater.exe") -Force
+    return $run
+}
+
+function Quote-ProcessArgument {
+    param([string]$Value)
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Start-ParentFixture {
+    param([string]$Install)
+    $primary = Join-Path $Install "Sky-Auto-Player.exe"
+    try {
+        $process = Start-Process -FilePath $primary -WorkingDirectory $Install -PassThru
+        Start-Sleep -Milliseconds 750
+        return $process
+    }
+    catch {
+        return $null
+    }
+}
+
+function Stop-ProcessIfRunning {
+    param([object]$Process)
+    if ($null -ne $Process) {
+        try {
+            if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
+        } catch { }
+    }
+}
+
+function Start-UpdaterProcess {
+    param(
+        [string]$Install,
+        [string]$Candidate,
+        [string]$CurrentVersion,
+        [string]$TargetVersion,
+        [string]$ReleaseDir,
+        [uint32]$ParentPid = 1,
+        [string]$FailAt,
+        [string]$PauseAt,
+        [switch]$Restart,
+        [switch]$KeepPaused
+    )
+    $run = New-RunDirectory $Candidate
+    $updater = Join-Path $run "Sky-Auto-Player-Updater.exe"
+    $stdout = Join-Path $run "stdout.txt"
+    $stderr = Join-Path $run "stderr.txt"
+    $arguments = @(
+        "--install-root", $Install,
+        "--parent-pid", [string]$ParentPid,
+        "--current-version", $CurrentVersion,
+        "--target-version", $TargetVersion,
+        "--channel", "stable"
+    )
+    if ($Restart) { $arguments += "--restart" }
+    if ($ReleaseDir) { $arguments += @("--release-dir", $ReleaseDir) }
+    if ($FailAt) { $arguments += @("--fail-at", $FailAt) }
+    if ($PauseAt) { $arguments += @("--pause-at", $PauseAt) }
+    $argumentLine = (($arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " ")
+    $process = Start-Process -FilePath $updater -ArgumentList $argumentLine -WorkingDirectory $Install `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    if (-not $KeepPaused) {
+        Start-Sleep -Milliseconds 1000
+    }
+    [pscustomobject]@{
+        Process = $process
+        Run = $run
+        Updater = $updater
+        Stdout = $stdout
+        Stderr = $stderr
+    }
+}
+
+function Invoke-Updater {
+    param(
+        [object]$Scenario,
+        [string]$Candidate,
+        [string]$CurrentVersion,
+        [string]$TargetVersion,
+        [string]$ReleaseDir,
+        [string]$FailAt,
+        [string]$PauseAt,
+        [switch]$Restart
+    )
+    $parent = Start-ParentFixture $Scenario.Install
+    $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
+    $runInfo = Start-UpdaterProcess -Install $Scenario.Install -Candidate $Candidate `
+        -ParentPid $parentPid -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion -ReleaseDir $ReleaseDir `
+        -FailAt $FailAt -PauseAt $PauseAt -Restart:$Restart
+    Start-Sleep -Milliseconds 500
+    Stop-ProcessIfRunning $parent
+    if (-not $runInfo.Process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-ProcessIfRunning $runInfo.Process
+        throw "updater timed out: $($Scenario.Name)"
+    }
+    $resultPath = Join-Path $Scenario.Local "Sky-Auto-Player\update-state\last-result.json"
+    $result = $null
+    if (Test-Path -LiteralPath $resultPath) {
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    }
+    [pscustomobject]@{
+        Scenario = $Scenario
+        Run = $runInfo.Run
+        ExitCode = $runInfo.Process.ExitCode
+        Result = $result
+        ResultPath = $resultPath
+        Stdout = if (Test-Path $runInfo.Stdout) { Get-Content $runInfo.Stdout -Raw } else { "" }
+        Stderr = if (Test-Path $runInfo.Stderr) { Get-Content $runInfo.Stderr -Raw } else { "" }
+    }
+}
+
+function Assert-RestartObserved {
+    param([string]$Install)
+    $primary = [IO.Path]::GetFullPath((Join-Path $Install "Sky-Auto-Player.exe"))
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $found = $false
+        foreach ($process in Get-Process) {
+            try {
+                if ($process.Path -and [IO.Path]::GetFullPath($process.Path) -ieq $primary) {
+                    $found = $true
+                    break
+                }
+            } catch { }
+        }
+        if ($found) { return $true }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
+function Stop-RestartedApp {
+    param([string]$Install)
+    $primary = [IO.Path]::GetFullPath((Join-Path $Install "Sky-Auto-Player.exe"))
+    foreach ($process in Get-Process) {
+        try {
+            if ($process.Path -and [IO.Path]::GetFullPath($process.Path) -ieq $primary) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+}
+
+function Assert-PreservedState {
+    param([object]$Scenario)
+    $paths = @("config.json", ".env", "songs/user.skysheet", "logs/user.log")
+    foreach ($relative in $paths) {
+        $before = $Scenario.BeforeHashes[$relative]
+        $after = (Get-FileHash -LiteralPath (Join-Path $Scenario.Install ($relative.Replace("/", "\"))) -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($before -ne $after) { throw "preserved path changed: $relative" }
+    }
+}
+
+function Assert-NoInstallMutation {
+    param([object]$Scenario)
+    $after = Get-FileHashes $Scenario.Install
+    if ($after.Count -ne $Scenario.BeforeHashes.Count) {
+        throw "installation file set changed unexpectedly: $($Scenario.Name)"
+    }
+    foreach ($relative in $Scenario.BeforeHashes.Keys) {
+        if (-not $after.Contains($relative) -or $after[$relative] -ne $Scenario.BeforeHashes[$relative]) {
+            throw "installation file changed unexpectedly: $relative"
+        }
+    }
+}
+
+function Save-ScenarioEvidence {
+    param([string]$Name, [object]$Scenario, [object]$Run, [object]$Manifest)
+    $afterManifest = Get-ManifestObject $Scenario.Install
+    $afterHashes = Get-FileHashes $Scenario.Install
+    Write-EvidenceJson "$Name-after-manifest.json" $afterManifest
+    Write-EvidenceJson "$Name-after-hashes.json" $afterHashes
+    if ($Name -eq "happy-local") {
+        Copy-Item -LiteralPath (Join-Path $script:EvidenceRoot "$Name-before-manifest.json") `
+            -Destination (Join-Path $script:EvidenceRoot "before-manifest.json") -Force
+        Copy-Item -LiteralPath (Join-Path $script:EvidenceRoot "$Name-before-hashes.json") `
+            -Destination (Join-Path $script:EvidenceRoot "before-hashes.json") -Force
+        Copy-Item -LiteralPath (Join-Path $script:EvidenceRoot "$Name-after-manifest.json") `
+            -Destination (Join-Path $script:EvidenceRoot "after-manifest.json") -Force
+        Copy-Item -LiteralPath (Join-Path $script:EvidenceRoot "$Name-after-hashes.json") `
+            -Destination (Join-Path $script:EvidenceRoot "after-hashes.json") -Force
+    }
+    Write-EvidenceJson "$Name-result.json" $Run.Result
+    if ($Run.ResultPath -and (Test-Path $Run.ResultPath)) {
+        Copy-Item -LiteralPath $Run.ResultPath -Destination (Join-Path $script:EvidenceRoot "$Name-result.json") -Force
+    }
+    Assert-ManifestFiles $Scenario.Install $Manifest | Out-Null
+    Assert-PreservedState $Scenario
+    if (Test-Path -LiteralPath (Join-Path $Scenario.Install ".sky-update-transaction")) {
+        throw "transaction directory remains after successful scenario: $Name"
+    }
+    return [pscustomobject]@{
+        status = $Run.Result.status
+        exit_code = $Run.ExitCode
+        restart_verified = Assert-RestartObserved $Scenario.Install
+        transaction_removed = $true
+    }
+}
+
+function Save-UpdaterLog {
+    param([string]$Name, [object]$Scenario)
+    $source = Join-Path $Scenario.Local "Sky-Auto-Player\update-state\updater.log"
+    $destination = Join-Path $script:EvidenceRoot "$Name-updater.log"
+    if (Test-Path -LiteralPath $source) {
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+        Add-Content -LiteralPath (Join-Path $script:EvidenceRoot "updater.log") `
+            -Value ("[$Name]`r`n" + (Get-Content -LiteralPath $source -Raw))
+    }
+}
+
+function Build-SyntheticLocalRelease {
+    param([string]$ToRoot, [string]$Candidate, [string]$Version)
+    $release = Join-Path $script:SandboxRoot "synthetic-release"
+    Copy-TreeContents $ToRoot $release
+    Copy-Item -LiteralPath $Candidate -Destination (Join-Path $release "Sky-Auto-Player-Updater.exe") -Force
+    Save-ManifestWithCurrentHashes $release
+    $zipName = "Sky-Auto-Player-v$Version.zip"
+    $zip = Join-Path $release $zipName
+    $bundle = Join-Path $script:SandboxRoot "synthetic-bundle"
+    New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+    Compress-Archive -Path (Join-Path $release "*") -DestinationPath $zip -Force
+    $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText((Join-Path $release "$zipName.sha256"), "$zipHash  $zipName`r`n", [Text.Encoding]::ASCII)
+    # LocalReleaseSource reads the bundle directory, while the ZIP itself is
+    # the exact archive that is hash-verified and extracted by the updater.
+    return $release
+}
+
+function Record-Failure {
+    param([string]$Name, [object]$ErrorRecord)
+    $script:Results[$Name] = [ordered]@{ status = "FAIL"; error = $ErrorRecord.ToString() }
+}
+
+try {
+    New-Item -ItemType Directory -Path $script:EvidenceRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $script:SandboxRoot -Force | Out-Null
+    $fromRoot = Get-PackageRoot (Resolve-Path $FromPackage).Path (Join-Path $script:SandboxRoot "from-package")
+    $toRoot = Get-PackageRoot (Resolve-Path $ToPackage).Path (Join-Path $script:SandboxRoot "to-package")
+    $fromManifest = Get-ManifestObject $fromRoot
+    $toManifest = Get-ManifestObject $toRoot
+    if ($fromManifest.version -ne "3.3.0") { throw "H1 requires a v3.3.0 source package; got $($fromManifest.version)" }
+    if ($toManifest.version -ne "3.4.0") { throw "H1 requires a v3.4.0 target package; got $($toManifest.version)" }
+
+    $cargoManifest = Join-Path $script:RepoRoot "rust\Cargo.toml"
+    & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater --release
+    if ($LASTEXITCODE -ne 0) { throw "production updater build failed" }
+    & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater_e2e `
+        --features e2e-local-source,e2e-fault-injection --release
+    if ($LASTEXITCODE -ne 0) { throw "E2E updater build failed" }
+    $productionCandidate = Join-Path $script:RepoRoot "rust\target\release\sky_updater.exe"
+    $e2eCandidate = Join-Path $script:RepoRoot "rust\target\release\sky_updater_e2e.exe"
+    if (-not (Test-Path $productionCandidate) -or -not (Test-Path $e2eCandidate)) { throw "updater candidates missing" }
+    $candidateHashes = [ordered]@{
+        production = (Get-FileHash $productionCandidate -Algorithm SHA256).Hash.ToLowerInvariant()
+        e2e_local = (Get-FileHash $e2eCandidate -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    @(
+        "production $($candidateHashes.production)"
+        "e2e_local $($candidateHashes.e2e_local)"
+    ) | Set-Content (Join-Path $script:EvidenceRoot "candidate-sha256.txt") -Encoding ascii
+
+    $syntheticRelease = Build-SyntheticLocalRelease $toRoot $e2eCandidate $toManifest.version
+
+    $scenario = New-Scenario "happy-local" $fromRoot
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease -Restart
+    if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H1 result was not success" }
+    $h1 = Save-ScenarioEvidence "happy-local" $scenario $run $toManifest
+    Save-UpdaterLog "happy-local" $scenario
+    $installedUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedUpdaterHash -ne $candidateHashes.e2e_local) { throw "H1 installed updater hash is not the candidate hash" }
+    if (-not $h1.restart_verified) { throw "H1 restart was not observed" }
+    $script:Results.happy_local = [ordered]@{ status = "PASS"; installed_updater_sha256 = $installedUpdaterHash; restart_verified = $true; transaction_removed = $true }
+    Stop-RestartedApp $scenario.Install
+
+    $scenario = New-Scenario "happy-github" $fromRoot
+    $run = Invoke-Updater $scenario $productionCandidate $fromManifest.version $GitHubTargetVersion $null -Restart
+    if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H2 result was not success" }
+    $h2Manifest = Get-ManifestObject $scenario.Install
+    $h2 = Save-ScenarioEvidence "happy-github" $scenario $run $h2Manifest
+    Save-UpdaterLog "happy-github" $scenario
+    if (-not $h2.restart_verified) { throw "H2 restart was not observed" }
+    $script:Results.happy_github = [ordered]@{ status = "PASS"; target_version = $h2Manifest.version; restart_verified = $true; transaction_removed = $true }
+    Stop-RestartedApp $scenario.Install
+
+    $scenario = New-Scenario "locked-primary" $fromRoot
+    $primaryLock = [IO.File]::Open((Join-Path $scenario.Install "Sky-Auto-Player.exe"), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease
+    } finally {
+        $primaryLock.Dispose()
+    }
+    if ($run.Result.error_code -ne "INSTALL_TARGET_BUSY" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "locked-primary safety check failed" }
+    Assert-NoInstallMutation $scenario
+    $script:Results.locked_primary_safe = $true
+    Write-EvidenceJson "locked-primary-result.json" $run.Result
+    Save-UpdaterLog "locked-primary" $scenario
+
+    $scenario = New-Scenario "concurrent"
+    $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
+        -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease -PauseAt "after-lock" -KeepPaused
+    $lockDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $lockFiles = @(Get-ChildItem (Join-Path $scenario.Local "Sky-Auto-Player\update-locks") -Filter "*.lock" -ErrorAction SilentlyContinue)
+        if ($lockFiles.Count -gt 0) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $lockDeadline)
+    $second = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
+        -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease
+    $second.Process.WaitForExit(15000) | Out-Null
+    $secondStderr = Get-Content $second.Stderr -Raw
+    Stop-ProcessIfRunning $first.Process
+    if ($second.Process.ExitCode -eq 0 -or $secondStderr -notmatch "UPDATE_ALREADY_RUNNING" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "concurrent updater safety check failed" }
+    [ordered]@{ status = "UPDATE_ALREADY_RUNNING"; exit_code = $second.Process.ExitCode; stderr = $secondStderr } | ConvertTo-Json | Set-Content (Join-Path $script:EvidenceRoot "concurrent-result.json") -Encoding utf8
+    $script:Results.concurrent_blocked = $true
+    Save-UpdaterLog "concurrent" $scenario
+
+    $scenario = New-Scenario "rollback-fault"
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease -FailAt "apply:before-replace:2"
+    if ($run.Result.status -ne "rolled_back" -or -not (Test-Path (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe"))) { throw "rollback fault safety check failed" }
+    $rollbackUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($rollbackUpdaterHash -ne $scenario.BeforeHashes["Sky-Auto-Player-Updater.exe"]) { throw "rollback did not preserve old updater hash" }
+    Write-EvidenceJson "rollback-fault-result.json" $run.Result
+    $script:Results.rollback_preserved_updater = $true
+    Save-UpdaterLog "rollback-fault" $scenario
+
+    $scenario = New-Scenario "crash-recovery"
+    $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
+        -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease -PauseAt "before-replace:apply:2" -KeepPaused
+    Start-Sleep -Milliseconds 2500
+    Stop-ProcessIfRunning $first.Process
+    if (-not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction\journal.json"))) { throw "crash fixture did not leave Prepared journal" }
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease
+    if ($run.Result.status -ne "success" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "crash recovery failed" }
+    $recoveredManifest = Get-ManifestObject $scenario.Install
+    Assert-ManifestFiles $scenario.Install $recoveredManifest | Out-Null
+    Assert-PreservedState $scenario
+    Write-EvidenceJson "crash-recovery-result.json" $run.Result
+    $script:Results.crash_recovery = $true
+    Save-UpdaterLog "crash-recovery" $scenario
+
+    $script:Results.overall = "PASS"
+    $script:Results.restart_verified = $true
+    $script:AllPassed = $true
+}
+catch {
+    $script:Results.overall = "FAILED"
+    $script:Results.failure = $_.Exception.Message
+    Write-Error $_
+}
+finally {
+    $env:LOCALAPPDATA = $script:PreviousLocalAppData
+    New-Item -ItemType Directory -Path $script:EvidenceRoot -Force | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $script:EvidenceRoot "updater.log"))) {
+        New-Item -ItemType File -Path (Join-Path $script:EvidenceRoot "updater.log") -Force | Out-Null
+    }
+    if (-not $script:Results.Contains("overall")) { $script:Results.overall = "FAILED" }
+    Write-EvidenceJson "environment.json" ([ordered]@{
+        os = [Environment]::OSVersion.VersionString
+        powershell = $PSVersionTable.PSVersion.ToString()
+        computer = $env:COMPUTERNAME
+        user = $env:USERNAME
+        timestamp_utc = $script:Timestamp
+        defender_exclusions_changed = $false
+        sandbox = $script:SandboxRoot
+    })
+    Write-EvidenceJson "summary.json" ([ordered]@{
+        overall = $script:Results.overall
+        happy_local = if ($script:Results.happy_local) { $script:Results.happy_local.status } else { "FAIL" }
+        happy_github = if ($script:Results.happy_github) { $script:Results.happy_github.status } else { "FAIL" }
+        locked_primary_safe = [bool]$script:Results.locked_primary_safe
+        concurrent_blocked = [bool]$script:Results.concurrent_blocked
+        rollback_preserved_updater = [bool]$script:Results.rollback_preserved_updater
+        restart_verified = [bool]$script:Results.restart_verified
+        crash_recovery = [bool]$script:Results.crash_recovery
+    })
+    if ($script:AllPassed -and -not $KeepEvidence -and (Test-Path $script:SandboxRoot)) {
+        Remove-Item -LiteralPath $script:SandboxRoot -Recurse -Force
+    }
+}
+
+if (-not $script:AllPassed) {
+    exit 1
+}
+Write-Host "Windows updater E2E PASS. Evidence: $script:EvidenceRoot"

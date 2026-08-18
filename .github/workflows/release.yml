@@ -104,6 +104,9 @@ jobs:
           $ver = "${{ steps.verlock.outputs.version }}"
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir "dist\Sky-Auto-Player-v$ver" --version $ver
+          $e2e = Get-ChildItem "dist\Sky-Auto-Player-v$ver" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "sky_updater_e2e*" }
+          if ($e2e) { throw "E2E updater artifacts must never enter the public release tree: $($e2e.FullName -join ', ')" }
 
       - name: Stage release assets
         id: stage

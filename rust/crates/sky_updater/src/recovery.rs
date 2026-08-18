@@ -3,10 +3,12 @@ use std::path::Path;
 
 use crate::archive::sha256_file;
 use crate::error::{Result, UpdaterError};
+use crate::file_replace::{atomic_restore, probe_replaceable};
 use crate::manifest::{Manifest, classify_preserved};
 use crate::transaction::{
     JournalState, TRANSACTION_DIR, read_journal, safe_join, verify_installed_managed,
 };
+use crate::{CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, UPDATER_EXE};
 
 pub fn recover_before_update(install_root: &Path) -> Result<()> {
     let root = safe_join(install_root, TRANSACTION_DIR)?;
@@ -54,7 +56,7 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
     // current files and the transaction material intact for diagnosis.
     let mut recovery_files = Vec::with_capacity(journal.backups.len());
     for backup in &journal.backups {
-        safe_join(install_root, &backup.path)
+        let destination = safe_join(install_root, &backup.path)
             .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
         let source = safe_join(&transaction_root, &backup.backup_path)
             .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
@@ -72,6 +74,10 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
                 backup.path
             )));
         }
+        if destination.exists() {
+            probe_replaceable(&destination, &backup.path)
+                .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
+        }
         recovery_files.push((
             backup.path.clone(),
             backup.backup_path.clone(),
@@ -79,6 +85,11 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
         ));
     }
 
+    let backup_paths = journal
+        .backups
+        .iter()
+        .map(|backup| backup.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut removable_paths = Vec::with_capacity(journal.new_paths.len());
     for relative in &journal.new_paths {
         if classify_preserved(relative) == crate::manifest::PreserveClass::Preserved {
@@ -88,6 +99,9 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
         }
         let path = safe_join(install_root, relative)
             .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
+        if backup_paths.contains(relative.as_str()) {
+            continue;
+        }
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_file() => {
                 removable_paths.push(relative.clone())
@@ -102,6 +116,44 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
         }
     }
 
+    recovery_files.sort_by(|left, right| {
+        restore_priority(&left.0)
+            .cmp(&restore_priority(&right.0))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    // Restore-first is the P0 safety property: no destination is deleted
+    // before its verified backup has been atomically prepared.
+    for (index, (relative, backup_relative, expected_hash)) in
+        recovery_files.into_iter().enumerate()
+    {
+        let source = safe_join(&transaction_root, &backup_relative)
+            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
+        let destination = safe_join(install_root, &relative)
+            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
+        atomic_restore(&source, &destination, &expected_hash, &relative, index + 1).map_err(
+            |error| match error {
+                UpdaterError::RollbackAtomicReplaceFailed { .. } => error,
+                other => UpdaterError::RollbackFailed(other.to_string()),
+            },
+        )?;
+    }
+
+    for backup in &journal.backups {
+        let destination = safe_join(install_root, &backup.path)
+            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
+        if !sha256_file(&destination)
+            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?
+            .eq_ignore_ascii_case(&backup.sha256)
+        {
+            return Err(UpdaterError::RollbackFailed(format!(
+                "restored hash mismatch: {}",
+                backup.path
+            )));
+        }
+    }
+
+    // Pure additions are the only paths that may be removed during rollback,
+    // and only after every old backup has been restored and verified.
     for relative in removable_paths {
         let path = safe_join(install_root, &relative)
             .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
@@ -109,32 +161,19 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
             fs::remove_file(path).map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
         }
     }
-
-    for (relative, backup_relative, expected_hash) in recovery_files {
-        let source = safe_join(&transaction_root, &backup_relative)
-            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
-        let destination = safe_join(install_root, &relative)
-            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
-        }
-        let destination = safe_join(install_root, &relative)
-            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
-        fs::copy(&source, &destination)
-            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
-        if !sha256_file(&destination)
-            .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?
-            .eq_ignore_ascii_case(&expected_hash)
-        {
-            return Err(UpdaterError::RollbackFailed(format!(
-                "restored hash mismatch: {relative}"
-            )));
-        }
-    }
     fs::remove_dir_all(transaction_root)
         .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
     Ok(())
+}
+
+fn restore_priority(path: &str) -> u8 {
+    match path {
+        UPDATER_EXE => 0,
+        PRIMARY_EXE => 1,
+        CALIBRATION_EXE => 2,
+        MANIFEST_NAME => 4,
+        _ => 3,
+    }
 }
 
 pub fn has_unresolved_transaction(install_root: &Path) -> bool {

@@ -7,6 +7,7 @@
 pub mod archive;
 pub mod cli;
 pub mod error;
+pub mod file_replace;
 pub mod github;
 pub mod http;
 pub mod install;
@@ -17,12 +18,22 @@ pub mod restart;
 pub mod result;
 pub mod signature;
 pub mod transaction;
+pub mod update_lock;
 pub mod version;
+
+#[cfg(feature = "e2e-fault-injection")]
+pub mod faults;
+
+#[cfg(feature = "e2e-local-source")]
+pub mod local_source;
+
+pub mod runner;
 
 pub const APP_NAME: &str = "Sky-Auto-Player";
 pub const PRIMARY_EXE: &str = "Sky-Auto-Player.exe";
 pub const UPDATER_EXE: &str = "Sky-Auto-Player-Updater.exe";
 pub const MANIFEST_NAME: &str = "MANIFEST.json";
+pub const CALIBRATION_EXE: &str = "native_calibration.exe";
 pub const SCHEMA_VERSION: u32 = 2;
 
 pub const API_MAX_BYTES: usize = 1024 * 1024;

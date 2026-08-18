@@ -4,9 +4,19 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+e2e-local-source = []
+e2e-fault-injection = []
+
 [[bin]]
 name = "sky_updater"
 path = "src/main.rs"
+
+[[bin]]
+name = "sky_updater_e2e"
+path = "src/bin/sky_updater_e2e.rs"
+required-features = ["e2e-local-source", "e2e-fault-injection"]
 
 [dependencies]
 pep440_rs = "0.7.3"
@@ -19,6 +29,7 @@ zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Networking_WinHttp",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",

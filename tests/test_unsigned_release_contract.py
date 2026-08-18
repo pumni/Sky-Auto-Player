@@ -60,7 +60,10 @@ def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path
         verifier.verify(release_dir, "3.2.1")
 
 
-@pytest.mark.parametrize("legacy_name", ["Sky-Player.exe", "updater.bat", "updater.ps1"])
+@pytest.mark.parametrize(
+    "legacy_name",
+    ["Sky-Player.exe", "updater.bat", "updater.ps1", "sky_updater_e2e.exe"],
+)
 def test_release_tree_rejects_legacy_update_artifacts(tmp_path: Path, legacy_name: str) -> None:
     verifier = _load_manifest_verifier()
     release_dir = tmp_path / "release"
