@@ -23,7 +23,7 @@ jobs:
           persist-credentials: true
           ref: agent/fix-missed-note-semantics
 
-      - name: Apply focused code and CI fixes
+      - name: Apply focused source and test fixes
         shell: bash
         run: |
           python - <<'PY'
@@ -105,12 +105,6 @@ jobs:
               '''    assert "missed:3" in debug''',
               '''    assert "missed:2" in debug''',
           )
-
-          replace_exact(
-              ".github/workflows/ci.yml",
-              '''              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json)''',
-              '''              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)''',
-          )
           PY
 
       - name: Set up Python environment
@@ -124,15 +118,13 @@ jobs:
           uv run ruff check src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
           uv run pyright src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
           uv run python -m compileall -q src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
-          grep -F '.config/rust_architecture_allowlist.json)' .github/workflows/ci.yml
 
-      - name: Commit focused fix and remove one-shot workflow
+      - name: Commit focused source fix
         shell: bash
         run: |
-          rm .github/workflows/agent-fix-missed-note-semantics.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py .github/workflows/ci.yml .github/workflows/agent-fix-missed-note-semantics.yml
+          git add src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
           git diff --cached --check
           git commit -m "fix(ui): report missed note counts accurately"
           git push origin HEAD:agent/fix-missed-note-semantics
