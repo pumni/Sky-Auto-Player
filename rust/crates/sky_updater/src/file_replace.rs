@@ -87,13 +87,34 @@ fn cleanup_stale_artifacts_in(directory: &Path) -> io::Result<()> {
         {
             fs::remove_file(entry.path())?;
         } else if file_type.is_dir() {
+            let path = entry.path();
+            if is_reparse_point(&path)? {
+                continue;
+            }
             let name = entry.file_name();
-            if name != "songs" && name != "logs" && name != ".sky-update-transaction" {
-                cleanup_stale_artifacts_in(&entry.path())?;
+            let name = name.to_string_lossy();
+            if !name.eq_ignore_ascii_case("songs")
+                && !name.eq_ignore_ascii_case("logs")
+                && !name.eq_ignore_ascii_case(".sky-update-transaction")
+            {
+                cleanup_stale_artifacts_in(&path)?;
             }
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    Ok(fs::symlink_metadata(path)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_path: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 fn is_reserved_artifact_name(name: &str) -> bool {
@@ -773,16 +794,32 @@ mod tests {
     fn stale_artifact_cleanup_recurses_without_touching_preserved_directories() {
         let root = temp_root("recursive-cleanup");
         let nested = root.join("_internal").join("bin");
-        let songs = root.join("songs");
         fs::create_dir_all(&nested).expect("nested");
-        fs::create_dir_all(&songs).expect("songs");
         fs::write(nested.join(".sky-update-7-8.tmp"), b"stale").expect("nested stale");
-        fs::write(songs.join(".sky-update-9-10.tmp"), b"user file").expect("user file");
+
+        let preserved = ["songs", "Songs", "SONGS", "logs", "Logs", "LOGS"];
+        for (index, name) in preserved.iter().enumerate() {
+            let directory = root.join(format!("case-{index}")).join(name);
+            fs::create_dir_all(&directory).expect("preserved directory");
+            fs::write(
+                directory.join(format!(".sky-update-{index}-{index}.tmp")),
+                b"user file",
+            )
+            .expect("preserved file");
+        }
 
         cleanup_stale_artifacts(&root).expect("cleanup");
 
         assert!(!nested.join(".sky-update-7-8.tmp").exists());
-        assert!(songs.join(".sky-update-9-10.tmp").exists());
+        for (index, name) in preserved.iter().enumerate() {
+            let directory = root.join(format!("case-{index}")).join(name);
+            assert!(
+                directory
+                    .join(format!(".sky-update-{index}-{index}.tmp"))
+                    .exists(),
+                "preserved path was cleaned: {name}"
+            );
+        }
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

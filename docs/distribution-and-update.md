@@ -232,9 +232,10 @@ tested after the updater replacement, not by an incidental file index. The
 Windows E2E harness records Defender antivirus/real-time status and exclusion
 paths before and after each acceptance run. It fails closed if Defender is not
 enabled, if the exclusion set is not readable, or if the exclusion set changes,
-and records any detections observed during the run in the evidence bundle. Run
-the harness elevated when Defender reports that exclusion paths require an
-administrator. The
+and records any detections observed during the run in the evidence bundle. The
+main harness and every updater/app scenario remain non-elevated; only the
+feature-local Defender snapshot helper uses two explicit UAC prompts. Evidence
+records `harness_elevated: false` and `defender_snapshot_elevated: true`. The
 first fixed updater release is a manual bridge for
 installations whose existing updater predates this transaction hardening;
 those installations must be moved manually to the fixed release before
