@@ -39,6 +39,7 @@ CANONICAL_DISPATCH_FILES = {
     "mod.rs",
     "observation.rs",
     "observer.rs",
+    "recovery.rs",
     "timing.rs",
 }
 
@@ -47,6 +48,18 @@ def test_checker_accepts_exact_canonical_dispatch_set(tmp_path):
     _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES)
     report = _checker().check_repository(tmp_path)
     assert not report.errors
+
+
+def test_checker_ignores_dispatch_test_sidecars(tmp_path):
+    _dispatch_fixture(
+        tmp_path,
+        CANONICAL_DISPATCH_FILES | {"authored_tests.rs", "cutoff_tests.rs"},
+    )
+    report = _checker().check_repository(tmp_path)
+    assert not any(
+        item.rule in {"unexpected_dispatch_module", "missing_dispatch_module"}
+        for item in report.errors
+    )
 
 
 def test_checker_rejects_unexpected_observer_drain_module(tmp_path):
