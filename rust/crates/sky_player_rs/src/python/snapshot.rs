@@ -147,6 +147,20 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) recovered_partial_up_retries: u64,
     #[pyo3(get)]
+    pub(super) missed_down_boundaries: u64,
+    #[pyo3(get)]
+    pub(super) missed_down_keys: u64,
+    #[pyo3(get)]
+    pub(super) missed_backlog_boundaries: u64,
+    #[pyo3(get)]
+    pub(super) missed_hard_late_boundaries: u64,
+    #[pyo3(get)]
+    pub(super) late_authorized_boundaries: u64,
+    #[pyo3(get)]
+    pub(super) deadline_authorization_reuses: u64,
+    #[pyo3(get)]
+    pub(super) max_missed_lateness_ticks: u64,
+    #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
     pub(super) health: String,
@@ -218,6 +232,13 @@ impl ProgressSnapshotPy {
             recovered_zero_progress_but_late: snapshot.recovered_zero_progress_but_late,
             recovered_zero_progress_retries: snapshot.recovered_zero_progress_retries,
             recovered_partial_up_retries: snapshot.recovered_partial_up_retries,
+            missed_down_boundaries: snapshot.missed_down_boundaries,
+            missed_down_keys: snapshot.missed_down_keys,
+            missed_backlog_boundaries: snapshot.missed_backlog_boundaries,
+            missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
+            late_authorized_boundaries: snapshot.late_authorized_boundaries,
+            deadline_authorization_reuses: snapshot.deadline_authorization_reuses,
+            max_missed_lateness_ticks: snapshot.max_missed_lateness_ticks,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {

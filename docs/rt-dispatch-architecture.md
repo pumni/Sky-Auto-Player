@@ -229,14 +229,29 @@ bookkeeping, but it never calls `SendInput` before the authoritative physical
 QPC target/epoch gate. This projection distinction must not be used to create
 an early physical send.
 
-After a successful physical boundary, an overdue replan without a deadline-wait
-handoff is a missed schedule. The worker terminates rather than emitting an
-overdue catch-up burst.
+After a successful musical Down boundary, the worker tracks a Down-only
+authorization state. A future Down-bearing boundary is authorized by an exact
+stamp containing the frozen authored packet identity, masks, and physical QPC
+target. The stamp survives waiter-entry latency and a same-boundary
+`Continue`/replan, but not a changed plan, target, epoch, pause, focus rebase,
+or completed/missed commit. The kernel wait result is not the musical proof.
+
+An unobserved overdue Down is a recoverable Production deadline miss after the
+first successful musical Down: the Down portion is omitted, the frozen
+coordinator frame is committed as missed, and playback advances to the next
+authored target without rebasing or changing timestamps. A Mixed frame sends
+only its required Up subset through one fixed recovery packet; a failed or
+uncertain safety Up remains terminal. Up-only safety releases are exempt from
+the musical backlog rule and are sent even when late. Strict-timing diagnostic
+mode may retain terminal behavior for qualification. In every mode, missed
+Downs are never retried or emitted as a catch-up burst.
 
 ## 7. Failure and publication boundaries
 
 Every QPC query used for a correctness decision is terminal on failure.
-Coordinator commit follows confirmed transport evidence. Cleanup releases
+Coordinator commit follows confirmed transport evidence; a typed
+`DeadlineMissedBeforeSend` result is handled as a missed authored frame only
+after startup and only when no Down syscall occurred. Cleanup releases
 active/possibly-active keys and verifies the resulting state before successful
 completion. The ready boundary is published only after startup gates and the
 required physical ownership and cleanup state are complete.

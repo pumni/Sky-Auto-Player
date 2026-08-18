@@ -15,6 +15,7 @@
 mod authored;
 pub(crate) mod observation;
 pub(crate) mod observer;
+mod recovery;
 pub(crate) mod timing;
 
 /// Outcome of one authored packet dispatch step.
@@ -27,11 +28,51 @@ pub enum DispatchStep {
     TerminateStatic(&'static str),
 }
 
+/// Exact identity of an authored physical Down boundary that was frozen by
+/// the coordinator and observed while still in the future.
+///
+/// The QPC target is deliberately not sufficient on its own: two distinct
+/// authored boundaries may share a target after projection or test setup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalBoundaryStamp {
+    pub(crate) first_batch_index: usize,
+    pub(crate) packet_index: usize,
+    pub(crate) packet_batch_count: usize,
+    pub(crate) source_action_index: u32,
+    pub(crate) up_mask: u16,
+    pub(crate) down_mask: u16,
+    pub(crate) physical_target_qpc: QpcTicks,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DownBoundaryState {
+    #[default]
+    Initial,
+    AwaitingFuture,
+    FutureAuthorized(PhysicalBoundaryStamp),
+}
+
+impl DownBoundaryState {
+    #[inline]
+    pub(crate) const fn awaiting_future(self) -> bool {
+        !matches!(self, Self::Initial)
+    }
+
+    #[inline]
+    pub(crate) const fn authorization(self) -> Option<PhysicalBoundaryStamp> {
+        match self {
+            Self::FutureAuthorized(stamp) => Some(stamp),
+            Self::Initial | Self::AwaitingFuture => None,
+        }
+    }
+}
+
 pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
+    pub(crate) missed_down_boundary: bool,
     pub(crate) startup_target_selected: bool,
     pub(crate) focus_loss_fault: bool,
     pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
@@ -62,6 +103,8 @@ pub(crate) struct AuthoredBatchView {
     pub(super) dispatch_path: DispatchPath,
     pub(super) packet_masks: PhysicalPacket,
     pub(super) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
+    pub(super) prepared_up_recovery_packet:
+        Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
     pub(super) commit: PhysicalCommit,
 }
 
@@ -78,6 +121,8 @@ pub(crate) struct AuthoredBatchView {
     pub(crate) dispatch_path: DispatchPath,
     pub(crate) packet_masks: PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
+    pub(crate) prepared_up_recovery_packet:
+        Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
     pub(crate) commit: PhysicalCommit,
 }
 

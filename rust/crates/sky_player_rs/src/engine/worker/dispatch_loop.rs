@@ -1,4 +1,5 @@
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
+use super::dispatch::PhysicalBoundaryStamp;
 use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
@@ -24,13 +25,20 @@ fn physical_target_qpc_for_work(
 }
 
 #[inline]
-fn physical_deadline_admission_is_allowed(
-    awaiting_future_physical_boundary: bool,
-    physical_target: sky_dispatch_win32::clock::QpcTicks,
-    now: sky_dispatch_win32::clock::QpcTicks,
-    arrived_via_deadline_wait: bool,
-) -> bool {
-    !(awaiting_future_physical_boundary && physical_target <= now && !arrived_via_deadline_wait)
+fn physical_boundary_stamp(
+    plan: &super::planning::NextDispatchPlan,
+    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Option<PhysicalBoundaryStamp> {
+    let physical = plan.physical()?;
+    (physical.authored_view.packet_masks.down_mask != 0).then_some(PhysicalBoundaryStamp {
+        first_batch_index: physical.authored_view.prepared_batch.index,
+        packet_index: physical.authored_view.prepared_batch.packet_index,
+        packet_batch_count: physical.authored_view.prepared_batch.packet_batch_count,
+        source_action_index: physical.authored_view.batch_source_action_index,
+        up_mask: physical.authored_view.packet_masks.up_mask,
+        down_mask: physical.authored_view.packet_masks.down_mask,
+        physical_target_qpc,
+    })
 }
 
 #[inline]
@@ -75,6 +83,7 @@ pub(crate) fn preflight_prepared_plan(
     }
     if !super::target_stamp_still_current(target_hwnd, target_generation, target) {
         runtime.verified_target = None;
+        runtime.invalidate_down_authorization();
         return Ok(false);
     }
     physical.target_proof = super::TargetProof::Verified(target);
@@ -150,41 +159,66 @@ pub(crate) fn dispatch_due_from_plan(
     let startup_target_selected = false;
     #[cfg(any(test, feature = "test-support"))]
     let test_direct_boundary = test_physical_target_qpc.is_some();
-    let physical_target_qpc = match physical_target_qpc_for_work(
-        if allow_pre_deadline {
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
-            }
-            #[cfg(not(any(test, feature = "test-support")))]
-            {
-                plan.physical_target_qpc()
-            }
-        } else {
+    let candidate_target_qpc = {
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            test_physical_target_qpc.or_else(|| plan.physical_target_qpc())
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
             plan.physical_target_qpc()
-        },
+        }
+    };
+    let Some(candidate_target_qpc) = candidate_target_qpc else {
+        return super::DispatchStep::NoWork;
+    };
+    let physical_target_qpc = match physical_target_qpc_for_work(
+        Some(candidate_target_qpc),
         now_ticks,
         allow_pre_deadline,
     ) {
         Ok(Some(target)) => target,
         Ok(None) => {
+            if candidate_target_qpc > now_ticks
+                && let Some(boundary) = physical_boundary_stamp(plan, candidate_target_qpc)
+                && runtime.down_boundary_state.awaiting_future()
+            {
+                runtime.observe_future_down_boundary(boundary);
+            }
             return super::DispatchStep::NoWork;
         }
         Err(error) => return super::DispatchStep::Terminate(error),
     };
 
-    let arrived_via_deadline_wait = runtime.last_dispatch_deadline_wake_qpc.is_some()
-        && runtime.last_dispatch_deadline_target_qpc == Some(physical_target_qpc);
-    if !physical_deadline_admission_is_allowed(
-        runtime.awaiting_future_physical_boundary,
-        physical_target_qpc,
-        now_ticks,
-        arrived_via_deadline_wait,
-    ) {
-        return super::DispatchStep::TerminateStatic(
-            "physical deadline infeasible: refusing overdue catch-up burst",
-        );
+    let boundary = physical_boundary_stamp(plan, physical_target_qpc);
+    #[cfg(any(test, feature = "test-support"))]
+    if test_physical_target_qpc.is_some()
+        && let Some(boundary_stamp) = boundary
+        && runtime.down_boundary_state.awaiting_future()
+    {
+        // The harness passes an exact frozen target as a synthetic future
+        // classification. This is test-only evidence; production authority
+        // comes from the nonblocking observation that precedes the waiter.
+        runtime.observe_future_down_boundary(boundary_stamp);
     }
+    let missed_down_boundary = boundary.is_some_and(|boundary| {
+        physical_target_qpc <= now_ticks
+            && runtime.down_boundary_state.awaiting_future()
+            && !runtime.authorize_down_boundary(boundary)
+            && runtime.musical_physical_commit_started
+    });
+    if boundary.is_some_and(|boundary| {
+        physical_target_qpc <= now_ticks && runtime.authorize_down_boundary(boundary)
+    }) {
+        local_metrics.deadline_authorization_reuses = local_metrics
+            .deadline_authorization_reuses
+            .saturating_add(1);
+        if physical_target_qpc < now_ticks {
+            local_metrics.late_authorized_boundaries =
+                local_metrics.late_authorized_boundaries.saturating_add(1);
+        }
+    }
+    runtime.last_dispatch_was_missed_down = false;
 
     let step = super::dispatch_authored_packet(
         super::AuthoredPacketContext {
@@ -192,6 +226,7 @@ pub(crate) fn dispatch_due_from_plan(
             effective_now_ticks,
             now_ticks,
             physical_target_qpc,
+            missed_down_boundary,
             startup_target_selected,
             focus_loss_fault,
             interrupt,
@@ -216,8 +251,11 @@ pub(crate) fn dispatch_due_from_plan(
         progress_clock,
         observer,
     );
-    if matches!(step, super::DispatchStep::Dispatched) {
-        runtime.awaiting_future_physical_boundary = true;
+    if matches!(step, super::DispatchStep::Dispatched)
+        && !runtime.last_dispatch_was_missed_down
+        && boundary.is_some()
+    {
+        runtime.mark_down_commit_started();
     }
     step
 }
@@ -363,6 +401,7 @@ pub(super) fn dispatch(
             }
 
             if !focus_ok {
+                core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
                 core.runtime.focus_restore_started_ticks = None;
                 if !resources.playback.has_pause_reason("focus") {
@@ -473,6 +512,7 @@ pub(super) fn dispatch(
             }
 
             if manual_pause && !resources.playback.has_pause_reason("manual") {
+                core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
                     if let Err(error) = suspend_live_input(
@@ -824,12 +864,6 @@ pub(super) fn dispatch(
                             Some("wait returned a result without a dispatch deadline".to_string());
                         break;
                     };
-                    let genuine_future_physical_wait = wait_result.is_some()
-                        && matches!(
-                            &dispatch_plan,
-                            super::planning::NextDispatchPlan::Physical(_)
-                        )
-                        && core.runtime.future_physical_wait_target_qpc == Some(target_qpc);
                     if let Some(wait_result) = wait_result {
                         core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
                         core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
@@ -843,12 +877,6 @@ pub(super) fn dispatch(
                                 allow_pre_epoch_startup_dispatch: true,
                             });
                         }
-                    }
-                    if genuine_future_physical_wait {
-                        // A real future-target wait crossed this exact
-                        // physical boundary.  Due-at-entry has no wait result
-                        // and therefore deliberately leaves the guard armed.
-                        core.runtime.awaiting_future_physical_boundary = false;
                     }
                     core.runtime.future_physical_wait_target_qpc = None;
                     let dispatch_now_ticks = dispatch_qpc;
@@ -937,83 +965,72 @@ pub(super) fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{physical_deadline_admission_is_allowed, physical_target_qpc_for_work};
+    use super::physical_target_qpc_for_work;
+    use crate::engine::worker::{DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime};
     use sky_dispatch_core::time::QpcTicks;
 
     #[test]
-    fn overdue_matrix_allows_only_an_isolated_or_waited_boundary() {
-        let first = QpcTicks::from_raw(1_000);
-        let second = QpcTicks::from_raw(1_100);
-        let after_slow_first_send = QpcTicks::from_raw(1_200);
-
-        // A and B are both overdue after the first SendInput completion.  B
-        // must not be emitted as a catch-up burst.
-        assert!(!physical_deadline_admission_is_allowed(
-            true,
-            second,
-            after_slow_first_send,
-            false,
-        ));
-
-        // The same guard covers a three-boundary backlog: each candidate after
-        // the already-completed physical boundary remains refused.
-        for target in [1_100, 1_200, 1_300] {
-            assert!(!physical_deadline_admission_is_allowed(
-                true,
-                QpcTicks::from_raw(target),
-                QpcTicks::from_raw(1_400),
-                false,
-            ));
-        }
-
-        // An isolated overdue boundary is allowed because there is no prior
-        // physical SendInput to turn it into a catch-up burst.
-        assert!(physical_deadline_admission_is_allowed(
-            false,
-            first,
-            after_slow_first_send,
-            false,
-        ));
-
-        // One tick of future slack clears the overdue condition; the normal
-        // waiter may own this boundary.
-        assert!(physical_deadline_admission_is_allowed(
-            true,
-            QpcTicks::from_raw(1_201),
-            after_slow_first_send,
-            false,
-        ));
-
-        // A genuine deadline wait is the one permitted route for a target
-        // that became due while the worker was blocked.
-        assert!(physical_deadline_admission_is_allowed(
-            true,
-            second,
-            after_slow_first_send,
-            true,
-        ));
+    fn exact_future_authorization_survives_waiter_entry_stall() {
+        let stamp = PhysicalBoundaryStamp {
+            first_batch_index: 2,
+            packet_index: 3,
+            packet_batch_count: 1,
+            source_action_index: 7,
+            up_mask: 0,
+            down_mask: 1,
+            physical_target_qpc: QpcTicks::from_raw(1_000),
+        };
+        let mut runtime = WorkerRuntime::default();
+        runtime.mark_down_commit_started();
+        runtime.observe_future_down_boundary(stamp);
+        assert_eq!(
+            runtime.down_boundary_state,
+            DownBoundaryState::FutureAuthorized(stamp)
+        );
+        assert!(runtime.authorize_down_boundary(stamp));
     }
 
     #[test]
-    fn waiter_entry_after_future_classification_keeps_backlog_guard_armed() {
-        let target = QpcTicks::from_raw(1_000);
+    fn authorization_does_not_leak_to_equal_qpc_boundary() {
+        let first = PhysicalBoundaryStamp {
+            first_batch_index: 2,
+            packet_index: 3,
+            packet_batch_count: 1,
+            source_action_index: 7,
+            up_mask: 0,
+            down_mask: 1,
+            physical_target_qpc: QpcTicks::from_raw(1_000),
+        };
+        let second = PhysicalBoundaryStamp {
+            first_batch_index: 4,
+            ..first
+        };
+        let mut runtime = WorkerRuntime::default();
+        runtime.mark_down_commit_started();
+        runtime.observe_future_down_boundary(first);
+        assert!(!runtime.authorize_down_boundary(second));
+    }
 
-        // First classification sees future slack; no wait crossing occurred.
-        assert!(physical_deadline_admission_is_allowed(
-            true,
-            target,
-            QpcTicks::from_raw(900),
-            false,
-        ));
-
-        // A stall before waiter entry models Due { wait_result: None } and
-        // must not turn the boundary into catch-up SendInput work.
-        assert!(!physical_deadline_admission_is_allowed(
-            true,
-            target,
-            QpcTicks::from_raw(1_100),
-            false,
-        ));
+    #[test]
+    fn pause_or_replan_invalidation_clears_exact_authorization() {
+        let stamp = PhysicalBoundaryStamp {
+            first_batch_index: 2,
+            packet_index: 3,
+            packet_batch_count: 1,
+            source_action_index: 7,
+            up_mask: 0,
+            down_mask: 1,
+            physical_target_qpc: QpcTicks::from_raw(1_000),
+        };
+        let mut runtime = WorkerRuntime::default();
+        runtime.mark_down_commit_started();
+        runtime.observe_future_down_boundary(stamp);
+        runtime.invalidate_down_authorization();
+        assert_eq!(
+            runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
+        assert!(!runtime.authorize_down_boundary(stamp));
     }
 
     #[test]

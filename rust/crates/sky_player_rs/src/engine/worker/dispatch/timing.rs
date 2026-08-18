@@ -164,6 +164,7 @@ pub(crate) fn prepare_authored_batch_view(
                 )));
             }
         };
+    let prepared_up_recovery_packet = prepare_up_recovery_packet(packet_masks)?;
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
     let authored_ticks = coordinator
         .effective_batch_scheduled_ticks(batch_index)
@@ -196,6 +197,7 @@ pub(crate) fn prepare_authored_batch_view(
         dispatch_path,
         packet_masks,
         prepared_packet,
+        prepared_up_recovery_packet,
         commit: PhysicalCommit::Authored(commit),
     }))
 }
@@ -258,6 +260,7 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
     .map_err(|error| {
         DispatchStep::Terminate(format!("physical packet preparation failure: {error}"))
     })?;
+    let prepared_up_recovery_packet = prepare_up_recovery_packet(selected_packet)?;
     let up_count = selected_up_mask.count_ones() as usize;
     let down_count = selected_down_mask.count_ones() as usize;
     let dispatch_path = match packet_kind {
@@ -297,6 +300,7 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
         dispatch_path,
         packet_masks: selected_packet,
         prepared_packet,
+        prepared_up_recovery_packet,
         commit: if pending_release_mask == 0 {
             PhysicalCommit::Authored(authored_commit)
         } else {
@@ -350,11 +354,30 @@ pub(crate) fn prepare_pending_release_view(
         dispatch_path: DispatchPath::UpOnly { up_count: count },
         packet_masks: packet,
         prepared_packet,
+        prepared_up_recovery_packet: None,
         commit: PhysicalCommit::PendingRelease {
             release_mask,
             due_ticks,
         },
     }))
+}
+
+fn prepare_up_recovery_packet(
+    packet: PhysicalPacket,
+) -> Result<Option<sky_dispatch_win32::input::PreparedPhysicalPacket>, DispatchStep> {
+    if packet.down_mask == 0 || packet.up_mask == 0 {
+        return Ok(None);
+    }
+    sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(PhysicalPacket::new(
+        packet.up_mask,
+        0,
+    ))
+    .map(Some)
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "physical Up recovery packet preparation failure: {error}"
+        ))
+    })
 }
 
 /// Timing-derived evidence captured from the note-on SendInput call.

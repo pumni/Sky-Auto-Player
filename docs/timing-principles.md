@@ -54,9 +54,12 @@ Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
 that share one authored timestamp. Runtime completion lateness is evidence for
 sender-side telemetry and ownership accounting only. Runtime deadline/overdue
-policy may terminate a missed boundary, but it never invents a
-completion-relative hold deadline, moves an authored timestamp, or emits a
-catch-up burst.
+policy never invents a completion-relative hold deadline, moves an authored
+timestamp, or emits a catch-up burst. Before the first successful musical Down
+commit, a missed Down remains a startup failure. After startup, an unapproved
+or hard-late musical Down is recorded and committed as missed; the worker
+continues with the next authored boundary while required safety Ups are still
+released.
 
 ## 2.1 Host delivery calibration
 
@@ -113,10 +116,22 @@ uses the same epoch/target rule and reserves no special adaptive startup lead.
 Stale-Up metadata with an empty physical packet is committed as metadata and
 does not consume a physical target.
 
-After a successful physical dispatch, a later physical target that is already
-overdue without an authoritative deadline-wait handoff is a missed schedule,
-not permission to emit a catch-up burst. The worker terminates fail-closed and
-does not replay overdue boundaries.
+After a successful musical Down dispatch, the worker arms a Down-only boundary
+state. A later Down-bearing boundary is authorized only when that exact frozen
+boundary was observed with `physical_target_qpc > now` after the previous Down
+commit. The authorization is an identity stamp, not a QPC-only proof, and it
+survives waiter-entry latency and a same-boundary control replan. It is cleared
+by a changed plan/target, pause or focus rebase, or completion of the stamped
+boundary.
+
+An overdue Down without that exact authorization is a missed musical boundary:
+Production sends no Down and commits the authored frame as missed. A hard-late
+authorized Down follows the same recovery path after the trusted sender's
+authoritative pre-call cutoff rejects the syscall. Strict timing diagnostics
+may keep these misses terminal for qualification. Up-only safety release is
+not part of the musical backlog rule and is sent even when its authored target
+is late. Thus no overdue Down burst is emitted, but ordinary jitter does not
+terminate a started production session.
 
 ## 4. Authoritative send ordering
 
@@ -128,7 +143,8 @@ The final physical path is ordered and fail-closed:
 3. Evaluate the lease using that proof sample.
 4. Spin to the authored physical target. The final spin rejects a Down-bearing
    packet that is already beyond its hard-late cutoff; Up-only safety release
-   remains exempt.
+   remains exempt. In started Production, that typed Down miss is committed
+   without a Down syscall instead of being retried or made fatal.
 5. Enter the trusted prepared sender and take the authoritative `pre_call_qpc`
    after payload pointer/length resolution. Recheck the same Down cutoff
    against that exact sample so a preemption between the outer spin and the
@@ -142,7 +158,10 @@ The transport sends Up entries before Down entries in one call. Partial Down or
 mixed integrity loss is never blindly retried. A skipped key that the
 coordinator still owns is state disagreement and requires full cleanup and
 termination. Any zero/partial transport result is terminal for the playback
-worker; cleanup is a separate fail-closed release-all operation.
+worker; cleanup is a separate fail-closed release-all operation. The typed
+`DeadlineMissedBeforeSend` result is the one timing exception: when the
+session has already committed its first musical Down, it performs the bounded
+missed-frame recovery path and keeps `SendInput` uncalled.
 
 Up-only traffic uses command and lease admission but not the Down focus gate.
 Down traffic compares the stamped HWND with the current foreground window at
@@ -172,9 +191,12 @@ At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter
 returns `Deadline`, including when an interrupt wake and the target race. The
 final command, target, focus, and lease admission remains authoritative and can
-still reject the physical send. Production admission requires both the
-high-resolution waitable timer and event wait; a missing timer or any runtime
-wait failure is terminal rather than a silent sleep-based fallback.
+still reject the physical send. A same-boundary `Continue` or replan does not
+erase an exact Down authorization; a different boundary or epoch does. Kernel
+`wait_result.is_some()` is timing transport evidence, not the authority for
+musical authorization. Production admission requires both the high-resolution
+waitable timer and event wait; a missing timer or any runtime wait failure is
+terminal rather than a silent sleep-based fallback.
 
 MMCSS Games/High and power-throttling opt-out remain scoped scheduling aids.
 TimeCritical is not the default. No wait or priority choice changes the

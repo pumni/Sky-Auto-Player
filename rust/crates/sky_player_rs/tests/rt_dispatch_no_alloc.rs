@@ -678,7 +678,7 @@ fn production_metadata_only_stale_commit_no_alloc() {
 }
 
 #[test]
-fn production_backlog_abort_decision_no_alloc() {
+fn production_missed_down_recovery_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.align_next_plan_to_future_for_test(100_000);
@@ -695,9 +695,53 @@ fn production_backlog_abort_decision_no_alloc() {
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0, "backlog decision allocated {allocs} time(s)");
-    assert!(match step {
-        DispatchStep::Terminate(error) => error.contains("catch-up"),
-        DispatchStep::TerminateStatic(error) => error.contains("catch-up"),
-        _ => false,
-    });
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+}
+
+#[test]
+fn production_mixed_missed_down_recovery_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    harness.advance_playback_time_us(100_000);
+    let overdue = harness.plan_current_dispatch();
+    harness.configure_packet_capture();
+
+    enable_counting();
+    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&overdue);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "mixed missed recovery allocated {allocs} time(s)"
+    );
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+}
+
+#[test]
+fn production_authorized_hard_late_recovery_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        DispatchStep::Dispatched
+    ));
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        DispatchStep::NoWork
+    ));
+    harness.configure_deadline_missed_packet_sender();
+
+    enable_counting();
+    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "hard-late recovery allocated {allocs} time(s)");
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }

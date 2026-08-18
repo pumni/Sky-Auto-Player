@@ -272,6 +272,22 @@ impl NativeDispatchSessionPy {
         dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
         dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;
         dict.set_item("authored_keys_rejected", snap.authored_keys_rejected)?;
+        dict.set_item("missed_down_boundaries", snap.missed_down_boundaries)?;
+        dict.set_item("missed_down_keys", snap.missed_down_keys)?;
+        dict.set_item("missed_backlog_boundaries", snap.missed_backlog_boundaries)?;
+        dict.set_item(
+            "missed_hard_late_boundaries",
+            snap.missed_hard_late_boundaries,
+        )?;
+        dict.set_item(
+            "late_authorized_boundaries",
+            snap.late_authorized_boundaries,
+        )?;
+        dict.set_item(
+            "deadline_authorization_reuses",
+            snap.deadline_authorization_reuses,
+        )?;
+        dict.set_item("max_missed_lateness_ticks", snap.max_missed_lateness_ticks)?;
         dict.set_item("chord_integrity_lost", snap.chord_integrity_lost)?;
         dict.set_item(
             "keys_inserted_before_failure",

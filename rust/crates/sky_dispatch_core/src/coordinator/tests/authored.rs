@@ -247,6 +247,92 @@ fn down_commit_uses_pre_send_timestamp() {
 }
 
 #[test]
+fn missed_authored_frame_releases_up_drops_down_and_invalidates_later_up() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "owned-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "safety-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x16].into(),
+                reason: "missed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x16].into(),
+                reason: "stale-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("valid missed-frame schedule");
+    let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
+
+    let first = coordinator
+        .prepare_current_authored_frame()
+        .expect("prepare first Down")
+        .expect("first Down is due");
+    let first_commit = coordinator
+        .prepare_authored_commit(first)
+        .expect("freeze first commit");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &first_commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::from_raw(1),
+        )
+        .expect("commit first Down");
+
+    let mixed = coordinator
+        .prepare_current_authored_frame()
+        .expect("prepare mixed missed frame")
+        .expect("mixed frame is due");
+    let mixed_commit = coordinator
+        .prepare_authored_commit(mixed)
+        .expect("freeze mixed missed frame");
+    assert_eq!(mixed.immediate_up_mask, 0b01);
+    assert_eq!(mixed.down_mask, 0b10);
+    coordinator
+        .commit_prepared_authored_frame_deadline_miss(
+            &mixed_commit,
+            mixed.immediate_up_mask,
+            mixed.down_mask,
+            TimelineTicks::from_raw(100),
+        )
+        .expect("commit mixed deadline miss");
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.get("released"), Some(&1));
+    assert_eq!(counts.get("dropped_expired"), Some(&1));
+    assert_eq!(coordinator.active_mask, 0);
+
+    let stale = coordinator
+        .prepare_current_stale_packet()
+        .expect("prepare stale future Up")
+        .expect("dropped Down Up is stale");
+    coordinator
+        .commit_stale_packet(stale)
+        .expect("commit stale future Up");
+    assert!(coordinator.is_finished());
+}
+
+#[test]
 fn packet_commit_releases_before_retrigger_down_and_advances_once() {
     let schedule = compile_runtime_intents(
         &[

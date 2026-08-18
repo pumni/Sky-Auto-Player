@@ -13,6 +13,7 @@ use super::super::{
 };
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
+use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{
     AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue, SpinSendError,
@@ -45,6 +46,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        missed_down_boundary,
         startup_target_selected,
         focus_loss_fault,
         interrupt,
@@ -90,6 +92,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        missed_down_boundary,
         startup_target_selected,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
@@ -126,6 +129,7 @@ fn commit_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    missed_down_boundary: bool,
     _startup_target_selected: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
@@ -186,6 +190,7 @@ fn commit_down_send_outcome(
         progress_clock,
         timing,
         physical_target_qpc,
+        missed_down_boundary,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         #[cfg(any(test, feature = "test-support"))]
@@ -195,6 +200,20 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
+    if missed_down_boundary {
+        return recover_missed_down_boundary(
+            view,
+            config,
+            runtime,
+            local_metrics,
+            backend,
+            coordinator,
+            clock_state,
+            physical_target_qpc,
+            now_ticks,
+            DownMissReason::Backlog,
+        );
+    }
     record_down_send_outcome(
         view,
         config,
@@ -316,6 +335,7 @@ fn admit_authored_down(
         && !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
     {
         runtime.verified_target = None;
+        runtime.invalidate_down_authorization();
         return Ok(AdmissionOutcome::TargetChanged);
     }
     if has_down_events
@@ -396,6 +416,7 @@ fn finalize_authored_down_admission(
     progress_clock: &SharedProgressClock,
     timing: &WorkerTimingState,
     physical_target_qpc: QpcTicks,
+    missed_down_boundary: bool,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
@@ -408,31 +429,33 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    #[cfg(any(test, feature = "test-support"))]
-    if !test_direct_boundary
-        && let Err(step) = wait_to_precision_boundary(
+    if !missed_down_boundary {
+        #[cfg(any(test, feature = "test-support"))]
+        if !test_direct_boundary
+            && let Err(step) = wait_to_precision_boundary(
+                qpc_clock,
+                waiter,
+                interrupt,
+                physical_target_qpc,
+                timing,
+                local_metrics,
+            )
+        {
+            return match step {
+                DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
+                other => Err(other),
+            };
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        wait_to_precision_boundary(
             qpc_clock,
             waiter,
             interrupt,
             physical_target_qpc,
             timing,
             local_metrics,
-        )
-    {
-        return match step {
-            DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
-            other => Err(other),
-        };
+        )?;
     }
-    #[cfg(not(any(test, feature = "test-support")))]
-    wait_to_precision_boundary(
-        qpc_clock,
-        waiter,
-        interrupt,
-        physical_target_qpc,
-        timing,
-        local_metrics,
-    )?;
 
     let control_signals = FinalControlSignals {
         quit_requested,
@@ -481,6 +504,7 @@ fn finalize_authored_down_admission(
             }
             DownAdmission::TargetChanged => {
                 runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
                 return Ok(AdmissionOutcome::TargetChanged);
             }
         }
@@ -508,16 +532,6 @@ fn finalize_authored_down_admission(
     if !matches!(lease_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::ControlRejected);
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    let deadline_missed = final_proof_qpc >= physical_target_qpc && !test_direct_boundary;
-    #[cfg(not(any(test, feature = "test-support")))]
-    let deadline_missed = final_proof_qpc >= physical_target_qpc;
-    if view_has_down && deadline_missed {
-        runtime.verified_target = None;
-        return Err(DispatchStep::TerminateStatic(
-            "down_deadline_missed_before_send",
-        ));
     }
     Ok(AdmissionOutcome::Allowed {
         trace_kind,
@@ -614,7 +628,29 @@ fn record_down_send_outcome(
     ) {
         Ok(result) => result,
         Err(SpinSendError::DownHardLateAbort) => {
-            return DispatchStep::TerminateStatic("down_hard_late_abort");
+            if !runtime.musical_physical_commit_started {
+                return DispatchStep::TerminateStatic("down_hard_late_abort");
+            }
+            let observed_qpc = match qpc_clock.now() {
+                Ok(ticks) => ticks,
+                Err(error) => {
+                    return DispatchStep::Terminate(format!(
+                        "QPC hard-late recovery failure: {error:?}"
+                    ));
+                }
+            };
+            return recover_missed_down_boundary(
+                view,
+                config,
+                runtime,
+                local_metrics,
+                backend,
+                coordinator,
+                clock_state,
+                physical_target_qpc,
+                observed_qpc,
+                DownMissReason::HardLate,
+            );
         }
         Err(SpinSendError::Qpc(error)) => {
             return DispatchStep::Terminate(format!("QPC spin failure: {error:?}"));
@@ -644,6 +680,28 @@ fn record_down_send_outcome(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
     );
+    if matches!(
+        result.status,
+        sky_dispatch_win32::input::SendTransactionStatus::DeadlineMissedBeforeSend
+    ) && view.packet_masks.down_mask != 0
+    {
+        if !runtime.musical_physical_commit_started {
+            return DispatchStep::TerminateStatic("down_deadline_missed_before_send");
+        }
+        let observed_qpc = result.evidence.started_ticks.unwrap_or(physical_target_qpc);
+        return recover_missed_down_boundary(
+            view,
+            config,
+            runtime,
+            local_metrics,
+            backend,
+            coordinator,
+            clock_state,
+            physical_target_qpc,
+            observed_qpc,
+            DownMissReason::HardLate,
+        );
+    }
     if result_chord_integrity_lost {
         runtime.chord_integrity_lost = runtime.chord_integrity_lost.saturating_add(1);
         local_metrics.chord_integrity_lost = local_metrics.chord_integrity_lost.saturating_add(1);
@@ -802,86 +860,5 @@ pub(super) fn resolve_slo_terminal_step(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::PhysicalCommit;
-    use super::*;
-    use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
-    use sky_dispatch_core::model::PhysicalPacketKind;
-    use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
-    use std::num::NonZeroU64;
-
-    #[test]
-    fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
-        let view = AuthoredBatchView {
-            prepared_batch: PreparedBatch {
-                index: 0,
-                effective_scheduled_ticks: TimelineTicks::ZERO,
-                packet_kind: PhysicalPacketKind::DownOnly,
-                packet_batch_count: 1,
-                packet_index: 0,
-            },
-            batch_source_action_index: 0,
-            batch_intent_count: 1,
-            batch_kind: ActionKind::Down,
-            batch_scheduled_ticks: TimelineTicks::ZERO,
-            authored_batch_scheduled_ticks: TimelineTicks::ZERO,
-            conflict_mask: 0,
-            dispatch_path: DispatchPath::DownOnly { down_count: 1 },
-            packet_masks: PhysicalPacket::new(0, 0b001),
-            prepared_packet: PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001))
-                .unwrap(),
-            commit: PhysicalCommit::Authored(PreparedAuthoredCommit {
-                frame: sky_dispatch_core::coordinator::PreparedAuthoredFrame {
-                    first_batch_index: 0,
-                    packet_index: 0,
-                    packet_batch_count: 1,
-                    authored_ticks: TimelineTicks::ZERO,
-                    immediate_up_mask: 0,
-                    deferred_up_mask: 0,
-                    down_mask: 0b001,
-                    stale_up_count: 0,
-                },
-                immediate_up_intents: smallvec::SmallVec::new(),
-                deferred_up_intents: smallvec::SmallVec::new(),
-                down_intents: smallvec::SmallVec::new(),
-                down_source_action_index: Some(0),
-            }),
-        };
-        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
-        let mut runtime = WorkerRuntime::default();
-
-        let step = resolve_slo_terminal_step(
-            false,
-            false,
-            false,
-            qpc_clock,
-            i64::MIN,
-            &view,
-            &mut runtime,
-        );
-
-        assert!(matches!(step, DispatchStep::Dispatched));
-    }
-
-    #[test]
-    fn anchored_target_math_supports_explicit_offset() {
-        let anchor = QpcTicks::from_raw(10_000);
-        let lead = DurationTicks::from_raw(500);
-        for (scheduled, expected_target) in [
-            (0, 9_500),
-            (100, 9_600),
-            (499, 9_999),
-            (500, 10_000),
-            (501, 10_001),
-        ] {
-            let target = super::super::super::anchored_dispatch_target_ticks_typed(
-                QpcTicks::from_raw(9_500),
-                anchor,
-                TimelineTicks::from_raw(scheduled),
-                lead,
-            )
-            .expect("startup target");
-            assert_eq!(target, QpcTicks::from_raw(expected_target));
-        }
-    }
-}
+#[path = "authored_tests.rs"]
+mod tests;

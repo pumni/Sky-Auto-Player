@@ -46,7 +46,8 @@ pub(crate) use dispatch::drain_one_observer;
 #[cfg(test)]
 pub(crate) use dispatch::handle_final_focus_loss;
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, dispatch_authored_packet, dispatch_stale_packet,
+    AuthoredPacketContext, DispatchStep, DownBoundaryState, PhysicalBoundaryStamp,
+    dispatch_authored_packet, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
@@ -168,9 +169,10 @@ pub(crate) struct WorkerRuntime {
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
-    /// A successful physical send arms the no-catch-up guard. It is cleared
-    /// only by a genuine future-target deadline wait for that target.
-    pub(crate) awaiting_future_physical_boundary: bool,
+    /// Musical Down admission state. Up-only safety sends never mutate this
+    /// state; authorization is tied to the exact frozen authored boundary.
+    pub(crate) down_boundary_state: DownBoundaryState,
+    pub(crate) last_dispatch_was_missed_down: bool,
     future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
@@ -185,8 +187,8 @@ pub(crate) struct WorkerRuntime {
     chord_integrity_lost: u64,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl WorkerRuntime {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
         Self {
             verified_target,
@@ -200,11 +202,13 @@ impl WorkerRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
         self.last_dispatch_deadline_target_qpc = ticks;
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_deadline_wait_evidence_for_test(
         &mut self,
         wake_qpc: Option<QpcTicks>,
@@ -214,10 +218,42 @@ impl WorkerRuntime {
         self.last_dispatch_deadline_target_qpc = target_qpc;
     }
 
+    #[inline]
+    pub(crate) fn observe_future_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) {
+        if self.down_boundary_state != DownBoundaryState::FutureAuthorized(boundary) {
+            self.down_boundary_state = DownBoundaryState::FutureAuthorized(boundary);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn authorize_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) -> bool {
+        self.down_boundary_state.authorization() == Some(boundary)
+    }
+
+    #[inline]
+    pub(crate) fn mark_down_commit_started(&mut self) {
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+    }
+
+    #[inline]
+    pub(crate) fn mark_down_boundary_missed(&mut self) {
+        if self.down_boundary_state.awaiting_future() {
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn invalidate_down_authorization(&mut self) {
+        if self.down_boundary_state.awaiting_future() {
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+        }
+    }
+
     /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
-    /// was classified but before the waiter could block.  The worker clears
-    /// the pending future-target handoff for this outcome, while deliberately
-    /// leaving the no-catch-up guard armed.
+    /// was classified but before the waiter could block. The timing observer
+    /// evidence is cleared; exact Down authorization is intentionally kept in
+    /// `down_boundary_state`.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_due_without_wait_for_test(&mut self) {
         self.last_dispatch_deadline_wake_qpc = None;
         self.last_dispatch_deadline_target_qpc = None;

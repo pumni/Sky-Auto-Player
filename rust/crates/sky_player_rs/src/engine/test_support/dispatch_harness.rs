@@ -161,6 +161,57 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Three overdue Down boundaries followed by a future Down. This keeps
+    /// the no-catch-up proof separate from the two-boundary authorization
+    /// race: every overdue Down must be committed missed before the future
+    /// authored boundary can resume.
+    pub fn new_three_overdue_then_future() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "stall-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "stall-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x17].into(),
+                reason: "stall-c-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 3_000,
+                scan_codes: vec![0x18].into(),
+                reason: "stall-d-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x19].into(),
+                reason: "stall-e-future-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 5,
+                kind: ActionKind::Up,
+                scheduled_us: 101_000,
+                scan_codes: vec![0x15, 0x16, 0x17, 0x18, 0x19].into(),
+                reason: "stall-cleanup".into(),
+            },
+        ])
+    }
+
     /// A deferred release for key A shares an authored timestamp with an
     /// unrelated Down chord on keys B/C. Production must send B/C at their
     /// authored boundary and retain A as an independent pending release.
@@ -784,7 +835,7 @@ impl ProductionDispatchTestHarness {
     /// coalesced Mixed transaction without inferring packet identity from a
     /// final coordinator snapshot.
     pub fn configure_packet_capture(&mut self) -> Arc<Mutex<Vec<PhysicalPacket>>> {
-        let packets = Arc::new(Mutex::new(Vec::new()));
+        let packets = Arc::new(Mutex::new(Vec::with_capacity(32)));
         let captured = Arc::clone(&packets);
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
@@ -810,6 +861,30 @@ impl ProductionDispatchTestHarness {
             }
         });
         packets
+    }
+
+    pub fn configure_deadline_missed_packet_sender(&mut self) {
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let now = clock.now().expect("test QPC");
+            SendTransactionOutcome {
+                status: SendTransactionStatus::DeadlineMissedBeforeSend,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(now),
+                    completed_ticks: None,
+                    timing_error: None,
+                },
+            }
+        });
     }
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
@@ -942,7 +1017,7 @@ impl ProductionDispatchTestHarness {
         Ok(step)
     }
     fn align_epoch_to_deadline_for_test(&mut self, deadline: TimelineTicks, now_ticks: QpcTicks) {
-        if self.runtime.awaiting_future_physical_boundary {
+        if self.runtime.down_boundary_state.awaiting_future() {
             return;
         }
         let current_target = self
@@ -1037,7 +1112,7 @@ impl ProductionDispatchTestHarness {
     /// Tests use this to cover all structural plan states directly.
     pub fn dispatch_due_from_plan_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
-        let allow_pre_deadline = !self.runtime.awaiting_future_physical_boundary;
+        let allow_pre_deadline = !self.runtime.down_boundary_state.awaiting_future();
         self.dispatch_plan_at(
             plan,
             self.effective_now_ticks,
@@ -1087,6 +1162,30 @@ impl ProductionDispatchTestHarness {
             None,
         )
     }
+
+    /// Inject an authorized boundary whose trusted pre-call sample is beyond
+    /// the fixed Down hard-late cutoff. The sender must make zero Down calls;
+    /// Production recovery then commits the boundary as missed.
+    pub fn dispatch_same_frozen_plan_after_hard_late_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("hard-late race requires a physical target");
+        let overdue_now = target
+            .checked_add_duration(self.timing.hard_late_abort_threshold_ticks)
+            .and_then(|ticks| ticks.checked_add_duration(DurationTicks::from_raw(1)))
+            .expect("hard-late test target arithmetic");
+        self.runtime.set_deadline_wait_evidence_for_test(None, None);
+        self.dispatch_plan_at(
+            plan,
+            plan.deadline_ticks().expect("physical deadline"),
+            overdue_now,
+            false,
+            None,
+        )
+    }
     /// Query the current authored packet path without mutating state.
     pub fn current_authored_path(&self) -> Option<DispatchPath> {
         let (up_mask, down_mask) = self.resources.coordinator.next_authored_packet_masks()?;
@@ -1118,6 +1217,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_target_qpc,
+            missed_down_boundary: false,
             startup_target_selected: false,
             focus_loss_fault: false,
             interrupt: &self.interrupt,

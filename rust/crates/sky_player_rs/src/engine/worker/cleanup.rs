@@ -318,15 +318,15 @@ pub(crate) fn clean_completion_proven(
     backend: &TrackedKeyState,
 ) -> bool {
     let counts = coordinator.generation_status_counts();
-    let all_released = counts.get("released").copied().unwrap_or_default()
-        == coordinator.schedule.generation_count
+    let released = counts.get("released").copied().unwrap_or_default();
+    let missed = counts.get("dropped_expired").copied().unwrap_or_default();
+    let all_completed = released.saturating_add(missed) == coordinator.schedule.generation_count
         && counts.values().sum::<u64>() == coordinator.schedule.generation_count;
-    all_released
+    all_completed
         && counts.get("scheduled").copied().unwrap_or_default() == 0
         && counts.get("active").copied().unwrap_or_default() == 0
         && counts.get("dropped_backend").copied().unwrap_or_default() == 0
         && counts.get("dropped_conflict").copied().unwrap_or_default() == 0
-        && counts.get("dropped_expired").copied().unwrap_or_default() == 0
         && counts.get("cancelled").copied().unwrap_or_default() == 0
         && backend.active_mask == 0
         && backend.possibly_active_mask == 0

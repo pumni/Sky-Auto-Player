@@ -733,6 +733,112 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
+    /// Commit an authored physical frame whose musical Down deadline was
+    /// missed without ever emitting those Downs.
+    ///
+    /// Immediate authored Ups are still committed as released, deferred Ups
+    /// are registered exactly as on the healthy path, and every prepared Down
+    /// generation is terminalized as `DroppedExpired`.  The frozen commit is
+    /// the only source of identities on this path; no schedule scan or
+    /// timestamp mutation is permitted.
+    pub fn commit_prepared_authored_frame_deadline_miss(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        confirmed_up_mask: u16,
+        missed_down_mask: u16,
+        started: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let prepared = commit.frame;
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        if confirmed_up_mask != prepared.immediate_up_mask || missed_down_mask != prepared.down_mask
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "deadline-miss masks do not match the frozen authored frame".into(),
+                ),
+            ));
+        }
+
+        for compact in &commit.immediate_up_intents {
+            let generation_id = compact.generation_id();
+            let slot = compact.key_slot();
+            let Some(active) = self.active_for_slot(slot).cloned() else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored immediate Up has no active generation".into(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id || started < active.release_not_before_ticks {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored missed-frame Up violates generation ownership or hold floor"
+                            .into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::Released,
+            )?;
+            let bit = Self::bit_for_slot(slot);
+            self.active_by_slot[usize::from(slot)] = None;
+            self.active_mask &= !bit;
+            self.blocked_mask &= !bit;
+        }
+
+        self.register_deferred_releases_frozen(prepared, &commit.deferred_up_intents)?;
+
+        let mut observed_down_mask = 0u16;
+        for down in &commit.down_intents {
+            let generation_id = down.intent.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = down.intent.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            observed_down_mask |= bit;
+            if self.active_by_slot[usize::from(slot)].is_some()
+                || self.active_mask & bit != 0
+                || self.blocked_mask & bit != 0
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "missed authored Down would overwrite an active or blocked key slot".into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::DroppedExpired,
+            )?;
+            self.invalidate_up_for_generation(generation_id);
+        }
+        if observed_down_mask != missed_down_mask {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "frozen Down intents do not cover the missed Down mask".into(),
+                ),
+            ));
+        }
+
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.validate_local_slot_masks()?;
+        Ok(())
+    }
+
     /// Commit one classified authored frame after its selected physical
     /// packet completed successfully.  Immediate releases are sent now;
     /// unrelated deferred releases are registered in the fixed pending table

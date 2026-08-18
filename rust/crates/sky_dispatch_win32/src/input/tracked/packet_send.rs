@@ -442,6 +442,36 @@ impl TrackedKeyState {
         latest_allowed_down_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
+        #[cfg(any(test, feature = "test-support"))]
+        let outcome = if let Some(emitter) = self.custom_packet_emitter.as_ref() {
+            emitter(packet)
+        } else {
+            let Some(clock) = self.qpc_clock else {
+                self.last_error = Some("packet sender has no QPC clock".to_string());
+                return self.apply_packet_outcome(
+                    packet,
+                    SendTransactionOutcome {
+                        status: SendTransactionStatus::ZeroProgress,
+                        evidence: SendEvidence {
+                            requested_mask: packet.up_mask | packet.down_mask,
+                            confirmed_mask: 0,
+                            skipped_mask: 0,
+                            first_inserted: 0,
+                            attempts: 0,
+                            zero_progress_retries: 0,
+                            retry_reason: PacketRetryReason::None,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            started_ticks: None,
+                            completed_ticks: None,
+                            timing_error: None,
+                        },
+                    },
+                );
+            };
+            send_prepared_physical_packet_once_with_cutoff(prepared, clock, latest_allowed_down_qpc)
+        };
+        #[cfg(not(any(test, feature = "test-support")))]
         let outcome = {
             let Some(clock) = self.qpc_clock else {
                 self.last_error = Some("packet sender has no QPC clock".to_string());
@@ -537,7 +567,11 @@ impl TrackedKeyState {
                 self.authored_keys_rejected = self
                     .authored_keys_rejected
                     .saturating_add(u64::from(packet.down_mask.count_ones()));
-                self.last_error = Some("physical packet deadline missed before SendInput".into());
+                // This is a typed timing result, not a transport-integrity
+                // error. The worker owns Production recovery/diagnostic
+                // policy; do not allocate a formatted/String error on the
+                // precision path.
+                self.last_error = None;
             }
         }
         if packet.up_mask != 0 && !outcome.is_success() {
