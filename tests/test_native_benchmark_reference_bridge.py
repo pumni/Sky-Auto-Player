@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,7 +43,7 @@ def test_transport_reference_keeps_timeline_semantics_v1() -> None:
 
 
 def test_historical_schema_eight_trace_projects_bookkeeping_field() -> None:
-    payload = {
+    payload: dict[str, object] = {
         "schema_version": 8,
         "records": [{"bookkeeping_duration_us": 17}],
     }
@@ -50,8 +51,15 @@ def test_historical_schema_eight_trace_projects_bookkeeping_field() -> None:
         payload,
         native_build_commit=BRIDGE.acceptance.TRANSPORT_REFERENCE_SHA,
     )
-    assert normalized["records"][0]["core_post_send_duration_us"] == 17
-    assert "core_post_send_duration_us" not in payload["records"][0]
+    records = normalized.get("records")
+    assert isinstance(records, list)
+    assert records and isinstance(records[0], dict)
+    assert records[0]["core_post_send_duration_us"] == 17
+
+    source_records = payload["records"]
+    assert isinstance(source_records, list)
+    assert source_records and isinstance(source_records[0], dict)
+    assert "core_post_send_duration_us" not in source_records[0]
 
 
 def test_legacy_dispatch_session_receives_explicit_allowlist() -> None:
@@ -72,7 +80,8 @@ def test_legacy_dispatch_session_receives_explicit_allowlist() -> None:
     )
     args, kwargs = calls[-1]
     assert args[0] == actions
-    assert list(args[1]) == list(BRIDGE.SKY_15_SCAN_CODES)
+    assert isinstance(args[1], list)
+    assert args[1] == list(BRIDGE.SKY_15_SCAN_CODES)
     assert kwargs == {"config": config}
 
 
@@ -97,7 +106,12 @@ def test_current_dispatch_session_does_not_receive_legacy_allowlist() -> None:
     assert kwargs == {"config": config}
 
 
-def _report(*, sha: str, workload: dict[str, object], policy: dict[str, object]) -> dict[str, object]:
+def _report(
+    *,
+    sha: str,
+    workload: Mapping[str, object],
+    policy: Mapping[str, object],
+) -> dict[str, object]:
     return {
         "benchmark_schema_version": BRIDGE.BRIDGE_SCHEMA_VERSION,
         "candidate_sha": sha,
@@ -106,7 +120,10 @@ def _report(*, sha: str, workload: dict[str, object], policy: dict[str, object])
         "timeline_semantics_version": 2,
         "command_timing_domain": BRIDGE.acceptance.COMMAND_TIMING_DOMAIN,
         "latency_segment_domain": BRIDGE.acceptance.LATENCY_SEGMENT_DOMAIN,
-        "benchmark_config": {"workload": workload, "native_policy": policy},
+        "benchmark_config": {
+            "workload": dict(workload),
+            "native_policy": dict(policy),
+        },
         "statistics_eligible": True,
         "excluded_runs": 0,
     }
@@ -147,7 +164,7 @@ def test_comparison_rejects_workload_mismatch(monkeypatch) -> None:
 
 
 def test_ab_real_backend_routes_through_reference_bridge() -> None:
-    import bench_native_ab
+    import bench_native_ab  # pyright: ignore[reportMissingImports]
 
     args = SimpleNamespace(
         backend="sendinput",
@@ -174,7 +191,7 @@ def test_ab_real_backend_routes_through_reference_bridge() -> None:
 
 
 def test_ab_real_backend_matrix_defers_native_policy_to_each_leg() -> None:
-    import bench_native_ab
+    import bench_native_ab  # pyright: ignore[reportMissingImports]
 
     args = SimpleNamespace(
         backend="sendinput",
