@@ -334,6 +334,9 @@ def test_doctor_calibrate_returns_one_for_out_of_envelope(monkeypatch, capsys) -
             margin_us=None,
             effective_min_hold_us=None,
             sample_count=100,
+            guard_us=100,
+            evidence_kind="injected_raw_input_delivery_proxy",
+            cache_path=Path(".cache/input_latency.json"),
         ),
     )
 
@@ -344,6 +347,9 @@ def test_doctor_calibrate_returns_one_for_out_of_envelope(monkeypatch, capsys) -
     assert result == 1
     output = capsys.readouterr().out
     assert "Calibration measurement completed, but host qualification failed." in output
+    assert "Policy guard (us): 100" in output
+    assert "Evidence: injected_raw_input_delivery_proxy" in output
+    assert "Cache: .cache/input_latency.json" in output
     assert "Calibration complete successfully" not in output
 
 
@@ -355,6 +361,5 @@ def test_doctor_fps_advisory_prints_for_fps_above_60(capsys, monkeypatch) -> Non
     captured = capsys.readouterr()
     assert "Configured game FPS is 144" in captured.out
     assert "Notes shorter than one 60 fps frame" in captured.out
-
 
 

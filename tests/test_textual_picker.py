@@ -11,6 +11,8 @@ from textual.widgets import Input
 
 from sky_music.config import AppConfig
 from sky_music.infrastructure.background import WorkerSnapshot
+from sky_music.infrastructure.calibration_loader import CalibrationStatus
+from sky_music.platform.win32.native_calibration import PublishedCalibrationResult
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import get_song_choices
 from sky_music.ui.picker_metadata import SongUiMetadata
@@ -911,7 +913,54 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
     assert app.return_value is None
 
 
-def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    (
+        "status",
+        "margin_us",
+        "candidate_margin_us",
+        "effective_min_hold_us",
+        "expected_modal_text",
+        "forbidden_modal_text",
+    ),
+    [
+        (
+            CalibrationStatus.VALID,
+            800,
+            800,
+            17_467,
+            ("VALID", "Applied hold margin", "Note-On timestamps: unchanged"),
+            ("OUT OF ENVELOPE",),
+        ),
+        (
+            CalibrationStatus.OUT_OF_ENVELOPE,
+            None,
+            12_188,
+            None,
+            (
+                "OUT OF ENVELOPE",
+                "Applied calibrated margin",
+                "NONE",
+                "Playback hold fallback",
+                "500 µs",
+                "Note-On timestamps: unchanged",
+            ),
+            (
+                "Calibrated device margin: 2000",
+                "Calibration Complete Successfully",
+                "Calibration complete successfully",
+            ),
+        ),
+    ],
+)
+def test_textual_picker_calibrate_latency_command(
+    monkeypatch,
+    status: CalibrationStatus,
+    margin_us: int | None,
+    candidate_margin_us: int,
+    effective_min_hold_us: int | None,
+    expected_modal_text: tuple[str, ...],
+    forbidden_modal_text: tuple[str, ...],
+) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
@@ -924,27 +973,30 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
 
     from pathlib import Path
 
-    from sky_music.infrastructure.calibration_loader import CalibrationStatus
-    from sky_music.platform.win32.native_calibration import PublishedCalibrationResult
-
     def dummy_harness(*args, **kwargs):
         nonlocal harness_called
         harness_called = True
         return PublishedCalibrationResult(
-            status=CalibrationStatus.VALID,
-            margin_us=800,
-            candidate_margin_us=800,
-            source="device_cache",
-            sample_count=20,
+            status=status,
+            margin_us=margin_us,
+            candidate_margin_us=candidate_margin_us,
+            source=(
+                "device_cache"
+                if status is CalibrationStatus.VALID
+                else "out_of_envelope_default_500"
+            ),
+            sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
             evidence_kind="injected_raw_input_delivery_proxy",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
             worst_bucket="15/cold",
-            global_shrink_p99_us=700,
+            global_shrink_p99_us=(
+                700 if status is CalibrationStatus.VALID else 12_088
+            ),
             guard_us=100,
             ceiling_us=2_000,
-            effective_min_hold_us=17_467,
+            effective_min_hold_us=effective_min_hold_us,
         )
 
     monkeypatch.setattr(calibration_module, "run_published_native_calibration", dummy_harness)
@@ -969,6 +1021,11 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
         # The harness should have been called and the InfoModal (success dialog) pushed
         assert harness_called is True
         assert type(app.screen).__name__ == "InfoModal"
+        modal_text = str(getattr(app.screen, "content", ""))
+        for expected in expected_modal_text:
+            assert expected in modal_text
+        for forbidden in forbidden_modal_text:
+            assert forbidden not in modal_text
         
         # Close InfoModal
         await pilot.press("escape")
@@ -980,4 +1037,3 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-

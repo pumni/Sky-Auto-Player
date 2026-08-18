@@ -323,6 +323,32 @@ def test_v2_current_saturation_migrates_to_out_of_envelope() -> None:
     assert summary.candidate_margin_us == 12_188
 
 
+def test_v2_valid_margin_migrates_to_valid_v3_semantics() -> None:
+    v3 = native_calibration._cache_v3(
+        _native_result(p99_by_key={"15/cold": 700})
+    )
+    legacy = dict(v3)
+    legacy["version"] = 2
+    legacy["source_formula_version"] = 2
+    legacy.pop("status")
+    qualification = cast(dict[str, object], legacy.pop("qualification"))
+    legacy["selected_margin"] = {
+        "basis": qualification["basis"],
+        "worst_bucket": qualification["worst_bucket"],
+        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
+        "guard_us": qualification["guard_us"],
+        "floor_us": qualification["floor_us"],
+        "ceiling_us": qualification["ceiling_us"],
+        "recommended_margin_us": 800,
+    }
+
+    summary = loader.parse_calibration_cache_summary(legacy)
+
+    assert summary.status is loader.CalibrationStatus.VALID
+    assert summary.margin_us == 800
+    assert summary.candidate_margin_us == 800
+
+
 def test_v2_tampered_legacy_recommendation_is_rejected() -> None:
     v3 = native_calibration._cache_v3(_native_result(p99_by_key={"15/cold": 700}))
     legacy = dict(v3)

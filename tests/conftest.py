@@ -27,8 +27,9 @@ def isolate_input_latency_cache(request, monkeypatch):
     """Isolate every test from a real ``.cache/input_latency.json`` so a
     cached run cannot pollute a test that does not opt in.
 
-    We patch ``sky_music.infrastructure.calibration_loader.load_calibration_resolution``
-    (the source module) so every production consumer sees the mock.
+    We patch both the source module and the binding captured by
+    ``calibrated_policy`` so every production consumer sees the mock even when
+    that module was imported during pytest collection.
     """
     nodeid = request.node.nodeid
     if (
@@ -40,13 +41,23 @@ def isolate_input_latency_cache(request, monkeypatch):
     ):
         return
     import sky_music.infrastructure.calibration_loader as loader_module
+    import sky_music.orchestration.calibrated_policy as calibrated_policy_module
+
+    def _default_resolution(*_args: object, **_kwargs: object):
+        return loader_module.CalibrationLoadResult(
+            status=loader_module.CalibrationStatus.UNCALIBRATED,
+            resolved_margin_us=500,
+            margin_source=loader_module.SOURCE_DEFAULT_500,
+            summary=None,
+        )
+
     monkeypatch.setattr(
         loader_module,
         "load_calibration_resolution",
-        lambda: loader_module.CalibrationLoadResult(
-            status=loader_module.CalibrationStatus.UNCALIBRATED,
-            resolved_margin_us=500,
-            margin_source="default_500",
-            summary=None,
-        ),
+        _default_resolution,
+    )
+    monkeypatch.setattr(
+        calibrated_policy_module,
+        "load_calibration_resolution",
+        _default_resolution,
     )

@@ -346,6 +346,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
             "min_hold_margin_source must be part of the persistent cache key signature"
         )
         assert "min_hold_margin_us" in sig
+        assert sig["down_late_grace_us"] == 500
 
 
 # ---------------------------------------------------------------------------
