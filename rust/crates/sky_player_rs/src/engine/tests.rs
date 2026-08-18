@@ -3353,6 +3353,81 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
 }
 
 #[test]
+fn outer_and_inner_hard_late_recovery_have_same_backend_health() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut outer = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let first = outer.plan_current_dispatch();
+    let first_step = outer.dispatch_at_plan_target_for_test(&first);
+    assert!(
+        matches!(first_step, super::worker::DispatchStep::Dispatched),
+        "outer first step: {first_step:?}"
+    );
+    let outer_future = outer.plan_current_dispatch();
+    assert!(matches!(
+        outer.dispatch_due_from_plan_for_test(&outer_future),
+        super::worker::DispatchStep::NoWork
+    ));
+    assert!(matches!(
+        outer.dispatch_same_frozen_plan_after_hard_late_for_test(&outer_future),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let outer_health = (
+        outer.local_metrics.missed_hard_late_boundaries,
+        outer.resources.backend.chords_rejected,
+        outer.resources.backend.authored_keys_rejected,
+        outer.resources.backend.active_mask,
+        outer.resources.backend.possibly_active_mask,
+        outer.resources.backend.failed_release_mask,
+        outer
+            .resources
+            .coordinator
+            .generation_status_counts()
+            .get("dropped_expired")
+            .copied()
+            .unwrap_or_default(),
+    );
+
+    let mut inner = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let first = inner.plan_current_dispatch();
+    assert!(matches!(
+        inner.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let inner_future = inner.plan_current_dispatch();
+    assert!(matches!(
+        inner.dispatch_due_from_plan_for_test(&inner_future),
+        super::worker::DispatchStep::NoWork
+    ));
+    inner.configure_deadline_missed_packet_sender();
+    assert!(matches!(
+        inner.dispatch_same_frozen_plan_after_due_without_wait_for_test(&inner_future),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let inner_health = (
+        inner.local_metrics.missed_hard_late_boundaries,
+        inner.resources.backend.chords_rejected,
+        inner.resources.backend.authored_keys_rejected,
+        inner.resources.backend.active_mask,
+        inner.resources.backend.possibly_active_mask,
+        inner.resources.backend.failed_release_mask,
+        inner
+            .resources
+            .coordinator
+            .generation_status_counts()
+            .get("dropped_expired")
+            .copied()
+            .unwrap_or_default(),
+    );
+
+    assert_eq!(outer_health, inner_health);
+    assert_eq!(outer_health.0, 1);
+    assert_eq!(outer_health.1, 0);
+    assert_eq!(outer_health.2, 0);
+    assert_eq!(outer_health.6, 1);
+}
+
+#[test]
 fn first_musical_down_hard_miss_remains_startup_terminal() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -4377,6 +4452,78 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
         .filter(|record| record["requested_count"].as_u64().unwrap_or(0) > 0)
         .collect();
     assert!(!physical_records.is_empty());
+}
+
+#[test]
+fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Down,
+            scheduled_us: 100_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "B-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 200_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A-up".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 200_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "B-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid hard-late recovery schedule");
+    let script = FaultInjectionScript {
+        entries: vec![(1, InjectedSendOutcome::DeadlineMissedBeforeSend)],
+        ..FaultInjectionScript::none()
+    };
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: script,
+        },
+    );
+    options.profile = DispatchProfile::Production;
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+
+    start_with_test_wall_clock_slack(&session);
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "{snapshot:?}"
+    );
+    assert_eq!(snapshot.status, "finished", "{snapshot:?}");
+    assert_eq!(snapshot.terminal_error, None, "{snapshot:?}");
+    assert_eq!(snapshot.authored_keys_rejected, 0, "{snapshot:?}");
+    assert_eq!(snapshot.missed_hard_late_boundaries, 1, "{snapshot:?}");
+    assert_eq!(
+        snapshot.generation_status_counts.get("dropped_expired"),
+        Some(&1)
+    );
+    assert_eq!(snapshot.active_count, 0, "{snapshot:?}");
+    assert_eq!(snapshot.possibly_active_count, 0, "{snapshot:?}");
+    assert_eq!(snapshot.failed_release_count, 0, "{snapshot:?}");
 }
 
 #[test]

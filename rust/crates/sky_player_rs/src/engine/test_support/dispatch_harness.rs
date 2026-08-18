@@ -1183,7 +1183,7 @@ impl ProductionDispatchTestHarness {
             plan.deadline_ticks().expect("physical deadline"),
             overdue_now,
             false,
-            None,
+            Some(target),
         )
     }
     /// Query the current authored packet path without mutating state.

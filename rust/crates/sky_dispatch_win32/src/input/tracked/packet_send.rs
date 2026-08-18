@@ -563,14 +563,10 @@ impl TrackedKeyState {
                 ));
             }
             SendTransactionStatus::DeadlineMissedBeforeSend => {
-                self.chords_rejected = self.chords_rejected.saturating_add(1);
-                self.authored_keys_rejected = self
-                    .authored_keys_rejected
-                    .saturating_add(u64::from(packet.down_mask.count_ones()));
-                // This is a typed timing result, not a transport-integrity
-                // error. The worker owns Production recovery/diagnostic
-                // policy; do not allocate a formatted/String error on the
-                // precision path.
+                // This is a typed no-syscall timing result, not a transport
+                // rejection. The worker owns Production missed-Down recovery
+                // and records the boundary there. Keep backend rejection
+                // health clean because SendInput was never called.
                 self.last_error = None;
             }
         }

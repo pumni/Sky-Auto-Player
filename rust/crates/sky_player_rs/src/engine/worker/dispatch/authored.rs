@@ -228,6 +228,10 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         &admission,
+        #[cfg(any(test, feature = "test-support"))]
+        test_direct_boundary
+            .then_some(now_ticks)
+            .filter(|ticks| *ticks > physical_target_qpc),
         observer,
     )
 }
@@ -593,6 +597,7 @@ fn record_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
     admission: &AdmissionOutcome,
+    #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
@@ -625,6 +630,8 @@ fn record_down_send_outcome(
         latest_allowed_down_qpc,
         backend,
         prepared_packet,
+        #[cfg(any(test, feature = "test-support"))]
+        test_now_ticks,
     ) {
         Ok(result) => result,
         Err(SpinSendError::DownHardLateAbort) => {

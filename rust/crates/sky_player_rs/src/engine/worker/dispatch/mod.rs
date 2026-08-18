@@ -182,8 +182,15 @@ pub(crate) fn spin_and_send_prepared(
     latest_allowed_down_qpc: Option<QpcTicks>,
     backend: &mut TrackedKeyState,
     prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
+    #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
 ) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, SpinSendError> {
     loop {
+        #[cfg(any(test, feature = "test-support"))]
+        let now_ticks = match test_now_ticks {
+            Some(ticks) => ticks,
+            None => qpc_clock.now().map_err(SpinSendError::Qpc)?,
+        };
+        #[cfg(not(any(test, feature = "test-support")))]
         let now_ticks = qpc_clock.now().map_err(SpinSendError::Qpc)?;
         if now_ticks >= physical_target_qpc {
             if hard_late_down_abort_reached(now_ticks, latest_allowed_down_qpc) {

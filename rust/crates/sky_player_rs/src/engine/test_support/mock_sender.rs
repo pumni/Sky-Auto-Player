@@ -127,6 +127,19 @@ pub(crate) fn create_mock_backend(
                 result.timing_error = Some(QpcError::CounterUnavailable);
                 result
             }
+            // The packet-emitter path below is the only mock path that can
+            // model this typed no-syscall sender result. Keep the legacy
+            // scan-code emitter total for tests that exercise it directly.
+            Some(InjectedSendOutcome::DeadlineMissedBeforeSend) => {
+                mock_platform_send_result_from_started_ticks(
+                    qpc_clock,
+                    Ok(sender_started_ticks),
+                    codes.len() as u8,
+                    codes.len() as u8,
+                    0,
+                    0,
+                )
+            }
         }
     });
     if let Some(counter) = script.full_instrument_release_calls.clone() {
@@ -212,6 +225,28 @@ fn physical_packet_outcome(
         std::thread::sleep(Duration::from_micros(total_latency_us));
     }
     let scripted = script.resolve(call_index);
+    if matches!(
+        scripted,
+        Some(InjectedSendOutcome::DeadlineMissedBeforeSend)
+    ) {
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::DeadlineMissedBeforeSend,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 0,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started_ticks),
+                completed_ticks: None,
+                timing_error: None,
+            },
+        };
+    }
     let (inserted, latency_ticks, win32_error) = match scripted {
         None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => (requested, 0, 0),
         Some(InjectedSendOutcome::Full { latency_ticks }) => (requested, *latency_ticks, 0),
@@ -246,6 +281,9 @@ fn physical_packet_outcome(
                     timing_error: Some(QpcError::CounterUnavailable),
                 },
             };
+        }
+        Some(InjectedSendOutcome::DeadlineMissedBeforeSend) => {
+            unreachable!("DeadlineMissedBeforeSend handled before the transport outcome match")
         }
     };
     let deadline = match started_ticks.checked_add_duration(DurationTicks::from_raw(latency_ticks))
