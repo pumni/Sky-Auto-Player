@@ -70,6 +70,13 @@ The updater is intentionally non-elevating. A portable installation must be
 in a user-writable directory; the package does not install a service or invoke
 UAC.
 
+Before any parent wait, recovery, download, verification, or installation
+work, the updater acquires an exclusive per-install lock at
+`%LOCALAPPDATA%\Sky-Auto-Player\update-locks\<sha256(canonical-root)>.lock`.
+The OS handle is held through result persistence and restart. A second updater
+returns `UPDATE_ALREADY_RUNNING` immediately and does not create or touch a
+transaction directory.
+
 ## 3. Release selection and network
 
 Python remains the user-facing selector. Stable excludes prereleases; beta may
@@ -142,8 +149,14 @@ managed file below a preserved directory is rejected. The transaction journal
 is computed before mutation and records replacements, additions, managed
 orphans, and backups; preserved paths are excluded from those mutations.
 
-Before the first mutation, complete backups are created and a flushed
-`prepared` journal is atomically written under:
+Before the first mutation, the updater preflights every existing managed
+destination using the same replace-compatible Windows access requirements as
+the atomic operation. A sharing violation returns `INSTALL_TARGET_BUSY` with
+the relative path and Win32 error code; no transaction is created and no
+installation file is modified.
+
+Complete backups are then created and a flushed `prepared` journal is
+atomically written under:
 
 ```text
 <install>\.sky-update-transaction\
@@ -151,10 +164,26 @@ Before the first mutation, complete backups are created and a flushed
     backup\
 ```
 
-Rollback removes newly managed files, restores backups, and verifies restored
-hashes. If recovery cannot be proven, backup material remains and the app is
-not restarted. A later run recovers a prepared transaction before starting a
-new update; malformed journals fail closed. Journal and result JSON use
+Managed payloads are copied to same-volume temporary files beside each
+destination, flushed, hash-verified, and atomically replaced (`ReplaceFileW` on
+Windows). Existing destinations are replaced with a same-directory emergency
+backup name and `ReplaceFileW` flags `0`; the failure path reconciles the
+destination, emergency backup, and temporary file before any cleanup. A
+temporary or emergency backup is never removed while the canonical destination
+is missing or ambiguous. The Windows preflight requests read/delete/
+synchronize access while sharing read/write/delete, matching the replacement
+operation rather than requiring write access. Apply ordering is explicit:
+normal files, primary executable, calibration executable, updater executable,
+and `MANIFEST.json` last.
+
+Rollback is restore-first. Each verified backup is prepared and atomically
+restored without deleting its current destination; the updater is restored
+first, followed by the primary executable and calibration binary. Pure-new
+additions are removed only after every old backup has been restored and
+verified. If any restore or cleanup step fails, the current destination and
+transaction material remain for the next recovery attempt; the app is not
+restarted. A later run recovers a `Prepared` transaction before starting a new
+update; malformed journals fail closed. Journal and result JSON use
 same-directory temporary files, flush, and atomic replace.
 
 ## 6. Result and restart handoff
@@ -167,8 +196,12 @@ The updater writes a bounded result record to:
 
 The app consumes it once on the next start and reports stable statuses such as
 `success`, `rolled_back`, and `failure`, together with a stable error code.
-Logs do not contain secrets, signed redirect query strings, song contents, or
-arbitrary personal file listings.
+The error code distinguishes at least `IO_FAILURE`, `JSON_FAILURE`,
+`NETWORK_FAILURE`, `INSTALL_TARGET_BUSY`, `UPDATE_ALREADY_RUNNING`,
+`INSTALL_ATOMIC_REPLACE_FAILED`, and `ROLLBACK_ATOMIC_REPLACE_FAILED`.
+Failure results may additionally include bounded `phase`, `operation`, `path`,
+and `os_error` fields. Logs do not contain secrets, signed redirect query
+strings, song contents, or arbitrary personal file listings.
 
 The parent PID is used only for bounded waiting. The updater never terminates
 the parent, attaches a debugger, reads its memory, injects code, installs a
@@ -189,6 +222,24 @@ Releases page. The user may:
 The public package contains no legacy `updater.bat`,
 `installer/updater.ps1`, Pester updater workflow, old-name resolution, or
 bridge release asset.
+
+The feature-gated local release source and deterministic fault-injection
+`sky_updater_e2e.exe` are test-only artifacts and are rejected by the public
+release-tree guard. E2E fault checkpoints are path-based (for example,
+`apply:after-replace:Sky-Auto-Player-Updater.exe` and
+`rollback:after-restore:Sky-Auto-Player-Updater.exe`) so critical windows are
+tested after the updater replacement, not by an incidental file index. The
+Windows E2E harness records Defender antivirus/real-time status and exclusion
+paths before and after each acceptance run. It fails closed if Defender is not
+enabled, if the exclusion set is not readable, or if the exclusion set changes,
+and records any detections observed during the run in the evidence bundle. The
+main harness and every updater/app scenario remain non-elevated; only the
+feature-local Defender snapshot helper uses two explicit UAC prompts. Evidence
+records `harness_elevated: false` and `defender_snapshot_elevated: true`. The
+first fixed updater release is a manual bridge for
+installations whose existing updater predates this transaction hardening;
+those installations must be moved manually to the fixed release before
+native self-update is trusted again.
 
 ## 8. Security boundary
 

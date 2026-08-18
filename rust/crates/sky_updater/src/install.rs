@@ -4,7 +4,9 @@ use std::path::Path;
 use crate::archive::validate_zip_file;
 use crate::error::{Result, UpdaterError};
 use crate::manifest::Manifest;
-use crate::transaction::{TransactionPlan, apply, build_plan, prepare_journal, safe_join};
+use crate::transaction::{
+    TransactionPlan, apply, build_plan, preflight, prepare_journal, safe_join,
+};
 use crate::{MANIFEST_NAME, PRIMARY_EXE, UPDATER_EXE};
 
 pub fn read_staged_manifest(staging: &Path, target_version: &str) -> Result<Manifest> {
@@ -12,7 +14,7 @@ pub fn read_staged_manifest(staging: &Path, target_version: &str) -> Result<Mani
     let manifest = Manifest::parse(&fs::read(manifest_path)?)?;
     manifest.validate(Some(target_version))?;
     manifest.verify_staged(staging)?;
-    for required in [PRIMARY_EXE, UPDATER_EXE, "native_calibration.exe"] {
+    for required in [PRIMARY_EXE, UPDATER_EXE, crate::CALIBRATION_EXE] {
         if !staging.join(required).is_file() {
             return Err(UpdaterError::ManifestInvalid(format!(
                 "required payload missing: {required}"
@@ -43,6 +45,7 @@ pub fn install_verified(
     old_manifest: &Manifest,
 ) -> Result<TransactionPlan> {
     let plan = build_plan(Some(old_manifest), new_manifest)?;
+    preflight(install_root, &plan)?;
     prepare_journal(install_root, &plan)?;
     apply(install_root, staging, new_manifest, &plan)?;
     Ok(plan)

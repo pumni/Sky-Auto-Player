@@ -20,6 +20,7 @@ FORBIDDEN = {
     "updater.bat",
     "installer",
     "updater.ps1",
+    "sky_updater_e2e.exe",
 }
 
 
@@ -50,6 +51,7 @@ def verify(release_dir: Path, version: str) -> None:
         for path in actual
         if path in FORBIDDEN
         or path.startswith("installer/")
+        or path.startswith("sky_updater_e2e")
         or path.endswith(".bat")
         or path.endswith(".ps1")
         or path.endswith(".Tests.ps1")

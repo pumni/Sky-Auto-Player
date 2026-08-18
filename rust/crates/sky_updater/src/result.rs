@@ -17,6 +17,14 @@ pub struct UpdateResult {
     pub timestamp_utc: String,
     pub error_code: Option<String>,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_error: Option<u32>,
 }
 
 pub fn result_dir() -> Result<PathBuf> {
@@ -44,8 +52,19 @@ pub fn append_log(result: &UpdateResult) -> Result<()> {
     }
     let code = result.error_code.as_deref().unwrap_or("OK");
     let line = format!(
-        "{} status={} from={} target={} code={}\n",
-        result.timestamp_utc, result.status, result.from_version, result.target_version, code
+        "{} status={} from={} target={} code={} phase={} operation={} path={} os_error={} msg=\"{}\"\n",
+        result.timestamp_utc,
+        result.status,
+        result.from_version,
+        result.target_version,
+        code,
+        result.phase.as_deref().unwrap_or(""),
+        result.operation.as_deref().unwrap_or(""),
+        result.path.as_deref().unwrap_or(""),
+        result
+            .os_error
+            .map_or(String::new(), |value| value.to_string()),
+        bounded_log_message(result.message.as_deref().unwrap_or("")),
     );
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
@@ -62,6 +81,10 @@ pub fn success(from: &str, target: &str) -> UpdateResult {
         timestamp_utc: timestamp(),
         error_code: None,
         message: None,
+        phase: None,
+        operation: None,
+        path: None,
+        os_error: None,
     }
 }
 
@@ -74,10 +97,15 @@ pub fn dry_run(from: &str, target: &str) -> UpdateResult {
         timestamp_utc: timestamp(),
         error_code: None,
         message: None,
+        phase: None,
+        operation: None,
+        path: None,
+        os_error: None,
     }
 }
 
 pub fn failure(from: &str, target: &str, error: &UpdaterError) -> UpdateResult {
+    let details = error_details(error);
     UpdateResult {
         schema_version: 1,
         status: "failure".into(),
@@ -85,11 +113,16 @@ pub fn failure(from: &str, target: &str, error: &UpdaterError) -> UpdateResult {
         target_version: target.into(),
         timestamp_utc: timestamp(),
         error_code: Some(error_code(error).into()),
-        message: Some(error.to_string()),
+        message: Some(bound_message(error.to_string())),
+        phase: details.phase,
+        operation: details.operation,
+        path: details.path,
+        os_error: details.os_error,
     }
 }
 
 pub fn rolled_back(from: &str, target: &str, error: &UpdaterError) -> UpdateResult {
+    let details = error_details(error);
     UpdateResult {
         schema_version: 1,
         status: "rolled_back".into(),
@@ -97,7 +130,11 @@ pub fn rolled_back(from: &str, target: &str, error: &UpdaterError) -> UpdateResu
         target_version: target.into(),
         timestamp_utc: timestamp(),
         error_code: Some("ROLLED_BACK".into()),
-        message: Some(error.to_string()),
+        message: Some(bound_message(error.to_string())),
+        phase: details.phase,
+        operation: details.operation,
+        path: details.path,
+        os_error: details.os_error,
     }
 }
 
@@ -131,7 +168,7 @@ fn civil_from_days(days: i64) -> (i64, u64, u64) {
     (year, month as u64, day as u64)
 }
 
-fn error_code(error: &UpdaterError) -> &'static str {
+pub fn error_code(error: &UpdaterError) -> &'static str {
     match error {
         UpdaterError::InvalidArgument(_) => "INVALID_ARGUMENT",
         UpdaterError::ParentTimeout => "PARENT_TIMEOUT",
@@ -149,9 +186,84 @@ fn error_code(error: &UpdaterError) -> &'static str {
         UpdaterError::TransactionRecoveryRequired(_) => "TRANSACTION_RECOVERY_REQUIRED",
         UpdaterError::BackupFailed(_) => "BACKUP_FAILED",
         UpdaterError::InstallCopyFailed(_) => "INSTALL_COPY_FAILED",
+        UpdaterError::InstallTargetBusy { .. } => "INSTALL_TARGET_BUSY",
+        UpdaterError::UpdateAlreadyRunning => "UPDATE_ALREADY_RUNNING",
+        UpdaterError::InstallAtomicReplaceFailed { .. } => "INSTALL_ATOMIC_REPLACE_FAILED",
+        UpdaterError::RollbackAtomicReplaceFailed { .. } => "ROLLBACK_ATOMIC_REPLACE_FAILED",
         UpdaterError::PostInstallVerifyFailed(_) => "POST_INSTALL_VERIFY_FAILED",
         UpdaterError::RollbackFailed(_) => "ROLLBACK_FAILED",
         UpdaterError::RestartFailed(_) => "RESTART_FAILED",
-        UpdaterError::Io(_) | UpdaterError::Json(_) => "NETWORK_FAILURE",
+        UpdaterError::Io(_) => "IO_FAILURE",
+        UpdaterError::Json(_) => "JSON_FAILURE",
+    }
+}
+
+#[derive(Default)]
+struct ErrorDetails {
+    phase: Option<String>,
+    operation: Option<String>,
+    path: Option<String>,
+    os_error: Option<u32>,
+}
+
+fn error_details(error: &UpdaterError) -> ErrorDetails {
+    match error {
+        UpdaterError::InstallTargetBusy { path, os_code, .. } => ErrorDetails {
+            phase: Some("preflight".into()),
+            operation: Some("probe".into()),
+            path: Some(bound_message(path.clone())),
+            os_error: Some(*os_code),
+        },
+        UpdaterError::InstallAtomicReplaceFailed { path, os_code, .. } => ErrorDetails {
+            phase: Some("apply".into()),
+            operation: Some("replace".into()),
+            path: Some(bound_message(path.clone())),
+            os_error: Some(*os_code),
+        },
+        UpdaterError::RollbackAtomicReplaceFailed { path, os_code, .. } => ErrorDetails {
+            phase: Some("rollback".into()),
+            operation: Some("replace".into()),
+            path: Some(bound_message(path.clone())),
+            os_error: Some(*os_code),
+        },
+        _ => ErrorDetails::default(),
+    }
+}
+
+const MAX_MESSAGE_CHARS: usize = 512;
+
+fn bound_message(message: String) -> String {
+    let normalized = message.replace(['\r', '\n'], " ");
+    if normalized.chars().count() <= MAX_MESSAGE_CHARS {
+        return normalized;
+    }
+    normalized
+        .chars()
+        .take(MAX_MESSAGE_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+fn bounded_log_message(message: &str) -> String {
+    bound_message(message.to_owned()).replace('"', "'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_MESSAGE_CHARS, bound_message};
+
+    #[test]
+    fn bound_message_limits_ascii_to_512_characters() {
+        let bounded = bound_message("x".repeat(600));
+        assert_eq!(bounded.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(bounded.chars().last(), Some('…'));
+    }
+
+    #[test]
+    fn bound_message_is_unicode_safe_at_boundary() {
+        let bounded = bound_message(format!("{}tail", "ế".repeat(600)));
+        assert_eq!(bounded.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(bounded.chars().last(), Some('…'));
+        assert!(bounded.is_char_boundary(bounded.len()));
     }
 }

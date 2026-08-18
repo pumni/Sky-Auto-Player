@@ -36,6 +36,26 @@ pub enum UpdaterError {
     BackupFailed(String),
     #[error("install copy failed: {0}")]
     InstallCopyFailed(String),
+    #[error("an install target is busy: {path} (Win32 error {os_code}): {message}")]
+    InstallTargetBusy {
+        path: String,
+        os_code: u32,
+        message: String,
+    },
+    #[error("another updater is already running")]
+    UpdateAlreadyRunning,
+    #[error("atomic install replacement failed for {path} (Win32 error {os_code}): {message}")]
+    InstallAtomicReplaceFailed {
+        path: String,
+        os_code: u32,
+        message: String,
+    },
+    #[error("atomic rollback replacement failed for {path} (Win32 error {os_code}): {message}")]
+    RollbackAtomicReplaceFailed {
+        path: String,
+        os_code: u32,
+        message: String,
+    },
     #[error("post-install verification failed: {0}")]
     PostInstallVerifyFailed(String),
     #[error("rollback failed: {0}")]

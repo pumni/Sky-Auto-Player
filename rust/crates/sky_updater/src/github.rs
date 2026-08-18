@@ -22,6 +22,34 @@ pub struct ReleasePayload {
     pub external_manifest_sha256: String,
 }
 
+pub trait ReleaseSource {
+    fn fetch_exact_release(
+        &self,
+        target_version: &str,
+        channel: Channel,
+        zip_destination: &Path,
+    ) -> Result<ReleasePayload>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GitHubReleaseSource;
+
+impl ReleaseSource for GitHubReleaseSource {
+    fn fetch_exact_release(
+        &self,
+        target_version: &str,
+        channel: Channel,
+        zip_destination: &Path,
+    ) -> Result<ReleasePayload> {
+        fetch_exact_release(
+            &crate::http::WinHttpClient,
+            target_version,
+            channel,
+            zip_destination,
+        )
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ReleaseResponse {
     tag_name: String,
