@@ -568,7 +568,7 @@ try {
 catch {
     $script:Results.overall = "FAILED"
     $script:Results.failure = $_.Exception.Message
-    Write-Error $_
+    Write-Warning $_
 }
 finally {
     $env:LOCALAPPDATA = $script:PreviousLocalAppData
@@ -591,7 +591,7 @@ finally {
         $script:Results.overall = "FAILED"
         $script:Results.failure = $_.Exception.Message
         $script:AllPassed = $false
-        Write-Error $_
+        Write-Warning $_
     }
     if (-not (Test-Path -LiteralPath (Join-Path $script:EvidenceRoot "updater.log"))) {
         New-Item -ItemType File -Path (Join-Path $script:EvidenceRoot "updater.log") -Force | Out-Null
