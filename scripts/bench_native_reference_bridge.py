@@ -9,12 +9,12 @@ candidate behavior remains owned by ``bench_native_acceptance``.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import bench_native_acceptance as acceptance
+
 from sky_music.layouts import SKY_15_SCAN_CODES
 
 BRIDGE_SCHEMA_VERSION = 8
