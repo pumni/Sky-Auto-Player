@@ -39,6 +39,7 @@ CANONICAL_DISPATCH_FILES = {
     "mod.rs",
     "observation.rs",
     "observer.rs",
+    "recovery.rs",
     "timing.rs",
 }
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
@@ -290,7 +291,11 @@ def check_repository(repository_root: Path) -> CheckReport:
 
     dispatch_dir = repository_root / "rust/crates/sky_player_rs/src/engine/worker/dispatch"
     if dispatch_dir.exists():
-        actual_dispatch_files = {path.name for path in dispatch_dir.glob("*.rs")}
+        actual_dispatch_files = {
+            path.name
+            for path in dispatch_dir.glob("*.rs")
+            if not path.name.endswith("_tests.rs")
+        }
         for unexpected in sorted(actual_dispatch_files - CANONICAL_DISPATCH_FILES):
             report.errors.append(
                 Violation(

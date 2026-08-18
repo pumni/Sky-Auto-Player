@@ -78,15 +78,15 @@ def test_snapshot_renderer_unit() -> None:
         current=0.0,
         total=10.0,
         song_name="My Song",
-        missed_down_boundaries=3,
-        missed_down_keys=3,
+        missed_down_boundaries=2,
+        missed_down_keys=5,
         missed_hard_late_boundaries=2,
         late_authorized_boundaries=4,
     )
     snap = renderer.get_snapshot()
     assert snap is not None
-    assert snap.missed_down_boundaries == 3
-    assert snap.missed_down_keys == 3
+    assert snap.missed_down_boundaries == 2
+    assert snap.missed_down_keys == 5
     assert snap.missed_hard_late_boundaries == 2
     assert snap.late_authorized_boundaries == 4
 
@@ -269,18 +269,19 @@ def test_playback_hud_surfaces_missed_notes_without_backend_error() -> None:
         current=0.0,
         total=1.0,
         song_name="Test Song",
-        missed_down_boundaries=3,
+        missed_down_boundaries=2,
+        missed_down_keys=5,
         missed_hard_late_boundaries=2,
         late_authorized_boundaries=4,
     )
 
     normal = "\n".join(card._playing_body(80))
-    assert "missed notes: 3" in normal
+    assert "missed notes: 5" in normal
     assert "backend error" not in normal
 
     card.debug_mode = True
     debug = "\n".join(card._playing_body(80))
-    assert "missed:3" in debug
+    assert "missed:2" in debug
     assert "hard:2" in debug
     assert "late-ok:4" in debug
 

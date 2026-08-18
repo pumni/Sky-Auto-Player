@@ -741,8 +741,9 @@ class PlaybackCard(Static):
             for notice in notice_state.notices
         )
         missed_down = snap.missed_down_boundaries if snap is not None else 0
-        if missed_down > 0 and not self.debug_mode:
-            body.append(f"{yellow}missed notes: {missed_down}{_ANSI_RESET}")
+        missed_keys = snap.missed_down_keys if snap is not None else 0
+        if missed_keys > 0 and not self.debug_mode:
+            body.append(f"{yellow}missed notes: {missed_keys}{_ANSI_RESET}")
         backend = (
             f"{red}stuck keys: {view.backend.stuck_keys}{_ANSI_RESET}"
             if not view.backend.healthy
@@ -958,8 +959,8 @@ class PlaybackApp(App[str]):
             f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
             for notice in notice_state.notices
         ]
-        if snap.missed_down_boundaries > 0:
-            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")
+        if snap.missed_down_keys > 0:
+            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_keys}[/]")
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
             warn_widget.styles.display = "block"
@@ -1152,8 +1153,8 @@ class PlaybackScreen(Screen[str]):
             f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
             for notice in notice_state.notices
         ]
-        if snap.missed_down_boundaries > 0 and not self.debug_mode:
-            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")
+        if snap.missed_down_keys > 0 and not self.debug_mode:
+            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_keys}[/]")
         if self.violations:
             warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
 
