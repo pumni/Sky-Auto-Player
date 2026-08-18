@@ -347,9 +347,9 @@ fn admit_authored_down(
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.down_late_grace_ticks)
     {
-        return Err(DispatchStep::Terminate(format!(
-            "authored Down exceeded the session down late-grace window",
-        )));
+        return Err(DispatchStep::Terminate(
+            "authored Down exceeded the session down late-grace window".to_string(),
+        ));
     }
     if has_conflicts {
         local_metrics.authored_conflict_events =
