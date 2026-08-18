@@ -229,6 +229,12 @@ release-tree guard. E2E fault checkpoints are path-based (for example,
 `apply:after-replace:Sky-Auto-Player-Updater.exe` and
 `rollback:after-restore:Sky-Auto-Player-Updater.exe`) so critical windows are
 tested after the updater replacement, not by an incidental file index. The
+Windows E2E harness records Defender antivirus/real-time status and exclusion
+paths before and after each acceptance run. It fails closed if Defender is not
+enabled, if the exclusion set is not readable, or if the exclusion set changes,
+and records any detections observed during the run in the evidence bundle. Run
+the harness elevated when Defender reports that exclusion paths require an
+administrator. The
 first fixed updater release is a manual bridge for
 installations whose existing updater predates this transaction hardening;
 those installations must be moved manually to the fixed release before

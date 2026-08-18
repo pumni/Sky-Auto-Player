@@ -72,7 +72,11 @@ pub fn probe_new_destination(path: &Path, label: &str) -> Result<()> {
 /// committed or fully recovered transaction.  A killed process can leave an
 /// emergency backup beside its destination after ReplaceFileW has succeeded.
 pub fn cleanup_stale_artifacts(install_root: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(install_root)? {
+    cleanup_stale_artifacts_in(install_root)
+}
+
+fn cleanup_stale_artifacts_in(directory: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
         if file_type.is_file()
@@ -82,6 +86,11 @@ pub fn cleanup_stale_artifacts(install_root: &Path) -> io::Result<()> {
                 .is_some_and(is_reserved_artifact_name)
         {
             fs::remove_file(entry.path())?;
+        } else if file_type.is_dir() {
+            let name = entry.file_name();
+            if name != "songs" && name != "logs" && name != ".sky-update-transaction" {
+                cleanup_stale_artifacts_in(&entry.path())?;
+            }
         }
     }
     Ok(())
@@ -619,4 +628,161 @@ fn atomic_move_new(temporary: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(not(windows))]
 fn atomic_move_new(temporary: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(temporary, destination)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::archive::sha256_bytes;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "sky-updater-reconcile-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    fn prepared(
+        root: &Path,
+        destination: &str,
+        temporary: &str,
+        emergency_backup: &str,
+        expected: &[u8],
+    ) -> PreparedReplacement {
+        PreparedReplacement {
+            temporary: root.join(temporary),
+            destination: root.join(destination),
+            emergency_backup: root.join(emergency_backup),
+            expected_hash: sha256_bytes(expected),
+            label: destination.into(),
+            cleanup_temporary: false,
+            cleanup_backup: false,
+        }
+    }
+
+    #[test]
+    fn reconcile_missing_destination_prefers_verified_emergency_backup() {
+        let root = temp_root("missing-destination");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("replacement.tmp"), b"new bytes").expect("temp");
+        fs::write(root.join("replacement.bak"), b"old bytes").expect("backup");
+        let destination = root.join("managed.dll");
+        let mut replacement = prepared(
+            &root,
+            "managed.dll",
+            "replacement.tmp",
+            "replacement.bak",
+            b"new bytes",
+        );
+
+        let message = replacement.reconcile_after_failure();
+
+        assert!(message.contains("emergency backup"));
+        assert_eq!(fs::read(&destination).expect("destination"), b"old bytes");
+        drop(replacement);
+        assert!(!root.join("replacement.tmp").exists());
+        assert!(!root.join("replacement.bak").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reconcile_wrong_destination_restores_emergency_backup() {
+        let root = temp_root("wrong-destination");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("managed.dll"), b"wrong bytes").expect("destination");
+        fs::write(root.join("replacement.tmp"), b"new bytes").expect("temp");
+        fs::write(root.join("replacement.bak"), b"old bytes").expect("backup");
+        let mut replacement = prepared(
+            &root,
+            "managed.dll",
+            "replacement.tmp",
+            "replacement.bak",
+            b"new bytes",
+        );
+
+        let message = replacement.reconcile_after_failure();
+
+        assert!(message.contains("restored"));
+        assert_eq!(
+            fs::read(root.join("managed.dll")).expect("destination"),
+            b"old bytes"
+        );
+        drop(replacement);
+        assert!(!root.join("replacement.tmp").exists());
+        assert!(!root.join("replacement.bak").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reconcile_verified_destination_cleans_duplicate_backup() {
+        let root = temp_root("verified-destination");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("managed.dll"), b"new bytes").expect("destination");
+        fs::write(root.join("replacement.tmp"), b"new bytes").expect("temp");
+        fs::write(root.join("replacement.bak"), b"old bytes").expect("backup");
+        let mut replacement = prepared(
+            &root,
+            "managed.dll",
+            "replacement.tmp",
+            "replacement.bak",
+            b"new bytes",
+        );
+
+        let message = replacement.reconcile_after_failure();
+
+        assert!(message.contains("verified replacement"));
+        drop(replacement);
+        assert_eq!(
+            fs::read(root.join("managed.dll")).expect("destination"),
+            b"new bytes"
+        );
+        assert!(!root.join("replacement.tmp").exists());
+        assert!(!root.join("replacement.bak").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reconcile_missing_destination_can_establish_from_verified_temp() {
+        let root = temp_root("temp-only");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("replacement.tmp"), b"new bytes").expect("temp");
+        let destination = root.join("managed.dll");
+        let mut replacement = prepared(
+            &root,
+            "managed.dll",
+            "replacement.tmp",
+            "replacement.bak",
+            b"new bytes",
+        );
+
+        let message = replacement.reconcile_after_failure();
+
+        assert!(message.contains("verified temporary"));
+        assert_eq!(fs::read(&destination).expect("destination"), b"new bytes");
+        drop(replacement);
+        assert!(!root.join("replacement.tmp").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn stale_artifact_cleanup_recurses_without_touching_preserved_directories() {
+        let root = temp_root("recursive-cleanup");
+        let nested = root.join("_internal").join("bin");
+        let songs = root.join("songs");
+        fs::create_dir_all(&nested).expect("nested");
+        fs::create_dir_all(&songs).expect("songs");
+        fs::write(nested.join(".sky-update-7-8.tmp"), b"stale").expect("nested stale");
+        fs::write(songs.join(".sky-update-9-10.tmp"), b"user file").expect("user file");
+
+        cleanup_stale_artifacts(&root).expect("cleanup");
+
+        assert!(!nested.join(".sky-update-7-8.tmp").exists());
+        assert!(songs.join(".sky-update-9-10.tmp").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 }

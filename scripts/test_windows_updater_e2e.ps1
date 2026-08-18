@@ -17,11 +17,69 @@ $script:SandboxRoot = Join-Path ([IO.Path]::GetTempPath()) "sky-updater-e2e-$scr
 $script:Results = [ordered]@{}
 $script:AllPassed = $false
 $script:PreviousLocalAppData = $env:LOCALAPPDATA
+$script:DefenderBefore = $null
+$script:DefenderAfter = $null
+$script:DefenderExclusionsUnchanged = $false
+$script:DefenderThreatCount = $null
+$script:DefenderRunStart = $null
 
 function Write-EvidenceJson {
     param([string]$Name, [object]$Value)
     $path = Join-Path $script:EvidenceRoot $Name
     $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $path -Encoding utf8
+}
+
+function Get-DefenderEvidence {
+    try {
+        $status = Get-MpComputerStatus -ErrorAction Stop
+        $preference = Get-MpPreference -ErrorAction Stop
+    }
+    catch {
+        throw "Defender status is unavailable: $($_.Exception.Message)"
+    }
+    $rawExclusions = @($preference.ExclusionPath)
+    if ($rawExclusions.Count -eq 1 -and [string]$rawExclusions[0] -match '^N/A:') {
+        throw "Defender exclusions are not readable; run acceptance from an elevated PowerShell session"
+    }
+    $exclusions = @(
+        $rawExclusions |
+            ForEach-Object { [string]$_ }
+    ) | Sort-Object
+    [pscustomobject]@{
+        antivirus_enabled = [bool]$status.AntivirusEnabled
+        realtime_protection_enabled = [bool]$status.RealTimeProtectionEnabled
+        exclusions = @($exclusions)
+    }
+}
+
+function Assert-DefenderEnabled {
+    param([object]$Evidence, [string]$Phase)
+    if (-not $Evidence.antivirus_enabled) {
+        throw "Defender antivirus is not enabled $Phase"
+    }
+    if (-not $Evidence.realtime_protection_enabled) {
+        throw "Defender real-time protection is not enabled $Phase"
+    }
+}
+
+function Test-DefenderExclusionsUnchanged {
+    param([object]$Before, [object]$After)
+    $beforePaths = @($Before.exclusions | ForEach-Object { [string]$_ }) | Sort-Object
+    $afterPaths = @($After.exclusions | ForEach-Object { [string]$_ }) | Sort-Object
+    return @(Compare-Object -ReferenceObject $beforePaths -DifferenceObject $afterPaths).Count -eq 0
+}
+
+function Get-DefenderThreatCount {
+    param([DateTime]$Since)
+    try {
+        return @(
+            Get-MpThreatDetection -ErrorAction Stop |
+                Where-Object { $_.InitialDetectionTime -ge $Since }
+        ).Count
+    }
+    catch {
+        return $null
+    }
 }
 
 function Get-RelativeFilePath {
@@ -381,6 +439,10 @@ function Record-Failure {
 try {
     New-Item -ItemType Directory -Path $script:EvidenceRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $script:SandboxRoot -Force | Out-Null
+    $script:DefenderRunStart = Get-Date
+    $script:DefenderBefore = Get-DefenderEvidence
+    Assert-DefenderEnabled $script:DefenderBefore "before acceptance"
+    Write-EvidenceJson "defender-before.json" $script:DefenderBefore
     $fromRoot = Get-PackageRoot (Resolve-Path $FromPackage).Path (Join-Path $script:SandboxRoot "from-package")
     $toRoot = Get-PackageRoot (Resolve-Path $ToPackage).Path (Join-Path $script:SandboxRoot "to-package")
     $fromManifest = Get-ManifestObject $fromRoot
@@ -511,6 +573,26 @@ catch {
 finally {
     $env:LOCALAPPDATA = $script:PreviousLocalAppData
     New-Item -ItemType Directory -Path $script:EvidenceRoot -Force | Out-Null
+    try {
+        $script:DefenderAfter = Get-DefenderEvidence
+        Assert-DefenderEnabled $script:DefenderAfter "after acceptance"
+        if ($null -eq $script:DefenderBefore) {
+            throw "Defender baseline was not captured"
+        }
+        $script:DefenderExclusionsUnchanged = Test-DefenderExclusionsUnchanged `
+            $script:DefenderBefore $script:DefenderAfter
+        if (-not $script:DefenderExclusionsUnchanged) {
+            throw "Defender exclusions changed during acceptance"
+        }
+        $script:DefenderThreatCount = Get-DefenderThreatCount $script:DefenderRunStart
+        Write-EvidenceJson "defender-after.json" $script:DefenderAfter
+    }
+    catch {
+        $script:Results.overall = "FAILED"
+        $script:Results.failure = $_.Exception.Message
+        $script:AllPassed = $false
+        Write-Error $_
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $script:EvidenceRoot "updater.log"))) {
         New-Item -ItemType File -Path (Join-Path $script:EvidenceRoot "updater.log") -Force | Out-Null
     }
@@ -521,7 +603,14 @@ finally {
         computer = $env:COMPUTERNAME
         user = $env:USERNAME
         timestamp_utc = $script:Timestamp
-        defender_exclusions_changed = $false
+        defender_exclusions_changed = if ($script:DefenderBefore -and $script:DefenderAfter) { -not $script:DefenderExclusionsUnchanged } else { $null }
+        defender_antivirus_enabled_before = if ($script:DefenderBefore) { [bool]$script:DefenderBefore.antivirus_enabled } else { $false }
+        defender_realtime_enabled_before = if ($script:DefenderBefore) { [bool]$script:DefenderBefore.realtime_protection_enabled } else { $false }
+        defender_realtime_enabled_after = if ($script:DefenderAfter) { [bool]$script:DefenderAfter.realtime_protection_enabled } else { $false }
+        defender_exclusions_before = if ($script:DefenderBefore) { @($script:DefenderBefore.exclusions) } else { @() }
+        defender_exclusions_after = if ($script:DefenderAfter) { @($script:DefenderAfter.exclusions) } else { @() }
+        defender_exclusions_unchanged = [bool]$script:DefenderExclusionsUnchanged
+        defender_detections_since_start = $script:DefenderThreatCount
         sandbox = $script:SandboxRoot
     })
     Write-EvidenceJson "summary.json" ([ordered]@{
@@ -533,6 +622,10 @@ finally {
         rollback_preserved_updater = [bool]$script:Results.rollback_preserved_updater
         restart_verified = [bool]$script:Results.restart_verified
         crash_recovery = [bool]$script:Results.crash_recovery
+        defender_antivirus_enabled_before = if ($script:DefenderBefore) { [bool]$script:DefenderBefore.antivirus_enabled } else { $false }
+        defender_realtime_enabled_before = if ($script:DefenderBefore) { [bool]$script:DefenderBefore.realtime_protection_enabled } else { $false }
+        defender_realtime_enabled_after = if ($script:DefenderAfter) { [bool]$script:DefenderAfter.realtime_protection_enabled } else { $false }
+        defender_exclusions_unchanged = [bool]$script:DefenderExclusionsUnchanged
     })
     if ($script:AllPassed -and -not $KeepEvidence -and (Test-Path $script:SandboxRoot)) {
         Remove-Item -LiteralPath $script:SandboxRoot -Recurse -Force
