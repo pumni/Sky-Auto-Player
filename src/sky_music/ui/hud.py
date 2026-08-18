@@ -401,10 +401,10 @@ class ProgressRenderer:
             )
             for notice in notice_state.notices
         )
-        if not self.verbose and missed_down_boundaries > 0:
+        if not self.verbose and missed_down_keys > 0:
             panel_content.append(
                 Text(
-                    f"missed notes: {missed_down_boundaries}",
+                    f"missed notes: {missed_down_keys}",
                     style=styles["warning"],
                 )
             )

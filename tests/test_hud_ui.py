@@ -117,15 +117,15 @@ def test_progress_renderer_surfaces_missed_note_counters(monkeypatch) -> None:
         1.0,
         "Test Song",
         force=True,
-        missed_down_boundaries=3,
-        missed_down_keys=3,
+        missed_down_boundaries=2,
+        missed_down_keys=5,
         missed_hard_late_boundaries=2,
         late_authorized_boundaries=4,
     )
     normal_output = StringIO()
     assert normal._live is not None
     Console(file=normal_output, width=120).print(normal._live.renderable)
-    assert "missed notes: 3" in normal_output.getvalue()
+    assert "missed notes: 5" in normal_output.getvalue()
     normal.finish()
 
     verbose = ProgressRenderer(verbose=True)
@@ -134,14 +134,14 @@ def test_progress_renderer_surfaces_missed_note_counters(monkeypatch) -> None:
         1.0,
         "Test Song",
         force=True,
-        missed_down_boundaries=3,
+        missed_down_boundaries=2,
         missed_hard_late_boundaries=2,
         late_authorized_boundaries=4,
     )
     verbose_output = StringIO()
     assert verbose._live is not None
     Console(file=verbose_output, width=120).print(verbose._live.renderable)
-    assert "missed:3" in verbose_output.getvalue()
+    assert "missed:2" in verbose_output.getvalue()
     assert "hard:2" in verbose_output.getvalue()
     assert "late-ok:4" in verbose_output.getvalue()
     verbose.finish()
