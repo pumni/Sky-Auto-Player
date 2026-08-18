@@ -135,6 +135,7 @@ impl Default for WorkerConfig {
             profile: DispatchProfile::Production,
             timing: TimingOptions {
                 min_hold_us: 10_000,
+                down_late_grace_us: 0,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -164,6 +165,7 @@ impl Default for WorkerConfig {
 
 pub(crate) struct TimingOptions {
     pub(crate) min_hold_us: u64,
+    pub(crate) down_late_grace_us: u64,
     pub(crate) strict_timing: bool,
     pub(crate) strict_down_completion_late_us: u64,
     pub(crate) strict_up_completion_late_us: u64,

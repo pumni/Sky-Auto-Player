@@ -78,6 +78,10 @@ class PlaybackSnapshot:
     song_name: str
     status: str = "playing"
     pre_roll_remaining_us: int = 0
+    missed_down_boundaries: int = 0
+    missed_down_keys: int = 0
+    missed_hard_late_boundaries: int = 0
+    late_authorized_boundaries: int = 0
     input_path_degraded: bool = False
     sendinput_path_degraded: bool = False
     core_post_send_degraded: bool = False
@@ -136,6 +140,10 @@ class SnapshotRenderer:
         song_name: str,
         status: str = "playing",
         pre_roll_remaining_us: int = 0,
+        missed_down_boundaries: int = 0,
+        missed_down_keys: int = 0,
+        missed_hard_late_boundaries: int = 0,
+        late_authorized_boundaries: int = 0,
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
@@ -154,6 +162,10 @@ class SnapshotRenderer:
                 song_name=song_name,
                 status=status,
                 pre_roll_remaining_us=max(0, int(pre_roll_remaining_us)),
+                missed_down_boundaries=int(missed_down_boundaries),
+                missed_down_keys=int(missed_down_keys),
+                missed_hard_late_boundaries=int(missed_hard_late_boundaries),
+                late_authorized_boundaries=int(late_authorized_boundaries),
                 input_path_degraded=input_path_degraded,
                 sendinput_path_degraded=sendinput_path_degraded,
                 core_post_send_degraded=core_post_send_degraded,
@@ -306,7 +318,6 @@ class PlaybackCard(Static):
         self._risk_selected = 0
         self._countdown_remaining = 0
         self._playback_result_callback: Any | None = None
-        self._timer: Any | None = None
         self._poll_timer: Any | None = None
         self._debug_hotkey: HotkeyBinding | None = None
         self._exited = False
@@ -401,6 +412,8 @@ class PlaybackCard(Static):
             current_q,
             int(snap.total * 10),
             snap.input_path_degraded,
+            snap.missed_down_boundaries,
+            snap.missed_hard_late_boundaries,
             stats_sig,
             self._countdown_remaining,
             self._risk_selected,
@@ -519,7 +532,7 @@ class PlaybackCard(Static):
             callback(result)
 
     def _stop_timers(self) -> None:
-        for attr in ("_timer", "_poll_timer"):
+        for attr in ("_poll_timer",):
             timer = getattr(self, attr, None)
             if timer is not None:
                 with contextlib.suppress(Exception):
@@ -727,6 +740,9 @@ class PlaybackCard(Static):
             f"{red if notice.severity == 'danger' else yellow}{notice.message}{_ANSI_RESET}"
             for notice in notice_state.notices
         )
+        missed_down = snap.missed_down_boundaries if snap is not None else 0
+        if missed_down > 0 and not self.debug_mode:
+            body.append(f"{yellow}missed notes: {missed_down}{_ANSI_RESET}")
         backend = (
             f"{red}stuck keys: {view.backend.stuck_keys}{_ANSI_RESET}"
             if not view.backend.healthy
@@ -747,7 +763,9 @@ class PlaybackCard(Static):
         elif self.debug_mode:
             status_line = (
                 f"backend {backend}  ·  late >2ms:{view.timing.late_2ms}  >5ms:{view.timing.late_5ms}  "
-                f">10ms:{view.timing.late_10ms}  ·  active keys: {view.backend.active_keys}{dropped_suffix}"
+                f">10ms:{view.timing.late_10ms}  ·  active keys: {view.backend.active_keys}{dropped_suffix}  ·  "
+                f"missed:{missed_down} · hard:{snap.missed_hard_late_boundaries if snap is not None else 0} · "
+                f"late-ok:{snap.late_authorized_boundaries if snap is not None else 0}"
             )
         else:
             status_line = (
@@ -852,61 +870,6 @@ class PlaybackApp(App[str]):
 
         self.run_engine()
         self.set_interval(0.1, self._poll)
-        # Silent update check — never interrupts playback. It persists only
-        # throttle/error state and the available version so the picker can
-        # restore the full update banner on next launch.
-        self._check_for_updates_silent(user_cfg)
-
-    @work(thread=True)
-    def _check_for_updates_silent(self, cfg: Any) -> None:
-        """Background check that toasts a notice if a newer version exists.
-
-        No modal and no automatic install: playback only persists check timestamps and
-        the available version marker. The picker restores the full banner on
-        the next launch.
-        """
-        try:
-            # Honors --no-update consistently with the picker worker.
-            import main as main_mod
-            from sky_music.orchestration.update_service import (
-                check_for_update,
-                record_check_error,
-                record_successful_check,
-                should_auto_check,
-            )
-            if getattr(main_mod.RUNTIME_STATE, "update_disabled", False):
-                return
-            if not should_auto_check(cfg):
-                return
-            from sky_music import __version__ as VERSION
-            result = check_for_update(cfg, current_version=VERSION)
-            if result.error is None:
-                record_successful_check(cfg)
-            else:
-                # Schedule a short-backoff retry via the new gate; playback
-                # never surfaces update errors to the user (silent path).
-                record_check_error(cfg)
-                return
-            if result.update is not None:
-                # Guard against the dev sentinel — never persist a pending
-                # marker based on a runtime that was never properly installed,
-                # which would otherwise flag every release as a newer update.
-                from sky_music.domain.update_checker import is_newer
-                if not is_newer(result.update.latest_version, VERSION):
-                    return
-                from sky_music.config import persist_update_last_notified
-                persist_update_last_notified(cfg, result.update.latest_version)
-                self.call_from_thread(
-                    self.notify,
-                    f"Update v{result.update.latest_version} available — "
-                    "open the picker to install.",
-                    severity="information",
-                    timeout=6,
-                )
-        except Exception:
-            # Best-effort — never propagate update-check failures into the
-            # playback event loop.
-            return
 
     @work(thread=True, exclusive=True)
     def run_engine(self) -> None:
@@ -995,6 +958,8 @@ class PlaybackApp(App[str]):
             f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
             for notice in notice_state.notices
         ]
+        if snap.missed_down_boundaries > 0:
+            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
             warn_widget.styles.display = "block"
@@ -1187,6 +1152,8 @@ class PlaybackScreen(Screen[str]):
             f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
             for notice in notice_state.notices
         ]
+        if snap.missed_down_boundaries > 0 and not self.debug_mode:
+            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")
         if self.violations:
             warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
 
@@ -1215,7 +1182,9 @@ class PlaybackScreen(Screen[str]):
             max_ms = stats.max_lateness_us / 1000.0
             lateness_str = (
                 f"late >2ms:{stats.late_2ms} >5ms:{stats.late_5ms} >10ms:{stats.late_10ms} · "
-                f"max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · p95 {stats.p95_ms:.1f}ms · σ(onset) {stats.sigma_onset_ms:.1f}ms"
+                f"max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · p95 {stats.p95_ms:.1f}ms · "
+                f"σ(onset) {stats.sigma_onset_ms:.1f}ms · missed:{snap.missed_down_boundaries} · "
+                f"hard:{snap.missed_hard_late_boundaries} · late-ok:{snap.late_authorized_boundaries}"
             )
             self.query_one("#debug-lateness", Static).update(lateness_str)
             

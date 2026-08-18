@@ -1,10 +1,10 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
 use super::super::{
-    BackendConfig, CoordinatorError, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PAUSED_POLL_US,
-    PlaybackClockState, QpcClock, QpcError, QpcTicks, RuntimeDispatchCoordinator, SharedMetrics,
-    TelemetryCollector, TrackedKeyState, WaitOptions, current_process_cpu_time_us,
-    current_thread_cpu_time_us, qpc_frequency_checked,
+    BackendConfig, CoordinatorError, DurationTicks, PAUSED_POLL_US, PlaybackClockState, QpcClock,
+    QpcError, QpcTicks, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
+    TrackedKeyState, WaitOptions, current_process_cpu_time_us, current_thread_cpu_time_us,
+    qpc_frequency_checked,
 };
 use super::admission::focus_matches_hwnd;
 use super::{
@@ -154,17 +154,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let hard_late_abort_threshold_ticks =
-        match qpc_clock.duration_from_us(HARD_LATE_ABORT_THRESHOLD_US) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("hard late-abort threshold conversion failed: {error:?}"),
-                );
-            }
-        };
+    let down_late_grace_ticks = match qpc_clock.duration_from_us(config.timing.down_late_grace_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("down late-grace conversion failed: {error:?}"),
+            );
+        }
+    };
     let strict_down_completion_late_ticks =
         match qpc_clock.duration_from_us(config.timing.strict_down_completion_late_us) {
             Ok(ticks) => ticks,
@@ -369,7 +368,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let start_process_cpu_us = current_process_cpu_time_us();
     core.timing = Some(WorkerTimingState {
         strict_timing: config.timing.strict_timing,
-        hard_late_abort_threshold_ticks,
+        down_late_grace_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
         admission_guard_ticks,

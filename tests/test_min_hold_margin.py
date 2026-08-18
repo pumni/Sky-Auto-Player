@@ -23,3 +23,14 @@ def test_zero_margin_is_valid_for_one_frame() -> None:
     policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=0)
 
     assert policy.hold_us == policy.min_hold_us == policy.frame_us
+
+
+def test_hold_margin_is_also_the_authorized_down_lateness_budget() -> None:
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=500)
+    authored_down = 100_000
+    authored_up = authored_down + policy.min_hold_us
+    latest_allowed_down = authored_down + policy.min_hold_margin_us
+
+    assert policy.min_hold_us == 17_167
+    assert authored_up - latest_allowed_down == 16_667
+    assert authored_up - latest_allowed_down == policy.min_hold_us - policy.min_hold_margin_us

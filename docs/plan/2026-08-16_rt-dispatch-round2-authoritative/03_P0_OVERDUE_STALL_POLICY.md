@@ -59,8 +59,9 @@ never become active, and their later authored Ups become stale/no-op.
 
 ## 4. Hard-late sender cutoff
 
-The trusted sender keeps the fixed 20 ms Down hard-late cutoff and the
-authoritative pre-call QPC check. If an authorized Down crosses that cutoff,
+The trusted sender keeps the authoritative pre-call QPC check and uses the
+session-fixed `down_late_grace_us` supplied from authored
+`min_hold_margin_us`. If an authorized Down crosses that cutoff,
 `SendInput` is not called. In Production after startup, the typed result follows
 the same missed-Down recovery path. StrictTimingDiagnostic may record the
 evidence and remain terminal for qualification.
@@ -102,7 +103,7 @@ The deterministic matrix must cover:
 9. failed/partial recovery Up as terminal cleanup;
 10. later Up for a dropped Down as stale/no-op;
 11. authorized small lateness still sendable;
-12. trusted pre-call beyond 20 ms with zero Down syscall and Production recovery;
+12. trusted pre-call beyond the session grace with zero Down syscall and Production recovery;
 13. first musical Down hard miss as startup-terminal;
 14. mid-song hard miss as nonterminal;
 15. focus/manual pause invalidation;

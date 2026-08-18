@@ -53,6 +53,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for StrictU64 {
 struct NativeSessionConfigPy {
     game_fps: u16,
     min_hold_us: u64,
+    down_late_grace_us: u64,
     require_focus: bool,
     focus_restore_grace_us: u64,
     target_hwnd: isize,
@@ -65,6 +66,7 @@ impl Default for NativeSessionConfigPy {
         Self {
             game_fps: 60,
             min_hold_us: 50_000,
+            down_late_grace_us: 0,
             require_focus: false,
             focus_restore_grace_us: 100_000,
             target_hwnd: 0,
@@ -80,6 +82,7 @@ impl NativeSessionConfigPy {
     #[pyo3(signature = (
         game_fps,
         min_hold_us = StrictU64(50000),
+        down_late_grace_us = StrictU64(0),
         require_focus = false,
         focus_restore_grace_us = StrictU64(100000),
         target_hwnd = StrictU64(0),
@@ -90,6 +93,7 @@ impl NativeSessionConfigPy {
     fn new(
         game_fps: StrictU64,
         min_hold_us: StrictU64,
+        down_late_grace_us: StrictU64,
         require_focus: bool,
         focus_restore_grace_us: StrictU64,
         target_hwnd: StrictU64,
@@ -110,6 +114,11 @@ impl NativeSessionConfigPy {
                 "min_hold_us must be at most 60000000",
             ));
         }
+        if down_late_grace_us.0 > min_hold_us.0 {
+            return Err(PyValueError::new_err(
+                "down_late_grace_us must not exceed min_hold_us",
+            ));
+        }
         if focus_restore_grace_us.0 > 60_000_000 {
             return Err(PyValueError::new_err(
                 "focus_restore_grace_us must be at most 60000000",
@@ -123,6 +132,7 @@ impl NativeSessionConfigPy {
         Ok(Self {
             game_fps,
             min_hold_us: min_hold_us.0,
+            down_late_grace_us: down_late_grace_us.0,
             require_focus,
             focus_restore_grace_us: focus_restore_grace_us.0,
             target_hwnd,
@@ -139,6 +149,11 @@ impl NativeSessionConfigPy {
     #[getter]
     fn min_hold_us(&self) -> u64 {
         self.min_hold_us
+    }
+
+    #[getter]
+    fn down_late_grace_us(&self) -> u64 {
+        self.down_late_grace_us
     }
 
     #[getter]

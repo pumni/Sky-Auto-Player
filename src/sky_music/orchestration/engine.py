@@ -82,6 +82,7 @@ class PlaybackEngine:
         if not 15 <= self.game_fps <= 240:
             raise ValueError("game_fps must be in 15..=240")
         self.min_hold_us = max(0, int(min_hold_us))
+        self.min_hold_margin_us = min_hold_margin_us
         self.hold_label = hold_label
         self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
@@ -128,6 +129,7 @@ class PlaybackEngine:
             song_name=self.song.name,
             game_fps=self.game_fps,
             min_hold_us=self.min_hold_us,
+            down_late_grace_us=self.min_hold_margin_us,
             require_focus=self.require_focus,
             focus_restore_grace_us=self.focus_restore_grace_us,
             pre_roll_us=self.pre_roll_us,

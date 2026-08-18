@@ -70,6 +70,10 @@ class NativeProgressSnapshotProtocol(Protocol):
     elapsed_us: int
     total_us: int
     pre_roll_remaining_us: int
+    missed_down_boundaries: int
+    missed_down_keys: int
+    missed_hard_late_boundaries: int
+    late_authorized_boundaries: int
     max_completion_error_us: int
     late_2ms: int
     late_5ms: int
@@ -131,6 +135,7 @@ class RustDispatchRuntime:
         song_name: str,
         game_fps: int,
         min_hold_us: int,
+        down_late_grace_us: int,
         require_focus: bool,
         focus_guard: Any,
         controls: Any,
@@ -145,6 +150,10 @@ class RustDispatchRuntime:
 
         if require_focus and (type(target_hwnd) is not int or target_hwnd <= 0):
             raise ValueError("target_hwnd must be the validated positive HWND when focus is required")
+        if type(down_late_grace_us) is not int or down_late_grace_us < 0:
+            raise ValueError("down_late_grace_us must be a non-negative integer")
+        if down_late_grace_us > min_hold_us:
+            raise ValueError("down_late_grace_us must not exceed min_hold_us")
 
         native_actions = (
             (
@@ -162,6 +171,7 @@ class RustDispatchRuntime:
             config=session_config_type(
                 game_fps=int(game_fps),
                 min_hold_us=min_hold_us,
+                down_late_grace_us=down_late_grace_us,
                 require_focus=require_focus,
                 focus_restore_grace_us=focus_restore_grace_us,
                 target_hwnd=target_hwnd or 0,
@@ -416,6 +426,10 @@ class RustDispatchRuntime:
                         self._song_name,
                         status=status,
                         pre_roll_remaining_us=int(live.pre_roll_remaining_us),
+                        missed_down_boundaries=int(live.missed_down_boundaries),
+                        missed_down_keys=int(live.missed_down_keys),
+                        missed_hard_late_boundaries=int(live.missed_hard_late_boundaries),
+                        late_authorized_boundaries=int(live.late_authorized_boundaries),
                         input_path_degraded=live.input_path_degraded,
                         sendinput_path_degraded=live.sendinput_path_degraded,
                         core_post_send_degraded=live.core_post_send_degraded,

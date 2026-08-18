@@ -271,7 +271,7 @@ pub(super) struct WorkerErrorState {
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
-    pub(super) hard_late_abort_threshold_ticks: DurationTicks,
+    pub(super) down_late_grace_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) admission_guard_ticks: DurationTicks,
@@ -290,7 +290,7 @@ impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
             strict_timing: false,
-            hard_late_abort_threshold_ticks: DurationTicks::ZERO,
+            down_late_grace_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             admission_guard_ticks: DurationTicks::ZERO,

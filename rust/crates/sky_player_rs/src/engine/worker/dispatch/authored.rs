@@ -1,7 +1,6 @@
 use super::super::super::{
-    ActionKind, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, PlaybackClockState, QpcClock,
-    QpcTicks, RuntimeDispatchCoordinator, TRACE_KIND_DOWN, TRACE_KIND_UP, TimelineTicks,
-    TrackedKeyState,
+    ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
+    TRACE_KIND_DOWN, TRACE_KIND_UP, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
@@ -251,7 +250,7 @@ pub(crate) enum AdmissionOutcome {
     ControlRejected,
 }
 
-/// Pre-send admission gate: focus, preflight, hard-late abort, conflict
+/// Pre-send admission gate: focus, preflight, Down late-grace cutoff, conflict
 /// detection, and final down-admission.  The unfocused path commits pause
 /// state and enqueues fixed observation evidence; the observer materializes
 /// telemetry and publication.  Does not call `SendInput`.
@@ -346,11 +345,10 @@ fn admit_authored_down(
         && config.timing.strict_timing
         && effective_now_ticks
             .checked_duration_since(view.authored_batch_scheduled_ticks)
-            .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
+            .is_ok_and(|late| late > timing.down_late_grace_ticks)
     {
         return Err(DispatchStep::Terminate(format!(
-            "authored Down exceeded hard lateness safety threshold of {}us",
-            HARD_LATE_ABORT_THRESHOLD_US
+            "authored Down exceeded the session down late-grace window",
         )));
     }
     if has_conflicts {
@@ -610,10 +608,10 @@ fn record_down_send_outcome(
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
     let latest_allowed_down_qpc = if packet.down_mask != 0 {
-        match physical_target_qpc.checked_add_duration(timing.hard_late_abort_threshold_ticks) {
+        match physical_target_qpc.checked_add_duration(timing.down_late_grace_ticks) {
             Ok(latest) => Some(latest),
             Err(_) => {
-                return DispatchStep::TerminateStatic("down_hard_late_abort_boundary_overflow");
+                return DispatchStep::TerminateStatic("down_late_grace_boundary_overflow");
             }
         }
     } else {

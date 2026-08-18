@@ -12,6 +12,7 @@ from sky_music.ui.textual_app.playback_app import (
     PlaybackApp,
     PlaybackCard,
     PlaybackCommandBridge,
+    PlaybackSnapshot,
     SnapshotRenderer,
 )
 
@@ -72,6 +73,22 @@ def test_snapshot_renderer_unit() -> None:
     assert snap.wait_clock_failures == 1
     assert snap.recovered_zero_progress_but_late == 3
     assert snap.recovered_partial_up_retries == 4
+
+    renderer.render(
+        current=0.0,
+        total=10.0,
+        song_name="My Song",
+        missed_down_boundaries=3,
+        missed_down_keys=3,
+        missed_hard_late_boundaries=2,
+        late_authorized_boundaries=4,
+    )
+    snap = renderer.get_snapshot()
+    assert snap is not None
+    assert snap.missed_down_boundaries == 3
+    assert snap.missed_down_keys == 3
+    assert snap.missed_hard_late_boundaries == 2
+    assert snap.late_authorized_boundaries == 4
 
     renderer.render(
         current=0.0,
@@ -243,6 +260,29 @@ def test_playback_card_unmount_requests_quit_when_playing() -> None:
     card.on_unmount()
 
     assert bridge.poll() == "quit"
+
+
+def test_playback_hud_surfaces_missed_notes_without_backend_error() -> None:
+    card = PlaybackCard(theme_name="aurora")
+    card._mode = "playing"
+    card._snapshot = PlaybackSnapshot(
+        current=0.0,
+        total=1.0,
+        song_name="Test Song",
+        missed_down_boundaries=3,
+        missed_hard_late_boundaries=2,
+        late_authorized_boundaries=4,
+    )
+
+    normal = "\n".join(card._playing_body(80))
+    assert "missed notes: 3" in normal
+    assert "backend error" not in normal
+
+    card.debug_mode = True
+    debug = "\n".join(card._playing_body(80))
+    assert "missed:3" in debug
+    assert "hard:2" in debug
+    assert "late-ok:4" in debug
 
 
 def test_unified_cancel_while_playing_requests_engine_quit() -> None:
@@ -2022,51 +2062,65 @@ def test_debug_stats_throttled(monkeypatch) -> None:
     assert stats_calls == 1 # Only called once due to 0.5s throttle
 
 
-def test_silent_update_persists_version_for_picker_handoff(monkeypatch) -> None:
+def test_playback_app_mount_does_not_start_update_check(monkeypatch) -> None:
     from types import SimpleNamespace
 
-    import main as main_module
-    from sky_music.config import AppConfig
-    from sky_music.domain.update_checker import UpdateCheckResult, UpdateInfo
-    from sky_music.orchestration import update_service
     from sky_music.ui.textual_app import playback_app as playback_module
 
-    cfg = AppConfig()
-    result = UpdateCheckResult(
-        update=UpdateInfo(
-            latest_version="9.9.9",
-            download_url="",
-            release_notes="",
-            html_url="",
-            published_at="",
-        ),
-        current_version="2.4.4",
+    events: list[str] = []
+    warning = SimpleNamespace(styles=SimpleNamespace(display=None))
+    fake_app = SimpleNamespace(
+        theme_name="aurora",
+        screen=SimpleNamespace(add_class=lambda _name: None),
+        query_one=lambda *_args: warning,
+        run_engine=lambda: events.append("engine"),
+        _poll=lambda: None,
+        set_interval=lambda *_args: events.append("poll"),
     )
-    persisted: list[str] = []
-    notifications: list[str] = []
+    monkeypatch.setattr(
+        playback_module,
+        "load_config",
+        lambda: SimpleNamespace(ui_background_mode="transparent"),
+    )
 
+    playback_module.PlaybackApp.on_mount(fake_app)  # type: ignore[arg-type]
+
+    assert events == ["engine", "poll"]
+
+
+def test_unified_update_worker_only_checks_picker_unless_forced(monkeypatch) -> None:
+    import main as main_module
+    from sky_music.config import AppConfig
+    from sky_music.domain.update_checker import UpdateCheckResult
+    from sky_music.orchestration import update_service
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.app_state import PlaybackMode
+
+    app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig())
+    app.call_from_thread = lambda *_args, **_kwargs: None
+    calls: list[str] = []
     monkeypatch.setattr(main_module.RUNTIME_STATE, "update_disabled", False)
     monkeypatch.setattr(update_service, "should_auto_check", lambda _cfg: True)
     monkeypatch.setattr(
         update_service,
         "check_for_update",
-        lambda _cfg, *, current_version: result,
+        lambda _cfg, *, current_version: calls.append(current_version)
+        or UpdateCheckResult(update=None, current_version=current_version),
     )
     monkeypatch.setattr(update_service, "record_successful_check", lambda _cfg: None)
-    monkeypatch.setattr(
-        "sky_music.config.persist_update_last_notified",
-        lambda _cfg, version: persisted.append(version),
-    )
 
-    fake_app = SimpleNamespace(
-        notify=lambda message, **_kwargs: notifications.append(message),
-        call_from_thread=lambda callback, *args, **kwargs: callback(*args, **kwargs),
-    )
-    worker = cast(Any, playback_module.PlaybackApp._check_for_updates_silent).__wrapped__
-    worker(fake_app, cfg)
+    worker = cast(Any, SkyPickerApp.check_for_updates_worker).__wrapped__
+    app.playback_mode = PlaybackMode.PLAYING
+    worker(app, False)
+    assert calls == []
 
-    assert persisted == ["9.9.9"]
-    assert notifications and "9.9.9" in notifications[0]
+    app.playback_mode = PlaybackMode.PICKER
+    worker(app, False)
+    assert len(calls) == 1
+
+    app.playback_mode = PlaybackMode.PLAYING
+    worker(app, True)
+    assert len(calls) == 2
 
 
 def test_restore_pending_update_ignores_stale_older_version(monkeypatch) -> None:

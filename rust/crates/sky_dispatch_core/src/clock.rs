@@ -90,13 +90,6 @@ impl PlaybackClockState {
         Ok(())
     }
 
-    pub fn rebase_epoch(&mut self, now: QpcTicks) -> Result<DurationTicks, TimeArithmeticError> {
-        let old_start = self.start_perf;
-        self.start_perf = now;
-        self.epoch = self.start_perf.checked_add_duration(self.pause_time)?;
-        now.checked_duration_since(old_start)
-    }
-
     pub fn get_elapsed(&self, now: QpcTicks) -> Result<TimelineTicks, TimeArithmeticError> {
         if let Some(started) = self.pause_interval_started {
             Ok(TimelineTicks::from_raw(

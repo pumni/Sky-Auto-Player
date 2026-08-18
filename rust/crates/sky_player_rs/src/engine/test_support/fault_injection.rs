@@ -30,7 +30,7 @@ pub enum InjectedSendOutcome {
     /// Return a complete send receipt but fail the post-send QPC boundary.
     QpcFailureAfterSend,
     /// Trusted sender rejects the Down before calling SendInput because the
-    /// authoritative pre-call QPC is beyond the hard-late cutoff.
+    /// authoritative pre-call QPC is beyond the session Down late-grace cutoff.
     DeadlineMissedBeforeSend,
 }
 

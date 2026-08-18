@@ -40,6 +40,7 @@ fn test_session_options(
         profile: DispatchProfile::StrictTimingDiagnostic,
         timing: TimingOptions {
             min_hold_us: 0,
+            down_late_grace_us: 500,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
@@ -3349,6 +3350,101 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     let hard_late = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
     assert!(matches!(hard_late, super::worker::DispatchStep::Dispatched));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+}
+
+#[test]
+fn authorized_down_first_tick_beyond_grace_misses_without_down_syscall() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let calls = harness.configure_send_counter();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        super::worker::DispatchStep::NoWork
+    ));
+    let one_tick_beyond_grace = harness
+        .timing
+        .down_late_grace_ticks
+        .checked_add(DurationTicks::from_raw(1))
+        .expect("QPC cutoff arithmetic");
+
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_at_lateness_for_test(&future, one_tick_beyond_grace),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_down_boundaries, 1);
+}
+
+#[test]
+fn five_millisecond_authorized_down_lateness_is_not_a_twenty_millisecond_window() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let calls = harness.configure_send_counter();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        super::worker::DispatchStep::NoWork
+    ));
+    let five_ms = harness
+        .resources
+        .clock
+        .duration_from_us(5_000)
+        .expect("QPC lateness conversion");
+
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_at_lateness_for_test(&future, five_ms),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+}
+
+#[test]
+fn hard_late_mixed_packet_sends_safety_up_without_down() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::PhysicalPacket;
+
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_packet_capture();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        super::worker::DispatchStep::NoWork
+    ));
+    let lateness = harness
+        .timing
+        .down_late_grace_ticks
+        .checked_add(DurationTicks::from_raw(1))
+        .expect("QPC cutoff arithmetic");
+
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_at_lateness_for_test(&future, lateness),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *packets.lock().expect("packet capture lock"),
+        vec![PhysicalPacket::new(0, 0b001), PhysicalPacket::new(0b001, 0)]
+    );
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
 }
 

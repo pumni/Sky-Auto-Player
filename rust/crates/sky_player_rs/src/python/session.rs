@@ -17,6 +17,7 @@ struct EffectiveSessionConfig {
     game_fps: u16,
     requested_min_hold_us: u64,
     effective_min_hold_us: u64,
+    down_late_grace_us: u64,
     require_focus: bool,
     focus_restore_grace_us: u64,
     telemetry_mode: &'static str,
@@ -29,6 +30,7 @@ impl EffectiveSessionConfig {
         dict.set_item("game_fps", self.game_fps)?;
         dict.set_item("requested_min_hold_us", self.requested_min_hold_us)?;
         dict.set_item("effective_min_hold_us", self.effective_min_hold_us)?;
+        dict.set_item("down_late_grace_us", self.down_late_grace_us)?;
         dict.set_item("require_focus", self.require_focus)?;
         dict.set_item("focus_restore_grace_us", self.focus_restore_grace_us)?;
         dict.set_item("telemetry_mode", self.telemetry_mode)?;
@@ -46,6 +48,7 @@ impl NativeDispatchSessionPy {
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
+        let down_late_grace_us = config.down_late_grace_us;
         // Python materializes the authored hold (frame duration plus the
         // calibrated static margin). Rust receives that value verbatim and
         // only validates it in the QPC tick domain.
@@ -79,6 +82,7 @@ impl NativeDispatchSessionPy {
             profile: parsed_profile,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
+                down_late_grace_us,
                 strict_timing,
                 strict_down_completion_late_us,
                 strict_up_completion_late_us,
@@ -116,6 +120,7 @@ impl NativeDispatchSessionPy {
                 game_fps,
                 requested_min_hold_us: min_hold_us,
                 effective_min_hold_us,
+                down_late_grace_us,
                 require_focus,
                 focus_restore_grace_us,
                 telemetry_mode: if config.telemetry { "ring" } else { "off" },
@@ -596,6 +601,7 @@ impl TestDispatchSessionPy {
             profile: DispatchProfile::MockTest,
             timing: TimingOptions {
                 min_hold_us: effective_min_hold_us,
+                down_late_grace_us: 0,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,

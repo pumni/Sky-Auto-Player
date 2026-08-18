@@ -17,10 +17,11 @@ microsecond conversions.
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
 | `final_proof_qpc` | QPC sample after final target/focus/control proof and before the final spin. It authorizes the frozen plan but is not a syscall-entry timestamp. |
-| `pre_call_qpc` | Authoritative QPC sample taken inside the trusted prepared sender after payload resolution; only the Down hard-late cutoff comparison may follow it before `SendInput`. |
+| `pre_call_qpc` | Authoritative QPC sample taken inside the trusted prepared sender after payload resolution; only the Down late-grace cutoff comparison may follow it before `SendInput`. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
+| `down_late_grace` | The session-fixed hold margin reused as the maximum authorized Down lateness. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -50,6 +51,29 @@ the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
 
+`min_hold_margin_us` serves two related purposes:
+
+1. it is already included once in the authored effective minimum hold;
+2. the same fixed session value bounds how late an authorized Down may enter
+   `SendInput` without being classified as a missed boundary.
+
+It is never added to the authored target, never used as dispatch lead, and
+never adapted during playback. The native worker materializes it once as
+`down_late_grace_ticks` at admission. For the tightest valid authored hold:
+
+```text
+authored_up - authored_down = effective_min_hold
+actual_down_pre_call <= authored_down + down_late_grace
+
+therefore:
+authored_up - actual_down_pre_call
+    >= effective_min_hold - down_late_grace
+```
+
+Production supplies `down_late_grace_us` from `min_hold_margin_us`. Equality
+at the cutoff is permitted; a pre-call QPC one tick beyond it makes zero Down
+`SendInput` syscalls and follows the existing missed-Down recovery path.
+
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
 that share one authored timestamp. Runtime completion lateness is evidence for
@@ -57,7 +81,7 @@ sender-side telemetry and ownership accounting only. Runtime deadline/overdue
 policy never invents a completion-relative hold deadline, moves an authored
 timestamp, or emits a catch-up burst. Before the first successful musical Down
 commit, a missed Down remains a startup failure. After startup, an unapproved
-or hard-late musical Down is recorded and committed as missed; the worker
+or late-grace-exceeding musical Down is recorded and committed as missed; the worker
 continues with the next authored boundary while required safety Ups are still
 released.
 
@@ -125,9 +149,9 @@ by a changed plan/target, pause or focus rebase, or completion of the stamped
 boundary.
 
 An overdue Down without that exact authorization is a missed musical boundary:
-Production sends no Down and commits the authored frame as missed. A hard-late
-authorized Down follows the same recovery path after the trusted sender's
-authoritative pre-call cutoff rejects the syscall. Strict timing diagnostics
+Production sends no Down and commits the authored frame as missed. A
+HardLate-authorized Down follows the same recovery path after the trusted
+sender's authoritative pre-call late-grace cutoff rejects the syscall. Strict timing diagnostics
 may keep these misses terminal for qualification. Up-only safety release is
 not part of the musical backlog rule and is sent even when its authored target
 is late. Thus no overdue Down burst is emitted, but ordinary jitter does not
@@ -142,11 +166,11 @@ The final physical path is ordered and fail-closed:
 2. Take the final target/focus/control proof QPC `final_proof_qpc`.
 3. Evaluate the lease using that proof sample.
 4. Spin to the authored physical target. The final spin rejects a Down-bearing
-   packet that is already beyond its hard-late cutoff; Up-only safety release
+   packet that is already beyond its session down-late grace cutoff; Up-only safety release
    remains exempt. In started Production, that typed Down miss is committed
    without a Down syscall instead of being retried or made fatal.
 5. Enter the trusted prepared sender and take the authoritative `pre_call_qpc`
-   after payload pointer/length resolution. Recheck the same Down cutoff
+   after payload pointer/length resolution. Recheck the same Down late-grace cutoff
    against that exact sample so a preemption between the outer spin and the
    syscall cannot late-send a Down. No second QPC sample or control work is
    inserted between this check and `SendInput`.
@@ -178,14 +202,15 @@ is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
-The final spin loop performs only the QPC target/cutoff comparison and
+The final spin loop performs only the QPC target/down-late-grace comparison and
 `spin_loop`; it does not poll interrupt generation, lease state, focus, or
 commands. Those invalidation decisions happen before the final proof and
-precision stage. The hard late cutoff is checked in the same bounded QPC loop
+precision stage. The session down-late grace cutoff is checked in the same bounded QPC loop
 for Down-bearing packets; Up-only safety release remains exempt. The trusted
 sender repeats only that cutoff predicate against its authoritative
 `pre_call_qpc`, closing the preemption window without adding another clock
-sample or adaptive controller.
+sample or adaptive controller. The trusted sender uses the same materialized
+session margin; it does not re-read microseconds or compute a new threshold.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter

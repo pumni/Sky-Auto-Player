@@ -422,10 +422,9 @@ def save_config(cfg: AppConfig) -> None:
     keys → write file → swap into place → update in-memory cache) is wrapped
     in ``_runtime_cfg_lock`` AND uses an atomic ``os.replace`` swap. Two
     writers racing would otherwise interleave mid-stream and corrupt
-    config.json — a real scenario once the picker's launch-time update worker
-    (``app.py::check_for_updates_worker``) and the playback-screen silent
-    check (``playback_app.py::_check_for_updates_silent``) both call
-    ``record_successful_check`` concurrently.
+    config.json — the picker launch-time update worker
+    (``app.py::check_for_updates_worker``) is the sole automatic caller of
+    ``record_successful_check``.
     """
     global _runtime_cfg
     with _runtime_cfg_lock:

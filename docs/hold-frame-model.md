@@ -21,7 +21,11 @@ falls back to the unchanged `500 µs` default.
 The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. PyO3 does not add another frame-relative floor;
 Rust only range-checks and validates this value in QPC ticks. It does not learn
-or subtract SendInput cost.
+or subtract SendInput cost. The same session-fixed `min_hold_margin_us` is
+forwarded as `down_late_grace_us` and converted once to QPC ticks. It bounds
+authorized Down lateness at the final sender cutoff; it is never added to an
+authored target or adapted during playback. Equality at the cutoff is allowed;
+the first QPC tick beyond it is a missed Down. Up-only releases remain exempt.
 
 At 60 FPS with the default margin:
 

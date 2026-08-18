@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -38,6 +39,10 @@ def _live(status: str, *, finished: bool, paused: bool = False) -> SimpleNamespa
         elapsed_us=0,
         total_us=1,
         pre_roll_remaining_us=0,
+        missed_down_boundaries=0,
+        missed_down_keys=0,
+        missed_hard_late_boundaries=0,
+        late_authorized_boundaries=0,
         max_completion_error_us=0,
         late_2ms=0,
         late_5ms=0,
@@ -238,6 +243,74 @@ def test_runtime_arms_native_before_preroll_reaches_zero() -> None:
     assert outcome == PlaybackOutcome.FINISHED
     assert session.arm_pre_roll_us == [3_000_000]
     assert runtime._has_played is True
+
+
+def test_runtime_forwards_explicit_down_late_grace_to_native_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeSessionConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    class FakeDispatchSession:
+        def __init__(self, _actions: Any, *, config: Any) -> None:
+            captured["config"] = config
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sky_player_rs",
+        SimpleNamespace(SessionConfig=FakeSessionConfig, DispatchSession=FakeDispatchSession),
+    )
+
+    RustDispatchRuntime(
+        actions=(),
+        song_name="test",
+        game_fps=60,
+        min_hold_us=17_167,
+        down_late_grace_us=500,
+        require_focus=False,
+        focus_guard=SimpleNamespace(),
+        controls=None,
+        renderer=None,
+        poll_s=0.01,
+    )
+
+    assert captured["down_late_grace_us"] == 500
+
+
+def test_playback_engine_forwards_hold_margin_without_deriving_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sky_music.domain import Song
+    from sky_music.domain.domain import Microseconds, ScanCode
+    from sky_music.domain.scheduler_types import ActionKind, KeyAction
+    from sky_music.orchestration import engine as engine_module
+
+    captured: dict[str, Any] = {}
+
+    class FakeRuntime:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def run(self) -> tuple[str, dict[str, Any], dict[str, Any]]:
+            return engine_module.PLAYBACK_FINISHED, {}, {}
+
+    monkeypatch.setattr(engine_module, "RustDispatchRuntime", FakeRuntime)
+    monkeypatch.setattr(engine_module.PlaybackEngine, "_ingest_native_report", lambda *_args: None)
+    engine = engine_module.PlaybackEngine(
+        song=Song(name="test", notes=()),
+        actions=(
+            KeyAction(
+                kind=ActionKind.DOWN,
+                scan_codes=(ScanCode(1),),
+                at_us=Microseconds(0),
+            ),
+        ),
+        require_focus=False,
+        min_hold_us=17_167,
+        min_hold_margin_us=500,
+    )
+
+    assert engine._play_native() == engine_module.PLAYBACK_FINISHED
+    assert captured["down_late_grace_us"] == 500
 
 
 def test_runtime_does_not_focus_before_native_worker(

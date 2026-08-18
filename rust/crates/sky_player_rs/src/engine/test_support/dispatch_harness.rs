@@ -625,9 +625,9 @@ impl ProductionDispatchTestHarness {
         timing.admission_guard_ticks = qpc_clock
             .duration_from_us(DEFAULT_ADMISSION_GUARD_US)
             .expect("test admission guard conversion");
-        timing.hard_late_abort_threshold_ticks = qpc_clock
-            .duration_from_us(20_000)
-            .expect("test hard-late cutoff conversion");
+        timing.down_late_grace_ticks = qpc_clock
+            .duration_from_us(500)
+            .expect("test down late-grace conversion");
         timing.effective_spin_threshold_ticks = qpc_clock
             .duration_from_us(20_000)
             .expect("test spin threshold conversion");
@@ -1164,18 +1164,34 @@ impl ProductionDispatchTestHarness {
     }
 
     /// Inject an authorized boundary whose trusted pre-call sample is beyond
-    /// the fixed Down hard-late cutoff. The sender must make zero Down calls;
+    /// the session Down late-grace cutoff. The sender must make zero Down calls;
     /// Production recovery then commits the boundary as missed.
     pub fn dispatch_same_frozen_plan_after_hard_late_for_test(
         &mut self,
         plan: &NextDispatchPlan,
     ) -> DispatchStep {
+        self.dispatch_same_frozen_plan_at_lateness_for_test(
+            plan,
+            self.timing
+                .down_late_grace_ticks
+                .checked_add(DurationTicks::from_raw(1))
+                .expect("hard-late test lateness arithmetic"),
+        )
+    }
+
+    /// Inject an authorized boundary with an exact deterministic pre-call
+    /// lateness measured in QPC ticks. The sender must preserve equality at
+    /// the grace cutoff and reject the first tick beyond it.
+    pub fn dispatch_same_frozen_plan_at_lateness_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        lateness: DurationTicks,
+    ) -> DispatchStep {
         let target = plan
             .physical_target_qpc()
             .expect("hard-late race requires a physical target");
         let overdue_now = target
-            .checked_add_duration(self.timing.hard_late_abort_threshold_ticks)
-            .and_then(|ticks| ticks.checked_add_duration(DurationTicks::from_raw(1)))
+            .checked_add_duration(lateness)
             .expect("hard-late test target arithmetic");
         self.runtime.set_deadline_wait_evidence_for_test(None, None);
         self.dispatch_plan_at(

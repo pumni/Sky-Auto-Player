@@ -185,6 +185,12 @@ deadline/overdue policy handles a late boundary; recovery-only pending
 releases are stored in a fixed `[Option; 15]` per-key table with mask and
 generation ownership. There is no transport retry state.
 
+The session-fixed `down_late_grace_us` is the already-materialized
+`min_hold_margin_us`, converted once to QPC ticks at admission. It bounds
+authorized Down lateness only; it is never dispatch lead and never changes an
+authored target. The trusted sender repeats the same cutoff check immediately
+before `SendInput`, while Up-only safety releases remain exempt.
+
 ## 5. Wait and interrupt ordering
 
 The worker uses a high-resolution waitable timer and event interruption to the
@@ -200,7 +206,7 @@ target, the waiter returns `Deadline`. Final command, target, focus, and lease
 admission remains authoritative after that result and may still reject
 `SendInput`.
 
-The final precision spin performs only its QPC target/cutoff comparison and
+The final precision spin performs only its QPC target/down-late-grace comparison and
 `spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
 are completed before that stage; no interrupt-generation polling or control
 branch is inserted into the final spin. The QPC deadline check remains

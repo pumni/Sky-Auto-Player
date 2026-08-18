@@ -168,10 +168,7 @@ pub(crate) enum SpinSendError {
 }
 
 #[inline]
-fn hard_late_down_abort_reached(
-    now_ticks: QpcTicks,
-    latest_allowed_down_qpc: Option<QpcTicks>,
-) -> bool {
+fn down_late_grace_reached(now_ticks: QpcTicks, latest_allowed_down_qpc: Option<QpcTicks>) -> bool {
     latest_allowed_down_qpc.is_some_and(|latest| now_ticks > latest)
 }
 
@@ -193,7 +190,7 @@ pub(crate) fn spin_and_send_prepared(
         #[cfg(not(any(test, feature = "test-support")))]
         let now_ticks = qpc_clock.now().map_err(SpinSendError::Qpc)?;
         if now_ticks >= physical_target_qpc {
-            if hard_late_down_abort_reached(now_ticks, latest_allowed_down_qpc) {
+            if down_late_grace_reached(now_ticks, latest_allowed_down_qpc) {
                 return Err(SpinSendError::DownHardLateAbort);
             }
             #[cfg(any(test, feature = "test-support"))]
@@ -213,31 +210,5 @@ pub(crate) fn spin_and_send_prepared(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::hard_late_down_abort_reached;
-    use sky_dispatch_win32::clock::QpcTicks;
-
-    #[test]
-    fn hard_late_down_cutoff_allows_exact_boundary() {
-        assert!(!hard_late_down_abort_reached(
-            QpcTicks::from_raw(20_000),
-            Some(QpcTicks::from_raw(20_000))
-        ));
-    }
-
-    #[test]
-    fn hard_late_down_cutoff_rejects_one_tick_after_boundary() {
-        assert!(hard_late_down_abort_reached(
-            QpcTicks::from_raw(20_001),
-            Some(QpcTicks::from_raw(20_000))
-        ));
-    }
-
-    #[test]
-    fn up_only_dispatch_has_no_hard_down_cutoff() {
-        assert!(!hard_late_down_abort_reached(
-            QpcTicks::from_raw(20_001),
-            None
-        ));
-    }
-}
+#[path = "cutoff_tests.rs"]
+mod tests;

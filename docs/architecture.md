@@ -52,7 +52,7 @@ focus, and control proof the worker takes `final_proof_qpc`; the lease is
 evaluated against that sample. It then spins to the authored physical target.
 The trusted Win32 sender takes the authoritative `pre_call_qpc` after the
 prepared payload pointer/length have been resolved. After that sample, a
-Down-bearing packet may perform only the hard-late cutoff comparison before
+Down-bearing packet may perform only the session down-late grace cutoff comparison before
 the single `SendInput` call; Up-only safety release has no Down cutoff. The
 Win32 sender then returns `sendinput_completion_qpc`. Completion is used as
 sender-side ownership/diagnostic evidence only; it is not used for

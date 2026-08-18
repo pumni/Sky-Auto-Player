@@ -1033,6 +1033,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     @work(thread=True)
     def check_for_updates_worker(self, force: bool = False) -> None:
+        if not force and self.playback_mode is not PlaybackMode.PICKER:
+            return
         # ``--no-update`` (RUNTIME_STATE.update_disabled) suppresses the
         # automatic launch check only; the manual ``force`` path from the
         # ``u`` key still works so the user can check on demand.
