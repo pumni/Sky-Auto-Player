@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import inspect
+from io import StringIO
+
+from rich.console import Console
 
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
@@ -88,3 +91,57 @@ def test_hud_retains_schedule_warning_state_for_live_renderer() -> None:
     assert [notice.message for notice in state.persistent_notices] == [
         "schedule repeat warning"
     ]
+
+
+def test_progress_renderer_surfaces_missed_note_counters(monkeypatch) -> None:
+    import sky_music.ui.hud as hud_module
+
+    class FakeLive:
+        def __init__(self, renderable, **_kwargs) -> None:
+            self.renderable = renderable
+
+        def start(self) -> None:
+            return None
+
+        def update(self, renderable) -> None:
+            self.renderable = renderable
+
+        def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(hud_module, "Live", FakeLive)
+
+    normal = ProgressRenderer()
+    normal.render(
+        0.0,
+        1.0,
+        "Test Song",
+        force=True,
+        missed_down_boundaries=3,
+        missed_down_keys=3,
+        missed_hard_late_boundaries=2,
+        late_authorized_boundaries=4,
+    )
+    normal_output = StringIO()
+    assert normal._live is not None
+    Console(file=normal_output, width=120).print(normal._live.renderable)
+    assert "missed notes: 3" in normal_output.getvalue()
+    normal.finish()
+
+    verbose = ProgressRenderer(verbose=True)
+    verbose.render(
+        0.0,
+        1.0,
+        "Test Song",
+        force=True,
+        missed_down_boundaries=3,
+        missed_hard_late_boundaries=2,
+        late_authorized_boundaries=4,
+    )
+    verbose_output = StringIO()
+    assert verbose._live is not None
+    Console(file=verbose_output, width=120).print(verbose._live.renderable)
+    assert "missed:3" in verbose_output.getvalue()
+    assert "hard:2" in verbose_output.getvalue()
+    assert "late-ok:4" in verbose_output.getvalue()
+    verbose.finish()

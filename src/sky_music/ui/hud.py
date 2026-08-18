@@ -172,6 +172,10 @@ class ProgressRenderer:
         song_name: str,
         status: str = "playing",
         pre_roll_remaining_us: int = 0,
+        missed_down_boundaries: int = 0,
+        missed_down_keys: int = 0,
+        missed_hard_late_boundaries: int = 0,
+        late_authorized_boundaries: int = 0,
         force: bool = False,
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
@@ -189,6 +193,7 @@ class ProgressRenderer:
 
         self.last_render_at = now
         self.input_path_degraded = bool(input_path_degraded)
+        self.missed_down_keys = int(missed_down_keys)
 
         if not self.run_id:
             self.run_id = time.strftime("%Y%m%d-%H%M%S")
@@ -354,6 +359,9 @@ class ProgressRenderer:
                 "  >5ms:", str(self.late_5ms),
                 "  >10ms:", str(self.late_10ms),
                 "  ·  active keys: ", str(active_keys),
+                "  ·  missed:", str(missed_down_boundaries),
+                " · hard:", str(missed_hard_late_boundaries),
+                " · late-ok:", str(late_authorized_boundaries),
                 *dropped_parts,
             )
         else:
@@ -393,6 +401,13 @@ class ProgressRenderer:
             )
             for notice in notice_state.notices
         )
+        if not self.verbose and missed_down_boundaries > 0:
+            panel_content.append(
+                Text(
+                    f"missed notes: {missed_down_boundaries}",
+                    style=styles["warning"],
+                )
+            )
 
         # Timing info (verbose)
         if self.verbose and self.active_policy is not None:
