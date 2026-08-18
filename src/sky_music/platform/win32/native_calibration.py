@@ -2,7 +2,7 @@
 
 The native process owns the Raw Input window and emits signed paired evidence.
 This adapter validates the complete result before writing an artifact or the
-version-2 production cache. Diagnostic runs may be saved as reports, never as
+version-3 production cache. Diagnostic runs may be saved as reports, never as
 production cache.
 """
 
@@ -33,10 +33,10 @@ from sky_music.infrastructure.calibration_loader import (
     MIN_CALIBRATION_SAMPLE_COUNT,
     REQUIRED_BUCKETS,
     CalibrationCacheSummary,
-    CalibrationQuantiles,
+    CalibrationStatus,
     PairBucketSummary,
-    _selected_margin,
     parse_calibration_cache_summary,
+    qualify_calibration_margin,
 )
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 9
@@ -69,7 +69,9 @@ NATIVE_RECEIPT_TIMEOUT_MS = 200
 
 @dataclass(frozen=True, slots=True)
 class PublishedCalibrationResult:
-    margin_us: int
+    status: CalibrationStatus
+    margin_us: int | None
+    candidate_margin_us: int
     source: str
     sample_count: int
     cache_path: Path
@@ -80,10 +82,8 @@ class PublishedCalibrationResult:
     worst_bucket: str = ""
     global_shrink_p99_us: int = 0
     guard_us: int = MARGIN_GUARD_US
+    ceiling_us: int = MARGIN_CEILING_US
     effective_min_hold_us: int | None = None
-    # Compatibility diagnostics. They are never used as the margin formula.
-    down_us: CalibrationQuantiles | None = None
-    up_us: CalibrationQuantiles | None = None
 
 
 class NativeCalibrationError(RuntimeError):
@@ -464,7 +464,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v2(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v3(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -482,20 +482,23 @@ def _cache_v2(result: dict[str, Any]) -> dict[str, Any]:
     }
     global_p99 = max(p99_values.values())
     worst_bucket = max(REQUIRED_BUCKETS, key=lambda key: (p99_values[key], -REQUIRED_BUCKETS.index(key)))
-    selected = {
+    qualification_result = qualify_calibration_margin(global_p99)
+    qualification = {
         "basis": "max_required_bucket_p99_positive_pair_hold_shrink",
         "worst_bucket": worst_bucket,
         "global_shrink_p99_us": global_p99,
         "guard_us": MARGIN_GUARD_US,
         "floor_us": MARGIN_FLOOR_US,
         "ceiling_us": MARGIN_CEILING_US,
-        "recommended_margin_us": _selected_margin(global_p99),
+        "candidate_margin_us": qualification_result.candidate_margin_us,
+        "applied_margin_us": qualification_result.applied_margin_us,
     }
     return {
-        "version": 2,
+        "version": 3,
         "source": "device_cache",
+        "status": qualification_result.status.value,
         "evidence_kind": result["evidence_kind"],
-        "source_formula_version": 2,
+        "source_formula_version": 3,
         "native_calibration_version": result["version"],
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
@@ -506,7 +509,7 @@ def _cache_v2(result: dict[str, Any]) -> dict[str, Any]:
         "host_fingerprint": result.get("host_fingerprint"),
         "required_buckets": list(REQUIRED_BUCKETS),
         "pair_buckets": flattened,
-        "selected_margin": selected,
+        "qualification": qualification,
     }
 
 
@@ -989,7 +992,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v2(final)
+    cache = _cache_v3(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1035,7 +1038,7 @@ def run_native_calibration(
     budget = min(MAX_CALIBRATION_BUDGET_SECONDS, max(6, math.floor(timeout)))
     result = _run_process(_find_binary(), budget_seconds=budget, timeout_seconds=timeout, samples=FULL_SAMPLE_COUNT)
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v2(result)
+    cache = _cache_v3(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1055,9 +1058,11 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v2(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v3(result))
     return PublishedCalibrationResult(
+        status=summary.status,
         margin_us=summary.margin_us,
+        candidate_margin_us=summary.candidate_margin_us,
         source=summary.source,
         sample_count=summary.sample_count,
         cache_path=Path(cache_path),
@@ -1068,7 +1073,12 @@ def run_published_native_calibration(
         worst_bucket=summary.worst_bucket,
         global_shrink_p99_us=summary.global_shrink_p99_us,
         guard_us=summary.guard_us,
-        effective_min_hold_us=materialize_hold_us(hold_frames, fps, summary.margin_us),
+        ceiling_us=summary.ceiling_us,
+        effective_min_hold_us=(
+            materialize_hold_us(hold_frames, fps, summary.margin_us)
+            if summary.status is CalibrationStatus.VALID and summary.margin_us is not None
+            else None
+        ),
     )
 
 
@@ -1076,7 +1086,6 @@ __all__ = [
     "CALIBRATION_ARTIFACT_SCHEMA_VERSION",
     "FULL_POLYPHONIES",
     "FULL_SAMPLE_COUNT",
-    "CalibrationQuantiles",
     "NativeCalibrationError",
     "PublishedCalibrationResult",
     "calibration_bucket_keys",

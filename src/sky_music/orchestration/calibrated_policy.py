@@ -6,7 +6,7 @@ calling ``session.resolve_effective_policy(cfg)`` directly.  This guarantees tha
 
 1. The loader is called exactly once per resolution.
 2. The ``min_hold_margin_source`` in the returned policy reflects the actual
-   cache state (``"device_cache"`` or ``"default_500"``).
+   cache state, including unhealthy fallback states.
 3. Console, Textual, and picker-metadata paths all behave identically.
 
 Layer contract (AGENTS.md Architecture Invariants):
@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sky_music.infrastructure.calibration_loader import (
-    load_calibrated_margin_recommendation,
+    load_calibration_resolution,
 )
 
 if TYPE_CHECKING:
@@ -43,10 +43,9 @@ def resolve_calibrated_policy(
     This is the **production entry point** for any code that needs a
     playback policy.  It:
 
-    1. Calls :func:`~sky_music.infrastructure.calibration_loader.load_calibrated_margin_recommendation`
-       to read ``.cache/input_latency.json`` (or fall back to the 500 µs
-       constant if the cache is absent or invalid).
-    2. Forwards ``calibrated_margin_us`` and ``calibrated_margin_source`` into
+    1. Calls :func:`~sky_music.infrastructure.calibration_loader.load_calibration_resolution`
+       to read ``.cache/input_latency.json`` and classify its health.
+    2. Forwards ``hold_margin_us`` and ``hold_margin_source`` into
        :meth:`~sky_music.domain.session_context.PlaybackSessionContext.resolve_effective_policy`
        so the returned policy carries the correct ``min_hold_margin_source``.
 
@@ -60,15 +59,14 @@ def resolve_calibrated_policy(
     Returns
     -------
     FrameTimingPolicy
-        A fully-resolved timing policy whose ``min_hold_margin_us`` reflects
-        the device cache (``device_cache``) or the static fallback
-        (``default_500``).
+        A fully-resolved timing policy whose hold margin reflects the device
+        cache or the explicit fallback source for its health state.
     """
-    margin_us, source = load_calibrated_margin_recommendation()
+    resolution = load_calibration_resolution()
     return session.resolve_effective_policy(
         cfg,
-        calibrated_margin_us=margin_us,
-        calibrated_margin_source=source,
+        hold_margin_us=resolution.resolved_margin_us,
+        hold_margin_source=resolution.margin_source,
     )
 
 

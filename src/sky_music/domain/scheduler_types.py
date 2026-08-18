@@ -14,6 +14,7 @@ from sky_music.domain.hold_timing import (
 
 DEFAULT_FOCUS_RESTORE_GRACE_US = 100_000
 DEFAULT_SAME_KEY_CONFLICT_POLICY = "drop_chord"
+DEFAULT_DOWN_LATE_GRACE_US = 500
 
 
 class ActionKind(StrEnum):
@@ -39,11 +40,18 @@ class TimingPolicy:
     same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY
     min_hold_margin_us: Microseconds = Microseconds(500)
     min_hold_margin_source: str = "default_500"
+    down_late_grace_us: Microseconds = Microseconds(DEFAULT_DOWN_LATE_GRACE_US)
 
     def __post_init__(self) -> None:
         validate_hold_frames(self.hold_frames)
         if self.focus_restore_grace_us < 0:
             raise ValueError("focus_restore_grace_us must be non-negative")
+        if (
+            not isinstance(self.down_late_grace_us, int)
+            or isinstance(self.down_late_grace_us, bool)
+            or self.down_late_grace_us < 0
+        ):
+            raise ValueError("down_late_grace_us must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +65,7 @@ class FrameTimingPolicy:
     same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY
     min_hold_margin_us: Microseconds = Microseconds(500)
     min_hold_margin_source: str = "default_500"
+    down_late_grace_us: Microseconds = Microseconds(DEFAULT_DOWN_LATE_GRACE_US)
 
     @classmethod
     def from_timing_policy(
@@ -81,6 +90,7 @@ class FrameTimingPolicy:
             same_key_conflict_policy=conflict,
             min_hold_margin_us=Microseconds(max(0, int(policy.min_hold_margin_us))),
             min_hold_margin_source=policy.min_hold_margin_source,
+            down_late_grace_us=Microseconds(policy.down_late_grace_us),
         )
 
     @classmethod
@@ -91,6 +101,7 @@ class FrameTimingPolicy:
         *,
         margin_us: int = 500,
         margin_source: str = "default_500",
+        down_late_grace_us: int = DEFAULT_DOWN_LATE_GRACE_US,
         focus_restore_grace_us: int = DEFAULT_FOCUS_RESTORE_GRACE_US,
         same_key_conflict_policy: ConflictPolicy = DEFAULT_SAME_KEY_CONFLICT_POLICY,
     ) -> FrameTimingPolicy:
@@ -101,6 +112,7 @@ class FrameTimingPolicy:
                 same_key_conflict_policy=same_key_conflict_policy,
                 min_hold_margin_us=Microseconds(margin_us),
                 min_hold_margin_source=margin_source,
+                down_late_grace_us=Microseconds(down_late_grace_us),
             ),
             fps,
         )

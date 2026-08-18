@@ -152,12 +152,22 @@ process tags every packet with direction and sequence, records Raw Input at
 the `WM_INPUT` handler entry, and pairs receipts by scan code. For each key it
 computes the signed hold shrink `D - U`; only clean pairs enter the signed
 quantiles. At least 100 clean pairs are required in every production bucket.
-The cache is version 2 (native schema 9, measurement protocol 4), and cache
-version 1 is rejected rather than reinterpreted. The selected margin is:
+The cache is version 3 (native schema 9, measurement protocol 4); version 2
+is integrity-checked and migrated, while version 1 is rejected rather than
+reinterpreted. Qualification is:
 
 ```text
-max(300, min(2_000, max(0, required_bucket_p99_shrink) + 100))
+candidate = max(0, required_bucket_p99_shrink) + 100
+candidate <= 2_000 -> VALID, applied margin = max(300, candidate)
+candidate > 2_000  -> OUT_OF_ENVELOPE, applied margin = None
 ```
+
+Completed out-of-envelope evidence overwrites the cache with its unhealthy
+v3 status and playback falls back to a clearly-sourced 500 µs hold margin.
+Measurement or integrity failure preserves the previous cache. The hold
+margin never changes Note-On timestamps, `physical_target`, dispatch lead, or
+the independent fixed `down_late_grace_us` policy, which is `500 µs` in
+production.
 
 Invalid provenance, incomplete buckets, anomalies, cleanup failure, or a
 failed startup Down/Up correlation self-test fail closed and preserve the

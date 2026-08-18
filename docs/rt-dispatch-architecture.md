@@ -185,11 +185,12 @@ deadline/overdue policy handles a late boundary; recovery-only pending
 releases are stored in a fixed `[Option; 15]` per-key table with mask and
 generation ownership. There is no transport retry state.
 
-The session-fixed `down_late_grace_us` is the already-materialized
-`min_hold_margin_us`, converted once to QPC ticks at admission. It bounds
-authorized Down lateness only; it is never dispatch lead and never changes an
-authored target. The trusted sender repeats the same cutoff check immediately
-before `SendInput`, while Up-only safety releases remain exempt.
+The session-fixed `down_late_grace_us` is an independent sender correctness
+policy, currently `500 µs`, converted once to QPC ticks at admission. It bounds
+authorized Down lateness only; it is never derived from the hold margin,
+calibration, or dispatch lead, and never changes an authored target. The
+trusted sender repeats the same cutoff check immediately before `SendInput`,
+while Up-only safety releases remain exempt.
 
 ## 5. Wait and interrupt ordering
 

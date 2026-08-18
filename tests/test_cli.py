@@ -314,6 +314,39 @@ def test_cli_doctor_routing(monkeypatch) -> None:
     assert called_args["input_check"] is False
 
 
+def test_doctor_calibrate_returns_one_for_out_of_envelope(monkeypatch, capsys) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.cli import doctor_command
+    from sky_music.infrastructure.calibration_loader import CalibrationStatus
+    from sky_music.platform.win32 import native_calibration, window_target
+
+    monkeypatch.setattr(window_target, "get_sky_window", lambda: None)
+    monkeypatch.setattr(
+        native_calibration,
+        "run_published_native_calibration",
+        lambda: SimpleNamespace(
+            status=CalibrationStatus.OUT_OF_ENVELOPE,
+            global_shrink_p99_us=12_088,
+            worst_bucket="15/hot",
+            candidate_margin_us=12_188,
+            ceiling_us=2_000,
+            margin_us=None,
+            effective_min_hold_us=None,
+            sample_count=100,
+        ),
+    )
+
+    result = doctor_command.run_doctor_command(
+        full=False, timing=False, input_check=False, calibrate=True
+    )
+
+    assert result == 1
+    output = capsys.readouterr().out
+    assert "Calibration measurement completed, but host qualification failed." in output
+    assert "Calibration complete successfully" not in output
+
+
 def test_doctor_fps_advisory_prints_for_fps_above_60(capsys, monkeypatch) -> None:
     """Phase C: Doctor FPS advisory prints when configured fps > 60."""
     monkeypatch.setattr("sky_music.infrastructure.doctor.load_config", lambda: type("cfg", (), {"game_fps": 144})())
@@ -322,7 +355,6 @@ def test_doctor_fps_advisory_prints_for_fps_above_60(capsys, monkeypatch) -> Non
     captured = capsys.readouterr()
     assert "Configured game FPS is 144" in captured.out
     assert "Notes shorter than one 60 fps frame" in captured.out
-
 
 
 

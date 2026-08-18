@@ -52,13 +52,14 @@ def test_metadata_cache_key_changes_when_hold_or_fps_changes() -> None:
 def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
     session = PlaybackSessionContext(hold_frames=1.25, fps=60)
     policy = session.resolve_effective_policy(
-        AppConfig(), calibrated_margin_us=800, calibrated_margin_source="device_cache"
+        AppConfig(), hold_margin_us=800, hold_margin_source="device_cache"
     )
 
     assert policy.hold_frames == 1.25
     assert policy.hold_us == policy.min_hold_us == 21_634
     assert policy.min_hold_margin_us == 800
     assert policy.min_hold_margin_source == "device_cache"
+    assert policy.down_late_grace_us == 500
     assert policy.focus_restore_grace_us == 100_000
 
 

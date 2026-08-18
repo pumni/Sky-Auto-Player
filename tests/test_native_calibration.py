@@ -194,13 +194,15 @@ def test_directional_execution_is_rejected() -> None:
         )
 
 
-def test_cache_v2_uses_max_positive_p99_and_preserves_signed_values() -> None:
+def test_cache_v3_uses_max_positive_p99_and_preserves_signed_values() -> None:
     result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
-    cache = native_calibration._cache_v2(result)
+    cache = native_calibration._cache_v3(result)
     summary = loader.parse_calibration_cache_summary(cache)
+    assert cache["version"] == 3
     assert summary.global_shrink_p99_us == 42
     assert summary.worst_bucket == "15/cold"
     assert summary.margin_us == 300
+    assert summary.candidate_margin_us == 142
     assert summary.pair_buckets["5/hot"].pair_worst_shrink_us.p99 == -8
 
 
@@ -211,11 +213,162 @@ def test_cache_v1_is_rejected_and_falls_back() -> None:
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
-    cache = native_calibration._cache_v2(_native_result())
+    cache = native_calibration._cache_v3(_native_result())
     cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
     cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="clean pairs"):
         loader.parse_calibration_cache_summary(cache)
+
+
+@pytest.mark.parametrize(
+    ("p99", "candidate", "status", "margin"),
+    [
+        (42, 142, loader.CalibrationStatus.VALID, 300),
+        (700, 800, loader.CalibrationStatus.VALID, 800),
+        (1_900, 2_000, loader.CalibrationStatus.VALID, 2_000),
+        (1_901, 2_001, loader.CalibrationStatus.OUT_OF_ENVELOPE, None),
+        (12_088, 12_188, loader.CalibrationStatus.OUT_OF_ENVELOPE, None),
+    ],
+)
+def test_qualification_boundaries(
+    p99: int,
+    candidate: int,
+    status: loader.CalibrationStatus,
+    margin: int | None,
+) -> None:
+    qualification = loader.qualify_calibration_margin(p99)
+    assert qualification.candidate_margin_us == candidate
+    assert qualification.status is status
+    assert qualification.applied_margin_us == margin
+
+
+def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
+    result = _native_result(
+        p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
+    )
+    cache = native_calibration._cache_v3(result)
+    summary = loader.parse_calibration_cache_summary(cache)
+
+    assert summary.margin_us is None
+    assert summary.candidate_margin_us == 12_188
+    assert summary.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert cache["qualification"]["applied_margin_us"] is None  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("candidate_margin_us", 2_000),
+        ("worst_bucket", "15/cold"),
+        ("global_shrink_p99_us", 0),
+    ],
+)
+def test_v3_rejects_tampered_qualification(field: str, value: object) -> None:
+    cache = native_calibration._cache_v3(_native_result())
+    cast(dict[str, object], cache["qualification"])[field] = value
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(cache)
+
+
+def test_v3_rejects_out_of_envelope_saturated_applied_margin() -> None:
+    cache = native_calibration._cache_v3(
+        _native_result(
+            p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
+        )
+    )
+    cast(dict[str, object], cache["qualification"])["applied_margin_us"] = 2_000
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(cache)
+
+
+def test_v3_rejects_wrong_status_and_valid_null_applied_margin() -> None:
+    out_cache = native_calibration._cache_v3(
+        _native_result(
+            p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12_088)
+        )
+    )
+    out_cache["status"] = "valid"
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(out_cache)
+
+    valid_cache = native_calibration._cache_v3(_native_result())
+    cast(dict[str, object], valid_cache["qualification"])["applied_margin_us"] = None
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(valid_cache)
+
+
+def test_v2_current_saturation_migrates_to_out_of_envelope() -> None:
+    v3 = native_calibration._cache_v3(
+        _native_result(
+            p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
+        )
+    )
+    legacy = dict(v3)
+    legacy["version"] = 2
+    legacy["source_formula_version"] = 2
+    legacy.pop("status")
+    qualification = cast(dict[str, object], legacy.pop("qualification"))
+    legacy["selected_margin"] = {
+        "basis": qualification["basis"],
+        "worst_bucket": qualification["worst_bucket"],
+        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
+        "guard_us": qualification["guard_us"],
+        "floor_us": qualification["floor_us"],
+        "ceiling_us": qualification["ceiling_us"],
+        "recommended_margin_us": 2_000,
+    }
+    summary = loader.parse_calibration_cache_summary(legacy)
+    assert summary.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert summary.margin_us is None
+    assert summary.candidate_margin_us == 12_188
+
+
+def test_v2_tampered_legacy_recommendation_is_rejected() -> None:
+    v3 = native_calibration._cache_v3(_native_result(p99_by_key={"15/cold": 700}))
+    legacy = dict(v3)
+    legacy["version"] = 2
+    legacy["source_formula_version"] = 2
+    legacy.pop("status")
+    qualification = cast(dict[str, object], legacy.pop("qualification"))
+    legacy["selected_margin"] = {
+        "basis": qualification["basis"],
+        "worst_bucket": qualification["worst_bucket"],
+        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
+        "guard_us": qualification["guard_us"],
+        "floor_us": qualification["floor_us"],
+        "ceiling_us": qualification["ceiling_us"],
+        "recommended_margin_us": 2_000,
+    }
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(legacy)
+
+
+def test_load_calibration_resolution_states() -> None:
+    missing = loader.load_calibration_resolution(data=None, cache_path=Path("does-not-exist.json"))
+    assert missing.status is loader.CalibrationStatus.UNCALIBRATED
+    assert missing.resolved_margin_us == 500
+    assert missing.margin_source == loader.SOURCE_DEFAULT_500
+
+    corrupt = loader.load_calibration_resolution(data={"version": 1})
+    assert corrupt.status is loader.CalibrationStatus.INVALID_CACHE
+    assert corrupt.resolved_margin_us == 500
+    assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_DEFAULT_500
+
+    valid_cache = native_calibration._cache_v3(
+        _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
+    )
+    valid = loader.load_calibration_resolution(data=valid_cache)
+    assert valid.status is loader.CalibrationStatus.VALID
+    assert valid.resolved_margin_us == 800
+    assert valid.margin_source == loader.SOURCE_DEVICE_CACHE
+
+    out_cache = native_calibration._cache_v3(
+        _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088))
+    )
+    out = loader.load_calibration_resolution(data=out_cache)
+    assert out.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert out.resolved_margin_us == 500
+    assert out.margin_source == loader.SOURCE_OUT_OF_ENVELOPE_DEFAULT_500
 
 
 def test_diagnostic_run_writes_report_but_never_production_cache(
@@ -244,6 +397,27 @@ def test_invalid_quick_result_leaves_existing_cache_untouched(
     with pytest.raises(native_calibration.NativeCalibrationError):
         native_calibration.run_native_calibration(cache_path=cache)
     assert cache.read_text(encoding="utf-8") == "sentinel\n"
+
+
+def test_completed_out_of_envelope_measurement_overwrites_existing_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cache = tmp_path / "input_latency.json"
+    cache.write_text("old cache\n", encoding="utf-8")
+    result = _native_result(
+        p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12_088)
+    )
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: result)
+
+    native_calibration.run_native_calibration(cache_path=cache)
+
+    summary = loader.parse_calibration_cache_summary(
+        json.loads(cache.read_text(encoding="utf-8"))
+    )
+    assert summary.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert summary.margin_us is None
+    assert summary.candidate_margin_us == 12_188
 
 
 def test_full_configuration_is_six_pair_buckets() -> None:
@@ -367,6 +541,8 @@ def test_published_result_populates_effective_native_floor(
     )
 
     assert published.effective_min_hold_us == 16_967
+    assert published.status is loader.CalibrationStatus.VALID
+    assert published.candidate_margin_us == 106
 
     stressed = _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
     monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: stressed)
@@ -378,3 +554,18 @@ def test_published_result_populates_effective_native_floor(
     )
     assert stressed_published.margin_us == 800
     assert stressed_published.effective_min_hold_us == 17_467
+
+    out = _native_result(
+        p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
+    )
+    monkeypatch.setattr(native_calibration, "_run_process", lambda *args, **kwargs: out)
+    out_published = native_calibration.run_published_native_calibration(
+        output_path=tmp_path / "out-raw.json",
+        cache_path=tmp_path / "out-cache.json",
+        fps=60,
+        hold_frames=1.0,
+    )
+    assert out_published.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert out_published.margin_us is None
+    assert out_published.candidate_margin_us == 12_188
+    assert out_published.effective_min_hold_us is None

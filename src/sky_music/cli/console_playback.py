@@ -619,6 +619,7 @@ def play_selected_song(
         min_hold_us=int(active_policy.min_hold_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,
+        down_late_grace_us=int(active_policy.down_late_grace_us),
         target_hwnd=(
             int(_window_target.cached_target_hwnd())
             if not is_dry_run

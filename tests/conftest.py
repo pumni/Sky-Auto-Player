@@ -3,10 +3,9 @@
 Ensures that ``src/`` is on ``sys.path`` for every test session so individual
 test files do not need to call ``sys.path.insert`` themselves.
 
-Also autouse-mocks the calibration loader so non-calibration tests are
+Also autouse-mocks the calibration resolver so non-calibration tests are
 isolated from a real ``.cache/input_latency.json`` artefact in the working
-tree. The three calibration-focused tests opt out via the nodeid check
-below so they can exercise the real loader.
+tree. Calibration-focused tests opt out via the nodeid check below.
 """
 from __future__ import annotations
 
@@ -28,11 +27,8 @@ def isolate_input_latency_cache(request, monkeypatch):
     """Isolate every test from a real ``.cache/input_latency.json`` so a
     cached run cannot pollute a test that does not opt in.
 
-    We patch ``sky_music.infrastructure.calibration_loader.load_calibrated_margin_recommendation``
-    (the source module) so every consumer -- the orchestration
-    ``RuntimeSessionState.apply_session`` and any test that imports the
-    loader directly -- sees the mock. Tests whose nodeid contains one of
-    the three calibration-loader opt-out markers run unmocked.
+    We patch ``sky_music.infrastructure.calibration_loader.load_calibration_resolution``
+    (the source module) so every production consumer sees the mock.
     """
     nodeid = request.node.nodeid
     if (
@@ -40,13 +36,17 @@ def isolate_input_latency_cache(request, monkeypatch):
         or "test_calibrated_margin_recommendation_poison_cases" in nodeid
         or "test_calibrated_margin_rejects_low_sample_count" in nodeid
         or "test_calibration_regression" in nodeid
+        or "test_load_calibration_resolution_states" in nodeid
     ):
         return
     import sky_music.infrastructure.calibration_loader as loader_module
     monkeypatch.setattr(
         loader_module,
-        "load_calibrated_margin_recommendation",
-        lambda: (None, "default_500"),
+        "load_calibration_resolution",
+        lambda: loader_module.CalibrationLoadResult(
+            status=loader_module.CalibrationStatus.UNCALIBRATED,
+            resolved_margin_us=500,
+            margin_source="default_500",
+            summary=None,
+        ),
     )
-
-

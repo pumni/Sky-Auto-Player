@@ -924,22 +924,27 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
 
     from pathlib import Path
 
-    from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
+    from sky_music.infrastructure.calibration_loader import CalibrationStatus
     from sky_music.platform.win32.native_calibration import PublishedCalibrationResult
 
     def dummy_harness(*args, **kwargs):
         nonlocal harness_called
         harness_called = True
         return PublishedCalibrationResult(
+            status=CalibrationStatus.VALID,
             margin_us=800,
+            candidate_margin_us=800,
             source="device_cache",
             sample_count=20,
-            down_us=CalibrationQuantiles(100, 200, 300),
-            up_us=CalibrationQuantiles(100, 200, 300),
             cache_path=Path(".cache/input_latency.json"),
             evidence_kind="injected_raw_input_delivery_proxy",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
+            worst_bucket="15/cold",
+            global_shrink_p99_us=700,
+            guard_us=100,
+            ceiling_us=2_000,
+            effective_min_hold_us=17_467,
         )
 
     monkeypatch.setattr(calibration_module, "run_published_native_calibration", dummy_harness)
@@ -975,5 +980,4 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-
 

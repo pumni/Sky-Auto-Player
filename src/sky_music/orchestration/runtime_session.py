@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 from sky_music.orchestration.native_admission import RustBuildInfo
 
 
@@ -34,21 +35,7 @@ class RuntimeSessionState:
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig) -> None:
         self.session = session
-        # Resolve the device-calibrated margin once at session build time
-        # and inject the primitives into the domain session. The
-        # calibration loader lives in ``infrastructure/`` so the domain
-        # session stays filesystem-free (AGENTS.md Architecture Invariants).
-        from sky_music.infrastructure.calibration_loader import (
-            load_calibrated_margin_recommendation,
-        )
-        calibrated_margin_us, calibrated_margin_source = (
-            load_calibrated_margin_recommendation()
-        )
-        self.timing_policy = session.resolve_effective_policy(
-            cfg,
-            calibrated_margin_us=calibrated_margin_us,
-            calibrated_margin_source=calibrated_margin_source,
-        )
+        self.timing_policy = resolve_calibrated_policy(session, cfg)
         self.scan_code_mode = session.scan_code_mode
         self.tempo_scale = session.tempo_scale
         self.hold_frames = session.hold_frames

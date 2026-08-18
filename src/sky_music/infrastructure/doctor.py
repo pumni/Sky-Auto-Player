@@ -96,7 +96,7 @@ def check_physical_keys_held() -> dict:
     return status
 
 def check_calibration_cache() -> dict:
-    """Checks whether the input-latency calibration cache exists."""
+    """Checks whether the host input-delivery calibration cache exists."""
     from pathlib import Path
     path = Path(".cache/input_latency.json")
     status = {"ok": True, "msg": "", "path": str(path)}
@@ -104,7 +104,7 @@ def check_calibration_cache() -> dict:
         status["msg"] = f"Calibration cache found at {path}."
     else:
         status["ok"] = False
-        status["msg"] = "Calibration cache not found. Run `--doctor-calibrate` to measure input latency for tighter margins."
+        status["msg"] = "Calibration cache not found. Run `--doctor-calibrate` to measure host input delivery for tighter hold margins."
     return status
 
 
@@ -262,7 +262,7 @@ def run_all_doctor_checks() -> bool:
     print_fps_advisory()
     print("-" * 60)
 
-    # 8. Input Latency Calibration Cache (redundant path hint)
+    # 8. Host Input Delivery Calibration Cache (redundant path hint)
     print("[8/8] Preflight Summary:")
     print("      Run `--doctor-calibrate` if calibration cache is missing (see check 3/8).")
     print("=" * 60)

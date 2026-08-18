@@ -775,6 +775,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             min_hold_us=int(plan.active_policy.min_hold_us),
             min_hold_margin_us=int(plan.active_policy.min_hold_margin_us),
             min_hold_margin_source=plan.active_policy.min_hold_margin_source,
+            down_late_grace_us=int(plan.active_policy.down_late_grace_us),
             pre_roll_us=max(0, int(self.countdown_seconds)) * 1_000_000,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
