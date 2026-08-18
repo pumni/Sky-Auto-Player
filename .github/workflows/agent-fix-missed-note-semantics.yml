@@ -1,0 +1,133 @@
+name: Agent fix missed-note semantics
+
+on:
+  push:
+    branches:
+      - agent/fix-missed-note-semantics
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply focused code and CI fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, *, count: int = 1) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}")
+              file_path.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          replace_exact(
+              "src/sky_music/ui/hud.py",
+              '''        if not self.verbose and missed_down_boundaries > 0:\n            panel_content.append(\n                Text(\n                    f"missed notes: {missed_down_boundaries}",\n                    style=styles["warning"],\n                )\n            )''',
+              '''        if not self.verbose and missed_down_keys > 0:\n            panel_content.append(\n                Text(\n                    f"missed notes: {missed_down_keys}",\n                    style=styles["warning"],\n                )\n            )''',
+          )
+
+          replace_exact(
+              "src/sky_music/ui/textual_app/playback_app.py",
+              '''        missed_down = snap.missed_down_boundaries if snap is not None else 0\n        if missed_down > 0 and not self.debug_mode:\n            body.append(f"{yellow}missed notes: {missed_down}{_ANSI_RESET}")''',
+              '''        missed_down = snap.missed_down_boundaries if snap is not None else 0\n        missed_keys = snap.missed_down_keys if snap is not None else 0\n        if missed_keys > 0 and not self.debug_mode:\n            body.append(f"{yellow}missed notes: {missed_keys}{_ANSI_RESET}")''',
+          )
+          replace_exact(
+              "src/sky_music/ui/textual_app/playback_app.py",
+              '''        if snap.missed_down_boundaries > 0:\n            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")''',
+              '''        if snap.missed_down_keys > 0:\n            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_keys}[/]")''',
+          )
+          replace_exact(
+              "src/sky_music/ui/textual_app/playback_app.py",
+              '''        if snap.missed_down_boundaries > 0 and not self.debug_mode:\n            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_boundaries}[/]")''',
+              '''        if snap.missed_down_keys > 0 and not self.debug_mode:\n            warnings_to_show.append(f"[{t.warning}]missed notes: {snap.missed_down_keys}[/]")''',
+          )
+
+          replace_exact(
+              "tests/test_hud_ui.py",
+              '''        missed_down_boundaries=3,\n        missed_down_keys=3,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+              '''        missed_down_boundaries=2,\n        missed_down_keys=5,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+          )
+          replace_exact(
+              "tests/test_hud_ui.py",
+              '''    assert "missed notes: 3" in normal_output.getvalue()''',
+              '''    assert "missed notes: 5" in normal_output.getvalue()''',
+          )
+          replace_exact(
+              "tests/test_hud_ui.py",
+              '''        missed_down_boundaries=3,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+              '''        missed_down_boundaries=2,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+          )
+          replace_exact(
+              "tests/test_hud_ui.py",
+              '''    assert "missed:3" in verbose_output.getvalue()''',
+              '''    assert "missed:2" in verbose_output.getvalue()''',
+          )
+
+          replace_exact(
+              "tests/test_textual_playback.py",
+              '''        missed_down_boundaries=3,\n        missed_down_keys=3,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+              '''        missed_down_boundaries=2,\n        missed_down_keys=5,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+          )
+          replace_exact(
+              "tests/test_textual_playback.py",
+              '''    assert snap.missed_down_boundaries == 3\n    assert snap.missed_down_keys == 3''',
+              '''    assert snap.missed_down_boundaries == 2\n    assert snap.missed_down_keys == 5''',
+          )
+          replace_exact(
+              "tests/test_textual_playback.py",
+              '''        missed_down_boundaries=3,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+              '''        missed_down_boundaries=2,\n        missed_down_keys=5,\n        missed_hard_late_boundaries=2,\n        late_authorized_boundaries=4,''',
+          )
+          replace_exact(
+              "tests/test_textual_playback.py",
+              '''    assert "missed notes: 3" in normal''',
+              '''    assert "missed notes: 5" in normal''',
+          )
+          replace_exact(
+              "tests/test_textual_playback.py",
+              '''    assert "missed:3" in debug''',
+              '''    assert "missed:2" in debug''',
+          )
+
+          replace_exact(
+              ".github/workflows/ci.yml",
+              '''              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json)''',
+              '''              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)''',
+          )
+          PY
+
+      - name: Set up Python environment
+        uses: ./.github/actions/python-environment
+        with:
+          run-runtime-audit: "false"
+
+      - name: Validate focused changes
+        shell: bash
+        run: |
+          uv run ruff check src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py
+          uv run pytest tests/test_hud_ui.py tests/test_textual_playback.py -q
+          grep -F '.config/rust_architecture_allowlist.json)' .github/workflows/ci.yml
+
+      - name: Commit focused fix and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/agent-fix-missed-note-semantics.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/sky_music/ui/hud.py src/sky_music/ui/textual_app/playback_app.py tests/test_hud_ui.py tests/test_textual_playback.py .github/workflows/ci.yml .github/workflows/agent-fix-missed-note-semantics.yml
+          git diff --cached --check
+          git commit -m "fix(ui): report missed note counts accurately"
+          git push origin HEAD:agent/fix-missed-note-semantics
