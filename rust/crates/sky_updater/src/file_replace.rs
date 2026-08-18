@@ -18,12 +18,21 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct PreparedReplacement {
     temporary: PathBuf,
     destination: PathBuf,
+    emergency_backup: PathBuf,
+    expected_hash: String,
     label: String,
+    cleanup_temporary: bool,
+    cleanup_backup: bool,
 }
 
 impl Drop for PreparedReplacement {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.temporary);
+        if self.cleanup_temporary {
+            let _ = fs::remove_file(&self.temporary);
+        }
+        if self.cleanup_backup {
+            let _ = fs::remove_file(&self.emergency_backup);
+        }
     }
 }
 
@@ -59,6 +68,49 @@ pub fn probe_new_destination(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove only temporary names reserved by this replacement primitive after a
+/// committed or fully recovered transaction.  A killed process can leave an
+/// emergency backup beside its destination after ReplaceFileW has succeeded.
+pub fn cleanup_stale_artifacts(install_root: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(install_root)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_reserved_artifact_name)
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_reserved_artifact_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(".sky-update-") else {
+        return false;
+    };
+    let (rest, suffix) = if let Some(rest) = rest.strip_suffix("-reconcile.bak") {
+        (rest, "bak")
+    } else if let Some(rest) = rest.strip_suffix(".tmp") {
+        (rest, "tmp")
+    } else if let Some(rest) = rest.strip_suffix(".bak") {
+        (rest, "bak")
+    } else {
+        return false;
+    };
+    let mut numbers = rest.split('-');
+    numbers
+        .next()
+        .is_some_and(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+        && numbers
+            .next()
+            .is_some_and(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+        && numbers.next().is_none()
+        && matches!(suffix, "tmp" | "bak")
+}
+
 pub fn prepare_replacement(
     source: &Path,
     destination: &Path,
@@ -79,6 +131,18 @@ pub fn prepare_replacement(
         std::process::id(),
         TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
+    let emergency_backup = parent.join(format!(
+        ".sky-update-{}-{}.bak",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    if emergency_backup.exists() {
+        return Err(UpdaterError::InstallAtomicReplaceFailed {
+            path: label.into(),
+            os_code: 183,
+            message: "emergency backup name already exists".into(),
+        });
+    }
     let mut input = File::open(source)?;
     let mut output = OpenOptions::new()
         .create_new(true)
@@ -108,7 +172,11 @@ pub fn prepare_replacement(
     Ok(PreparedReplacement {
         temporary,
         destination: destination.to_owned(),
+        emergency_backup,
+        expected_hash: expected_hash.to_ascii_lowercase(),
         label: label.into(),
+        cleanup_temporary: true,
+        cleanup_backup: true,
     })
 }
 
@@ -125,13 +193,21 @@ pub fn atomic_replace_existing(
             "existing destination disappeared before atomic replace",
         ));
     }
-    atomic_replace_paths(&replacement.temporary, &replacement.destination).map_err(|error| {
-        atomic_failure(
-            &replacement.label,
-            os_code(&error),
-            &format!("atomic replacement failed: {error}"),
-        )
-    })
+    let mut replacement = replacement;
+    match replacement.commit_existing() {
+        Ok(()) => {
+            after_replace(phase, &replacement.label)?;
+            Ok(())
+        }
+        Err(error) => {
+            let reconciliation = replacement.reconcile_after_failure();
+            Err(atomic_failure(
+                &replacement.label,
+                os_code(&error),
+                &format!("atomic replacement failed: {error}; {reconciliation}"),
+            ))
+        }
+    }
 }
 
 pub fn atomic_install_new(
@@ -147,13 +223,18 @@ pub fn atomic_install_new(
             "new destination appeared before atomic install",
         ));
     }
+    let mut replacement = replacement;
     atomic_move_new(&replacement.temporary, &replacement.destination).map_err(|error| {
         atomic_failure(
             &replacement.label,
             os_code(&error),
             &format!("atomic install failed: {error}"),
         )
-    })
+    })?;
+    replacement.verify_destination()?;
+    replacement.cleanup_temporary = true;
+    replacement.cleanup_backup = true;
+    after_replace(phase, &replacement.label)
 }
 
 pub fn atomic_restore(
@@ -200,13 +281,21 @@ fn atomic_restore_existing(replacement: PreparedReplacement, index: usize) -> Re
         },
         other => other,
     })?;
-    atomic_replace_paths(&replacement.temporary, &replacement.destination).map_err(|error| {
-        UpdaterError::RollbackAtomicReplaceFailed {
-            path: replacement.label.clone(),
-            os_code: os_code(&error),
-            message: format!("atomic restore failed: {error}"),
+    let mut replacement = replacement;
+    match replacement.commit_existing() {
+        Ok(()) => {
+            after_restore(&replacement.label)?;
+            Ok(())
         }
-    })
+        Err(error) => {
+            let reconciliation = replacement.reconcile_after_failure();
+            Err(UpdaterError::RollbackAtomicReplaceFailed {
+                path: replacement.label.clone(),
+                os_code: os_code(&error),
+                message: format!("atomic restore failed: {error}; {reconciliation}"),
+            })
+        }
+    }
 }
 
 fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<()> {
@@ -218,13 +307,150 @@ fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<
         },
         other => other,
     })?;
+    let mut replacement = replacement;
     atomic_move_new(&replacement.temporary, &replacement.destination).map_err(|error| {
         UpdaterError::RollbackAtomicReplaceFailed {
             path: replacement.label.clone(),
             os_code: os_code(&error),
             message: format!("atomic restore install failed: {error}"),
         }
-    })
+    })?;
+    replacement.verify_destination().map_err(|error| {
+        UpdaterError::RollbackAtomicReplaceFailed {
+            path: replacement.label.clone(),
+            os_code: os_code(&error),
+            message: format!("restored hash verification failed: {error}"),
+        }
+    })?;
+    replacement.cleanup_temporary = true;
+    replacement.cleanup_backup = true;
+    after_restore(&replacement.label)
+}
+
+impl PreparedReplacement {
+    fn commit_existing(&mut self) -> io::Result<()> {
+        atomic_replace_paths(
+            &self.temporary,
+            &self.destination,
+            Some(&self.emergency_backup),
+        )?;
+        self.verify_destination().map_err(|error| {
+            io::Error::other(format!("replacement hash verification failed: {error}"))
+        })?;
+        self.cleanup_temporary = true;
+        self.cleanup_backup = true;
+        Ok(())
+    }
+
+    fn verify_destination(&self) -> io::Result<()> {
+        if !self.destination.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "canonical destination is missing after replacement",
+            ));
+        }
+        let actual =
+            sha256_file(&self.destination).map_err(|error| io::Error::other(error.to_string()))?;
+        if actual != self.expected_hash {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "canonical destination hash does not match prepared replacement",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reconcile a failed ReplaceFileW call before Drop can clean anything.
+    ///
+    /// The emergency backup and temporary replacement stay on disk whenever
+    /// the filesystem state is ambiguous.  Cleanup is enabled only after a
+    /// canonical destination has been observed or re-established.
+    fn reconcile_after_failure(&mut self) -> String {
+        self.cleanup_temporary = false;
+        self.cleanup_backup = false;
+
+        if self.destination.is_file() {
+            if self.verify_destination().is_ok() {
+                self.cleanup_temporary = true;
+                self.cleanup_backup = true;
+                return "destination contains the verified replacement".into();
+            }
+
+            if self.emergency_backup.is_file() {
+                let recovery_backup = self.destination.with_file_name(format!(
+                    ".sky-update-{}-{}-reconcile.bak",
+                    std::process::id(),
+                    TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+                ));
+                let reconciliation = atomic_replace_paths(
+                    &self.emergency_backup,
+                    &self.destination,
+                    Some(&recovery_backup),
+                );
+                match reconciliation {
+                    Ok(()) if self.destination.is_file() => {
+                        let _ = fs::remove_file(&recovery_backup);
+                        self.cleanup_temporary = true;
+                        self.cleanup_backup = true;
+                        return "destination restored from emergency backup".into();
+                    }
+                    Ok(()) | Err(_) if !self.destination.is_file() => {
+                        for backup in [&self.emergency_backup, &recovery_backup] {
+                            if backup.is_file()
+                                && atomic_move_new(backup, &self.destination).is_ok()
+                                && self.destination.is_file()
+                            {
+                                self.cleanup_temporary = true;
+                                self.cleanup_backup = true;
+                                return "destination restored after replacement reconciliation"
+                                    .into();
+                            }
+                        }
+                    }
+                    Ok(()) | Err(_) => {}
+                }
+            }
+
+            // The original destination is still present.  Preserve any
+            // emergency artifacts, but it is safe to remove the unused temp.
+            self.cleanup_temporary = true;
+            return "canonical destination remains; emergency artifacts preserved".into();
+        }
+
+        if self.emergency_backup.is_file()
+            && atomic_move_new(&self.emergency_backup, &self.destination).is_ok()
+            && self.destination.is_file()
+        {
+            self.cleanup_temporary = true;
+            self.cleanup_backup = true;
+            return "destination restored from emergency backup".into();
+        }
+
+        if self.temporary.is_file()
+            && self.verify_temporary().is_ok()
+            && atomic_move_new(&self.temporary, &self.destination).is_ok()
+            && self.destination.is_file()
+        {
+            self.cleanup_temporary = true;
+            self.cleanup_backup = true;
+            return "destination established from verified temporary replacement".into();
+        }
+
+        "canonical destination could not be re-established; artifacts preserved".into()
+    }
+
+    fn verify_temporary(&self) -> io::Result<()> {
+        let actual =
+            sha256_file(&self.temporary).map_err(|error| io::Error::other(error.to_string()))?;
+        if actual == self.expected_hash {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "temporary replacement hash mismatch",
+            ))
+        }
+    }
 }
 
 fn copy_and_flush(input: &mut File, output: &mut File) -> io::Result<()> {
@@ -262,6 +488,8 @@ fn os_code(error: &io::Error) -> u32 {
 
 fn before_replace(phase: &str, index: usize, path: &str) -> Result<()> {
     #[cfg(feature = "e2e-fault-injection")]
+    crate::faults::pause_at(&format!("before-replace:{phase}:{path}"));
+    #[cfg(feature = "e2e-fault-injection")]
     crate::faults::pause_at(&format!("before-replace:{phase}:{index}"));
     #[cfg(feature = "e2e-fault-injection")]
     crate::faults::before_replace(phase, index, path)?;
@@ -269,12 +497,30 @@ fn before_replace(phase: &str, index: usize, path: &str) -> Result<()> {
     Ok(())
 }
 
+fn after_replace(phase: &str, path: &str) -> Result<()> {
+    #[cfg(feature = "e2e-fault-injection")]
+    {
+        crate::faults::pause_at(&format!("after-replace:{phase}:{path}"));
+        crate::faults::after_replace(phase, path)?;
+    }
+    let _ = (phase, path);
+    Ok(())
+}
+
+fn after_restore(path: &str) -> Result<()> {
+    #[cfg(feature = "e2e-fault-injection")]
+    {
+        crate::faults::pause_at(&format!("after-restore:rollback:{path}"));
+        crate::faults::after_restore(path)?;
+    }
+    let _ = path;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn probe_windows_handle(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING,
     };
@@ -287,8 +533,12 @@ fn probe_windows_handle(path: &Path, label: &str) -> Result<()> {
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE | windows_sys::Win32::Storage::FileSystem::DELETE,
-            0,
+            GENERIC_READ
+                | windows_sys::Win32::Storage::FileSystem::DELETE
+                | windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
+            windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
@@ -312,16 +562,23 @@ fn wide(path: &Path) -> Vec<u16> {
 }
 
 #[cfg(windows)]
-fn atomic_replace_paths(temporary: &Path, destination: &Path) -> io::Result<()> {
+fn atomic_replace_paths(
+    temporary: &Path,
+    destination: &Path,
+    backup: Option<&Path>,
+) -> io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
     let temporary = wide(temporary);
     let destination = wide(destination);
+    let backup = backup.map(wide);
     if unsafe {
         ReplaceFileW(
             destination.as_ptr(),
             temporary.as_ptr(),
-            std::ptr::null(),
-            1,
+            backup
+                .as_ref()
+                .map_or(std::ptr::null(), |path| path.as_ptr()),
+            0,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         )
@@ -333,7 +590,11 @@ fn atomic_replace_paths(temporary: &Path, destination: &Path) -> io::Result<()> 
 }
 
 #[cfg(not(windows))]
-fn atomic_replace_paths(temporary: &Path, destination: &Path) -> io::Result<()> {
+fn atomic_replace_paths(
+    temporary: &Path,
+    destination: &Path,
+    _backup: Option<&Path>,
+) -> io::Result<()> {
     fs::rename(temporary, destination)
 }
 

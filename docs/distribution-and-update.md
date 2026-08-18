@@ -166,8 +166,15 @@ atomically written under:
 
 Managed payloads are copied to same-volume temporary files beside each
 destination, flushed, hash-verified, and atomically replaced (`ReplaceFileW` on
-Windows). Apply ordering is explicit: normal files, primary executable,
-calibration executable, updater executable, and `MANIFEST.json` last.
+Windows). Existing destinations are replaced with a same-directory emergency
+backup name and `ReplaceFileW` flags `0`; the failure path reconciles the
+destination, emergency backup, and temporary file before any cleanup. A
+temporary or emergency backup is never removed while the canonical destination
+is missing or ambiguous. The Windows preflight requests read/delete/
+synchronize access while sharing read/write/delete, matching the replacement
+operation rather than requiring write access. Apply ordering is explicit:
+normal files, primary executable, calibration executable, updater executable,
+and `MANIFEST.json` last.
 
 Rollback is restore-first. Each verified backup is prepared and atomically
 restored without deleting its current destination; the updater is restored
@@ -218,7 +225,11 @@ bridge release asset.
 
 The feature-gated local release source and deterministic fault-injection
 `sky_updater_e2e.exe` are test-only artifacts and are rejected by the public
-release-tree guard. The first fixed updater release is a manual bridge for
+release-tree guard. E2E fault checkpoints are path-based (for example,
+`apply:after-replace:Sky-Auto-Player-Updater.exe` and
+`rollback:after-restore:Sky-Auto-Player-Updater.exe`) so critical windows are
+tested after the updater replacement, not by an incidental file index. The
+first fixed updater release is a manual bridge for
 installations whose existing updater predates this transaction hardening;
 those installations must be moved manually to the fixed release before
 native self-update is trusted again.

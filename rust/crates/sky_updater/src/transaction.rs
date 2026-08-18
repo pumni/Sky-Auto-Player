@@ -595,6 +595,7 @@ pub fn cleanup_committed(install_root: &Path) -> Result<()> {
         }
         fs::remove_dir_all(root)?;
     }
+    crate::file_replace::cleanup_stale_artifacts(install_root)?;
     Ok(())
 }
 

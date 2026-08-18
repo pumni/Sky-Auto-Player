@@ -163,7 +163,8 @@ mod fault_regressions {
         // partially applied installation.
         write_manifest(&root, &new);
 
-        faults::configure(Some("rollback:before-replace:2"), None).expect("fault config");
+        faults::configure(Some("rollback:before-replace:Sky-Auto-Player.exe"), None)
+            .expect("fault config");
         let error = rollback_prepared(&root).expect_err("primary restore fault");
         assert!(matches!(
             error,
@@ -202,7 +203,11 @@ mod fault_regressions {
         fs::create_dir_all(&staging).expect("staging");
         let (old, new, old_files, _) = seed_install(&root, &staging);
 
-        faults::configure(Some("apply:before-replace:2"), None).expect("fault config");
+        faults::configure(
+            Some("apply:after-replace:Sky-Auto-Player-Updater.exe"),
+            None,
+        )
+        .expect("fault config");
         let error = install_verified(&root, &staging, &new, &old).expect_err("primary apply fault");
         assert!(matches!(error, UpdaterError::InstallCopyFailed(_)));
         assert!(transaction_root(&root).exists());
@@ -235,7 +240,11 @@ mod fault_regressions {
         }
         write_manifest(&root, &new);
 
-        faults::configure(Some("rollback:before-replace:2"), None).expect("fault config");
+        faults::configure(
+            Some("rollback:after-restore:Sky-Auto-Player-Updater.exe"),
+            None,
+        )
+        .expect("fault config");
         assert!(rollback_prepared(&root).is_err());
         assert_eq!(
             fs::read(root.join(UPDATER_EXE)).expect("updater"),

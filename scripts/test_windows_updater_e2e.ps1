@@ -62,10 +62,18 @@ function Save-ManifestWithCurrentHashes {
     $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $Root "MANIFEST.json") -Encoding utf8
 }
 
-function Assert-ManifestFiles {
+function Test-PreservedPath {
+    param([string]$Relative)
+    return $Relative -eq "config.json" -or $Relative -eq ".env" `
+        -or $Relative.StartsWith("songs/", [StringComparison]::OrdinalIgnoreCase) `
+        -or $Relative.StartsWith("logs/", [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ManagedManifestFiles {
     param([string]$Root, [object]$Manifest)
     $hashes = Get-FileHashes $Root
     foreach ($entry in @($Manifest.files)) {
+        if (Test-PreservedPath $entry.path) { continue }
         if (-not $hashes.Contains($entry.path)) {
             throw "manifest file is missing: $($entry.path)"
         }
@@ -323,7 +331,7 @@ function Save-ScenarioEvidence {
     if ($Run.ResultPath -and (Test-Path $Run.ResultPath)) {
         Copy-Item -LiteralPath $Run.ResultPath -Destination (Join-Path $script:EvidenceRoot "$Name-result.json") -Force
     }
-    Assert-ManifestFiles $Scenario.Install $Manifest | Out-Null
+    Assert-ManagedManifestFiles $Scenario.Install $Manifest | Out-Null
     Assert-PreservedState $Scenario
     if (Test-Path -LiteralPath (Join-Path $Scenario.Install ".sky-update-transaction")) {
         throw "transaction directory remains after successful scenario: $Name"
@@ -391,22 +399,25 @@ try {
     if (-not (Test-Path $productionCandidate) -or -not (Test-Path $e2eCandidate)) { throw "updater candidates missing" }
     $candidateHashes = [ordered]@{
         production = (Get-FileHash $productionCandidate -Algorithm SHA256).Hash.ToLowerInvariant()
-        e2e_local = (Get-FileHash $e2eCandidate -Algorithm SHA256).Hash.ToLowerInvariant()
+        e2e_executor = (Get-FileHash $e2eCandidate -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     @(
         "production $($candidateHashes.production)"
-        "e2e_local $($candidateHashes.e2e_local)"
+        "e2e_executor $($candidateHashes.e2e_executor)"
     ) | Set-Content (Join-Path $script:EvidenceRoot "candidate-sha256.txt") -Encoding ascii
 
-    $syntheticRelease = Build-SyntheticLocalRelease $toRoot $e2eCandidate $toManifest.version
+    # H1 uses the E2E binary only as the executor. The synthetic payload must
+    # contain the production updater that a public package would install.
+    $syntheticRelease = Build-SyntheticLocalRelease $toRoot $productionCandidate $toManifest.version
+    $syntheticManifest = Get-ManifestObject $syntheticRelease
 
     $scenario = New-Scenario "happy-local" $fromRoot
     $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease -Restart
     if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H1 result was not success" }
-    $h1 = Save-ScenarioEvidence "happy-local" $scenario $run $toManifest
+    $h1 = Save-ScenarioEvidence "happy-local" $scenario $run $syntheticManifest
     Save-UpdaterLog "happy-local" $scenario
     $installedUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($installedUpdaterHash -ne $candidateHashes.e2e_local) { throw "H1 installed updater hash is not the candidate hash" }
+    if ($installedUpdaterHash -ne $candidateHashes.production) { throw "H1 installed updater hash is not the production candidate hash" }
     if (-not $h1.restart_verified) { throw "H1 restart was not observed" }
     $script:Results.happy_local = [ordered]@{ status = "PASS"; installed_updater_sha256 = $installedUpdaterHash; restart_verified = $true; transaction_removed = $true }
     Stop-RestartedApp $scenario.Install
@@ -434,7 +445,7 @@ try {
     Write-EvidenceJson "locked-primary-result.json" $run.Result
     Save-UpdaterLog "locked-primary" $scenario
 
-    $scenario = New-Scenario "concurrent"
+    $scenario = New-Scenario "concurrent" $fromRoot
     $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
         -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease -PauseAt "after-lock" -KeepPaused
     $lockDeadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -453,25 +464,36 @@ try {
     $script:Results.concurrent_blocked = $true
     Save-UpdaterLog "concurrent" $scenario
 
-    $scenario = New-Scenario "rollback-fault"
-    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease -FailAt "apply:before-replace:2"
-    if ($run.Result.status -ne "rolled_back" -or -not (Test-Path (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe"))) { throw "rollback fault safety check failed" }
+    $scenario = New-Scenario "rollback-fault" $fromRoot
+    $prepared = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
+        -CurrentVersion $fromManifest.version -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease `
+        -PauseAt "after-replace:apply:Sky-Auto-Player-Updater.exe" -KeepPaused
+    Start-Sleep -Milliseconds 2500
+    Stop-ProcessIfRunning $prepared.Process
+    if (-not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction\journal.json"))) { throw "rollback fault fixture did not leave Prepared journal" }
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease `
+        -FailAt "rollback:after-restore:Sky-Auto-Player-Updater.exe"
+    if ($run.Result.error_code -ne "ROLLBACK_ATOMIC_REPLACE_FAILED" -or -not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "rollback fault safety check failed" }
+    if (-not (Test-Path (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe"))) { throw "rollback fault removed updater" }
     $rollbackUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($rollbackUpdaterHash -ne $scenario.BeforeHashes["Sky-Auto-Player-Updater.exe"]) { throw "rollback did not preserve old updater hash" }
+    if ($rollbackUpdaterHash -ne $scenario.BeforeHashes["Sky-Auto-Player-Updater.exe"]) { throw "rollback fault did not preserve old updater hash" }
     Write-EvidenceJson "rollback-fault-result.json" $run.Result
     $script:Results.rollback_preserved_updater = $true
     Save-UpdaterLog "rollback-fault" $scenario
+    $recovered = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease
+    if ($recovered.Result.status -ne "success" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "rollback recovery failed" }
+    Save-ScenarioEvidence "rollback-fault-recovery" $scenario $recovered $syntheticManifest | Out-Null
 
-    $scenario = New-Scenario "crash-recovery"
+    $scenario = New-Scenario "crash-recovery" $fromRoot
     $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
-        -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease -PauseAt "before-replace:apply:2" -KeepPaused
+        -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease `
+        -PauseAt "after-replace:apply:Sky-Auto-Player-Updater.exe" -KeepPaused
     Start-Sleep -Milliseconds 2500
     Stop-ProcessIfRunning $first.Process
     if (-not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction\journal.json"))) { throw "crash fixture did not leave Prepared journal" }
     $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease
     if ($run.Result.status -ne "success" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "crash recovery failed" }
-    $recoveredManifest = Get-ManifestObject $scenario.Install
-    Assert-ManifestFiles $scenario.Install $recoveredManifest | Out-Null
+    Assert-ManagedManifestFiles $scenario.Install $syntheticManifest | Out-Null
     Assert-PreservedState $scenario
     Write-EvidenceJson "crash-recovery-result.json" $run.Result
     $script:Results.crash_recovery = $true

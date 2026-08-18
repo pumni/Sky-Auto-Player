@@ -34,6 +34,7 @@ pub fn recover_before_update(install_root: &Path) -> Result<()> {
                 ))
             })?;
             fs::remove_dir_all(root)?;
+            crate::file_replace::cleanup_stale_artifacts(install_root)?;
             Ok(())
         }
         JournalState::Prepared => rollback_prepared(install_root),
@@ -161,6 +162,8 @@ pub fn rollback_prepared(install_root: &Path) -> Result<()> {
             fs::remove_file(path).map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
         }
     }
+    crate::file_replace::cleanup_stale_artifacts(install_root)
+        .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
     fs::remove_dir_all(transaction_root)
         .map_err(|err| UpdaterError::RollbackFailed(err.to_string()))?;
     Ok(())

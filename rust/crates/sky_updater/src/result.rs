@@ -230,15 +230,40 @@ fn error_details(error: &UpdaterError) -> ErrorDetails {
     }
 }
 
+const MAX_MESSAGE_CHARS: usize = 512;
+
 fn bound_message(message: String) -> String {
-    let mut bounded = message.replace(['\r', '\n'], " ");
-    if bounded.len() > 512 {
-        bounded.truncate(512);
-        bounded.push('…');
+    let normalized = message.replace(['\r', '\n'], " ");
+    if normalized.chars().count() <= MAX_MESSAGE_CHARS {
+        return normalized;
     }
-    bounded
+    normalized
+        .chars()
+        .take(MAX_MESSAGE_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
 fn bounded_log_message(message: &str) -> String {
     bound_message(message.to_owned()).replace('"', "'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_MESSAGE_CHARS, bound_message};
+
+    #[test]
+    fn bound_message_limits_ascii_to_512_characters() {
+        let bounded = bound_message("x".repeat(600));
+        assert_eq!(bounded.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(bounded.chars().last(), Some('…'));
+    }
+
+    #[test]
+    fn bound_message_is_unicode_safe_at_boundary() {
+        let bounded = bound_message(format!("{}tail", "ế".repeat(600)));
+        assert_eq!(bounded.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(bounded.chars().last(), Some('…'));
+        assert!(bounded.is_char_boundary(bounded.len()));
+    }
 }
