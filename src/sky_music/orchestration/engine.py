@@ -8,6 +8,7 @@ from typing import Any
 
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import (
+    DEFAULT_DOWN_LATE_GRACE_US,
     DEFAULT_FOCUS_RESTORE_GRACE_US,
     KeyAction,
 )
@@ -62,6 +63,7 @@ class PlaybackEngine:
         min_hold_us: int = 0,
         min_hold_margin_us: int = 500,
         min_hold_margin_source: str = "default_500",
+        down_late_grace_us: int = DEFAULT_DOWN_LATE_GRACE_US,
         dry_run: bool = False,
         pre_roll_us: int = 0,
         target_hwnd: int | None = None,
@@ -83,6 +85,9 @@ class PlaybackEngine:
             raise ValueError("game_fps must be in 15..=240")
         self.min_hold_us = max(0, int(min_hold_us))
         self.min_hold_margin_us = min_hold_margin_us
+        if type(down_late_grace_us) is not int or down_late_grace_us < 0:
+            raise ValueError("down_late_grace_us must be a non-negative integer")
+        self.down_late_grace_us = int(down_late_grace_us)
         self.hold_label = hold_label
         self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
@@ -111,6 +116,7 @@ class PlaybackEngine:
                 "rust_dispatch_schema_version": RUST_DISPATCH_SCHEMA_VERSION,
                 "dry_run": self.dry_run,
                 "min_hold_us": self.min_hold_us,
+                "down_late_grace_us": self.down_late_grace_us,
                 "focus_required": self.require_focus,
             }
         )
@@ -129,7 +135,7 @@ class PlaybackEngine:
             song_name=self.song.name,
             game_fps=self.game_fps,
             min_hold_us=self.min_hold_us,
-            down_late_grace_us=self.min_hold_margin_us,
+            down_late_grace_us=self.down_late_grace_us,
             require_focus=self.require_focus,
             focus_restore_grace_us=self.focus_restore_grace_us,
             pre_roll_us=self.pre_roll_us,
@@ -228,6 +234,10 @@ class PlaybackEngine:
                 "rt_priority_acquired": snapshot.get("rt_priority_acquired"),
                 "wait_strategy_acquired": snapshot.get("wait_strategy_acquired"),
                 "input_path_degraded": snapshot.get("input_path_degraded", False),
+                "min_hold_us": self.min_hold_us,
+                "min_hold_margin_us": self.min_hold_margin_us,
+                "min_hold_margin_source": self.telemetry.min_hold_margin_source,
+                "down_late_grace_us": self.down_late_grace_us,
             }
         )
         self.telemetry.record_backend_health(

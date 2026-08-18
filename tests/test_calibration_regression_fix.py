@@ -21,11 +21,13 @@ from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.calibration_loader import (
     SOURCE_DEFAULT_500,
     SOURCE_DEVICE_CACHE,
-    load_calibrated_margin_recommendation,
+    CalibrationLoadResult,
+    CalibrationStatus,
+    load_calibration_resolution,
 )
 
 # ---------------------------------------------------------------------------
-# Helper – minimal valid cache-v2 payload
+# Helper – minimal valid cache-v3 payload
 # ---------------------------------------------------------------------------
 
 def _signed_stats(p99: int = 6) -> dict[str, int]:
@@ -36,10 +38,13 @@ def _signed_stats(p99: int = 6) -> dict[str, int]:
 
 _REQUIRED_BUCKETS = ("1/hot", "1/cold", "5/hot", "5/cold", "15/hot", "15/cold")
 _INTEGRATION_CACHE: dict = {
-    "version": 2,
+    "version": 3,
+    "status": "valid",
     "source": "device_cache",
     "evidence_kind": "injected_raw_input_delivery_proxy",
-    "source_formula_version": 2,
+    "source_formula_version": 3,
+    "native_source_fingerprint": "test-fingerprint",
+    "rustc_version": "rustc test",
     "native_calibration_version": 9,
     "measurement_protocol_version": 4,
     "source_git_sha": "test-sha",
@@ -56,21 +61,35 @@ _INTEGRATION_CACHE: dict = {
         }
         for key in _REQUIRED_BUCKETS
     },
-    "selected_margin": {
+    "qualification": {
         "basis": "max_required_bucket_p99_positive_pair_hold_shrink",
         "worst_bucket": "15/cold",
         "global_shrink_p99_us": 700,
         "guard_us": 100,
         "floor_us": 300,
         "ceiling_us": 2000,
-        "recommended_margin_us": 800,
+        "candidate_margin_us": 800,
+        "applied_margin_us": 800,
     },
 }
 
 _EXPECTED_MARGIN_US = 800
 
-# Correct patch target: the function as imported into calibrated_policy's namespace
-_LOADER_PATCH = "sky_music.orchestration.calibrated_policy.load_calibrated_margin_recommendation"
+def _resolution(
+    margin_us: int,
+    source: str,
+    status: CalibrationStatus = CalibrationStatus.VALID,
+) -> CalibrationLoadResult:
+    return CalibrationLoadResult(
+        status=status,
+        resolved_margin_us=margin_us,
+        margin_source=source,
+        summary=None,
+    )
+
+
+# Correct patch target: the typed resolver imported by calibrated_policy.
+_LOADER_PATCH = "sky_music.orchestration.calibrated_policy.load_calibration_resolution"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +106,7 @@ class TestResolveCalibratedPolicy:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(_LOADER_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             policy = resolve_calibrated_policy(session, cfg)
 
         assert int(policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
@@ -100,7 +119,10 @@ class TestResolveCalibratedPolicy:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(_LOADER_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
+        with patch(
+            _LOADER_PATCH,
+            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+        ):
             policy = resolve_calibrated_policy(session, cfg)
 
         assert policy.min_hold_margin_source == SOURCE_DEFAULT_500
@@ -114,7 +136,10 @@ class TestResolveCalibratedPolicy:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(_LOADER_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
+        with patch(
+            _LOADER_PATCH,
+            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.INVALID_CACHE),
+        ):
             policy = resolve_calibrated_policy(session, cfg)
 
         assert policy.min_hold_margin_source == SOURCE_DEFAULT_500
@@ -128,7 +153,7 @@ class TestPreparePlaybackUsesCalibration:
     """Tests that prepare_playback (Textual path) uses the calibrated margin."""
 
     # Patch at the import site of playback_controller (where it imports from calibrated_policy)
-    _PREP_PATCH = "sky_music.orchestration.calibrated_policy.load_calibrated_margin_recommendation"
+    _PREP_PATCH = "sky_music.orchestration.calibrated_policy.load_calibration_resolution"
 
     def _make_song(self) -> Song:
         return Song(
@@ -150,7 +175,7 @@ class TestPreparePlaybackUsesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(self._PREP_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(self._PREP_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             plan = prepare_playback(song, session, cfg)
 
         assert isinstance(plan, PlaybackPlan)
@@ -170,7 +195,10 @@ class TestPreparePlaybackUsesCalibration:
 
         # Explicitly mock the loader — this test opts out of the conftest autouse mock
         # because its nodeid contains "test_calibration_regression".
-        with patch(_LOADER_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
+        with patch(
+            _LOADER_PATCH,
+            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+        ):
             plan = prepare_playback(song, session, cfg)
         assert isinstance(plan, PlaybackPlan)
         assert plan.active_policy.min_hold_margin_source == SOURCE_DEFAULT_500
@@ -209,6 +237,17 @@ class TestConsolePolicyMatchesTextual:
         )
 
 
+def test_runtime_session_uses_only_the_single_calibrated_policy_resolver() -> None:
+    import inspect
+
+    from sky_music.orchestration import runtime_session
+
+    source = inspect.getsource(runtime_session)
+    assert "resolve_calibrated_policy" in source
+    assert "load_calibrated_margin_recommendation" not in source
+    assert "load_calibration_resolution" not in source
+
+
 # ---------------------------------------------------------------------------
 # 4. Profile/tempo rebuild preserves calibration
 # ---------------------------------------------------------------------------
@@ -233,7 +272,7 @@ class TestRebuildPreservesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(_LOADER_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             plan = prepare_playback(song, session, cfg)
             assert isinstance(plan, PlaybackPlan)
             rebuilt = rebuild_with(plan, hold_frames=1.5)
@@ -253,7 +292,7 @@ class TestRebuildPreservesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(_LOADER_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             plan = prepare_playback(song, session, cfg)
             assert isinstance(plan, PlaybackPlan)
             rebuilt = rebuild_with(plan, tempo=0.9)
@@ -271,7 +310,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
 
     # _effective_policy_signature does a local import of resolve_calibrated_policy,
     # so we patch at the single source: the calibrated_policy module's loader reference.
-    _SIG_PATCH = "sky_music.orchestration.calibrated_policy.load_calibrated_margin_recommendation"
+    _SIG_PATCH = "sky_music.orchestration.calibrated_policy.load_calibration_resolution"
 
     def test_signature_changes_when_margin_changes(self) -> None:
         from sky_music.ui.picker_metadata import _effective_policy_signature
@@ -279,10 +318,13 @@ class TestPickerMetadataSignatureIncludesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        with patch(self._SIG_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
+        with patch(
+            self._SIG_PATCH,
+            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+        ):
             sig_default = _effective_policy_signature(session, cfg)
 
-        with patch(self._SIG_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(self._SIG_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             sig_device = _effective_policy_signature(session, cfg)
 
         assert sig_default != sig_device, (
@@ -304,6 +346,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
             "min_hold_margin_source must be part of the persistent cache key signature"
         )
         assert "min_hold_margin_us" in sig
+        assert sig["down_late_grace_us"] == 500
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +414,7 @@ class TestKeymapCommandRename:
         cmd = self._get_command("calibrate_latency")
         assert cmd is not None, "calibrate_latency command missing from COMMANDS"
         assert cmd.key == "c", f"Expected key='c', got key={cmd.key!r}"
-        assert "Input Latency" in cmd.label, f"Label should say 'Input Latency', got {cmd.label!r}"
+        assert cmd.label == "Host Input Delivery Calibration"
 
     def test_calibration_has_no_direct_key(self) -> None:
         """Telemetry recommendation command must not be bound to 'c'."""
@@ -435,18 +478,19 @@ class TestCalibrationRegressionIntegration:
     def test_calibration_regression_cache_to_policy(self) -> None:
         """Given a valid .cache/input_latency.json, the active policy margin == 800 µs."""
         # Act: load the margin directly from synthetic data (avoids filesystem)
-        margin_us, source = load_calibrated_margin_recommendation(data=_INTEGRATION_CACHE)
+        resolution = load_calibration_resolution(data=_INTEGRATION_CACHE)
 
-        assert source == SOURCE_DEVICE_CACHE
-        assert margin_us == _EXPECTED_MARGIN_US
+        assert resolution.status is CalibrationStatus.VALID
+        assert resolution.margin_source == SOURCE_DEVICE_CACHE
+        assert resolution.resolved_margin_us == _EXPECTED_MARGIN_US
 
         # Build a policy through the resolver using the loaded margin
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
         policy = session.resolve_effective_policy(
             cfg,
-            calibrated_margin_us=margin_us,
-            calibrated_margin_source=source,
+            hold_margin_us=resolution.resolved_margin_us,
+            hold_margin_source=resolution.margin_source,
         )
 
         assert int(policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
@@ -469,8 +513,8 @@ class TestCalibrationRegressionIntegration:
         cfg = AppConfig()
         policy = session.resolve_effective_policy(
             cfg,
-            calibrated_margin_us=_EXPECTED_MARGIN_US,
-            calibrated_margin_source=SOURCE_DEVICE_CACHE,
+            hold_margin_us=_EXPECTED_MARGIN_US,
+            hold_margin_source=SOURCE_DEVICE_CACHE,
         )
 
         sched = build_key_actions(song, policy=policy, scan_code_mode="physical")
@@ -488,12 +532,15 @@ class TestCalibrationRegressionIntegration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        _SIG_PATCH = "sky_music.orchestration.calibrated_policy.load_calibrated_margin_recommendation"
+        _SIG_PATCH = "sky_music.orchestration.calibrated_policy.load_calibration_resolution"
 
-        with patch(_SIG_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
+        with patch(
+            _SIG_PATCH,
+            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+        ):
             sig_before = _effective_policy_signature(session, cfg)
 
-        with patch(_SIG_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
+        with patch(_SIG_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             sig_after = _effective_policy_signature(session, cfg)
 
         assert sig_before != sig_after, (
@@ -507,7 +554,7 @@ class TestCalibrationRegressionIntegration:
 # ---------------------------------------------------------------------------
 
 class TestPublishedCalibrationResultContract:
-    """Tests for typed paired evidence and strict cache-v2 parsing."""
+    """Tests for typed paired evidence and strict v3/v2 cache parsing."""
 
     def test_raw_native_result_has_no_ui_down_us_contract(self) -> None:
         """Raw native dict has buckets, not top-level down_us."""
@@ -518,7 +565,9 @@ class TestPublishedCalibrationResultContract:
         )
 
         pub = PublishedCalibrationResult(
+            status=CalibrationStatus.VALID,
             margin_us=800,
+            candidate_margin_us=800,
             source="device_cache",
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
@@ -529,6 +578,7 @@ class TestPublishedCalibrationResultContract:
             worst_bucket="15/cold",
             global_shrink_p99_us=700,
             guard_us=100,
+            ceiling_us=2_000,
         )
         assert pub.global_shrink_p99_us == 700
         assert pub.evidence_kind == "injected_raw_input_delivery_proxy"
@@ -562,8 +612,8 @@ class TestPublishedCalibrationResultContract:
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
         for bucket in cache["pair_buckets"].values():
             bucket["pair_worst_shrink_us"] = _signed_stats(-2)
-        cache["selected_margin"].update(
-            {"worst_bucket": "1/hot", "global_shrink_p99_us": 0, "recommended_margin_us": 300}
+        cache["qualification"].update(
+            {"worst_bucket": "1/hot", "global_shrink_p99_us": 0, "candidate_margin_us": 100, "applied_margin_us": 300}
         )
         summary = parse_calibration_cache_summary(cache)
         assert summary.margin_us == 300
@@ -618,7 +668,9 @@ class TestPublishedCalibrationResultContract:
         )
 
         pub = PublishedCalibrationResult(
+            status=CalibrationStatus.VALID,
             margin_us=800,
+            candidate_margin_us=800,
             source="device_cache",
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
@@ -629,6 +681,7 @@ class TestPublishedCalibrationResultContract:
             worst_bucket="15/cold",
             global_shrink_p99_us=700,
             guard_us=100,
+            ceiling_us=2_000,
         )
 
         msg = (

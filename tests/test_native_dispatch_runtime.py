@@ -278,7 +278,7 @@ def test_runtime_forwards_explicit_down_late_grace_to_native_session(monkeypatch
     assert captured["down_late_grace_us"] == 500
 
 
-def test_playback_engine_forwards_hold_margin_without_deriving_it(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_playback_engine_keeps_hold_margin_and_down_late_grace_independent(monkeypatch: pytest.MonkeyPatch) -> None:
     from sky_music.domain import Song
     from sky_music.domain.domain import Microseconds, ScanCode
     from sky_music.domain.scheduler_types import ActionKind, KeyAction
@@ -306,11 +306,13 @@ def test_playback_engine_forwards_hold_margin_without_deriving_it(monkeypatch: p
         ),
         require_focus=False,
         min_hold_us=17_167,
-        min_hold_margin_us=500,
+        min_hold_margin_us=1_800,
+        down_late_grace_us=500,
     )
 
     assert engine._play_native() == engine_module.PLAYBACK_FINISHED
     assert captured["down_late_grace_us"] == 500
+    assert captured["down_late_grace_us"] != engine.min_hold_margin_us
 
 
 def test_runtime_does_not_focus_before_native_worker(

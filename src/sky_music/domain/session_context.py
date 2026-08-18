@@ -14,6 +14,7 @@ from sky_music.domain.hold_timing import (
     validate_hold_frames,
 )
 from sky_music.domain.scheduler_types import (
+    DEFAULT_DOWN_LATE_GRACE_US,
     DEFAULT_FOCUS_RESTORE_GRACE_US,
     FrameTimingPolicy,
     TimingPolicy,
@@ -101,16 +102,19 @@ class PlaybackSessionContext:
         self,
         cfg: AppConfig | None = None,
         *,
-        calibrated_margin_us: int | None = None,
-        calibrated_margin_source: str = "default_500",
+        hold_margin_us: int = 500,
+        hold_margin_source: str = "default_500",
     ) -> FrameTimingPolicy:
         del cfg
+        if type(hold_margin_us) is not int or hold_margin_us < 0:
+            raise ValueError("hold_margin_us must be a non-negative integer")
         policy = TimingPolicy(
             hold_frames=self.hold_frames,
             focus_restore_grace_us=Microseconds(self.focus_restore_grace_us),
             same_key_conflict_policy=self.same_key_conflict_policy,
-            min_hold_margin_us=Microseconds(max(0, calibrated_margin_us if calibrated_margin_us is not None else 500)),
-            min_hold_margin_source=calibrated_margin_source if calibrated_margin_us is not None else "default_500",
+            min_hold_margin_us=Microseconds(hold_margin_us),
+            min_hold_margin_source=hold_margin_source,
+            down_late_grace_us=Microseconds(DEFAULT_DOWN_LATE_GRACE_US),
         )
         return FrameTimingPolicy.from_timing_policy(policy, fps=self.fps)
 

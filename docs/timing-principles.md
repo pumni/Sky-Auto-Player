@@ -21,7 +21,7 @@ microsecond conversions.
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `down_late_grace` | The session-fixed hold margin reused as the maximum authorized Down lateness. |
+| `down_late_grace` | Independent fixed sender correctness grace for authorized Down admission; production is `500 µs`. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -51,14 +51,10 @@ the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
 
-`min_hold_margin_us` serves two related purposes:
-
-1. it is already included once in the authored effective minimum hold;
-2. the same fixed session value bounds how late an authorized Down may enter
-   `SendInput` without being classified as a missed boundary.
-
-It is never added to the authored target, never used as dispatch lead, and
-never adapted during playback. The native worker materializes it once as
+`min_hold_margin_us` affects only the authored effective minimum hold. It is
+never added to the authored target, never used as dispatch lead, and never
+adapted during playback. Independently, production uses the fixed
+`down_late_grace_us = 500` sender policy, materialized once as
 `down_late_grace_ticks` at admission. For the tightest valid authored hold:
 
 ```text
@@ -70,9 +66,9 @@ authored_up - actual_down_pre_call
     >= effective_min_hold - down_late_grace
 ```
 
-Production supplies `down_late_grace_us` from `min_hold_margin_us`. Equality
-at the cutoff is permitted; a pre-call QPC one tick beyond it makes zero Down
-`SendInput` syscalls and follows the existing missed-Down recovery path.
+Equality at the cutoff is permitted; a pre-call QPC one tick beyond it makes
+zero Down `SendInput` syscalls and follows the existing missed-Down recovery
+path. Calibration never changes this grace.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `effective_min_hold_us`, including intervals
@@ -107,10 +103,22 @@ shrink = D - U
 ```
 
 The publishable matrix has six buckets (`1/5/15 × hot/cold`) with at least
-100 clean pairs in each. The selected static margin is the positive global
-bucket p99 plus a 100 µs guard, clamped to 300–2,000 µs. This margin is
-applied only to the hold floor; it never leads the playback target or claims
-game-observed timing. Full-calibration checkpoints use plain-text SHA256
+100 clean pairs in each. Qualification uses:
+
+```text
+candidate = positive global p99 + 100 µs
+
+candidate <= 2,000 µs
+    => calibrated, applied margin = max(300 µs, candidate)
+candidate > 2,000 µs
+    => out of the trusted correction envelope, no calibrated correction
+```
+
+An out-of-envelope measurement is complete evidence, is written as unhealthy
+cache v3, and playback falls back to the explicit 500 µs hold margin. A
+measurement/integrity failure preserves the previous cache. The correction is
+applied only to the hold floor; it never leads the playback target, changes
+`down_late_grace`, or claims game-observed timing. Full-calibration checkpoints use plain-text SHA256
 sidecars and a stable common provenance manifest. Resume and finalization
 reject any bucket whose source/build identity, native source fingerprint,
 Rust version, QPC frequency, or Windows build differs from the other five;

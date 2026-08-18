@@ -25,12 +25,51 @@ def test_zero_margin_is_valid_for_one_frame() -> None:
     assert policy.hold_us == policy.min_hold_us == policy.frame_us
 
 
-def test_hold_margin_is_also_the_authorized_down_lateness_budget() -> None:
-    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=500)
-    authored_down = 100_000
-    authored_up = authored_down + policy.min_hold_us
-    latest_allowed_down = authored_down + policy.min_hold_margin_us
+def test_calibrated_hold_margin_does_not_change_down_late_grace() -> None:
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=1_800)
 
-    assert policy.min_hold_us == 17_167
-    assert authored_up - latest_allowed_down == 16_667
-    assert authored_up - latest_allowed_down == policy.min_hold_us - policy.min_hold_margin_us
+    assert policy.min_hold_margin_us == 1_800
+    assert policy.down_late_grace_us == 500
+
+
+def test_down_late_grace_does_not_change_materialized_hold() -> None:
+    a = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=800, down_late_grace_us=100
+    )
+    b = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=800, down_late_grace_us=500
+    )
+
+    assert a.min_hold_us == b.min_hold_us
+
+
+def test_calibration_does_not_shift_authored_note_on_timestamps() -> None:
+    from sky_music.domain import Millis, Note, NoteKey, Song
+    from sky_music.domain.scheduler import build_key_actions
+    from sky_music.domain.scheduler_types import ActionKind
+
+    song = Song(
+        name="timestamp-invariant",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1_000), key=NoteKey("Key1")),
+        ),
+    )
+    actions_a = build_key_actions(
+        song, policy=FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=500)
+    ).actions
+    actions_b = build_key_actions(
+        song, policy=FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=1_800)
+    ).actions
+
+    downs_a = [
+        (action.scan_codes, int(action.at_us))
+        for action in actions_a
+        if action.kind is ActionKind.DOWN
+    ]
+    downs_b = [
+        (action.scan_codes, int(action.at_us))
+        for action in actions_b
+        if action.kind is ActionKind.DOWN
+    ]
+    assert downs_a == downs_b

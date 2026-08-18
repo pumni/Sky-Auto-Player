@@ -46,7 +46,7 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec("fps", "f", "FPS Sync", "Synchronize with game frame rate", "Playback"),
     CommandSpec("calibration", "", "Telemetry Playback Recommendation", "Analyze the latest playback telemetry and suggest hold/tempo changes", "Playback"),
     CommandSpec("dry_run", "d", "Toggle Dry-run", "Simulate without sending keys", "Playback"),
-    CommandSpec("calibrate_latency", "c", "Input Latency Calibration", "Measure host-side injected input delivery latency", "Playback"),
+    CommandSpec("calibrate_latency", "c", "Host Input Delivery Calibration", "Measure host-side injected Raw Input delivery", "Playback"),
     CommandSpec("hud", "h", "Toggle HUD", "Show/hide TUI HUD and Debug panel", "Interface"),
     CommandSpec("telemetry", "F3", "Toggle Telemetry", "Enable/disable CSV logging", "Interface"),
     CommandSpec("reload", "Ctrl+R", "Reload Songs", "Refresh songs directory", "Library"),

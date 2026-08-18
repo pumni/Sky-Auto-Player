@@ -1326,7 +1326,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
         self.app.push_screen(
             OptionModal(
-                "Input Latency Calibration",
+                "Host Input Delivery Calibration",
                 options,
                 info_text=text,
                 theme_name=self.active_theme,
@@ -1338,6 +1338,7 @@ class PickerScreen(Screen[SongPickerResult]):
         import asyncio
         from functools import partial
 
+        from sky_music.infrastructure.calibration_loader import CalibrationStatus
         from sky_music.platform.win32.native_calibration import (
             run_published_native_calibration,
         )
@@ -1390,25 +1391,52 @@ class PickerScreen(Screen[SongPickerResult]):
 
         assert published is not None
 
-        # Invalidate session/policy-dependent picker metadata so the next render
-        # uses the new device_cache margin.
+        # The completed measurement always published a new v3 cache, including
+        # an unhealthy out-of-envelope result.  Invalidate metadata so the next
+        # render resolves the new policy source.
         invalidate_policy_metadata()
         self._replace_metadata_coordinator()
 
-        self.app.push_screen(
-                InfoModal(
-                    "Input Latency Calibration Complete",
-                    f"Host delivery hold-shrink p99: {published.global_shrink_p99_us} \u00b5s\n"
-                    f"Worst measured bucket: {published.worst_bucket}\n"
-                    f"Calibrated device margin: {published.margin_us} \u00b5s\n"
-                    f"Policy guard: {published.guard_us} \u00b5s\n"
-                    f"Materialized authored hold: {published.effective_min_hold_us} \u00b5s (selected frame hold + calibrated margin)\n"
-                    f"Clean pairs per required bucket: {published.sample_count}\n"
-                    f"Evidence: {published.evidence_kind}\n"
-                    f"Cache: {published.cache_path}",
-                    theme_name=self.active_theme,
-                )
-        )
+        if published.status is CalibrationStatus.OUT_OF_ENVELOPE:
+            message = (
+                "Host Input Delivery Calibration: OUT OF ENVELOPE\n\n"
+                f"Host delivery hold-shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                f"Worst measured bucket          : {published.worst_bucket}\n"
+                f"Policy guard                   : {published.guard_us} \u00b5s\n"
+                f"Required hold correction       : {published.candidate_margin_us} \u00b5s\n"
+                f"Trusted correction ceiling    : {published.ceiling_us} \u00b5s\n\n"
+                "Applied calibrated margin      : NONE\n"
+                "Playback hold fallback         : 500 \u00b5s (not calibrated)\n"
+                f"Clean pairs / required bucket  : {published.sample_count}\n"
+                f"Evidence                       : {published.evidence_kind}\n"
+                f"Cache                          : {published.cache_path}\n\n"
+                "Note-On timestamps: unchanged\n\n"
+                "Reason:\n"
+                "Measured host delivery behavior is outside the trusted\n"
+                "calibration correction envelope."
+            )
+            title = "Host Input Delivery Calibration: OUT OF ENVELOPE"
+        else:
+            assert published.status is CalibrationStatus.VALID
+            assert published.margin_us is not None
+            assert published.effective_min_hold_us is not None
+            message = (
+                "Host Input Delivery Calibration: VALID\n\n"
+                f"Host delivery hold-shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                f"Worst measured bucket          : {published.worst_bucket}\n"
+                f"Policy guard                   : {published.guard_us} \u00b5s\n"
+                f"Candidate hold correction      : {published.candidate_margin_us} \u00b5s\n"
+                f"Applied hold margin            : {published.margin_us} \u00b5s\n"
+                f"Trusted correction ceiling     : {published.ceiling_us} \u00b5s\n"
+                f"Materialized authored hold     : {published.effective_min_hold_us} \u00b5s\n"
+                f"Clean pairs / required bucket  : {published.sample_count}\n"
+                f"Evidence                       : {published.evidence_kind}\n"
+                f"Cache                          : {published.cache_path}\n\n"
+                "Note-On timestamps: unchanged"
+            )
+            title = "Host Input Delivery Calibration: VALID"
+
+        self.app.push_screen(InfoModal(title, message, theme_name=self.active_theme))
 
 
     def action_open_calibration(self) -> None:

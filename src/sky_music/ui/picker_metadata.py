@@ -85,6 +85,7 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "min_hold_us",
     "min_hold_margin_us",
     "min_hold_margin_source",
+    "down_late_grace_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",
     "frame_us",
@@ -939,7 +940,9 @@ def get_song_ui_metadata(
         resolver = None
 
         song = _song_repository.load(song_path)
-        policy = session.resolve_effective_policy(cfg)
+        from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
+
+        policy = resolve_calibrated_policy(session, cfg if cfg is not None else AppConfig())
         sched = build_key_actions(
             song,
             policy=policy,
@@ -1292,7 +1295,7 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
 def invalidate_policy_metadata() -> None:
     """Clear only the session/policy-dependent in-memory caches.
 
-    Call this after a successful native input-latency calibration so that
+    Call this after a completed native host input-delivery calibration so that
     subsequent picker renders recompute risk and recommended-hold data
     against the new device margin.  Raw song parse results and the
     policy-independent ``_raw_cache`` are intentionally preserved.
