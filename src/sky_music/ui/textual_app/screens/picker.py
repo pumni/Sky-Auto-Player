@@ -1312,7 +1312,7 @@ class PickerScreen(Screen[SongPickerResult]):
             PickerOption("no", "Cancel"),
         ]
         text = (
-            "This measures the host-side injected Raw Input delivery proxy; it does not measure Sky polling, rendering, or audio latency.\n\n"
+            "This measures the host-side injected Raw Input total target-to-receipt hold proxy; it does not measure Sky polling, rendering, or audio latency.\n\n"
             "1. A separate Windows calibration window will open.\n"
             "2. Keep that window focused and avoid pressing keys until it completes.\n"
             "3. A bounded series of Down/Up calibration pairs will be sent across the required polyphony and hot/cold buckets.\n"
@@ -1400,7 +1400,7 @@ class PickerScreen(Screen[SongPickerResult]):
         if published.status is CalibrationStatus.OUT_OF_ENVELOPE:
             message = (
                 "Host Input Delivery Calibration: OUT OF ENVELOPE\n\n"
-                f"Host delivery hold-shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                f"Host total-hold proxy shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
                 f"Required hold correction       : {published.candidate_margin_us} \u00b5s\n"
@@ -1422,7 +1422,7 @@ class PickerScreen(Screen[SongPickerResult]):
             assert published.effective_min_hold_us is not None
             message = (
                 "Host Input Delivery Calibration: VALID\n\n"
-                f"Host delivery hold-shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                f"Host total-hold proxy shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
                 f"Candidate hold correction      : {published.candidate_margin_us} \u00b5s\n"

@@ -7,9 +7,9 @@
 //!
 //! # Evidence scope
 //!
-//! All data produced here is **injected Raw Input delivery proxy** latency.
-//! It is **not** Sky/game-observed latency.  The `evidence_kind` field in the
-//! JSON output says so explicitly.
+//! All data produced here is **injected Raw Input target-to-receipt total hold
+//! proxy** evidence. It is **not** Sky/game-observed latency. The
+//! `evidence_kind` field in the JSON output says so explicitly.
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;

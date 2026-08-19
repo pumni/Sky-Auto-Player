@@ -149,21 +149,24 @@ diagnostic, not game-observed timing evidence.
 The publishable calibration contract is a balanced Down/Up pair for each of
 `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`, and `15/cold`. The native
 process tags every packet with direction and sequence, records Raw Input at
-the `WM_INPUT` handler entry, and pairs receipts by scan code. For each key it
-computes the signed hold shrink `D - U`; only clean pairs enter the signed
-quantiles. At least 100 clean pairs are required in every production bucket.
-The cache is version 3 (native schema 9, measurement protocol 4); version 2
-is integrity-checked and migrated, while version 1 is rejected rather than
-reinterpreted. Qualification is:
+the `WM_INPUT` handler entry, and pairs receipts by scan code. Each direction
+has four authoritative QPC boundaries: absolute target, fused sender crossing,
+SendInput completion, and first receipt. For each key it computes direct signed
+total hold shrink `(up_target - down_target) - (up_receipt - down_receipt)`;
+scheduler, SendInput, and delivery shrink are diagnostics that must sum to that
+direct value. Only clean pairs enter the signed quantiles. At least 100 clean
+pairs are required in every production bucket. The cache is version 4 (native
+schema 10, measurement protocol 5); version 3 and older evidence is
+incompatible and falls back rather than being reinterpreted. Qualification is:
 
 ```text
-candidate = max(0, required_bucket_p99_shrink) + 100
+candidate = max(0, required_bucket_p99_total_proxy_shrink) + 100
 candidate <= 2_000 -> VALID, applied margin = max(300, candidate)
 candidate > 2_000  -> OUT_OF_ENVELOPE, applied margin = None
 ```
 
 Completed out-of-envelope evidence overwrites the cache with its unhealthy
-v3 status and playback falls back to a clearly-sourced 500 µs hold margin.
+v4 status and playback falls back to a clearly-sourced 500 µs hold margin.
 Measurement or integrity failure preserves the previous cache. The hold
 margin never changes Note-On timestamps, `physical_target`, dispatch lead, or
 the independent fixed `down_late_grace_us` policy, which is `500 µs` in

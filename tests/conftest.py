@@ -37,6 +37,7 @@ def isolate_input_latency_cache(request, monkeypatch):
         or "test_calibrated_margin_recommendation_poison_cases" in nodeid
         or "test_calibrated_margin_rejects_low_sample_count" in nodeid
         or "test_calibration_regression" in nodeid
+        or "test_native_calibration" in nodeid
         or "test_load_calibration_resolution_states" in nodeid
     ):
         return

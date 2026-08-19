@@ -162,6 +162,115 @@ enum PreparedSendFailure {
     DeadlineMissed { started_ticks: QpcTicks },
 }
 
+#[cfg(windows)]
+struct PreparedInputView {
+    requested: u8,
+    length: usize,
+    inputs: *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
+    cb_size: i32,
+}
+
+/// Run the shared target-aware QPC/SendInput envelope for a fixed INPUT view.
+///
+/// The view is constructed by a trusted crate-internal caller before entering
+/// this function.  Keeping this envelope shared lets the calibration packet
+/// carry its correlation tag without creating a second timing implementation.
+#[cfg(windows)]
+fn send_input_view_at_target(
+    view: PreparedInputView,
+    clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> Result<PlatformSendResult, PreparedSendFailure> {
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+
+    // Last-error state is preparation; it must not sit between the crossing
+    // sample and SendInput.
+    unsafe { SetLastError(0) };
+    let started_ticks = loop {
+        let ticks = match clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(PreparedSendFailure::Clock(None, error, false));
+            }
+        };
+        if ticks >= physical_target_qpc {
+            break ticks;
+        }
+        std::hint::spin_loop();
+    };
+
+    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+        return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
+    }
+
+    let inserted = unsafe { SendInput(view.length as u32, view.inputs, view.cb_size) }
+        .min(view.length as u32) as u8;
+    let win32_error = if usize::from(inserted) < view.length {
+        unsafe { GetLastError() }
+    } else {
+        0
+    };
+    let completed_ticks = match clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return Err(PreparedSendFailure::Clock(Some(started_ticks), error, true));
+        }
+    };
+
+    Ok(PlatformSendResult {
+        requested: view.requested,
+        inserted,
+        started_ticks,
+        completed_ticks: Some(completed_ticks),
+        win32_error,
+        timing_error: None,
+    })
+}
+
+#[cfg(not(windows))]
+fn send_input_view_at_target(
+    requested: u8,
+    clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> Result<PlatformSendResult, PreparedSendFailure> {
+    let started_ticks = loop {
+        let ticks = match clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(PreparedSendFailure::Clock(None, error, false));
+            }
+        };
+        if ticks >= physical_target_qpc {
+            break ticks;
+        }
+        std::hint::spin_loop();
+    };
+    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+        return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
+    }
+    let completed_ticks = match clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return Err(PreparedSendFailure::Clock(
+                Some(started_ticks),
+                error,
+                false,
+            ));
+        }
+    };
+    Ok(PlatformSendResult {
+        requested,
+        inserted: requested,
+        started_ticks,
+        completed_ticks: Some(completed_ticks),
+        win32_error: 0,
+        timing_error: None,
+    })
+}
+
 fn send_once_prepared(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
@@ -777,92 +886,116 @@ pub fn send_prepared_physical_packet_once_at_target_with_cutoff(
 ) -> SendTransactionOutcome {
     let packet = prepared.packet();
     #[cfg(windows)]
-    let (requested, length, inputs, cb_size) = {
+    let view = {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT;
         let length = usize::from(prepared.event_count());
-        (
-            prepared.event_count(),
+        PreparedInputView {
+            requested: prepared.event_count(),
             length,
-            prepared.inputs.as_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
+            inputs: prepared.inputs.as_ptr(),
+            cb_size: std::mem::size_of::<INPUT>() as i32,
+        }
     };
     #[cfg(not(windows))]
     let requested = prepared.event_count();
 
-    let started_ticks = loop {
-        let ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return prepared_send_outcome(
-                    packet,
-                    Err(PreparedSendFailure::Clock(None, error, false)),
-                );
-            }
-        };
-        if ticks >= physical_target_qpc {
-            break ticks;
-        }
-        std::hint::spin_loop();
-    };
+    #[cfg(windows)]
+    let first =
+        send_input_view_at_target(view, clock, physical_target_qpc, latest_allowed_down_qpc);
+    #[cfg(not(windows))]
+    let first = send_input_view_at_target(
+        requested,
+        clock,
+        physical_target_qpc,
+        latest_allowed_down_qpc,
+    );
+    prepared_send_outcome(packet, first)
+}
 
-    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
-        return prepared_send_outcome(
-            packet,
-            Err(PreparedSendFailure::DeadlineMissed { started_ticks }),
+/// Crate-private tagged calibration packet entry point. Packet materialization
+/// is completed before the shared target-crossing envelope begins; the
+/// correlation tag never enters the production packet identity.
+pub(crate) fn send_tagged_packet_at_target(
+    scan_codes: &[u16],
+    key_up: bool,
+    extra: usize,
+    clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+) -> PlatformSendResult {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
+        };
+
+        let requested = scan_codes.len().min(15) as u8;
+        let mut inputs: [INPUT; 15] = unsafe { std::mem::zeroed() };
+        let mut flags = KEYEVENTF_SCANCODE;
+        if key_up {
+            flags |= KEYEVENTF_KEYUP;
+        }
+        for (index, &scan_code) in scan_codes.iter().take(15).enumerate() {
+            inputs[index] = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: 0,
+                        wScan: scan_code,
+                        dwFlags: flags,
+                        time: 0,
+                        dwExtraInfo: extra,
+                    },
+                },
+            };
+        }
+        let result = send_input_view_at_target(
+            PreparedInputView {
+                requested,
+                length: usize::from(requested),
+                inputs: inputs.as_ptr(),
+                cb_size: std::mem::size_of::<INPUT>() as i32,
+            },
+            clock,
+            physical_target_qpc,
+            None,
         );
+        match result {
+            Ok(result) => result,
+            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
+                requested,
+                inserted: 0,
+                started_ticks: started.unwrap_or(QpcTicks::ZERO),
+                completed_ticks: None,
+                win32_error: 0,
+                timing_error: Some(error),
+            },
+            Err(PreparedSendFailure::DeadlineMissed { .. }) => {
+                unreachable!("tagged calibration packets do not use a Down cutoff")
+            }
+        }
     }
 
-    #[cfg(windows)]
-    let first = {
-        use windows_sys::Win32::Foundation::GetLastError;
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
-        let inserted = unsafe { SendInput(length as u32, inputs, cb_size) }.min(length as u32);
-        let win32_error = if inserted < length as u32 {
-            unsafe { GetLastError() }
-        } else {
-            0
-        };
-        let completed_ticks = match clock.now() {
-            Ok(ticks) => Some(ticks),
-            Err(error) => {
-                return prepared_send_outcome(
-                    packet,
-                    Err(PreparedSendFailure::Clock(Some(started_ticks), error, true)),
-                );
-            }
-        };
-        PlatformSendResult {
-            requested,
-            inserted: inserted as u8,
-            started_ticks,
-            completed_ticks,
-            win32_error,
-            timing_error: None,
-        }
-    };
     #[cfg(not(windows))]
-    let first = {
-        let completed_ticks = match clock.now() {
-            Ok(ticks) => Some(ticks),
-            Err(error) => {
-                return prepared_send_outcome(
-                    packet,
-                    Err(PreparedSendFailure::Clock(Some(started_ticks), error, true)),
-                );
-            }
-        };
-        PlatformSendResult {
-            requested,
-            inserted: requested,
-            started_ticks,
-            completed_ticks,
-            win32_error: 0,
-            timing_error: None,
+    {
+        let _ = (scan_codes, key_up, extra);
+        match send_input_view_at_target(
+            u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
+            clock,
+            physical_target_qpc,
+            None,
+        ) {
+            Ok(result) => result,
+            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
+                requested: u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
+                inserted: 0,
+                started_ticks: started.unwrap_or(QpcTicks::ZERO),
+                completed_ticks: None,
+                win32_error: 0,
+                timing_error: Some(error),
+            },
+            Err(PreparedSendFailure::DeadlineMissed { .. }) => unreachable!(),
         }
-    };
-
-    prepared_send_outcome(packet, Ok(first))
+    }
 }
 
 #[cfg(test)]

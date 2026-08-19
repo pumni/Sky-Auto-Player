@@ -440,12 +440,12 @@ impl TrackedKeyState {
         qpc_clock: crate::clock::QpcClock,
         physical_target_qpc: QpcTicks,
         latest_allowed_down_qpc: Option<QpcTicks>,
-        #[cfg(any(test, feature = "test-support"))] test_started_ticks: Option<QpcTicks>,
+        _test_started_ticks: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
         {
-            let started_ticks = if let Some(started_ticks) = test_started_ticks {
+            let started_ticks = if let Some(started_ticks) = _test_started_ticks {
                 Some(started_ticks)
             } else if self.custom_packet_emitter.is_some() {
                 Some(loop {
@@ -508,7 +508,7 @@ impl TrackedKeyState {
                     }
                     return self.apply_packet_outcome(packet, outcome);
                 }
-                if test_started_ticks.is_some() {
+                if _test_started_ticks.is_some() {
                     let outcome = send_prepared_physical_packet_once_with_start_and_cutoff(
                         prepared,
                         qpc_clock,

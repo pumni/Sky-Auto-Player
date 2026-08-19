@@ -41,8 +41,8 @@ def run_doctor_command(
             return 1
         
         print("Creating calibration window. Please keep the window focused.")
-        print("Injecting balanced Down/Up pairs and measuring host-side Raw Input delivery...")
-        print("This is a SendInput -> app-owned WM_INPUT delivery proxy, not game/audio onset truth.")
+        print("Injecting balanced Down/Up pairs and measuring the host-side total hold proxy...")
+        print("This is SendInput target-to-receipt evidence, not game/audio onset truth.")
         try:
             from sky_music.infrastructure.calibration_loader import CalibrationStatus
             from sky_music.platform.win32.native_calibration import (
@@ -51,7 +51,7 @@ def run_doctor_command(
 
             res = run_published_native_calibration()
             print(
-                "Host delivery hold-shrink p99 (us): "
+                "Host total-hold proxy shrink p99 (us): "
                 f"{res.global_shrink_p99_us} (worst bucket: {res.worst_bucket})"
             )
             print(f"Candidate hold correction (us): {res.candidate_margin_us}")

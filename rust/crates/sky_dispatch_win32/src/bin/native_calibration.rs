@@ -6,8 +6,9 @@
 //! process terminates unexpectedly.
 
 use sky_dispatch_win32::calibration::{
-    CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, CALIBRATION_SCHEMA_VERSION, CalibrationConfig,
-    CalibrationFailureReport, MEASUREMENT_PROTOCOL_VERSION, SampleClass, run_calibration_json,
+    CALIBRATION_EVIDENCE_KIND, CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, CALIBRATION_SCHEMA_VERSION,
+    CalibrationConfig, CalibrationFailureReport, HOST_FINGERPRINT_VERSION,
+    MEASUREMENT_PROTOCOL_VERSION, SampleClass, run_calibration_json,
     run_calibration_pair_bucket_json,
 };
 
@@ -55,7 +56,7 @@ fn main() -> Result<(), String> {
                     return Err("--mode must be quick, full, or bucket".to_string());
                 }
             }
-            // Accepted only for a clear migration error. Protocol v4 has no
+            // Accepted only for a clear migration error. Protocol vNext has no
             // independent directional bucket.
             "--kind" => {
                 return Err("--kind is retired; protocol v4 measures Down/Up pairs".to_string());
@@ -121,6 +122,8 @@ fn main() -> Result<(), String> {
                 "version": CALIBRATION_SCHEMA_VERSION,
                 "calibration_schema_version": CALIBRATION_SCHEMA_VERSION,
                 "measurement_protocol_version": MEASUREMENT_PROTOCOL_VERSION,
+                "evidence_kind": CALIBRATION_EVIDENCE_KIND,
+                "host_fingerprint_version": HOST_FINGERPRINT_VERSION,
                 "source_git_sha": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_build_id": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_source_fingerprint": env!("SKY_NATIVE_SOURCE_FINGERPRINT"),

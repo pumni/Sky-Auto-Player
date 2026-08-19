@@ -623,14 +623,17 @@ fn record_down_send_outcome(
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
+    #[cfg(any(test, feature = "test-support"))]
+    let backend_test_started_ticks = test_now_ticks;
+    #[cfg(not(any(test, feature = "test-support")))]
+    let backend_test_started_ticks = None;
     debug_assert_eq!(prepared_packet.packet(), packet);
     let result = backend.send_prepared_physical_packet_at_target_with_cutoff(
         prepared_packet,
         qpc_clock,
         physical_target_qpc,
         latest_allowed_down_qpc,
-        #[cfg(any(test, feature = "test-support"))]
-        test_now_ticks,
+        backend_test_started_ticks,
     );
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(

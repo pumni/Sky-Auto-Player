@@ -26,6 +26,25 @@ def _quantiles(p99: int = 6) -> dict[str, int]:
     }
 
 
+def _host_fingerprint() -> dict[str, object]:
+    return {
+        "host_fingerprint_version": 2,
+        "qpc_frequency_hz": 10_000_000,
+        "win32_build": "Windows 11 test",
+        "processor_architecture": "AMD64",
+        "cpu_vendor": "GenuineIntel",
+        "cpu_family": 6,
+        "cpu_model": 183,
+        "cpu_stepping": 1,
+        "logical_processor_count": 16,
+        "processor_group_count": 1,
+        "cpu_set_efficiency_classes": [8, 8, 16, 16],
+        "highest_efficiency_class": 16,
+        "lowest_efficiency_class": 8,
+        "sampled_at_us": 123,
+    }
+
+
 def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> dict[str, object]:
     total = clean if attempted is None else attempted
     rejected = total - clean
@@ -45,6 +64,10 @@ def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> 
         "last_receipt_us": _quantiles(),
         "intra_chord_spread_us": None,
         "pair_worst_shrink_us": _quantiles(p99),
+        "pair_worst_total_proxy_shrink_us": _quantiles(p99),
+        "scheduler_shrink_us": _quantiles(6),
+        "sendinput_shrink_us": _quantiles(6),
+        "delivery_shrink_us": _quantiles(6),
         "down_receipt_us": _quantiles(),
         "up_receipt_us": _quantiles(),
     }
@@ -66,15 +89,15 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 9,
-        "measurement_protocol_version": 4,
-        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "version": 10,
+        "measurement_protocol_version": 5,
+        "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
         "dirty_worktree": False,
         "native_source_fingerprint": "test-fingerprint",
         "rustc_version": "rustc test",
-        "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+        "host_fingerprint": _host_fingerprint(),
         "configuration": _configuration(polyphonies=[polyphony], samples=samples),
         "class": class_name,
         "polyphony": polyphony,
@@ -103,15 +126,15 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 9,
-        "measurement_protocol_version": 4,
-        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "version": 10,
+        "measurement_protocol_version": 5,
+        "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
         "dirty_worktree": False,
         "native_source_fingerprint": "test-fingerprint",
         "rustc_version": "rustc test",
-        "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+        "host_fingerprint": _host_fingerprint(),
         "configuration": _configuration(polyphonies=[1, 5, 15]),
         "pair_buckets": pair_buckets,
         "measured_attempted": 600,
@@ -136,10 +159,10 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
     }
 
 
-def test_protocol_v4_native_result_accepts_signed_pair_matrix() -> None:
+def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 9
-    assert result["measurement_protocol_version"] == 4
+    assert result["version"] == 10
+    assert result["measurement_protocol_version"] == 5
 
 
 def test_native_result_rejects_missing_required_bucket() -> None:
@@ -194,16 +217,16 @@ def test_directional_execution_is_rejected() -> None:
         )
 
 
-def test_cache_v3_uses_max_positive_p99_and_preserves_signed_values() -> None:
+def test_cache_v4_uses_max_positive_total_proxy_p99_and_preserves_signed_values() -> None:
     result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
-    cache = native_calibration._cache_v3(result)
+    cache = native_calibration._cache_v4(result)
     summary = loader.parse_calibration_cache_summary(cache)
-    assert cache["version"] == 3
+    assert cache["version"] == 4
     assert summary.global_shrink_p99_us == 42
     assert summary.worst_bucket == "15/cold"
     assert summary.margin_us == 300
     assert summary.candidate_margin_us == 142
-    assert summary.pair_buckets["5/hot"].pair_worst_shrink_us.p99 == -8
+    assert summary.pair_buckets["5/hot"].pair_worst_total_proxy_shrink_us.p99 == -8
 
 
 def test_cache_v1_is_rejected_and_falls_back() -> None:
@@ -213,7 +236,7 @@ def test_cache_v1_is_rejected_and_falls_back() -> None:
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
-    cache = native_calibration._cache_v3(_native_result())
+    cache = native_calibration._cache_v4(_native_result())
     cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
     cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="clean pairs"):
@@ -246,7 +269,7 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     result = _native_result(
         p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
     )
-    cache = native_calibration._cache_v3(result)
+    cache = native_calibration._cache_v4(result)
     summary = loader.parse_calibration_cache_summary(cache)
 
     assert summary.margin_us is None
@@ -263,15 +286,15 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
         ("global_shrink_p99_us", 0),
     ],
 )
-def test_v3_rejects_tampered_qualification(field: str, value: object) -> None:
-    cache = native_calibration._cache_v3(_native_result())
+def test_v4_rejects_tampered_qualification(field: str, value: object) -> None:
+    cache = native_calibration._cache_v4(_native_result())
     cast(dict[str, object], cache["qualification"])[field] = value
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(cache)
 
 
-def test_v3_rejects_out_of_envelope_saturated_applied_margin() -> None:
-    cache = native_calibration._cache_v3(
+def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
+    cache = native_calibration._cache_v4(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
         )
@@ -281,8 +304,8 @@ def test_v3_rejects_out_of_envelope_saturated_applied_margin() -> None:
         loader.parse_calibration_cache_summary(cache)
 
 
-def test_v3_rejects_wrong_status_and_valid_null_applied_margin() -> None:
-    out_cache = native_calibration._cache_v3(
+def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
+    out_cache = native_calibration._cache_v4(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12_088)
         )
@@ -291,85 +314,28 @@ def test_v3_rejects_wrong_status_and_valid_null_applied_margin() -> None:
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(out_cache)
 
-    valid_cache = native_calibration._cache_v3(_native_result())
+    valid_cache = native_calibration._cache_v4(_native_result())
     cast(dict[str, object], valid_cache["qualification"])["applied_margin_us"] = None
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(valid_cache)
 
 
-def test_v2_current_saturation_migrates_to_out_of_envelope() -> None:
-    v3 = native_calibration._cache_v3(
-        _native_result(
-            p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
-        )
-    )
-    legacy = dict(v3)
-    legacy["version"] = 2
-    legacy["source_formula_version"] = 2
-    legacy.pop("status")
-    qualification = cast(dict[str, object], legacy.pop("qualification"))
-    legacy["selected_margin"] = {
-        "basis": qualification["basis"],
-        "worst_bucket": qualification["worst_bucket"],
-        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
-        "guard_us": qualification["guard_us"],
-        "floor_us": qualification["floor_us"],
-        "ceiling_us": qualification["ceiling_us"],
-        "recommended_margin_us": 2_000,
-    }
-    summary = loader.parse_calibration_cache_summary(legacy)
-    assert summary.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
-    assert summary.margin_us is None
-    assert summary.candidate_margin_us == 12_188
-
-
-def test_v2_valid_margin_migrates_to_valid_v3_semantics() -> None:
-    v3 = native_calibration._cache_v3(
-        _native_result(p99_by_key={"15/cold": 700})
-    )
-    legacy = dict(v3)
-    legacy["version"] = 2
-    legacy["source_formula_version"] = 2
-    legacy.pop("status")
-    qualification = cast(dict[str, object], legacy.pop("qualification"))
-    legacy["selected_margin"] = {
-        "basis": qualification["basis"],
-        "worst_bucket": qualification["worst_bucket"],
-        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
-        "guard_us": qualification["guard_us"],
-        "floor_us": qualification["floor_us"],
-        "ceiling_us": qualification["ceiling_us"],
-        "recommended_margin_us": 800,
-    }
-
-    summary = loader.parse_calibration_cache_summary(legacy)
-
-    assert summary.status is loader.CalibrationStatus.VALID
-    assert summary.margin_us == 800
-    assert summary.candidate_margin_us == 800
-
-
-def test_v2_tampered_legacy_recommendation_is_rejected() -> None:
-    v3 = native_calibration._cache_v3(_native_result(p99_by_key={"15/cold": 700}))
-    legacy = dict(v3)
-    legacy["version"] = 2
-    legacy["source_formula_version"] = 2
-    legacy.pop("status")
-    qualification = cast(dict[str, object], legacy.pop("qualification"))
-    legacy["selected_margin"] = {
-        "basis": qualification["basis"],
-        "worst_bucket": qualification["worst_bucket"],
-        "global_shrink_p99_us": qualification["global_shrink_p99_us"],
-        "guard_us": qualification["guard_us"],
-        "floor_us": qualification["floor_us"],
-        "ceiling_us": qualification["ceiling_us"],
-        "recommended_margin_us": 2_000,
-    }
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize("legacy_version", [2, 3])
+def test_legacy_cache_is_rejected_without_reinterpreting_vnext(
+    legacy_version: int,
+) -> None:
+    legacy = native_calibration._cache_v4(_native_result())
+    legacy["version"] = legacy_version
+    legacy["source_formula_version"] = 3
+    with pytest.raises(ValueError, match=r"legacy|unsupported"):
         loader.parse_calibration_cache_summary(legacy)
+    resolution = loader.load_calibration_resolution(data=legacy)
+    assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
+    assert resolution.resolved_margin_us == 500
 
 
-def test_load_calibration_resolution_states() -> None:
+def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(loader, "_current_host_fingerprint", _host_fingerprint)
     missing = loader.load_calibration_resolution(data=None, cache_path=Path("does-not-exist.json"))
     assert missing.status is loader.CalibrationStatus.UNCALIBRATED
     assert missing.resolved_margin_us == 500
@@ -380,7 +346,7 @@ def test_load_calibration_resolution_states() -> None:
     assert corrupt.resolved_margin_us == 500
     assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_DEFAULT_500
 
-    valid_cache = native_calibration._cache_v3(
+    valid_cache = native_calibration._cache_v4(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
     )
     valid = loader.load_calibration_resolution(data=valid_cache)
@@ -388,13 +354,30 @@ def test_load_calibration_resolution_states() -> None:
     assert valid.resolved_margin_us == 800
     assert valid.margin_source == loader.SOURCE_DEVICE_CACHE
 
-    out_cache = native_calibration._cache_v3(
+    out_cache = native_calibration._cache_v4(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088))
     )
     out = loader.load_calibration_resolution(data=out_cache)
     assert out.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
     assert out.resolved_margin_us == 500
     assert out.margin_source == loader.SOURCE_OUT_OF_ENVELOPE_DEFAULT_500
+
+
+def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = native_calibration._cache_v4(_native_result())
+    current = _host_fingerprint()
+    monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: current)
+    cache["host_fingerprint"]["sampled_at_us"] = 999_999  # type: ignore[index]
+    assert loader.load_calibration_resolution(data=cache).status is loader.CalibrationStatus.VALID
+
+    changed = dict(current)
+    changed["cpu_model"] = int(cast(int, changed["cpu_model"])) + 1
+    monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: changed)
+    result = loader.load_calibration_resolution(data=cache)
+    assert result.status is loader.CalibrationStatus.INCOMPATIBLE
+    assert result.resolved_margin_us == 500
 
 
 def test_diagnostic_run_writes_report_but_never_production_cache(

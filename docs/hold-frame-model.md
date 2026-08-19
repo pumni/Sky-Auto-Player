@@ -14,14 +14,14 @@ effective_min_hold_us = requested_min_hold_us
 
 The default hold margin is `500 µs`; calibration may provide a validated
 margin.
-The validated host-delivery calibration uses only paired Down/Up evidence from
+The validated host total-hold calibration uses only paired Down/Up target-to-receipt evidence from
 the six required `1/5/15 × hot/cold` buckets, with at least 100 clean pairs in
-each bucket. Its candidate is the global positive p99 hold shrink plus
+each bucket. Its candidate is the global positive p99 direct total-proxy hold shrink plus
 `100 µs`. A candidate at or below `2,000 µs` is valid and applies
 `max(300 µs, candidate)`; a candidate above `2,000 µs` is out of the trusted
 correction envelope and applies no calibrated margin. Cache v1 or
-incomplete/dirty evidence falls back to the unchanged `500 µs` default, while
-completed out-of-envelope evidence is retained as unhealthy cache v3.
+incomplete/dirty/legacy-host evidence falls back to the unchanged `500 µs` default, while
+completed out-of-envelope evidence is retained as unhealthy cache v4.
 The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. PyO3 does not add another frame-relative floor;
 Rust only range-checks and validates this value in QPC ticks. It does not learn

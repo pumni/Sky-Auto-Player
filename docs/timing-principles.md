@@ -83,13 +83,14 @@ released.
 
 ## 2.1 Host delivery calibration
 
-Calibration is a separate native, app-owned Raw Input proxy. It measures
-`SendInput` completion to `WM_INPUT` receipt, not game polling, rendering,
-audio, or network latency. The sender boundary is measured as:
+Calibration is a separate native, app-owned Raw Input proxy. It measures a
+target-to-receipt total hold proxy, not game polling, rendering, audio, or
+network latency. The sender boundary is measured as:
 
 ```text
-validate/build/tag packet -> arm sequence -> SetLastError(0)
--> pre_call_qpc -> SendInput -> sendinput_completion_qpc -> validate receipt
+validate/build/tag packet -> arm sequence -> precision handoff
+-> target_crossing/pre_call_qpc -> SendInput -> sendinput_completion_qpc
+-> validate receipt
 ```
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
@@ -99,7 +100,17 @@ pair computes signed per-key values:
 ```text
 D = down_receipt_qpc - down_completion_qpc
 U = up_receipt_qpc - up_completion_qpc
-shrink = D - U
+T = target_qpc
+P = pre_call_qpc
+C = sendinput_completion_qpc
+R = first_receipt_qpc
+
+scheduler_shrink = (P_D - T_D) - (P_U - T_U)
+sendinput_shrink = (C_D - P_D) - (C_U - P_U)
+delivery_shrink = (R_D - C_D) - (R_U - C_U)
+total_proxy_shrink = (T_U - T_D) - (R_U - R_D)
+
+total_proxy_shrink = scheduler_shrink + sendinput_shrink + delivery_shrink
 ```
 
 The publishable matrix has six buckets (`1/5/15 × hot/cold`) with at least
@@ -115,14 +126,16 @@ candidate > 2,000 µs
 ```
 
 An out-of-envelope measurement is complete evidence, is written as unhealthy
-cache v3, and playback falls back to the explicit 500 µs hold margin. A
+cache v4, and playback falls back to the explicit 500 µs hold margin. A
 measurement/integrity failure preserves the previous cache. The correction is
 applied only to the hold floor; it never leads the playback target, changes
 `down_late_grace`, or claims game-observed timing. Full-calibration checkpoints use plain-text SHA256
 sidecars and a stable common provenance manifest. Resume and finalization
 reject any bucket whose source/build identity, native source fingerprint,
-Rust version, QPC frequency, or Windows build differs from the other five;
-only the observation timestamp may differ. The final artifact and cache are
+Rust version, QPC frequency, Windows build, CPU identity, topology, or
+efficiency-class histogram differs from the other five; only the observation
+timestamp may differ. Runtime cache loading also requires the stable host
+fingerprint to match the current native host. The final artifact and cache are
 published only after the complete matrix and cache have both passed validation.
 
 ## 3. Planning and physical target

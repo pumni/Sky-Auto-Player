@@ -1,8 +1,8 @@
-"""Process-isolated protocol-v4 input-delivery calibration adapter.
+"""Process-isolated protocol-vNext input-delivery calibration adapter.
 
 The native process owns the Raw Input window and emits signed paired evidence.
 This adapter validates the complete result before writing an artifact or the
-version-3 production cache. Diagnostic runs may be saved as reports, never as
+version-4 production cache. Diagnostic runs may be saved as reports, never as
 production cache.
 """
 
@@ -27,6 +27,8 @@ from sky_music.domain.hold_timing import (
     materialize_hold_us,
 )
 from sky_music.infrastructure.calibration_loader import (
+    CALIBRATION_EVIDENCE_KIND,
+    HOST_FINGERPRINT_VERSION,
     MARGIN_CEILING_US,
     MARGIN_FLOOR_US,
     MARGIN_GUARD_US,
@@ -39,9 +41,9 @@ from sky_music.infrastructure.calibration_loader import (
     qualify_calibration_margin,
 )
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 9
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 4
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 6
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 10
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 5
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 7
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
@@ -175,6 +177,36 @@ def _validate_quantiles(value: object, name: str) -> dict[str, int]:
     return values
 
 
+def _validate_host_fingerprint(value: object) -> dict[str, Any]:
+    host = _require_mapping(value, "host_fingerprint")
+    if host.get("host_fingerprint_version") != HOST_FINGERPRINT_VERSION:
+        raise NativeCalibrationError("native calibration host fingerprint version is unsupported")
+    _int(host.get("qpc_frequency_hz"), "host_fingerprint.qpc_frequency_hz", minimum=1)
+    for field in ("win32_build", "processor_architecture", "cpu_vendor"):
+        field_value = host.get(field)
+        if not isinstance(field_value, str) or not field_value.strip():
+            raise NativeCalibrationError(f"native calibration host fingerprint lacks {field}")
+    for field in (
+        "cpu_family",
+        "cpu_model",
+        "cpu_stepping",
+        "logical_processor_count",
+        "processor_group_count",
+    ):
+        _int(host.get(field), f"host_fingerprint.{field}", minimum=0)
+    efficiency = host.get("cpu_set_efficiency_classes")
+    if not isinstance(efficiency, list) or any(
+        not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in efficiency
+    ):
+        raise NativeCalibrationError("native calibration host efficiency histogram is invalid")
+    for field in ("highest_efficiency_class", "lowest_efficiency_class"):
+        field_value = host.get(field)
+        if field_value is not None:
+            _int(field_value, f"host_fingerprint.{field}", minimum=0)
+    _int(host.get("sampled_at_us"), "host_fingerprint.sampled_at_us", minimum=0)
+    return host
+
+
 def _validate_pair_bucket(
     bucket_value: object,
     name: str,
@@ -200,10 +232,12 @@ def _validate_pair_bucket(
     ):
         if _int(bucket.get(field), f"{name}.{field}") > rejected:
             raise NativeCalibrationError(f"{name}.{field} exceeds rejected pairs")
-    pair_quantiles = bucket.get("pair_worst_shrink_us")
+    pair_quantiles = bucket.get("pair_worst_total_proxy_shrink_us")
     if pair_quantiles is None and not require_quantiles:
         return bucket
-    _validate_quantiles(pair_quantiles, f"{name}.pair_worst_shrink_us")
+    _validate_quantiles(pair_quantiles, f"{name}.pair_worst_total_proxy_shrink_us")
+    for field in ("scheduler_shrink_us", "sendinput_shrink_us", "delivery_shrink_us"):
+        _validate_quantiles(bucket.get(field), f"{name}.{field}")
     return bucket
 
 
@@ -212,7 +246,7 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
         raise NativeCalibrationError("unsupported native calibration schema version")
     if data.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
         raise NativeCalibrationError("unsupported native calibration measurement protocol")
-    if data.get("evidence_kind") != "injected_raw_input_delivery_proxy":
+    if data.get("evidence_kind") != CALIBRATION_EVIDENCE_KIND:
         raise NativeCalibrationError("native calibration evidence kind is not the expected proxy")
     for name in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
         value = data.get(name)
@@ -238,10 +272,7 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
             raise NativeCalibrationError(
                 "native calibration build does not match the frozen release"
             )
-    host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")
-    _int(host.get("qpc_frequency_hz"), "host_fingerprint.qpc_frequency_hz", minimum=1)
-    if not isinstance(host.get("win32_build"), str) or not host["win32_build"].strip():
-        raise NativeCalibrationError("native calibration has incomplete Windows fingerprint")
+    _validate_host_fingerprint(data.get("host_fingerprint"))
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
     for field, expected in (
         ("cleanup_success", True),
@@ -342,7 +373,7 @@ def _validate_result(
     if counts["measured_class_mismatch"] > counts["measured_attempted"]:
         raise NativeCalibrationError("native calibration measured_class_mismatch exceeds attempts")
     if counts["setup_attempted"] != 0:
-        raise NativeCalibrationError("protocol-v4 must not publish directional setup attempts")
+        raise NativeCalibrationError("protocol-vNext must not publish directional setup attempts")
     bucket_totals = {"anomaly_count": 0, "timeout_count": 0, "class_mismatch_count": 0}
     for polyphony in FULL_POLYPHONIES:
         classes = _require_mapping(raw_buckets[str(polyphony)], f"pair_buckets.{polyphony}")
@@ -464,7 +495,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v3(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v4(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -474,17 +505,21 @@ def _cache_v3(result: dict[str, Any]) -> dict[str, Any]:
             "attempted": bucket["attempted"],
             "clean_pair_count": bucket["clean"],
             "rejected": bucket["rejected"],
-            "pair_worst_shrink_us": bucket["pair_worst_shrink_us"],
+            "pair_worst_total_proxy_shrink_us": bucket["pair_worst_total_proxy_shrink_us"],
+            "scheduler_shrink_us": bucket["scheduler_shrink_us"],
+            "sendinput_shrink_us": bucket["sendinput_shrink_us"],
+            "delivery_shrink_us": bucket["delivery_shrink_us"],
+            "pair_worst_shrink_us": bucket.get("pair_worst_shrink_us"),
         }
     p99_values = {
-        key: max(0, int(bucket["pair_worst_shrink_us"]["p99"]))
+        key: max(0, int(bucket["pair_worst_total_proxy_shrink_us"]["p99"]))
         for key, bucket in flattened.items()
     }
     global_p99 = max(p99_values.values())
     worst_bucket = max(REQUIRED_BUCKETS, key=lambda key: (p99_values[key], -REQUIRED_BUCKETS.index(key)))
     qualification_result = qualify_calibration_margin(global_p99)
     qualification = {
-        "basis": "max_required_bucket_p99_positive_pair_hold_shrink",
+        "basis": "max_required_bucket_p99_positive_pair_total_proxy_hold_shrink",
         "worst_bucket": worst_bucket,
         "global_shrink_p99_us": global_p99,
         "guard_us": MARGIN_GUARD_US,
@@ -494,11 +529,12 @@ def _cache_v3(result: dict[str, Any]) -> dict[str, Any]:
         "applied_margin_us": qualification_result.applied_margin_us,
     }
     return {
-        "version": 3,
+        "version": 4,
+        "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "source": "device_cache",
         "status": qualification_result.status.value,
         "evidence_kind": result["evidence_kind"],
-        "source_formula_version": 3,
+        "source_formula_version": 4,
         "native_calibration_version": result["version"],
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
@@ -544,7 +580,7 @@ def _execute_native_bucket(
     kind: str | None = None,
 ) -> dict[str, Any]:
     if kind is not None:
-        raise NativeCalibrationError("independent directional calibration is retired in protocol v4")
+        raise NativeCalibrationError("independent directional calibration is retired in protocol vNext")
     command = [
         str(binary),
         "--mode",
@@ -724,7 +760,7 @@ def _manifest_path(checkpoint_dir: Path) -> Path:
 
 
 def _provenance_identity(data: dict[str, Any]) -> dict[str, Any]:
-    host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")
+    host = _validate_host_fingerprint(data.get("host_fingerprint"))
     qpc_frequency = _int(host.get("qpc_frequency_hz"), "host_fingerprint.qpc_frequency_hz", minimum=1)
     win32_build = host.get("win32_build")
     if not isinstance(win32_build, str) or not win32_build.strip():
@@ -737,6 +773,24 @@ def _provenance_identity(data: dict[str, Any]) -> dict[str, Any]:
         "rustc_version": data.get("rustc_version"),
         "qpc_frequency_hz": qpc_frequency,
         "win32_build": win32_build,
+        "host_fingerprint": {
+            field: host[field]
+            for field in (
+                "host_fingerprint_version",
+                "qpc_frequency_hz",
+                "win32_build",
+                "processor_architecture",
+                "cpu_vendor",
+                "cpu_family",
+                "cpu_model",
+                "cpu_stepping",
+                "logical_processor_count",
+                "processor_group_count",
+                "cpu_set_efficiency_classes",
+                "highest_efficiency_class",
+                "lowest_efficiency_class",
+            )
+        },
     }
     for name in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
         value = identity[name]
@@ -758,18 +812,12 @@ def _validate_provenance_manifest(value: object) -> dict[str, Any]:
         "rustc_version",
         "qpc_frequency_hz",
         "win32_build",
+        "host_fingerprint",
     }
     if set(value) != expected:
         raise NativeCalibrationError("calibration checkpoint provenance manifest is incomplete")
-    return _provenance_identity(
-        {
-            **value,
-            "host_fingerprint": {
-                "qpc_frequency_hz": value["qpc_frequency_hz"],
-                "win32_build": value["win32_build"],
-            },
-        }
-    )
+    host = _require_mapping(value["host_fingerprint"], "provenance.host_fingerprint")
+    return _provenance_identity({**value, "host_fingerprint": {**host, "sampled_at_us": 0}})
 
 
 def _static_provenance(identity: dict[str, Any]) -> dict[str, Any]:
@@ -818,7 +866,7 @@ def _finalize_artifacts(
         "acceptance_eligible": True,
         "version": SUPPORTED_NATIVE_CALIBRATION_VERSION,
         "measurement_protocol_version": SUPPORTED_MEASUREMENT_PROTOCOL_VERSION,
-        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "evidence_kind": CALIBRATION_EVIDENCE_KIND,
         "source_git_sha": common_provenance["source_git_sha"],
         "native_build_id": common_provenance["native_build_id"],
         "native_source_fingerprint": common_provenance["native_source_fingerprint"],
@@ -992,7 +1040,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v3(final)
+    cache = _cache_v4(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1014,7 +1062,7 @@ def run_native_calibration(
     failure_report_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if kind is not None:
-        raise NativeCalibrationError("independent directional calibration is retired in protocol v4")
+        raise NativeCalibrationError("independent directional calibration is retired in protocol vNext")
     if mode == "diagnostic":
         if class_name is None or polyphony is None or samples is None:
             raise NativeCalibrationError("diagnostic mode requires class_name, polyphony, and samples")
@@ -1038,7 +1086,7 @@ def run_native_calibration(
     budget = min(MAX_CALIBRATION_BUDGET_SECONDS, max(6, math.floor(timeout)))
     result = _run_process(_find_binary(), budget_seconds=budget, timeout_seconds=timeout, samples=FULL_SAMPLE_COUNT)
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v3(result)
+    cache = _cache_v4(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1058,7 +1106,7 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v3(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v4(result))
     return PublishedCalibrationResult(
         status=summary.status,
         margin_us=summary.margin_us,

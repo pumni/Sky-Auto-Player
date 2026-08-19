@@ -27,7 +27,7 @@ from sky_music.infrastructure.calibration_loader import (
 )
 
 # ---------------------------------------------------------------------------
-# Helper – minimal valid cache-v3 payload
+# Helper – minimal valid cache-vNext payload
 # ---------------------------------------------------------------------------
 
 def _signed_stats(p99: int = 6) -> dict[str, int]:
@@ -37,32 +37,53 @@ def _signed_stats(p99: int = 6) -> dict[str, int]:
 
 
 _REQUIRED_BUCKETS = ("1/hot", "1/cold", "5/hot", "5/cold", "15/hot", "15/cold")
+_HOST_FINGERPRINT = {
+    "host_fingerprint_version": 2,
+    "qpc_frequency_hz": 10_000_000,
+    "win32_build": "Windows 11 test",
+    "processor_architecture": "AMD64",
+    "cpu_vendor": "GenuineIntel",
+    "cpu_family": 6,
+    "cpu_model": 183,
+    "cpu_stepping": 1,
+    "logical_processor_count": 16,
+    "processor_group_count": 1,
+    "cpu_set_efficiency_classes": [8, 8, 16, 16],
+    "highest_efficiency_class": 16,
+    "lowest_efficiency_class": 8,
+    "sampled_at_us": 123,
+}
 _INTEGRATION_CACHE: dict = {
-    "version": 3,
+    "version": 4,
+    "artifact_schema_version": 7,
     "status": "valid",
     "source": "device_cache",
-    "evidence_kind": "injected_raw_input_delivery_proxy",
-    "source_formula_version": 3,
+    "evidence_kind": "injected_raw_input_total_hold_proxy",
+    "source_formula_version": 4,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
-    "native_calibration_version": 9,
-    "measurement_protocol_version": 4,
+    "native_calibration_version": 10,
+    "measurement_protocol_version": 5,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
     "dirty_worktree": False,
-    "host_fingerprint": {"qpc_frequency_hz": 10_000_000, "win32_build": "Windows 11 test"},
+    "host_fingerprint": _HOST_FINGERPRINT,
     "required_buckets": list(_REQUIRED_BUCKETS),
     "pair_buckets": {
         key: {
             "attempted": 100,
             "clean_pair_count": 100,
             "rejected": 0,
+            "pair_worst_total_proxy_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
+            "scheduler_shrink_us": _signed_stats(6),
+            "sendinput_shrink_us": _signed_stats(6),
+            "delivery_shrink_us": _signed_stats(6),
             "pair_worst_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
         }
         for key in _REQUIRED_BUCKETS
     },
     "qualification": {
-        "basis": "max_required_bucket_p99_positive_pair_hold_shrink",
+        "basis": "max_required_bucket_p99_positive_pair_total_proxy_hold_shrink",
         "worst_bucket": "15/cold",
         "global_shrink_p99_us": 700,
         "guard_us": 100,
@@ -478,7 +499,11 @@ class TestCalibrationRegressionIntegration:
     def test_calibration_regression_cache_to_policy(self) -> None:
         """Given a valid .cache/input_latency.json, the active policy margin == 800 µs."""
         # Act: load the margin directly from synthetic data (avoids filesystem)
-        resolution = load_calibration_resolution(data=_INTEGRATION_CACHE)
+        with patch(
+            "sky_music.infrastructure.calibration_loader._current_host_fingerprint",
+            return_value=_HOST_FINGERPRINT,
+        ):
+            resolution = load_calibration_resolution(data=_INTEGRATION_CACHE)
 
         assert resolution.status is CalibrationStatus.VALID
         assert resolution.margin_source == SOURCE_DEVICE_CACHE
@@ -590,7 +615,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert summary.pair_buckets["15/cold"].pair_worst_shrink_us.p99 == 700
+        assert summary.pair_buckets["15/cold"].pair_worst_total_proxy_shrink_us.p99 == 700
         assert summary.margin_us == 800
 
     def test_published_result_contains_numeric_signed_pair_quantiles(self) -> None:
@@ -600,8 +625,8 @@ class TestPublishedCalibrationResultContract:
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert type(summary.pair_buckets["1/hot"].pair_worst_shrink_us.p50) is int
-        assert summary.pair_buckets["1/hot"].pair_worst_shrink_us.min < 0
+        assert type(summary.pair_buckets["1/hot"].pair_worst_total_proxy_shrink_us.p50) is int
+        assert summary.pair_buckets["1/hot"].pair_worst_total_proxy_shrink_us.min < 0
 
     def test_published_result_accepts_margin_floor_300(self) -> None:
         """Recommended margin floor is 300 µs when paired p99 is small."""
@@ -611,7 +636,7 @@ class TestPublishedCalibrationResultContract:
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
         for bucket in cache["pair_buckets"].values():
-            bucket["pair_worst_shrink_us"] = _signed_stats(-2)
+            bucket["pair_worst_total_proxy_shrink_us"] = _signed_stats(-2)
         cache["qualification"].update(
             {"worst_bucket": "1/hot", "global_shrink_p99_us": 0, "candidate_margin_us": 100, "applied_margin_us": 300}
         )
@@ -627,7 +652,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        del cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"]["p50"]
+        del cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["p50"]
         with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
@@ -640,7 +665,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        del cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"]["p99"]
+        del cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["p99"]
         with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
@@ -653,7 +678,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        cache["pair_buckets"]["1/hot"]["pair_worst_shrink_us"].update(
+        cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"].update(
             {"p50": 9, "p90": 2}
         )
         with pytest.raises(ValueError):

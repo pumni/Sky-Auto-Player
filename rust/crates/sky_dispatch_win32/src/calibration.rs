@@ -2,16 +2,17 @@
 //!
 //! # Evidence scope
 //!
-//! This module measures **injected Raw Input delivery proxy** latency only.
-//! Concretely it captures the time between `SendInput` completion and the
-//! moment a `WM_INPUT` message from the app-owned calibration window arrives.
+//! This module measures **injected Raw Input target-to-receipt total hold
+//! proxy** evidence only. Concretely it captures four QPC boundaries for each
+//! direction: the absolute target, the fused sender crossing immediately
+//! before `SendInput`, syscall completion, and the first `WM_INPUT` receipt.
 //!
 //! The measured boundary is:
 //! ```text
-//! call_started_ticks   — QPC immediately before SendInput
+//! target_ticks         — absolute target requested by the calibration pair
+//! call_started_ticks   — fused crossing QPC immediately before SendInput
 //! call_completed_ticks — QPC immediately after SendInput returns
 //! first_receipt_ticks  — QPC when the first WM_INPUT for this packet arrives
-//! last_receipt_ticks   — QPC when the last WM_INPUT for this packet arrives
 //! ```
 //!
 //! This is **not** game-observed latency.  Do not label it as such.
@@ -79,6 +80,15 @@ pub enum CalibrationError {
 
     #[error("calibration statistics overflowed")]
     StatisticsOverflow,
+
+    #[error("calibration timestamp ordering is invalid: {field}")]
+    TimestampOrder { field: &'static str },
+
+    #[error("calibration timestamp arithmetic overflowed")]
+    TimestampArithmeticOverflow,
+
+    #[error("calibration precision wait failed: {detail}")]
+    PrecisionWaitFailed { detail: String },
 
     #[error("calibration measurement budget expired before cleanup")]
     BudgetExceeded,
@@ -182,6 +192,145 @@ impl CalibrationError {
     }
 }
 
+/// The four authoritative QPC boundaries for one key direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairedTimingPoint {
+    pub target_ticks: QpcTicks,
+    pub pre_call_ticks: QpcTicks,
+    pub completion_ticks: QpcTicks,
+    pub receipt_ticks: QpcTicks,
+}
+
+/// Signed component and direct total shrink in QPC ticks.
+///
+/// Tick-domain arithmetic is intentionally kept separate from microsecond
+/// presentation so a frequency conversion cannot affect pair qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairedTimingShrinkTicks {
+    pub scheduler_shrink_ticks: i128,
+    pub sendinput_shrink_ticks: i128,
+    pub delivery_shrink_ticks: i128,
+    pub total_proxy_shrink_ticks: i128,
+}
+
+/// Signed component and direct total shrink in microseconds for reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairedTimingShrinkUs {
+    pub scheduler_shrink_us: i64,
+    pub sendinput_shrink_us: i64,
+    pub delivery_shrink_us: i64,
+    pub total_proxy_shrink_us: i64,
+}
+
+fn ordered_delta(
+    later: QpcTicks,
+    earlier: QpcTicks,
+    field: &'static str,
+) -> Result<i128, CalibrationError> {
+    if later < earlier {
+        return Err(CalibrationError::TimestampOrder { field });
+    }
+    Ok(i128::from(later.as_u64()) - i128::from(earlier.as_u64()))
+}
+
+/// Compute paired scheduler, SendInput, delivery, and direct total shrink.
+///
+/// Each direction must have the monotonic target → pre-call → completion →
+/// receipt ordering. The direct total is checked against the decomposed sum so
+/// a future schema cannot silently publish inconsistent component evidence.
+pub fn paired_timing_shrink_ticks(
+    down: PairedTimingPoint,
+    up: PairedTimingPoint,
+) -> Result<PairedTimingShrinkTicks, CalibrationError> {
+    let down_scheduler = ordered_delta(
+        down.pre_call_ticks,
+        down.target_ticks,
+        "down pre_call before target",
+    )?;
+    let up_scheduler = ordered_delta(
+        up.pre_call_ticks,
+        up.target_ticks,
+        "up pre_call before target",
+    )?;
+    let down_send = ordered_delta(
+        down.completion_ticks,
+        down.pre_call_ticks,
+        "down completion before pre_call",
+    )?;
+    let up_send = ordered_delta(
+        up.completion_ticks,
+        up.pre_call_ticks,
+        "up completion before pre_call",
+    )?;
+    let down_delivery = ordered_delta(
+        down.receipt_ticks,
+        down.completion_ticks,
+        "down receipt before completion",
+    )?;
+    let up_delivery = ordered_delta(
+        up.receipt_ticks,
+        up.completion_ticks,
+        "up receipt before completion",
+    )?;
+    let target_hold = ordered_delta(
+        up.target_ticks,
+        down.target_ticks,
+        "up target before down target",
+    )?;
+    let receipt_hold = ordered_delta(
+        up.receipt_ticks,
+        down.receipt_ticks,
+        "up receipt before down receipt",
+    )?;
+    let scheduler_shrink = down_scheduler
+        .checked_sub(up_scheduler)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let sendinput_shrink = down_send
+        .checked_sub(up_send)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let delivery_shrink = down_delivery
+        .checked_sub(up_delivery)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let total_proxy_shrink = target_hold
+        .checked_sub(receipt_hold)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let decomposed = scheduler_shrink
+        .checked_add(sendinput_shrink)
+        .and_then(|value| value.checked_add(delivery_shrink))
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    if total_proxy_shrink != decomposed {
+        return Err(CalibrationError::TimestampArithmeticOverflow);
+    }
+    Ok(PairedTimingShrinkTicks {
+        scheduler_shrink_ticks: scheduler_shrink,
+        sendinput_shrink_ticks: sendinput_shrink,
+        delivery_shrink_ticks: delivery_shrink,
+        total_proxy_shrink_ticks: total_proxy_shrink,
+    })
+}
+
+fn signed_ticks_to_us(clock: QpcClock, ticks: i128) -> Result<i64, CalibrationError> {
+    let magnitude = ticks.unsigned_abs();
+    let magnitude = u64::try_from(magnitude).map_err(|_| CalibrationError::ClockFailure)?;
+    let micros = clock
+        .duration_to_us(crate::clock::DurationTicks::from_raw(magnitude))
+        .map_err(|_| CalibrationError::ClockFailure)?;
+    let micros = i64::try_from(micros).map_err(|_| CalibrationError::ClockFailure)?;
+    Ok(if ticks.is_negative() { -micros } else { micros })
+}
+
+pub fn paired_timing_shrink_us(
+    clock: QpcClock,
+    shrink: PairedTimingShrinkTicks,
+) -> Result<PairedTimingShrinkUs, CalibrationError> {
+    Ok(PairedTimingShrinkUs {
+        scheduler_shrink_us: signed_ticks_to_us(clock, shrink.scheduler_shrink_ticks)?,
+        sendinput_shrink_us: signed_ticks_to_us(clock, shrink.sendinput_shrink_ticks)?,
+        delivery_shrink_us: signed_ticks_to_us(clock, shrink.delivery_shrink_ticks)?,
+        total_proxy_shrink_us: signed_ticks_to_us(clock, shrink.total_proxy_shrink_ticks)?,
+    })
+}
+
 // ─── Sample record ────────────────────────────────────────────────────────────
 
 /// A single calibration sample for one polyphony/direction bucket.
@@ -192,6 +341,7 @@ impl CalibrationError {
 #[derive(Debug, Clone)]
 pub struct CalibrationSample {
     pub sequence_id: u32,
+    pub target_ticks: QpcTicks,
     pub call_started_ticks: QpcTicks,
     pub call_completed_ticks: QpcTicks,
     /// `None` means no receipt arrived within the timeout window.
@@ -268,9 +418,22 @@ impl CalibrationSample {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyShrinkEvidence {
     pub scan_code: u16,
+    pub down_target_ticks: u64,
+    pub down_pre_call_ticks: u64,
+    pub down_completion_ticks: u64,
+    pub down_receipt_ticks: u64,
+    pub up_target_ticks: u64,
+    pub up_pre_call_ticks: u64,
+    pub up_completion_ticks: u64,
+    pub up_receipt_ticks: u64,
     pub down_latency_us: i64,
     pub up_latency_us: i64,
+    /// Legacy delivery-only alias retained for diagnostic readers.
     pub shrink_us: i64,
+    pub scheduler_shrink_us: i64,
+    pub sendinput_shrink_us: i64,
+    pub delivery_shrink_us: i64,
+    pub total_proxy_shrink_us: i64,
 }
 
 /// A balanced Down/Up evidence unit. Directional receipts are paired by scan
@@ -282,13 +445,17 @@ pub struct PairSample {
     pub down_idle_gap_ticks: sky_dispatch_core::time::DurationTicks,
     pub up_idle_gap_ticks: sky_dispatch_core::time::DurationTicks,
     pub pair_worst_shrink_us: Option<i64>,
+    pub pair_worst_total_proxy_shrink_us: Option<i64>,
+    pub pair_worst_scheduler_shrink_us: Option<i64>,
+    pub pair_worst_sendinput_shrink_us: Option<i64>,
+    pub pair_worst_delivery_shrink_us: Option<i64>,
     pub key_evidence: SmallVec<[KeyShrinkEvidence; 15]>,
     pub pairing_anomaly: bool,
 }
 
 impl PairSample {
     pub fn is_clean(&self) -> bool {
-        self.pair_worst_shrink_us.is_some()
+        self.pair_worst_total_proxy_shrink_us.is_some()
             && !self.pairing_anomaly
             && self.down.is_complete()
             && self.up.is_complete()
@@ -303,6 +470,10 @@ pub struct PairSampleEvidence {
     pub actual_down_gap_us: u64,
     pub actual_up_gap_us: u64,
     pub pair_worst_shrink_us: Option<i64>,
+    pub pair_worst_total_proxy_shrink_us: Option<i64>,
+    pub pair_worst_scheduler_shrink_us: Option<i64>,
+    pub pair_worst_sendinput_shrink_us: Option<i64>,
+    pub pair_worst_delivery_shrink_us: Option<i64>,
     pub key_evidence: Vec<KeyShrinkEvidence>,
     pub down_call_duration_us: u64,
     pub up_call_duration_us: u64,
@@ -424,9 +595,21 @@ pub struct BucketStats {
     pub last_receipt_us: Option<SignedQuantileStats>,
     /// Spread between first and last receipt (zero for polyphony-1 buckets).
     pub intra_chord_spread_us: Option<QuantileStats>,
-    /// Authoritative v4 evidence: signed worst per-key hold shrink.
+    /// Legacy delivery-only diagnostic retained for audit readers.
     #[serde(default)]
     pub pair_worst_shrink_us: Option<SignedQuantileStats>,
+    /// vNext qualification evidence: worst per-key total target-to-receipt
+    /// hold shrink for each clean pair.
+    #[serde(default)]
+    pub pair_worst_total_proxy_shrink_us: Option<SignedQuantileStats>,
+    /// Component diagnostics only; these are never summed independently for
+    /// qualification.
+    #[serde(default)]
+    pub scheduler_shrink_us: Option<SignedQuantileStats>,
+    #[serde(default)]
+    pub sendinput_shrink_us: Option<SignedQuantileStats>,
+    #[serde(default)]
+    pub delivery_shrink_us: Option<SignedQuantileStats>,
     #[serde(default)]
     pub down_receipt_us: Option<SignedQuantileStats>,
     #[serde(default)]
@@ -465,8 +648,10 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 4;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 9;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 5;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 10;
+pub const HOST_FINGERPRINT_VERSION: u32 = 2;
+pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
 pub const CALIBRATION_MIN_MEASUREMENT_SECONDS: u64 = 1;
 pub const CALIBRATION_MIN_TOTAL_BUDGET_SECONDS: u64 =
@@ -556,7 +741,7 @@ impl CalibrationConfig {
 
 // ─── Output schema ────────────────────────────────────────────────────────────
 
-/// The complete output of one calibration run.
+/// The complete output of one protocol-vNext calibration run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationOutput {
     /// Output schema version — bump when fields are added or renamed.
@@ -571,7 +756,7 @@ pub struct CalibrationOutput {
     pub evidence_kind: &'static str,
     pub host_fingerprint: HostFingerprint,
     pub configuration: CalibrationConfig,
-    /// Protocol-v4 pair matrix. The six required production cells live here.
+    /// Protocol-vNext pair matrix. The six required production cells live here.
     pub pair_buckets: HashMap<u8, HashMap<String, BucketStats>>,
     /// Warm-up attempts, kept separate from measured evidence.
     pub warmup_attempted: u64,
@@ -595,7 +780,7 @@ pub struct CalibrationOutput {
     pub cleanup: CleanupOutcome,
 }
 
-/// Pair-centric bucket artifact used by the protocol-v4 runner. It is kept
+/// Pair-centric bucket artifact used by the protocol-vNext runner. It is kept
 /// separate from the legacy directional shape so no caller can accidentally
 /// treat a directional bucket as publishable evidence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -660,8 +845,19 @@ fn calibration_extra_info_sequence(extra: usize) -> Option<u32> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostFingerprint {
+    pub host_fingerprint_version: u32,
     pub qpc_frequency_hz: u64,
     pub win32_build: Option<String>,
+    pub processor_architecture: String,
+    pub cpu_vendor: String,
+    pub cpu_family: u32,
+    pub cpu_model: u32,
+    pub cpu_stepping: u32,
+    pub logical_processor_count: u32,
+    pub processor_group_count: u16,
+    pub cpu_set_efficiency_classes: Vec<u32>,
+    pub highest_efficiency_class: Option<u8>,
+    pub lowest_efficiency_class: Option<u8>,
     pub sampled_at_us: u64,
 }
 
@@ -778,9 +974,11 @@ pub fn check_foreground_owned(hwnd: isize) -> bool {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    use crate::event::OwnedEvent;
     use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, send_input_raw};
     use crate::mmcss::{MmcssGuard, PriorityMode};
     use crate::power::PowerThrottlingGuard;
+    use crate::wait::{HybridWaiter, WaitOutcome};
 
     use std::sync::{Arc, Condvar, Mutex};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -1198,6 +1396,8 @@ mod platform {
         pub(crate) possibly_active_mask: u16,
         last_send_completed_ticks: Option<QpcTicks>,
         measurement_deadline: Option<QpcTicks>,
+        precision_waiter: HybridWaiter,
+        wait_interrupt: OwnedEvent,
     }
 
     fn stop_pump_on_startup_failure(
@@ -1220,6 +1420,17 @@ mod platform {
     impl CalibrationSession {
         pub fn open() -> Result<Self, CalibrationError> {
             let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
+            let precision_waiter = HybridWaiter::production();
+            if let Some(failure) = precision_waiter.initial_failure() {
+                return Err(CalibrationError::PrecisionWaitFailed {
+                    detail: format!("{failure:?}"),
+                });
+            }
+            let wait_interrupt = OwnedEvent::new_auto_reset().ok_or_else(|| {
+                CalibrationError::PrecisionWaitFailed {
+                    detail: "could not create calibration wait interrupt".to_string(),
+                }
+            })?;
             let initial = SharedCalibState {
                 pending_receipts: SmallVec::new(),
                 active_sequence: None,
@@ -1277,6 +1488,8 @@ mod platform {
                 possibly_active_mask: 0,
                 last_send_completed_ticks: None,
                 measurement_deadline: None,
+                precision_waiter,
+                wait_interrupt,
             };
 
             if let Err(err) = session.acquire_foreground(Duration::from_secs(5)) {
@@ -1298,6 +1511,27 @@ mod platform {
             }
 
             Ok(session)
+        }
+
+        fn wait_to_precision_target(
+            &self,
+            physical_target_qpc: QpcTicks,
+        ) -> Result<(), CalibrationError> {
+            self.ensure_budget()?;
+            let result = self.precision_waiter.wait_until_ticks_with_metrics(
+                physical_target_qpc,
+                700,
+                &self.wait_interrupt,
+            );
+            match result.outcome {
+                WaitOutcome::Deadline => Ok(()),
+                WaitOutcome::Interrupted => Err(CalibrationError::PrecisionWaitFailed {
+                    detail: "calibration wait was interrupted".to_string(),
+                }),
+                WaitOutcome::Failed(failure) => Err(CalibrationError::PrecisionWaitFailed {
+                    detail: format!("{failure:?}"),
+                }),
+            }
         }
 
         #[cfg(not(any(test, feature = "test-support")))]
@@ -1438,30 +1672,6 @@ mod platform {
             Ok(())
         }
 
-        fn sleep_with_budget(&self, duration: Duration) -> Result<(), CalibrationError> {
-            let Some(deadline) = self.measurement_deadline else {
-                std::thread::sleep(duration);
-                return Ok(());
-            };
-            let now = self
-                .qpc_clock
-                .now()
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            let remaining = deadline
-                .checked_duration_since(now)
-                .map_err(|_| CalibrationError::BudgetExceeded)?;
-            let remaining_us = self
-                .qpc_clock
-                .duration_to_us(remaining)
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            let requested_us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
-            if remaining_us == 0 || requested_us > remaining_us {
-                return Err(CalibrationError::BudgetExceeded);
-            }
-            std::thread::sleep(duration);
-            self.ensure_budget()
-        }
-
         pub(crate) fn cleanup_keyboard(&mut self) -> CleanupOutcome {
             let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
             let expected = attempted.len() as u8;
@@ -1499,10 +1709,28 @@ mod platform {
         /// `scan_codes` must be a subset of `PHYSICAL_INSTRUMENT_SCAN_CODES`.
         /// `key_up` controls the direction. The caller is responsible for
         /// maintaining down/up balance across samples.
-        pub fn measure_packet(
+        #[allow(dead_code)]
+        fn measure_packet(
             &mut self,
             scan_codes: &[u16],
             key_up: bool,
+            receipt_timeout: Duration,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let target = self
+                .qpc_clock
+                .now()
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            self.measure_packet_at_target(scan_codes, key_up, target, receipt_timeout)
+        }
+
+        /// Inject one tagged packet at an absolute QPC target. The waitable
+        /// timer/700 µs handoff is outside the fused sender; the sender owns
+        /// the authoritative target-crossing sample and completion boundary.
+        pub fn measure_packet_at_target(
+            &mut self,
+            scan_codes: &[u16],
+            key_up: bool,
+            physical_target_qpc: QpcTicks,
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
             self.ensure_foreground_owned()?;
@@ -1538,10 +1766,16 @@ mod platform {
                 g.pending_receipts.clear();
             }
 
-            // The tagged sender owns both QPC boundaries. Do not add outer
-            // timestamps here: those would include calibration bookkeeping and
-            // would mislabel it as the SendInput syscall duration.
-            let psr = send_input_raw_tagged(scan_codes, key_up, extra, self.qpc_clock);
+            // The tagged sender owns the target crossing and both QPC
+            // boundaries. Do not add outer timestamps around SendInput.
+            self.wait_to_precision_target(physical_target_qpc)?;
+            let psr = crate::input::send_tagged_packet_at_target(
+                scan_codes,
+                key_up,
+                extra,
+                self.qpc_clock,
+                physical_target_qpc,
+            );
             let (call_started, call_completed) = match exact_sendinput_boundaries(&psr) {
                 Ok(boundaries) => boundaries,
                 Err(error) => {
@@ -1652,6 +1886,7 @@ mod platform {
 
             Ok(CalibrationSample {
                 sequence_id: seq,
+                target_ticks: physical_target_qpc,
                 call_started_ticks: call_started,
                 call_completed_ticks: call_completed,
                 first_receipt_ticks: first,
@@ -1678,12 +1913,18 @@ mod platform {
             key_up: bool,
             expected_class: SampleClass,
             cold_threshold: sky_dispatch_core::time::DurationTicks,
+            physical_target_qpc: QpcTicks,
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
             let previous_completion = self
                 .last_send_completed_ticks
                 .ok_or(CalibrationError::ClockFailure)?;
-            let mut sample = self.measure_packet(scan_codes, key_up, receipt_timeout)?;
+            let mut sample = self.measure_packet_at_target(
+                scan_codes,
+                key_up,
+                physical_target_qpc,
+                receipt_timeout,
+            )?;
             let (observed_class, actual_idle_gap_ticks) = classify_idle_gap(
                 previous_completion,
                 sample.call_started_ticks,
@@ -1693,46 +1934,6 @@ mod platform {
             sample.actual_idle_gap_ticks = Some(actual_idle_gap_ticks);
             sample.anomalies.class_mismatch = observed_class != expected_class;
             Ok(sample)
-        }
-
-        /// Wait from an exact SendInput completion boundary until the physical
-        /// cold threshold has elapsed. The completion tick, rather than a
-        /// receipt or authored timestamp, is the classification anchor.
-        pub fn wait_cold_gap_after(
-            &self,
-            completed_ticks: QpcTicks,
-            gap_us: u64,
-        ) -> Result<(), CalibrationError> {
-            let gap_ticks = self
-                .qpc_clock
-                .duration_from_us(gap_us)
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            let deadline = completed_ticks
-                .checked_add_duration(gap_ticks)
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            loop {
-                self.ensure_budget()?;
-                let now = self
-                    .qpc_clock
-                    .now()
-                    .map_err(|_| CalibrationError::ClockFailure)?;
-                if now >= deadline {
-                    return Ok(());
-                }
-                let remaining = deadline
-                    .as_u64()
-                    .checked_sub(now.as_u64())
-                    .ok_or(CalibrationError::ClockFailure)?;
-                let remaining_us = self
-                    .qpc_clock
-                    .duration_to_us(crate::clock::DurationTicks::from_raw(remaining))
-                    .map_err(|_| CalibrationError::ClockFailure)?;
-                if remaining_us > 100 {
-                    self.sleep_with_budget(Duration::from_micros(remaining_us.min(1_000)))?;
-                } else {
-                    std::hint::spin_loop();
-                }
-            }
         }
 
         pub fn close(mut self) -> CleanupOutcome {
@@ -1786,123 +1987,6 @@ mod platform {
             {
                 state.pump_thread_failed = true;
             }
-        }
-    }
-
-    /// Variant of `send_input_raw` that injects a custom `dwExtraInfo` so we
-    /// can correlate Raw Input receipts with the correct sequence.
-    fn send_input_raw_tagged(
-        scan_codes: &[u16],
-        key_up: bool,
-        extra: usize,
-        clock: QpcClock,
-    ) -> crate::input::PlatformSendResult {
-        use smallvec::SmallVec;
-        use windows_sys::Win32::Foundation::SetLastError;
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput,
-        };
-
-        if scan_codes.is_empty() {
-            let completed_ticks = match clock.now() {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    return crate::input::PlatformSendResult {
-                        requested: 0,
-                        inserted: 0,
-                        started_ticks: QpcTicks::ZERO,
-                        completed_ticks: None,
-                        win32_error: 0,
-                        timing_error: Some(error),
-                    };
-                }
-            };
-            let timing_error = clock
-                .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
-                    completed_ticks.as_u64(),
-                ))
-                .map_err(|_| crate::clock::QpcError::ConversionOverflow)
-                .err();
-            return crate::input::PlatformSendResult {
-                requested: 0,
-                inserted: 0,
-                started_ticks: completed_ticks,
-                completed_ticks: Some(completed_ticks),
-                win32_error: 0,
-                timing_error,
-            };
-        }
-
-        let mut flags = KEYEVENTF_SCANCODE;
-        if key_up {
-            flags |= KEYEVENTF_KEYUP;
-        }
-
-        let packets: SmallVec<[INPUT; 15]> = scan_codes
-            .iter()
-            .map(|&sc| INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: 0,
-                        wScan: sc,
-                        dwFlags: flags,
-                        time: 0,
-                        dwExtraInfo: extra,
-                    },
-                },
-            })
-            .collect();
-
-        let requested = packets.len() as u32;
-        let cb_size = std::mem::size_of::<INPUT>() as i32;
-
-        // The measured interval begins only after validation, tagging and
-        // complete packet materialization. SetLastError is also preparation,
-        // so it must precede the single start QPC sample.
-        unsafe { SetLastError(0) };
-        let started_ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return crate::input::PlatformSendResult {
-                    requested: scan_codes.len() as u8,
-                    inserted: 0,
-                    started_ticks: QpcTicks::ZERO,
-                    completed_ticks: None,
-                    win32_error: 0,
-                    timing_error: Some(error),
-                };
-            }
-        };
-        let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
-        // Completion QPC is the first required post-call operation. Reading
-        // GetLastError or doing any conversion before it would widen the
-        // sender boundary with unrelated bookkeeping.
-        let (completed_ticks, timing_error) = match clock.now() {
-            Ok(ticks) => match clock
-                .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
-                    ticks.as_u64(),
-                ))
-                .map_err(|_| crate::clock::QpcError::ConversionOverflow)
-            {
-                Ok(_) => (Some(ticks), None),
-                Err(error) => (Some(ticks), Some(error)),
-            },
-            Err(error) => (None, Some(error)),
-        };
-        let win32_error = if inserted != requested {
-            unsafe { windows_sys::Win32::Foundation::GetLastError() }
-        } else {
-            0
-        };
-
-        crate::input::PlatformSendResult {
-            requested: requested as u8,
-            inserted: inserted as u8,
-            started_ticks,
-            completed_ticks,
-            win32_error,
-            timing_error,
         }
     }
 
@@ -1993,7 +2077,9 @@ mod platform {
     ) -> Result<PairSample, CalibrationError> {
         let mut key_evidence = SmallVec::<[KeyShrinkEvidence; 15]>::new();
         let mut pairing_anomaly = false;
-        let mut worst: Option<i64> = None;
+        let mut worst_delivery: Option<i64> = None;
+        let mut worst_total: Option<(i64, i64, i64, i64)> = None;
+        let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
 
         for &scan_code in expected_scan_codes {
             let down_matches: SmallVec<[RawInputReceipt; 2]> = down
@@ -2019,12 +2105,53 @@ mod platform {
             let shrink = down_latency
                 .checked_sub(up_latency)
                 .ok_or(CalibrationError::StatisticsOverflow)?;
-            worst = Some(worst.map_or(shrink, |current| current.max(shrink)));
+            let down_timing = PairedTimingPoint {
+                target_ticks: down.target_ticks,
+                pre_call_ticks: down.call_started_ticks,
+                completion_ticks: down.call_completed_ticks,
+                receipt_ticks: down_matches[0].arrived_ticks,
+            };
+            let up_timing = PairedTimingPoint {
+                target_ticks: up.target_ticks,
+                pre_call_ticks: up.call_started_ticks,
+                completion_ticks: up.call_completed_ticks,
+                receipt_ticks: up_matches[0].arrived_ticks,
+            };
+            let timing_ticks = match paired_timing_shrink_ticks(down_timing, up_timing) {
+                Ok(value) => value,
+                Err(_) => {
+                    pairing_anomaly = true;
+                    continue;
+                }
+            };
+            let timing_us = paired_timing_shrink_us(qpc_clock, timing_ticks)?;
+            worst_delivery = Some(worst_delivery.map_or(shrink, |current| current.max(shrink)));
+            let candidate = (
+                timing_us.total_proxy_shrink_us,
+                timing_us.scheduler_shrink_us,
+                timing_us.sendinput_shrink_us,
+                timing_us.delivery_shrink_us,
+            );
+            if worst_total.is_none_or(|current| candidate.0 > current.0) {
+                worst_total = Some(candidate);
+            }
             key_evidence.push(KeyShrinkEvidence {
                 scan_code,
+                down_target_ticks: down.target_ticks.as_u64(),
+                down_pre_call_ticks: down.call_started_ticks.as_u64(),
+                down_completion_ticks: down.call_completed_ticks.as_u64(),
+                down_receipt_ticks: down_matches[0].arrived_ticks.as_u64(),
+                up_target_ticks: up.target_ticks.as_u64(),
+                up_pre_call_ticks: up.call_started_ticks.as_u64(),
+                up_completion_ticks: up.call_completed_ticks.as_u64(),
+                up_receipt_ticks: up_matches[0].arrived_ticks.as_u64(),
                 down_latency_us: down_latency,
                 up_latency_us: up_latency,
                 shrink_us: shrink,
+                scheduler_shrink_us: timing_us.scheduler_shrink_us,
+                sendinput_shrink_us: timing_us.sendinput_shrink_us,
+                delivery_shrink_us: timing_us.delivery_shrink_us,
+                total_proxy_shrink_us: timing_us.total_proxy_shrink_us,
             });
         }
 
@@ -2033,7 +2160,11 @@ mod platform {
             up,
             down_idle_gap_ticks,
             up_idle_gap_ticks,
-            pair_worst_shrink_us: worst,
+            pair_worst_shrink_us: worst_delivery,
+            pair_worst_total_proxy_shrink_us: worst_total.map(|value| value.0),
+            pair_worst_scheduler_shrink_us: worst_total.map(|value| value.1),
+            pair_worst_sendinput_shrink_us: worst_total.map(|value| value.2),
+            pair_worst_delivery_shrink_us: worst_total.map(|value| value.3),
             key_evidence,
             pairing_anomaly,
         })
@@ -2057,6 +2188,10 @@ mod platform {
             actual_up_gap_us: qpc_ticks_to_us(QpcTicks::from_raw(pair.up_idle_gap_ticks.as_u64()))
                 .map_err(|_| CalibrationError::ClockFailure)?,
             pair_worst_shrink_us: pair.pair_worst_shrink_us,
+            pair_worst_total_proxy_shrink_us: pair.pair_worst_total_proxy_shrink_us,
+            pair_worst_scheduler_shrink_us: pair.pair_worst_scheduler_shrink_us,
+            pair_worst_sendinput_shrink_us: pair.pair_worst_sendinput_shrink_us,
+            pair_worst_delivery_shrink_us: pair.pair_worst_delivery_shrink_us,
             key_evidence: pair.key_evidence.to_vec(),
             down_call_duration_us: pair.down.call_duration_us()?,
             up_call_duration_us: pair.up.call_duration_us()?,
@@ -2070,9 +2205,25 @@ mod platform {
 
     fn aggregate_pairs(pairs: &[PairSample]) -> Result<BucketStats, CalibrationError> {
         let clean_pairs: Vec<&PairSample> = pairs.iter().filter(|pair| pair.is_clean()).collect();
-        let pair_values: Vec<i64> = clean_pairs
+        let legacy_pair_values: Vec<i64> = clean_pairs
             .iter()
             .filter_map(|pair| pair.pair_worst_shrink_us)
+            .collect();
+        let total_pair_values: Vec<i64> = clean_pairs
+            .iter()
+            .filter_map(|pair| pair.pair_worst_total_proxy_shrink_us)
+            .collect();
+        let scheduler_values: Vec<i64> = clean_pairs
+            .iter()
+            .filter_map(|pair| pair.pair_worst_scheduler_shrink_us)
+            .collect();
+        let sendinput_values: Vec<i64> = clean_pairs
+            .iter()
+            .filter_map(|pair| pair.pair_worst_sendinput_shrink_us)
+            .collect();
+        let delivery_values: Vec<i64> = clean_pairs
+            .iter()
+            .filter_map(|pair| pair.pair_worst_delivery_shrink_us)
             .collect();
         let down_receipts: Vec<i64> = clean_pairs
             .iter()
@@ -2115,10 +2266,30 @@ mod platform {
             .iter()
             .filter(|pair| pair.down.anomalies.partial_send || pair.up.anomalies.partial_send)
             .count() as u64;
-        let pair_stats = if pair_values.is_empty() {
+        let legacy_pair_stats = if legacy_pair_values.is_empty() {
             None
         } else {
-            Some(quantile_stats_i64(&pair_values)?)
+            Some(quantile_stats_i64(&legacy_pair_values)?)
+        };
+        let total_pair_stats = if total_pair_values.is_empty() {
+            None
+        } else {
+            Some(quantile_stats_i64(&total_pair_values)?)
+        };
+        let scheduler_stats = if scheduler_values.is_empty() {
+            None
+        } else {
+            Some(quantile_stats_i64(&scheduler_values)?)
+        };
+        let sendinput_stats = if sendinput_values.is_empty() {
+            None
+        } else {
+            Some(quantile_stats_i64(&sendinput_values)?)
+        };
+        let delivery_stats = if delivery_values.is_empty() {
+            None
+        } else {
+            Some(quantile_stats_i64(&delivery_values)?)
         };
         let down_stats = if down_receipts.is_empty() {
             None
@@ -2145,7 +2316,11 @@ mod platform {
             first_receipt_us: down_stats.clone(),
             last_receipt_us: up_stats.clone(),
             intra_chord_spread_us: None,
-            pair_worst_shrink_us: pair_stats,
+            pair_worst_shrink_us: legacy_pair_stats,
+            pair_worst_total_proxy_shrink_us: total_pair_stats,
+            scheduler_shrink_us: scheduler_stats,
+            sendinput_shrink_us: sendinput_stats,
+            delivery_shrink_us: delivery_stats,
             down_receipt_us: down_stats,
             up_receipt_us: up_stats,
         })
@@ -2160,7 +2335,7 @@ mod platform {
             .map(pair_sample_evidence)
             .collect::<Result<Vec<_>, _>>()?;
         evidence.sort_by_key(|sample| {
-            std::cmp::Reverse(sample.pair_worst_shrink_us.unwrap_or(i64::MIN))
+            std::cmp::Reverse(sample.pair_worst_total_proxy_shrink_us.unwrap_or(i64::MIN))
         });
         evidence.truncate(limit);
         Ok(evidence)
@@ -2185,11 +2360,162 @@ mod platform {
             .map_err(|_| CalibrationError::ClockFailure)
             .and_then(|ticks| qpc_ticks_to_us(ticks).map_err(|_| CalibrationError::ClockFailure))?;
         let win32_build = windows_build_string();
+        let (processor_architecture, cpu_vendor, cpu_family, cpu_model, cpu_stepping) =
+            cpu_identity();
+        let (logical_processor_count, processor_group_count) = processor_topology();
+        let cpu_set_efficiency_classes = cpu_set_efficiency_histogram();
+        let (lowest_efficiency_class, highest_efficiency_class) =
+            efficiency_class_bounds(&cpu_set_efficiency_classes);
         Ok(HostFingerprint {
+            host_fingerprint_version: HOST_FINGERPRINT_VERSION,
             qpc_frequency_hz: freq,
             win32_build,
+            processor_architecture,
+            cpu_vendor,
+            cpu_family,
+            cpu_model,
+            cpu_stepping,
+            logical_processor_count,
+            processor_group_count,
+            cpu_set_efficiency_classes,
+            highest_efficiency_class,
+            lowest_efficiency_class,
             sampled_at_us,
         })
+    }
+
+    fn cpu_identity() -> (String, String, u32, u32, u32) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let leaf0 = core::arch::x86_64::__cpuid(0);
+            let vendor_bytes = [
+                leaf0.ebx.to_le_bytes(),
+                leaf0.edx.to_le_bytes(),
+                leaf0.ecx.to_le_bytes(),
+            ]
+            .concat();
+            let vendor = String::from_utf8_lossy(&vendor_bytes).to_string();
+            if leaf0.eax < 1 {
+                return ("x86_64".to_string(), vendor, 0, 0, 0);
+            }
+            let leaf1 = core::arch::x86_64::__cpuid(1);
+            let base_family = (leaf1.eax >> 8) & 0x0f;
+            let extended_family = (leaf1.eax >> 20) & 0xff;
+            let family = if base_family == 0x0f {
+                base_family + extended_family
+            } else {
+                base_family
+            };
+            let base_model = (leaf1.eax >> 4) & 0x0f;
+            let extended_model = (leaf1.eax >> 16) & 0x0f;
+            let model = if base_family == 0x06 || base_family == 0x0f {
+                base_model + (extended_model << 4)
+            } else {
+                base_model
+            };
+            (
+                "x86_64".to_string(),
+                vendor,
+                family,
+                model,
+                leaf1.eax & 0x0f,
+            )
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            (
+                std::env::consts::ARCH.to_string(),
+                "unknown".to_string(),
+                0,
+                0,
+                0,
+            )
+        }
+    }
+
+    fn processor_topology() -> (u32, u16) {
+        use windows_sys::Win32::System::Threading::{
+            ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetActiveProcessorGroupCount,
+        };
+        (
+            unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) },
+            unsafe { GetActiveProcessorGroupCount() },
+        )
+    }
+
+    fn cpu_set_efficiency_histogram() -> Vec<u32> {
+        use windows_sys::Win32::System::SystemInformation::{
+            CpuSetInformation, GetSystemCpuSetInformation, SYSTEM_CPU_SET_INFORMATION,
+        };
+        let mut required = 0u32;
+        // SAFETY: the null buffer is the documented size-query form.
+        let _ = unsafe {
+            GetSystemCpuSetInformation(
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if required == 0 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u8; required as usize];
+        let mut returned = required;
+        // SAFETY: buffer is writable and exactly the size returned by the
+        // preceding query; the API does not retain the pointer.
+        let ok = unsafe {
+            GetSystemCpuSetInformation(
+                buffer.as_mut_ptr().cast(),
+                returned,
+                &mut returned,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0;
+        if !ok {
+            return Vec::new();
+        }
+        let header_size = std::mem::size_of::<SYSTEM_CPU_SET_INFORMATION>();
+        let mut histogram: Vec<u32> = Vec::new();
+        let mut offset = 0usize;
+        while offset.saturating_add(header_size) <= returned as usize {
+            // SAFETY: offset is advanced by each validated record size and
+            // the header is within the returned byte count.
+            let info = unsafe {
+                &*(buffer
+                    .as_ptr()
+                    .add(offset)
+                    .cast::<SYSTEM_CPU_SET_INFORMATION>())
+            };
+            if info.Type == CpuSetInformation {
+                // SAFETY: the record type selects the CpuSet union member.
+                let efficiency = unsafe { info.Anonymous.CpuSet.EfficiencyClass } as usize;
+                if histogram.len() <= efficiency {
+                    histogram.resize(efficiency + 1, 0);
+                }
+                histogram[efficiency] = histogram[efficiency].saturating_add(1);
+            }
+            let size = info.Size as usize;
+            if size < header_size {
+                break;
+            }
+            offset = offset.saturating_add(size);
+        }
+        histogram
+    }
+
+    fn efficiency_class_bounds(histogram: &[u32]) -> (Option<u8>, Option<u8>) {
+        let lowest = histogram
+            .iter()
+            .position(|count| *count != 0)
+            .and_then(|value| u8::try_from(value).ok());
+        let highest = histogram
+            .iter()
+            .rposition(|count| *count != 0)
+            .and_then(|value| u8::try_from(value).ok());
+        (lowest, highest)
     }
 
     fn windows_build_string() -> Option<String> {
@@ -2243,31 +2569,27 @@ mod platform {
     }
 
     enum BalancedPairAction {
-        Wait { completion: QpcTicks, gap_us: u64 },
-        Measure { key_up: bool },
+        Measure { key_up: bool, target_qpc: QpcTicks },
     }
 
     fn balanced_pair_measurements<S>(
-        previous_completion: QpcTicks,
-        gap_us: u64,
+        down_target: QpcTicks,
+        up_target: QpcTicks,
         mut step: S,
     ) -> Result<(CalibrationSample, CalibrationSample), CalibrationError>
     where
         S: FnMut(BalancedPairAction) -> Result<Option<CalibrationSample>, CalibrationError>,
     {
-        step(BalancedPairAction::Wait {
-            completion: previous_completion,
-            gap_us,
-        })?;
-        let down = step(BalancedPairAction::Measure { key_up: false })?
-            .ok_or(CalibrationError::ClockFailure)?;
-        let down_completion = down.call_completed_ticks;
-        step(BalancedPairAction::Wait {
-            completion: down_completion,
-            gap_us,
-        })?;
-        let up = step(BalancedPairAction::Measure { key_up: true })?
-            .ok_or(CalibrationError::ClockFailure)?;
+        let down = step(BalancedPairAction::Measure {
+            key_up: false,
+            target_qpc: down_target,
+        })?
+        .ok_or(CalibrationError::ClockFailure)?;
+        let up = step(BalancedPairAction::Measure {
+            key_up: true,
+            target_qpc: up_target,
+        })?
+        .ok_or(CalibrationError::ClockFailure)?;
         Ok((down, up))
     }
 
@@ -2282,18 +2604,25 @@ mod platform {
         let previous_completion = session
             .last_send_completed_ticks
             .ok_or(CalibrationError::ClockFailure)?;
+        let gap_ticks = session
+            .qpc_clock
+            .duration_from_us(gap_us)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let down_target = previous_completion
+            .checked_add_duration(gap_ticks)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let up_target = down_target
+            .checked_add_duration(gap_ticks)
+            .map_err(|_| CalibrationError::ClockFailure)?;
         let (down, up) =
-            balanced_pair_measurements(previous_completion, gap_us, |action| match action {
-                BalancedPairAction::Wait { completion, gap_us } => {
-                    session.wait_cold_gap_after(completion, gap_us)?;
-                    Ok(None)
-                }
-                BalancedPairAction::Measure { key_up } => session
+            balanced_pair_measurements(down_target, up_target, |action| match action {
+                BalancedPairAction::Measure { key_up, target_qpc } => session
                     .measure_classified_packet(
                         scan_codes,
                         key_up,
                         class,
                         cold_threshold_ticks,
+                        target_qpc,
                         receipt_timeout,
                     )
                     .map(Some),
@@ -2441,7 +2770,7 @@ mod platform {
             dirty_worktree: env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
             native_source_fingerprint: env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
             rustc_version: env!("SKY_RUSTC_VERSION"),
-            evidence_kind: "injected_raw_input_delivery_proxy",
+            evidence_kind: CALIBRATION_EVIDENCE_KIND,
             host_fingerprint: build_host_fingerprint()?,
             configuration: config.clone(),
             class,
@@ -2509,7 +2838,7 @@ mod platform {
             dirty_worktree: env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
             native_source_fingerprint: env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
             rustc_version: env!("SKY_RUSTC_VERSION"),
-            evidence_kind: "injected_raw_input_delivery_proxy",
+            evidence_kind: CALIBRATION_EVIDENCE_KIND,
             host_fingerprint: build_host_fingerprint()?,
             configuration: config.clone(),
             pair_buckets,
@@ -2539,6 +2868,7 @@ mod platform {
             let last = receipts.iter().map(|receipt| receipt.arrived_ticks).max();
             CalibrationSample {
                 sequence_id: 7,
+                target_ticks: QpcTicks::from_raw(0),
                 call_started_ticks: QpcTicks::from_raw(1),
                 call_completed_ticks: QpcTicks::from_raw(10_000_000),
                 first_receipt_ticks: first,
@@ -2600,15 +2930,18 @@ mod platform {
         #[test]
         fn balanced_pair_waits_from_each_exact_completion_in_order() {
             let mut events: Vec<String> = Vec::new();
-            let result =
-                balanced_pair_measurements(QpcTicks::from_raw(100), 5_000, |action| match action {
-                    BalancedPairAction::Wait { completion, gap_us } => {
-                        events.push(format!("wait:{}:{}", completion.as_u64(), gap_us));
-                        Ok(None)
-                    }
-                    BalancedPairAction::Measure { key_up } => {
-                        events.push(if key_up { "measure_up" } else { "measure_down" }.to_string());
+            let result = balanced_pair_measurements(
+                QpcTicks::from_raw(100),
+                QpcTicks::from_raw(200),
+                |action| match action {
+                    BalancedPairAction::Measure { key_up, target_qpc } => {
+                        events.push(format!(
+                            "measure_{}:{}",
+                            if key_up { "up" } else { "down" },
+                            target_qpc.as_u64()
+                        ));
                         let mut measured = sample(SmallVec::new());
+                        measured.target_ticks = target_qpc;
                         measured.call_completed_ticks = if key_up {
                             QpcTicks::from_raw(400)
                         } else {
@@ -2616,19 +2949,12 @@ mod platform {
                         };
                         Ok(Some(measured))
                     }
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             assert_eq!(result.0.call_completed_ticks, QpcTicks::from_raw(200));
             assert_eq!(result.1.call_completed_ticks, QpcTicks::from_raw(400));
-            assert_eq!(
-                events,
-                vec![
-                    "wait:100:5000",
-                    "measure_down",
-                    "wait:200:5000",
-                    "measure_up",
-                ]
-            );
+            assert_eq!(events, vec!["measure_down:100", "measure_up:200"]);
         }
 
         #[test]
@@ -2715,8 +3041,19 @@ mod platform {
 
     pub fn build_host_fingerprint() -> Result<HostFingerprint, CalibrationError> {
         Ok(HostFingerprint {
+            host_fingerprint_version: HOST_FINGERPRINT_VERSION,
             qpc_frequency_hz: 0,
             win32_build: None,
+            processor_architecture: std::env::consts::ARCH.to_string(),
+            cpu_vendor: "unknown".to_string(),
+            cpu_family: 0,
+            cpu_model: 0,
+            cpu_stepping: 0,
+            logical_processor_count: 0,
+            processor_group_count: 0,
+            cpu_set_efficiency_classes: Vec::new(),
+            highest_efficiency_class: None,
+            lowest_efficiency_class: None,
             sampled_at_us: 0,
         })
     }
@@ -2896,12 +3233,82 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 9);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 10);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 5);
+        assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_CLEANUP_RESERVE_SECONDS, 5);
         assert_eq!(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, 6);
         assert_eq!(cfg.hot_gap_target_us, 5_000);
         assert_eq!(cfg.cold_threshold_us, 20_000);
         assert_eq!(cfg.cold_idle_gap_us, 25_000);
+    }
+
+    fn timing_point(
+        target: u64,
+        pre_call: u64,
+        completion: u64,
+        receipt: u64,
+    ) -> PairedTimingPoint {
+        PairedTimingPoint {
+            target_ticks: QpcTicks::from_raw(target),
+            pre_call_ticks: QpcTicks::from_raw(pre_call),
+            completion_ticks: QpcTicks::from_raw(completion),
+            receipt_ticks: QpcTicks::from_raw(receipt),
+        }
+    }
+
+    #[test]
+    fn paired_total_shrink_matches_scheduler_component() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 300, 400, 500),
+            timing_point(1_100, 1_200, 1_300, 1_400),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 100);
+        assert_eq!(shrink.sendinput_shrink_ticks, 0);
+        assert_eq!(shrink.delivery_shrink_ticks, 0);
+        assert_eq!(shrink.total_proxy_shrink_ticks, 100);
+    }
+
+    #[test]
+    fn paired_total_shrink_matches_sendinput_component() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 200, 500, 600),
+            timing_point(1_100, 1_200, 1_400, 1_500),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 0);
+        assert_eq!(shrink.sendinput_shrink_ticks, 100);
+        assert_eq!(shrink.delivery_shrink_ticks, 0);
+        assert_eq!(shrink.total_proxy_shrink_ticks, 100);
+    }
+
+    #[test]
+    fn paired_total_shrink_matches_delivery_component() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 200, 300, 700),
+            timing_point(1_100, 1_200, 1_300, 1_600),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 0);
+        assert_eq!(shrink.sendinput_shrink_ticks, 0);
+        assert_eq!(shrink.delivery_shrink_ticks, 100);
+        assert_eq!(shrink.total_proxy_shrink_ticks, 100);
+    }
+
+    #[test]
+    fn paired_timing_rejects_non_monotonic_boundaries() {
+        let error = paired_timing_shrink_ticks(
+            timing_point(100, 200, 300, 700),
+            timing_point(1_100, 1_200, 1_150, 1_600),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CalibrationError::TimestampOrder {
+                field: "up completion before pre_call"
+            }
+        ));
     }
 
     #[test]
@@ -2983,6 +3390,7 @@ mod tests {
     fn sample_is_complete_when_receipts_match() {
         let sample = CalibrationSample {
             sequence_id: 1,
+            target_ticks: QpcTicks::from_raw(90),
             call_started_ticks: QpcTicks::from_raw(100),
             call_completed_ticks: QpcTicks::from_raw(200),
             first_receipt_ticks: Some(QpcTicks::from_raw(250)),
@@ -3005,6 +3413,7 @@ mod tests {
     fn sample_intra_chord_spread_none_for_monophonic() {
         let sample = CalibrationSample {
             sequence_id: 1,
+            target_ticks: QpcTicks::from_raw(90),
             call_started_ticks: QpcTicks::from_raw(100),
             call_completed_ticks: QpcTicks::from_raw(200),
             first_receipt_ticks: Some(QpcTicks::from_raw(250)),

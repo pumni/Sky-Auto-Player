@@ -26,6 +26,15 @@ fn instrument_scan_codes() -> Vec<u16> {
     PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec()
 }
 
+#[pyfunction]
+fn host_timing_fingerprint_json() -> PyResult<String> {
+    let fingerprint = sky_dispatch_win32::calibration::build_host_fingerprint()
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    serde_json::to_string(&fingerprint).map_err(|error| {
+        PyRuntimeError::new_err(format!("could not serialize host fingerprint: {error}"))
+    })
+}
+
 #[cfg(feature = "calibration")]
 use super::calibration;
 
@@ -196,6 +205,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TestDispatchSessionPy>()?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
     m.add_function(wrap_pyfunction!(instrument_scan_codes, m)?)?;
+    m.add_function(wrap_pyfunction!(host_timing_fingerprint_json, m)?)?;
     #[cfg(feature = "calibration")]
     {
         m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
