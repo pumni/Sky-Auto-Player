@@ -18,21 +18,21 @@ All logs below are raw command transcripts. Each ends with an explicit
 | `uv run --env-file .env python scripts/audit_free_threaded_wheels.py` | 0 | runtime GIL disabled; dependency audit PASS | none | [07-free-threaded-audit.log](phase-b-validation/07-free-threaded-audit.log) |
 | `uv run --env-file .env ruff check .` | 0 | all checks passed | global cache `Access is denied`; no lint failure | [08-ruff.log](phase-b-validation/08-ruff.log) |
 | `uv run --env-file .env pyright` | 0 | 0 errors, 0 warnings, 0 informations | none | [09-pyright.log](phase-b-validation/09-pyright.log) |
-| `uv run --env-file .env pytest -q -m "not slow"` | 0 | 817 passed, 6 skipped, 1 xfailed | one `PytestCacheWarning`; skipped native acceptance cases are explicitly marked | [10-pytest-nonslow.log](phase-b-validation/10-pytest-nonslow.log) |
+| `uv run --env-file .env pytest -q -m "not slow"` | 0 | 824 passed, 6 skipped, 1 xfailed | one `PytestCacheWarning`; skipped native acceptance cases are explicitly marked | [10-pytest-nonslow.log](phase-b-validation/10-pytest-nonslow.log) |
 | `uv run --env-file .env python scripts/audit_security_mandates.py` | 0 | no forbidden Windows API references | none | [11-security-audit.log](phase-b-validation/11-security-audit.log) |
 | `git diff --check` | 0 | whitespace clean | none | [12-git-diff-check.log](phase-b-validation/12-git-diff-check.log) |
 
 ## Exact Phase-A unlock record
 
-The exact governance token was supplied by the user in this conversation before
-Phase B work began:
+The exact governance token was recorded by the user during the
+post-implementation Phase-B acceptance exchange:
 
 ```text
 PHASE_A_ACCEPTED: proceed to Phase B calibration vNext
 ```
 
-This records the Phase-A sequencing authorization. It is distinct from human
-real-host calibration evidence, which remains pending.
+This records the late Phase-A sequencing authorization/owner confirmation. It
+is distinct from human real-host calibration evidence, which remains pending.
 
 ## Other evidence artifacts
 

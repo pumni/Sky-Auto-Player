@@ -54,6 +54,12 @@ MMCSS label, MMCSS active state, PowerThrottling/HighQoS guard state, and actual
 waiter mode. Native schema is 11, artifact schema is 8, and cache schema is 5;
 older payloads fail closed.
 
+The final validator correction now makes publishable validation stricter than
+structural validation: only `event+high_resolution_timer` is publishable, and
+the MMCSS label must be `mmcss:Games`, `thread:highest`, or `off`. Checkpoint
+finalization/resume rejects missing, old, or future artifact schema versions
+before metadata and provenance publication.
+
 Command-level execution evidence, exit codes, counts, warnings, and raw log
 paths are recorded in [PHASE_B_VALIDATION_EVIDENCE.md](PHASE_B_VALIDATION_EVIDENCE.md).
 
@@ -116,8 +122,8 @@ candidate_bench_run_05.json 0e4cf14323f2a8c87afa58b8b6678df34622bbd2715cc5d16487
 | Gate | Result |
 | --- | --- |
 | `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | PASS |
-| Rust workspace tests | PASS — 230 tests |
-| `sky_dispatch_win32` tests | PASS — 151 tests |
+| Rust workspace tests | PASS — 459 tests with `--all-features` |
+| `sky_dispatch_win32` tests | PASS — 152 tests |
 | workspace Clippy, `-D warnings` | PASS |
 | `sky_player_rs` check and scoped Clippy | PASS |
 | `uv sync` with repo-local `UV_CACHE_DIR` and `.env` | PASS |
@@ -125,7 +131,7 @@ candidate_bench_run_05.json 0e4cf14323f2a8c87afa58b8b6678df34622bbd2715cc5d16487
 | free-threaded wheel audit | PASS — GIL disabled |
 | Ruff | PASS |
 | Pyright | PASS — 0 errors, 0 warnings |
-| Python non-slow tests | PASS — 815 passed, 6 skipped, 1 xfailed |
+| Python non-slow tests | PASS — 824 passed, 6 skipped, 1 xfailed, 1 warning |
 | security mandate audit | PASS |
 | `git diff --check` | PASS |
 
@@ -141,8 +147,9 @@ The Phase-A sequencing authorization is present and exact:
 PHASE_A_ACCEPTED: proceed to Phase B calibration vNext
 ```
 
-It was supplied in the user message before Phase-B work began. It is not a
-substitute for real-host calibration evidence.
+It was recorded during the post-implementation Phase-B acceptance exchange,
+after Phase-B work had begun. It is not a substitute for real-host calibration
+evidence.
 
 The automated correction evidence is complete, but the following are not
 claimed here:

@@ -183,6 +183,32 @@ def test_native_result_requires_scheduling_aid_provenance() -> None:
         native_calibration._validate_result(result)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("waiter_mode", "event+timer_resolution_fallback"),
+        ("waiter_mode", "timer_resolution_fallback"),
+        ("waiter_mode", "high_resolution_timer"),
+        ("mmcss_acquired", "thread:time_critical"),
+    ],
+)
+def test_publishable_calibration_rejects_degraded_scheduling_aids(
+    field: str, value: str
+) -> None:
+    result = _native_result()
+    cast(dict[str, object], result["scheduling_aids"])[field] = value
+    with pytest.raises(native_calibration.NativeCalibrationError, match="publishable"):
+        native_calibration._validate_result(result)
+
+    cache = native_calibration._cache_v5(_native_result())
+    cast(dict[str, object], cache["scheduling_aids"])[field] = value
+    with pytest.raises(ValueError, match="publishable"):
+        loader.parse_calibration_cache_summary(cache)
+    resolution = loader.load_calibration_resolution(data=cache)
+    assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
+    assert resolution.resolved_margin_us == 500
+
+
 def test_native_result_rejects_missing_required_bucket() -> None:
     result = _native_result()
     del result["pair_buckets"]["15"]["cold"]  # type: ignore[index]
@@ -552,6 +578,30 @@ def test_finalizer_rejects_mixed_provenance_before_publication(tmp_path: Path) -
 
     assert output.read_text(encoding="utf-8") == "old output\n"
     assert cache.read_text(encoding="utf-8") == "old cache\n"
+
+
+@pytest.mark.parametrize("artifact_schema_version", [None, 7, 9])
+def test_finalizer_rejects_wrong_artifact_schema_version(
+    tmp_path: Path, artifact_schema_version: int | None
+) -> None:
+    artifacts, checkpoint = _checkpoint_artifacts(tmp_path)
+    tampered = dict(artifacts["15/cold"])
+    if artifact_schema_version is None:
+        del tampered["artifact_schema_version"]
+    else:
+        tampered["artifact_schema_version"] = artifact_schema_version
+    artifact_path = checkpoint / "15-cold.json"
+    native_calibration._write_json_atomically(artifact_path, tampered)
+    native_calibration._write_text_atomically(
+        artifact_path.with_suffix(".sha256"), hashlib.sha256(artifact_path.read_bytes()).hexdigest() + "\n"
+    )
+
+    with pytest.raises(native_calibration.NativeCalibrationError, match="artifact schema"):
+        native_calibration.finalize_native_calibration(
+            checkpoint_dir=checkpoint,
+            output_path=tmp_path / "published.json",
+            cache_path=tmp_path / "input_latency.json",
+        )
 
 
 def test_finalizer_validates_cache_before_publishing(tmp_path: Path) -> None:

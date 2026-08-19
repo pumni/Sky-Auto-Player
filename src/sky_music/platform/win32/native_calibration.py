@@ -37,7 +37,7 @@ from sky_music.infrastructure.calibration_loader import (
     CalibrationCacheSummary,
     CalibrationStatus,
     PairBucketSummary,
-    _validate_scheduling_aids,
+    _validate_publishable_scheduling_aids,
     parse_calibration_cache_summary,
     qualify_calibration_margin,
 )
@@ -275,7 +275,7 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
             )
     _validate_host_fingerprint(data.get("host_fingerprint"))
     try:
-        _validate_scheduling_aids(data.get("scheduling_aids"))
+        _validate_publishable_scheduling_aids(data.get("scheduling_aids"))
     except (TypeError, ValueError) as exc:
         raise NativeCalibrationError(str(exc)) from exc
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
@@ -778,7 +778,7 @@ def _provenance_identity(data: dict[str, Any]) -> dict[str, Any]:
         "native_source_fingerprint": data.get("native_source_fingerprint"),
         "dirty_worktree": data.get("dirty_worktree"),
         "rustc_version": data.get("rustc_version"),
-        "scheduling_aids": _validate_scheduling_aids(data.get("scheduling_aids")),
+        "scheduling_aids": _validate_publishable_scheduling_aids(data.get("scheduling_aids")),
         "qpc_frequency_hz": qpc_frequency,
         "win32_build": win32_build,
         "host_fingerprint": {
@@ -847,6 +847,11 @@ def _assert_provenance_match(actual: dict[str, Any], expected: dict[str, Any], *
         raise NativeCalibrationError(f"bucket {key} has mismatched calibration provenance")
 
 
+def _validate_artifact_schema(data: dict[str, Any]) -> None:
+    if data.get("artifact_schema_version") != CALIBRATION_ARTIFACT_SCHEMA_VERSION:
+        raise NativeCalibrationError("unsupported calibration artifact schema version")
+
+
 def _finalize_artifacts(
     artifacts: dict[str, dict[str, Any]],
     *,
@@ -863,6 +868,7 @@ def _finalize_artifacts(
             raise NativeCalibrationError(f"bucket {key} has mismatched artifact identity")
         if artifact.get("orchestration_configuration") != orchestration:
             raise NativeCalibrationError(f"bucket {key} has mismatched orchestration configuration")
+        _validate_artifact_schema(artifact)
         _validate_common_metadata(artifact)
         _assert_provenance_match(_provenance_identity(artifact), common_provenance, key=key)
         if artifact.get("acceptance_eligible") is not True:

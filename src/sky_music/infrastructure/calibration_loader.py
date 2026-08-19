@@ -241,6 +241,24 @@ def _validate_scheduling_aids(
     return value
 
 
+def _validate_publishable_scheduling_aids(
+    value: object, *, name: str = "scheduling_aids"
+) -> dict[str, object]:
+    scheduling_aids = _validate_scheduling_aids(value, name=name)
+    if scheduling_aids["waiter_mode"] != "event+high_resolution_timer":
+        raise ValueError(
+            f"{name}.waiter_mode is not publishable: "
+            "production calibration requires event+high_resolution_timer"
+        )
+    if scheduling_aids["mmcss_acquired"] not in {
+        "mmcss:Games",
+        "thread:highest",
+        "off",
+    }:
+        raise ValueError(f"{name}.mmcss_acquired is not publishable")
+    return scheduling_aids
+
+
 def _host_identity(value: dict[str, object]) -> tuple[object, ...]:
     efficiency = cast(list[int], value["cpu_set_efficiency_classes"])
     return (
@@ -414,6 +432,7 @@ def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
     if data.get("source_formula_version") != SOURCE_FORMULA_VERSION:
         raise ValueError("unsupported calibration source formula")
     _validate_provenance(data, require_extended=True)
+    scheduling_aids = _validate_publishable_scheduling_aids(data.get("scheduling_aids"))
     pair_buckets = _parse_pair_buckets(data)
     global_p99, worst_bucket, qualification = _recompute_qualification(pair_buckets)
 
@@ -461,7 +480,7 @@ def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
         floor=floor,
         ceiling=ceiling,
         host_fingerprint=_validate_host_fingerprint(data.get("host_fingerprint")),
-        scheduling_aids=_validate_scheduling_aids(data.get("scheduling_aids")),
+        scheduling_aids=scheduling_aids,
     )
 
 

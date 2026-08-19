@@ -1,19 +1,19 @@
 COMMAND: 10-pytest-nonslow
 ........................................................................ [  8%]
 ........................................................................ [ 17%]
-........................................................................ [ 26%]
+........................................................................ [ 25%]
 ..........................................................ssssss........ [ 34%]
 ........................................................................ [ 43%]
-........................................................................ [ 52%]
-........................................................................ [ 61%]
+........................................................................ [ 51%]
+........................................................................ [ 60%]
 ........................................................................ [ 69%]
-.................AFTER P: OptionModal
-...............................................x....... [ 78%]
-.........................EXECUTE CALLED!
+........................AFTER P: OptionModal
+...............................................x [ 77%]
+................................EXECUTE CALLED!
 IS INSTANTIATED: False
-............................................... [ 87%]
-........................................................................ [ 96%]
-................................                                         [100%]
+........................................ [ 86%]
+........................................................................ [ 95%]
+.......................................                                  [100%]
 ============================== warnings summary ===============================
 .venv\Lib\site-packages\_pytest\cacheprovider.py:475
   D:\Dev\Sky-Auto-Player\.venv\Lib\site-packages\_pytest\cacheprovider.py:475: PytestCacheWarning: could not create cache path D:\Dev\Sky-Auto-Player\.pytest_cache\v\cache\nodeids: [WinError 183] Cannot create a file when that file already exists: 'D:\\Dev\\Sky-Auto-Player\\.pytest_cache\\v\\cache'
@@ -25,5 +25,5 @@ SKIPPED [1] tests\test_native_acceptance.py:540: requires the test-support nativ
 SKIPPED [1] tests\test_native_acceptance.py:557: requires the test-support native wheel
 SKIPPED [4] tests\test_native_acceptance.py:584: requires the test-support native wheel
 XFAIL tests/test_textual_playback.py::test_card_anchored_after_debug_toggle_grows - Flaky region layout timing on Windows
-817 passed, 6 skipped, 1 xfailed, 1 warning in 67.72s (0:01:07)
+824 passed, 6 skipped, 1 xfailed, 1 warning in 67.25s (0:01:07)
 EXIT_CODE: 0
