@@ -1,0 +1,12 @@
+Phase A targeted test evidence
+
+1. `cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_win32 input::packet::tests::target_crossing_inside_down_cutoff_is_allowed -- --exact`
+   PASS — 1 passed, 0 failed.
+
+2. `cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_win32 input::packet::tests::target_crossing_sample_is_reused_without_a_second_pre_call_read -- --exact`
+   PASS — 1 passed, 0 failed.
+
+3. `cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_win32`
+   PASS — 142 passed, 0 failed.
+
+The direct in-grace case is `target < crossing < cutoff`: 100 < 101 < 102.

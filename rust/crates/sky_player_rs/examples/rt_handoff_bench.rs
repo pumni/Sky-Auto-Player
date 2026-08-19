@@ -10,18 +10,23 @@
 
 use serde_json::json;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
+use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitResult, WakeErrorStats};
+use sky_dispatch_win32::input::{
+    PhysicalPacket, PreparedPhysicalPacket, SendTransactionOutcome, SendTransactionStatus,
+};
+use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WaitResult, WakeErrorStats};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, ProductionDispatchTestHarness,
 };
+use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;
 
 const DEFAULT_ITERATIONS: usize = 2_000;
 const DUE_US: u64 = 10_000;
+const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
 const WAKE_PROBE_SAMPLES: usize = 32;
 
 fn due_us() -> u64 {
@@ -61,6 +66,67 @@ struct WaitMode {
     startup_wake_error: WakeErrorStats,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchmarkMode {
+    RealWait,
+    PhaseASyntheticTargetPlusOneTick,
+    PhaseASenderOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchmarkScope {
+    Full,
+    PhaseASenderOnly,
+}
+
+impl BenchmarkScope {
+    fn from_env() -> Result<Self, String> {
+        match std::env::var("RT_HANDOFF_BENCH_SCOPE").as_deref() {
+            Ok("full") | Err(std::env::VarError::NotPresent) => Ok(Self::Full),
+            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
+            Ok(value) => Err(format!(
+                "RT_HANDOFF_BENCH_SCOPE must be full or phase_a_sender_only, got {value:?}"
+            )),
+            Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::PhaseASenderOnly => "phase_a_sender_only",
+        }
+    }
+}
+
+impl BenchmarkMode {
+    fn from_env() -> Result<Self, String> {
+        match std::env::var("RT_HANDOFF_BENCH_MODE").as_deref() {
+            Ok("real_wait") | Err(std::env::VarError::NotPresent) => Ok(Self::RealWait),
+            Ok("phase_a_synthetic_target_plus_one_tick") => {
+                Ok(Self::PhaseASyntheticTargetPlusOneTick)
+            }
+            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
+            Ok(value) => Err(format!(
+                "RT_HANDOFF_BENCH_MODE must be real_wait, phase_a_synthetic_target_plus_one_tick, or phase_a_sender_only, got {value:?}"
+            )),
+            Err(error) => Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::RealWait => "real_wait",
+            Self::PhaseASyntheticTargetPlusOneTick => "phase_a_synthetic_target_plus_one_tick",
+            Self::PhaseASenderOnly => "phase_a_sender_only",
+        }
+    }
+
+    const fn uses_real_waiter(self) -> bool {
+        matches!(self, Self::RealWait)
+    }
+}
+
 #[derive(Default)]
 struct Samples {
     wake_to_admission_us: Vec<u64>,
@@ -71,6 +137,35 @@ struct Samples {
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
     early_dispatch_count: usize,
+    non_dispatches: usize,
+    deadline_missed_count: usize,
+    failure_reasons: BTreeMap<String, usize>,
+    observation_count: usize,
+    observation_gaps: usize,
+}
+
+impl Samples {
+    fn record_failure(&mut self, reason: impl Into<String>) {
+        self.non_dispatches += 1;
+        *self.failure_reasons.entry(reason.into()).or_default() += 1;
+    }
+
+    fn record_step_failure(&mut self, step: &DispatchStep) {
+        let reason = match step {
+            DispatchStep::TerminateStatic(reason)
+                if matches!(
+                    *reason,
+                    "down_hard_late_abort" | "down_deadline_missed_before_send"
+                ) =>
+            {
+                self.deadline_missed_count += 1;
+                *reason
+            }
+            DispatchStep::TerminateStatic(reason) => *reason,
+            other => return self.record_failure(format!("unexpected_step:{other:?}")),
+        };
+        self.record_failure(reason);
+    }
 }
 
 fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usize) -> Option<T> {
@@ -347,41 +442,113 @@ fn plan_projected(
     harness.plan_current_dispatch_projected()
 }
 
-fn run_down(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
+fn wait_and_dispatch_or_record(
+    harness: &mut ProductionDispatchTestHarness,
+    plan: &sky_player_rs::engine::dispatch_primitives::NextDispatchPlan,
+    benchmark_mode: BenchmarkMode,
+    samples: &mut Samples,
+) -> Result<Option<WaitResult>, String> {
+    let (step, wait) = match benchmark_mode {
+        BenchmarkMode::RealWait => {
+            let step = match harness.wait_and_dispatch_current_plan(plan) {
+                Ok(step) => step,
+                Err(error) => {
+                    samples.record_failure(format!("wait_error:{error}"));
+                    return Ok(None);
+                }
+            };
+            let wait = harness
+                .last_wait_result()
+                .ok_or_else(|| "real benchmark dispatch did not record wait result".to_string())?;
+            (step, wait)
+        }
+        BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
+            let target = harness
+                .physical_target_qpc_for_test(plan)
+                .ok_or_else(|| "synthetic benchmark plan has no physical target".to_string())?;
+            let step = harness.dispatch_at_phase_a_benchmark_boundary_for_test(
+                plan,
+                SYNTHETIC_TRANSPORT_COMPLETION_US,
+            );
+            let wait = WaitResult {
+                outcome: WaitOutcome::Deadline,
+                wake_qpc: Some(target),
+                spin_ticks: DurationTicks::ZERO,
+            };
+            (step, wait)
+        }
+        BenchmarkMode::PhaseASenderOnly => {
+            return Err("phase_a_sender_only does not use coordinator dispatch".to_string());
+        }
+    };
+    if matches!(step, DispatchStep::Dispatched) {
+        Ok(Some(wait))
+    } else {
+        samples.record_step_failure(&step);
+        Ok(None)
+    }
+}
+
+fn drain_observations(
+    harness: &mut ProductionDispatchTestHarness,
+    samples: &mut Samples,
+    wait: WaitResult,
+) {
+    let mut count = 0;
+    while let Some(observation) = harness.pop_observation() {
+        count += 1;
+        samples.observation_count += 1;
+        add_observation(samples, observation, wait);
+    }
+    if count != 1 {
+        samples.observation_gaps += 1;
+    }
+}
+
+fn run_down(
+    key_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let mut harness =
             ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
+        harness.align_next_plan_to_benchmark_margin_for_test(due_us());
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
             mode.effective_spin_threshold_us,
         )?;
         let plan = plan_projected(&mut harness);
-        let step = harness.wait_and_dispatch_current_plan(&plan)?;
-        assert!(
-            matches!(step, DispatchStep::Dispatched),
-            "down step: {step:?}"
-        );
-        assert_eq!(
-            harness.pending_observation_count(),
-            1,
-            "down dispatch did not enqueue one raw observation"
-        );
+        let wait =
+            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
+                Some(wait) => wait,
+                None => continue,
+            };
         samples.physical_dispatches += 1;
-        let wait = harness.last_wait_result().expect("benchmark wait result");
-        while let Some(observation) = harness.pop_observation() {
-            add_observation(&mut samples, observation, wait);
-        }
+        drain_observations(&mut harness, &mut samples, wait);
     }
     Ok(samples)
 }
 
-fn run_up(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
+fn run_up(
+    key_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
-        let mut harness =
-            ProductionDispatchTestHarness::new_uponly_release_chord_with_gap(key_count, due_us());
+        let mut harness = match ProductionDispatchTestHarness::try_new_uponly_release_chord_with_gap(
+            key_count,
+            due_us(),
+        ) {
+            Ok(harness) => harness,
+            Err(error) => {
+                samples.record_failure(format!("setup_error:{error}"));
+                continue;
+            }
+        };
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -396,25 +563,34 @@ fn run_up(key_count: usize, mode: WaitMode) -> Result<Samples, String> {
             "authored benchmark setup did not leave the requested physical UpOnly packet"
         );
         let plan = plan_projected(&mut harness);
-        let step = harness.wait_and_dispatch_current_plan(&plan)?;
-        assert!(
-            matches!(step, DispatchStep::Dispatched),
-            "up step: {step:?}"
-        );
+        let wait =
+            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
+                Some(wait) => wait,
+                None => continue,
+            };
         samples.physical_dispatches += 1;
-        let wait = harness.last_wait_result().expect("benchmark wait result");
-        while let Some(observation) = harness.pop_observation() {
-            add_observation(&mut samples, observation, wait);
-        }
+        drain_observations(&mut harness, &mut samples, wait);
     }
     Ok(samples)
 }
 
-fn run_mixed(event_count: usize, mode: WaitMode) -> Result<Samples, String> {
+fn run_mixed(
+    event_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
-        let mut harness =
-            ProductionDispatchTestHarness::new_mixed_events_with_gap(event_count, due_us());
+        let mut harness = match ProductionDispatchTestHarness::try_new_mixed_events_with_gap(
+            event_count,
+            due_us(),
+        ) {
+            Ok(harness) => harness,
+            Err(error) => {
+                samples.record_failure(format!("setup_error:{error}"));
+                continue;
+            }
+        };
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -422,35 +598,108 @@ fn run_mixed(event_count: usize, mode: WaitMode) -> Result<Samples, String> {
         )?;
         while harness.pop_observation().is_some() {}
         let plan = plan_projected(&mut harness);
-        let step = harness.wait_and_dispatch_current_plan(&plan)?;
-        assert!(
-            matches!(step, DispatchStep::Dispatched),
-            "mixed step: {step:?}"
-        );
+        let wait =
+            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
+                Some(wait) => wait,
+                None => continue,
+            };
         samples.physical_dispatches += 1;
-        let wait = harness.last_wait_result().expect("benchmark wait result");
-        while let Some(observation) = harness.pop_observation() {
-            add_observation(&mut samples, observation, wait);
-        }
+        drain_observations(&mut harness, &mut samples, wait);
     }
     Ok(samples)
+}
+
+fn add_sender_only_sample(
+    samples: &mut Samples,
+    target: QpcTicks,
+    outcome: SendTransactionOutcome,
+    clock: QpcClock,
+) {
+    if !matches!(outcome.status, SendTransactionStatus::Complete) {
+        samples.record_failure(format!("sender_status:{:?}", outcome.status));
+        return;
+    }
+    let Some(started) = outcome.evidence.started_ticks else {
+        samples.record_failure("sender_missing_started_ticks");
+        return;
+    };
+    let Some(completed) = outcome.evidence.completed_ticks else {
+        samples.record_failure("sender_missing_completed_ticks");
+        return;
+    };
+    samples.physical_dispatches += 1;
+    samples.observation_count += 1;
+    samples.wake_to_admission_us.push(
+        started
+            .checked_duration_since(target)
+            .ok()
+            .and_then(|ticks| clock.duration_to_us(ticks).ok())
+            .unwrap_or(0),
+    );
+    samples.final_spin_us.push(0);
+    samples
+        .dispatch_start_error_us
+        .push(signed_qpc_us(clock, started, target));
+    samples.pre_call_to_completion_us.push(
+        completed
+            .checked_duration_since(started)
+            .ok()
+            .and_then(|ticks| clock.duration_to_us(ticks).ok())
+            .unwrap_or(0),
+    );
+    samples
+        .target_to_completion_us
+        .push(signed_qpc_us(clock, completed, target));
+    if started < target {
+        samples.early_dispatch_count += 1;
+    }
+}
+
+fn run_phase_a_sender_only(packet: PhysicalPacket) -> Result<Samples, String> {
+    let mut samples = Samples::default();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, due_us());
+    let prepared = PreparedPhysicalPacket::try_new(packet).expect("prepared sender-only packet");
+    let clock = QpcClock::initialize().expect("QPC");
+    for _ in 0..iterations() {
+        let (target, outcome) = harness.send_prepared_phase_a_packet_for_test(&prepared);
+        add_sender_only_sample(&mut samples, target, outcome, clock);
+    }
+    Ok(samples)
+}
+
+fn phase_a_sender_only_report() -> serde_json::Value {
+    let scenarios = serde_json::json!({
+        "down_only_15": summarize(run_phase_a_sender_only(PhysicalPacket::new(0, 0x7fff)).unwrap_or_else(|error| panic!("{error}"))),
+        "up_only_15": summarize(run_phase_a_sender_only(PhysicalPacket::new(0x7fff, 0)).unwrap_or_else(|error| panic!("{error}"))),
+        "mixed_2": summarize(run_phase_a_sender_only(PhysicalPacket::new(0b01, 0b10)).unwrap_or_else(|error| panic!("{error}"))),
+    });
+    serde_json::json!({
+        "scope": "sender-only; prepared packet and tracked-state reconciliation retained; waiter/coordinator excluded",
+        "waitable_timer_enabled": false,
+        "event_wait_enabled": false,
+        "adaptive_spin_enabled": false,
+        "effective_spin_threshold_us": 0,
+        "synthetic_boundary": "QPC target sampled immediately before sender call",
+        "scenarios": scenarios,
+        "iterations": iterations(),
+    })
 }
 
 fn summarize(mut samples: Samples) -> serde_json::Value {
     assert_eq!(
         samples.wake_to_admission_us.len(),
-        samples.physical_dispatches,
-        "every successful physical dispatch must have one raw wake-to-send sample"
-    );
-    assert_eq!(
-        samples.wake_to_admission_us.len(),
-        iterations(),
-        "scenario did not produce the requested number of timing samples"
+        samples.observation_count,
+        "every collected observation must have one raw wake-to-send sample"
     );
     assert_eq!(
         samples.dispatch_start_error_us.len(),
-        samples.physical_dispatches,
-        "every physical dispatch must have one start-error sample"
+        samples.observation_count,
+        "every collected observation must have one start-error sample"
+    );
+    assert_eq!(
+        samples.physical_dispatches + samples.non_dispatches,
+        iterations(),
+        "scenario did not account for every benchmark attempt"
     );
     json!({
         "controller": "dispatch_start_error",
@@ -506,6 +755,11 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         },
         "physical_dispatches": samples.physical_dispatches,
         "early_dispatch_count": samples.early_dispatch_count,
+        "non_dispatches": samples.non_dispatches,
+        "deadline_missed_before_send_count": samples.deadline_missed_count,
+        "failure_reasons": samples.failure_reasons,
+        "observation_count": samples.observation_count,
+        "observation_gaps": samples.observation_gaps,
         "observation_queue": "bounded_nonblocking_on",
     })
 }
@@ -570,66 +824,107 @@ fn wake_error_json(stats: WakeErrorStats) -> serde_json::Value {
 
 fn main() {
     let started = Instant::now();
+    let benchmark_mode = BenchmarkMode::from_env().unwrap_or_else(|error| panic!("{error}"));
+    let benchmark_scope = BenchmarkScope::from_env().unwrap_or_else(|error| panic!("{error}"));
+    if matches!(benchmark_scope, BenchmarkScope::PhaseASenderOnly)
+        && !matches!(benchmark_mode, BenchmarkMode::PhaseASenderOnly)
+    {
+        panic!("phase_a_sender_only requires phase_a_sender_only benchmark mode");
+    }
     let qpc_frequency = qpc_frequency_checked().expect("QPC frequency");
-    let modes = [
-        build_wait_mode("production_adaptive_spin", true, true, true),
-        build_fixed_wait_mode("fixed_spin_250us", 250),
-        build_fixed_wait_mode("fixed_spin_400us", 400),
-        build_fixed_wait_mode("fixed_spin_700us", 700),
-        build_fixed_wait_mode("fixed_spin_1000us", 1_000),
-    ];
     let mut mode_reports = serde_json::Map::new();
-    for mode in modes {
-        let mut scenarios = serde_json::Map::new();
-        scenarios.insert(
-            "down_only_1".to_string(),
-            summarize(run_down(1, mode).unwrap_or_else(|error| panic!("{error}"))),
-        );
-        scenarios.insert(
-            "down_only_5".to_string(),
-            summarize(run_down(5, mode).unwrap_or_else(|error| panic!("{error}"))),
-        );
-        scenarios.insert(
-            "down_only_15".to_string(),
-            summarize(run_down(15, mode).unwrap_or_else(|error| panic!("{error}"))),
-        );
-        scenarios.insert(
-            "up_only_1".to_string(),
-            summarize(run_up(1, mode).unwrap_or_else(|error| panic!("{error}"))),
-        );
-        for key_count in [5, 15] {
+    if matches!(benchmark_scope, BenchmarkScope::Full) {
+        let modes = [
+            build_wait_mode("production_adaptive_spin", true, true, true),
+            build_fixed_wait_mode("fixed_spin_250us", 250),
+            build_fixed_wait_mode("fixed_spin_400us", 400),
+            build_fixed_wait_mode("fixed_spin_700us", 700),
+            build_fixed_wait_mode("fixed_spin_1000us", 1_000),
+        ];
+        for mode in modes {
+            let mut scenarios = serde_json::Map::new();
             scenarios.insert(
-                format!("up_only_{key_count}"),
-                summarize(run_up(key_count, mode).unwrap_or_else(|error| panic!("{error}"))),
+                "down_only_1".to_string(),
+                summarize(
+                    run_down(1, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+                ),
+            );
+            scenarios.insert(
+                "down_only_5".to_string(),
+                summarize(
+                    run_down(5, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+                ),
+            );
+            scenarios.insert(
+                "down_only_15".to_string(),
+                summarize(
+                    run_down(15, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+                ),
+            );
+            scenarios.insert(
+                "up_only_1".to_string(),
+                summarize(
+                    run_up(1, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+                ),
+            );
+            for key_count in [5, 15] {
+                scenarios.insert(
+                    format!("up_only_{key_count}"),
+                    summarize(
+                        run_up(key_count, mode, benchmark_mode)
+                            .unwrap_or_else(|error| panic!("{error}")),
+                    ),
+                );
+            }
+            for event_count in [2, 10, 30] {
+                scenarios.insert(
+                    format!("mixed_{event_count}"),
+                    summarize(
+                        run_mixed(event_count, mode, benchmark_mode)
+                            .unwrap_or_else(|error| panic!("{error}")),
+                    ),
+                );
+            }
+            mode_reports.insert(
+                mode.name.to_string(),
+                json!({
+                    "waitable_timer_enabled": mode.waitable_timer_enabled,
+                    "event_wait_enabled": mode.event_wait_enabled,
+                    "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+                    "spin_floor_us": sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US,
+                    "effective_spin_threshold_us": mode.effective_spin_threshold_us,
+                    "mmcss_mode": "off_test_guard",
+                    "priority_mode": "off_test_guard",
+                    "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
+                    "iterations": iterations(),
+                    "scenarios": scenarios,
+                }),
             );
         }
-        for event_count in [2, 10, 30] {
-            scenarios.insert(
-                format!("mixed_{event_count}"),
-                summarize(run_mixed(event_count, mode).unwrap_or_else(|error| panic!("{error}"))),
-            );
-        }
+    } else {
         mode_reports.insert(
-            mode.name.to_string(),
-            json!({
-                "waitable_timer_enabled": mode.waitable_timer_enabled,
-                "event_wait_enabled": mode.event_wait_enabled,
-                "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-                "spin_floor_us": sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US,
-                "effective_spin_threshold_us": mode.effective_spin_threshold_us,
-                "mmcss_mode": "off_test_guard",
-                "priority_mode": "off_test_guard",
-                "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
-                "iterations": iterations(),
-                "scenarios": scenarios,
-            }),
+            "phase_a_sender_only".to_string(),
+            phase_a_sender_only_report(),
         );
     }
     let observation_enqueue_ab = observation_enqueue_ab();
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
         "production_timing_policy": true,
-        "evidence_scope": "Rust handoff timing with deterministic mock transport; not Raw Input or game-observed latency",
+        "benchmark_scope": benchmark_scope.name(),
+        "benchmark_mode": benchmark_mode.name(),
+        "waiter_metrics_valid": benchmark_mode.uses_real_waiter(),
+        "synthetic_transport_completion_us": matches!(
+            benchmark_mode,
+            BenchmarkMode::PhaseASyntheticTargetPlusOneTick
+        )
+        .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
+        "evidence_scope": match (benchmark_scope, benchmark_mode) {
+            (BenchmarkScope::Full, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; not Raw Input or game-observed latency",
+            (BenchmarkScope::Full, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
+        },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
         "iterations": iterations(),

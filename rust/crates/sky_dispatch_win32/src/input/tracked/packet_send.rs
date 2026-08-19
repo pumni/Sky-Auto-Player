@@ -522,6 +522,27 @@ impl TrackedKeyState {
         self.apply_packet_outcome(packet, outcome)
     }
 
+    /// Phase-A benchmark seam: candidate uses the fused target-aware sender
+    /// while the exact baseline worktree provides the legacy start-timestamp
+    /// sender under the same test-support API.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn send_phase_a_benchmark_boundary(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        qpc_clock: crate::clock::QpcClock,
+        physical_target_qpc: QpcTicks,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+        started_ticks: QpcTicks,
+    ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_at_target_with_cutoff(
+            prepared,
+            qpc_clock,
+            physical_target_qpc,
+            latest_allowed_down_qpc,
+            Some(started_ticks),
+        )
+    }
+
     /// Send a trusted prepared packet on the production precision path.
     ///
     /// The Win32 primitive samples the authoritative pre-call QPC after the

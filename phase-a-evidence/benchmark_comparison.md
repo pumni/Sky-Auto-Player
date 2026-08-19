@@ -1,24 +1,34 @@
 # Benchmark comparison
 
-The prescribed benchmark was run with `RT_HANDOFF_BENCH_ITERATIONS=5000`.
+The correction produced five baseline and five candidate JSON runs with
+`RT_HANDOFF_BENCH_ITERATIONS=5000`, `RT_HANDOFF_BENCH_SCOPE=phase_a_sender_only`,
+and `RT_HANDOFF_BENCH_MODE=phase_a_sender_only`.
 
-Baseline command:
+The scope is intentionally narrow and explicit: a prepared packet is sent
+through the tracked-state sender seam, with the baseline worktree retaining
+the legacy start-timestamp sender and the candidate using the fused
+target-aware sender. Waiter/coordinator scheduling is excluded. The default
+full benchmark and real-wait mode remain available for separate Windows
+review; these artifacts do not claim OS waiter or game-observed latency.
 
-```text
-RT_HANDOFF_BENCH_ITERATIONS=5000 cargo run --manifest-path rust/Cargo.toml -p sky_player_rs --example rt_handoff_bench --features test-support --release
-```
+Raw artifacts:
 
-Result: `INCONCLUSIVE`. The baseline aborted before emitting JSON at
-`down_hard_late_abort`.
+- `baseline_bench_run_01.json` … `baseline_bench_run_05.json`
+- `candidate_bench_run_01.json` … `candidate_bench_run_05.json`
 
-Candidate command:
+Every artifact has `iterations=5000`, matching scope/mode, three scenarios
+(`down_only_15`, `up_only_15`, `mixed_2`), `non_dispatches=0`, and
+`early_dispatch_count=0`.
 
-```text
-RT_HANDOFF_BENCH_ITERATIONS=5000 cargo run --manifest-path rust/Cargo.toml -p sky_player_rs --example rt_handoff_bench --features test-support --release phase-a-evidence/candidate_bench_run_01.json
-```
+Across all five runs and scenarios, `dispatch_start_error_us` has p99/max 0
+for both baseline and candidate. `pre_call_to_completion_us` and
+`target_to_completion_us` have p99 0 in every run. Their observed maxima were:
 
-Result: `INCONCLUSIVE`. The candidate aborted before emitting JSON at
-`down_deadline_missed_before_send`. No timing numbers are claimed and no
-baseline/candidate JSON comparison is fabricated.
+| scenario | baseline max list | candidate max list |
+|---|---:|---:|
+| down_only_15 | 2, 1, 1, 1, 10 µs | 3, 2, 1, 1, 1 µs |
+| up_only_15 | 0, 17, 0, 0, 0 µs | 0, 0, 0, 0, 0 µs |
+| mixed_2 | 0, 0, 0, 0, 0 µs | 0, 0, 0, 0, 0 µs |
 
-Human Windows evidence remains `AWAITING_HUMAN_REVIEW`.
+The completion tail shows no material regression in this sender-only A/B
+scope. Human real-Windows evidence remains `AWAITING_HUMAN_REVIEW`.

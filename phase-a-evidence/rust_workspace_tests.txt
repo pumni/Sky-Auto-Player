@@ -1,0 +1,19 @@
+Rust workspace verification
+
+Command:
+
+`cargo test --manifest-path rust/Cargo.toml --workspace --all-features`
+
+Result: PASS.
+
+Counts: sky_dispatch_core 47; golden 1; properties 3; sky_dispatch_win32
+142; sky_player_rs 186; rt_dispatch_no_alloc 20; sky_updater 43; packaged
+update E2E 1; updater safety 5; PEP 440 corpus 1; all Rust doc-tests pass.
+
+Additional gates:
+
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` — PASS
+- `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings` — PASS
+- `cargo check --manifest-path rust/Cargo.toml -p sky_player_rs` — PASS
+- `git diff --check` — PASS
+- `uv run --env-file .env python scripts/audit_security_mandates.py` — PASS

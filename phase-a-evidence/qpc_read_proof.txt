@@ -15,3 +15,9 @@ Static source test:
 
 Cutoff tests also cover strict `>` rejection, equality acceptance, and the
 Up-only late-release exception.
+
+Direct in-grace test added for the acceptance contract:
+
+- `target_crossing_inside_down_cutoff_is_allowed`
+- target 100, crossing sample 101, Down cutoff 102
+- one send is allowed and the crossing sample is reused as `started_ticks`

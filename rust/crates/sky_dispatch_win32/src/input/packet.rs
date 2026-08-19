@@ -1073,6 +1073,38 @@ mod tests {
     }
 
     #[test]
+    fn target_crossing_inside_down_cutoff_is_allowed() {
+        let prepared =
+            PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001)).expect("prepared");
+        let send_calls = Rc::new(Cell::new(0));
+        let result = send_prepared_physical_packet_once_at_target_scripted(
+            &prepared,
+            QpcTicks::from_raw(100),
+            Some(QpcTicks::from_raw(102)),
+            || Ok(QpcTicks::from_raw(101)),
+            {
+                let send_calls = Rc::clone(&send_calls);
+                move |started_ticks| {
+                    send_calls.set(send_calls.get() + 1);
+                    Ok(PlatformSendResult {
+                        requested: 1,
+                        inserted: 1,
+                        started_ticks,
+                        completed_ticks: Some(QpcTicks::from_raw(102)),
+                        win32_error: 0,
+                        timing_error: None,
+                    })
+                }
+            },
+        );
+
+        assert_eq!(result.status, SendTransactionStatus::Complete);
+        assert_eq!(result.evidence.started_ticks, Some(QpcTicks::from_raw(101)));
+        assert_eq!(result.evidence.attempts, 1);
+        assert_eq!(send_calls.get(), 1);
+    }
+
+    #[test]
     fn target_aware_sender_keeps_up_only_release_eligible_when_late() {
         let prepared =
             PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0)).expect("prepared");

@@ -29,8 +29,8 @@ use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PhysicalPacket,
-    PlatformSendResult, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
-    TrackedKeyState,
+    PlatformSendResult, PreparedPhysicalPacket, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus, TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -483,6 +483,11 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn new_mixed_events_with_gap(event_count: usize, gap_us: u64) -> Self {
+        Self::try_new_mixed_events_with_gap(event_count, gap_us)
+            .expect("initial mixed benchmark dispatch")
+    }
+
+    pub fn try_new_mixed_events_with_gap(event_count: usize, gap_us: u64) -> Result<Self, String> {
         assert!(
             event_count.is_multiple_of(2) && (2..=30).contains(&event_count),
             "mixed event count must be an even value in 2..=30"
@@ -512,11 +517,13 @@ impl ProductionDispatchTestHarness {
             reason: "bench-down".into(),
         });
         let mut harness = Self::create_harness(&actions);
-        harness.align_next_plan_to_future_for_test(500_000);
+        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
         let plan = harness.plan_current_dispatch();
-        let step = harness.wait_and_dispatch_current_plan(&plan);
-        assert!(matches!(step, Ok(DispatchStep::Dispatched)));
-        harness
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+        match step {
+            DispatchStep::Dispatched => Ok(harness),
+            step => Err(format!("initial mixed benchmark step: {step:?}")),
+        }
     }
 
     pub fn new_uponly_release() -> Self {
@@ -528,6 +535,14 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn new_uponly_release_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
+        Self::try_new_uponly_release_chord_with_gap(key_count, gap_us)
+            .expect("initial UpOnly benchmark dispatch")
+    }
+
+    pub fn try_new_uponly_release_chord_with_gap(
+        key_count: usize,
+        gap_us: u64,
+    ) -> Result<Self, String> {
         assert!((1..=15).contains(&key_count), "key count must be 1..=15");
         let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
         let mut harness = Self::create_harness(&[
@@ -547,14 +562,13 @@ impl ProductionDispatchTestHarness {
             },
         ]);
         // Dispatch Down outside window
-        harness.align_next_plan_to_future_for_test(500_000);
+        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
         let plan = harness.plan_current_dispatch();
         let step = harness.dispatch_at_plan_target_for_test(&plan);
-        assert!(
-            matches!(step, DispatchStep::Dispatched),
-            "initial UpOnly harness dispatch failed: {step:?}"
-        );
-        harness
+        match step {
+            DispatchStep::Dispatched => Ok(harness),
+            step => Err(format!("initial UpOnly benchmark step: {step:?}")),
+        }
     }
 
     fn create_harness(actions: &[KeyActionInput]) -> Self {
@@ -730,6 +744,37 @@ impl ProductionDispatchTestHarness {
             .as_u64()
             .saturating_sub(deadline.as_u64())
             .saturating_add(margin.as_u64().max(2_000_000));
+        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
+    }
+
+    /// Benchmark-only alignment that keeps the same frozen absolute-target
+    /// semantics while avoiding the long startup margin used by unit tests.
+    pub fn align_next_plan_to_benchmark_margin_for_test(&mut self, margin_us: u64) {
+        let authored = self
+            .resources
+            .coordinator
+            .prepare_current_authored_frame()
+            .expect("authored frame")
+            .map(|frame| frame.authored_ticks);
+        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let Some(deadline) = (match (authored, pending) {
+            (Some(authored), Some(pending)) => Some(authored.min(pending)),
+            (Some(authored), None) => Some(authored),
+            (None, Some(pending)) => Some(pending),
+            (None, None) => None,
+        }) else {
+            return;
+        };
+        let now = self.resources.clock.now().expect("qpc now");
+        let margin = self
+            .resources
+            .clock
+            .duration_from_us(margin_us)
+            .expect("benchmark margin conversion");
+        let epoch = now
+            .as_u64()
+            .saturating_sub(deadline.as_u64())
+            .saturating_add(margin.as_u64());
         self.resources.playback.epoch = QpcTicks::from_raw(epoch);
     }
 
@@ -1137,6 +1182,90 @@ impl ProductionDispatchTestHarness {
         // Use the frozen target as a test-controlled exact-boundary sample;
         // this never re-anchors or rewrites the plan after it is frozen.
         self.dispatch_plan_at(plan, deadline, target, true, Some(target))
+    }
+
+    pub fn physical_target_qpc_for_test(&self, plan: &NextDispatchPlan) -> Option<QpcTicks> {
+        plan.physical_target_qpc()
+    }
+
+    pub fn send_phase_a_packet_for_test(
+        &mut self,
+        packet: PhysicalPacket,
+    ) -> (QpcTicks, SendTransactionOutcome) {
+        let prepared = PreparedPhysicalPacket::try_new(packet).expect("prepared benchmark packet");
+        self.send_prepared_phase_a_packet_for_test(&prepared)
+    }
+
+    pub fn send_prepared_phase_a_packet_for_test(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+    ) -> (QpcTicks, SendTransactionOutcome) {
+        let packet = prepared.packet();
+        let target = self.resources.clock.now().expect("benchmark sender QPC");
+        let latest_allowed_down_qpc = (packet.down_mask != 0).then(|| {
+            target
+                .checked_add_duration(self.timing.down_late_grace_ticks)
+                .expect("benchmark Down cutoff")
+        });
+        let outcome = self.resources.backend.send_phase_a_benchmark_boundary(
+            prepared,
+            self.resources.clock,
+            target,
+            latest_allowed_down_qpc,
+            target,
+        );
+        (target, outcome)
+    }
+
+    /// Invoke the frozen Phase-A sender boundary with a deterministic first
+    /// sample one QPC tick after the target and a deterministic completion
+    /// delay. This keeps baseline and candidate A/B runs on the same sender
+    /// path without waiting on wall-clock time.
+    pub fn dispatch_at_phase_a_benchmark_boundary_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        completion_delay_us: u64,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("plan target required for Phase-A benchmark boundary");
+        let benchmark_now = target
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("Phase-A benchmark boundary arithmetic");
+        let deadline = plan
+            .deadline_ticks()
+            .expect("plan deadline required for Phase-A benchmark boundary");
+        let completion_delay = self
+            .resources
+            .clock
+            .duration_from_us(completion_delay_us)
+            .expect("Phase-A benchmark completion delay conversion");
+        let completed_ticks = benchmark_now
+            .checked_add_duration(completion_delay)
+            .expect("Phase-A benchmark completion boundary arithmetic");
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(benchmark_now),
+                    completed_ticks: Some(completed_ticks),
+                    timing_error: None,
+                },
+            }
+        });
+        self.runtime
+            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
+        self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(target))
     }
 
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
