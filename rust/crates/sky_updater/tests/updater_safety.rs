@@ -6,9 +6,12 @@ use sky_updater::archive::sha256_bytes;
 use sky_updater::error::UpdaterError;
 use sky_updater::install::install_verified;
 use sky_updater::manifest::{Manifest, ManifestFile};
+#[cfg(feature = "e2e-fault-injection")]
 use sky_updater::recovery::rollback_prepared;
+use sky_updater::transaction::transaction_root;
+#[cfg(feature = "e2e-fault-injection")]
 use sky_updater::transaction::{
-    JournalState, build_plan, prepare_journal, read_journal, transaction_root, write_json_atomic,
+    JournalState, build_plan, prepare_journal, read_journal, write_json_atomic,
 };
 use sky_updater::update_lock::UpdateLock;
 use sky_updater::{

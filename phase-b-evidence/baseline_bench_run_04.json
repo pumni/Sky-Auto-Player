@@ -1,0 +1,612 @@
+{
+  "benchmark": "rt_handoff_bench",
+  "benchmark_mode": "phase_a_production_boundary",
+  "benchmark_scope": "phase_a_production_matrix",
+  "deadline_us": 10000,
+  "elapsed_ms": 4402,
+  "evidence_scope": "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; the production target-aware sender owns the crossing QPC with test_started_ticks=None; waiter scheduling is excluded by a test-only direct boundary; not Raw Input or game-observed latency",
+  "iterations": 5000,
+  "modes": {
+    "phase_a_production_boundary": {
+      "adaptive_spin_enabled": true,
+      "effective_spin_threshold_us": 752,
+      "event_wait_enabled": true,
+      "iterations": 5000,
+      "scenarios": {
+        "down_only_1": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 319,
+            "p01": 109,
+            "p50": 109,
+            "p95": 114,
+            "p99": 125,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 318,
+            "min": 109,
+            "p50": 109,
+            "p95": 114,
+            "p99": 125,
+            "p99_9": 183,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 319,
+            "p50": 109,
+            "p95": 114,
+            "p99": 125,
+            "p99_9": 184,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "down_only_15": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 236,
+            "p01": 113,
+            "p50": 114,
+            "p95": 119,
+            "p99": 138,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 235,
+            "min": 113,
+            "p50": 113,
+            "p95": 118,
+            "p99": 137,
+            "p99_9": 175,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 16,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 236,
+            "p50": 114,
+            "p95": 119,
+            "p99": 138,
+            "p99_9": 175,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "down_only_5": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 401,
+            "p01": 110,
+            "p50": 111,
+            "p95": 114,
+            "p99": 124,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 399,
+            "min": 110,
+            "p50": 110,
+            "p95": 114,
+            "p99": 124,
+            "p99_9": 176,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 5,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 1,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 401,
+            "p50": 111,
+            "p95": 114,
+            "p99": 124,
+            "p99_9": 176,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "mixed_10": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 306,
+            "p01": 109,
+            "p50": 110,
+            "p95": 113,
+            "p99": 126,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 305,
+            "min": 109,
+            "p50": 109,
+            "p95": 113,
+            "p99": 126,
+            "p99_9": 184,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 306,
+            "p50": 110,
+            "p95": 113,
+            "p99": 126,
+            "p99_9": 185,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "mixed_2": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 167,
+            "p01": 107,
+            "p50": 107,
+            "p95": 110,
+            "p99": 119,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 167,
+            "min": 107,
+            "p50": 107,
+            "p95": 110,
+            "p99": 118,
+            "p99_9": 138,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 167,
+            "p50": 107,
+            "p95": 110,
+            "p99": 119,
+            "p99_9": 140,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "mixed_30": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 207,
+            "p01": 115,
+            "p50": 115,
+            "p95": 120,
+            "p99": 135,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 206,
+            "min": 115,
+            "p50": 115,
+            "p95": 120,
+            "p99": 135,
+            "p99_9": 164,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 12,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 207,
+            "p50": 115,
+            "p95": 120,
+            "p99": 135,
+            "p99_9": 165,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "up_only_1": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 174,
+            "p01": 106,
+            "p50": 106,
+            "p95": 108,
+            "p99": 114,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 173,
+            "min": 106,
+            "p50": 106,
+            "p95": 108,
+            "p99": 114,
+            "p99_9": 128,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 0,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 174,
+            "p50": 106,
+            "p95": 108,
+            "p99": 114,
+            "p99_9": 129,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "up_only_15": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 250,
+            "p01": 110,
+            "p50": 110,
+            "p95": 112,
+            "p99": 124,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 250,
+            "min": 110,
+            "p50": 110,
+            "p95": 112,
+            "p99": 124,
+            "p99_9": 169,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 6,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 250,
+            "p50": 110,
+            "p95": 112,
+            "p99": 124,
+            "p99_9": 170,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "up_only_5": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 220,
+            "p01": 107,
+            "p50": 108,
+            "p95": 108,
+            "p99": 115,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 219,
+            "min": 107,
+            "p50": 107,
+            "p95": 108,
+            "p99": 114,
+            "p99_9": 137,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 220,
+            "p50": 108,
+            "p95": 108,
+            "p99": 115,
+            "p99_9": 138,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        }
+      },
+      "scope": "Phase-A acceptance production sender boundary; full coordinator dispatch/admission/commit path; waiter scheduling excluded",
+      "sender_start_timestamp_source": "production fused target-crossing primitive; test_started_ticks=None",
+      "transport": "deterministic packet emitter with QPC completion sample",
+      "waitable_timer_enabled": true
+    }
+  },
+  "observation_enqueue_ab": {
+    "available_queue_dropped": 0,
+    "available_queue_high_watermark": 0,
+    "available_queue_push_ns": {
+      "max": 2800,
+      "p50": 200,
+      "p95": 400,
+      "p99": 500,
+      "p99_9": 600,
+      "samples": 10000
+    },
+    "baseline_bypass_ns": {
+      "max": 51000,
+      "p50": 100,
+      "p95": 100,
+      "p99": 200,
+      "p99_9": 200,
+      "samples": 10000
+    },
+    "clock": "std::time::Instant",
+    "high_watermark_tracking": "disabled_in_precision_path",
+    "iterations": 10000,
+    "saturated_queue_dropped": 10000,
+    "saturated_queue_high_watermark": 0,
+    "saturated_queue_push_ns": {
+      "max": 77200,
+      "p50": 200,
+      "p95": 600,
+      "p99": 700,
+      "p99_9": 1000,
+      "samples": 10000
+    },
+    "scope": "producer primitive only; observation construction, copying, and consumer drain excluded"
+  },
+  "production_timing_policy": true,
+  "qpc_frequency": 10000000,
+  "rust_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "synthetic_transport_completion_us": null,
+  "transport": "deterministic_mock",
+  "waiter_metrics_valid": false
+}
