@@ -157,8 +157,10 @@ target, fused sender crossing, SendInput completion, and first receipt. For each
 total hold shrink `(up_target - down_target) - (up_receipt - down_receipt)`;
 scheduler, SendInput, and delivery shrink are diagnostics that must sum to that
 direct value. Only clean pairs enter the signed quantiles. At least 100 clean
-pairs are required in every production bucket. The cache is version 4 (native
-schema 10, measurement protocol 5); version 3 and older evidence is
+pairs are required in every production bucket. Native output schema 11 and
+artifact schema 8 record the acquired MMCSS label, PowerThrottling/HighQoS
+guard state, and actual waiter mode alongside host provenance. The cache is
+version 5 (native schema 11, measurement protocol 5); older evidence is
 incompatible and falls back rather than being reinterpreted. Qualification is:
 
 ```text
@@ -168,7 +170,7 @@ candidate > 2_000  -> OUT_OF_ENVELOPE, applied margin = None
 ```
 
 Completed out-of-envelope evidence overwrites the cache with its unhealthy
-v4 status and playback falls back to a clearly-sourced 500 µs hold margin.
+v5 status and playback falls back to a clearly-sourced 500 µs hold margin.
 Measurement or integrity failure preserves the previous cache. The hold
 margin never changes Note-On timestamps, `physical_target`, dispatch lead, or
 the independent fixed `down_late_grace_us` policy, which is `500 µs` in

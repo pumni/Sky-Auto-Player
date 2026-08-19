@@ -133,17 +133,19 @@ candidate > 2,000 µs
 ```
 
 An out-of-envelope measurement is complete evidence, is written as unhealthy
-cache v4, and playback falls back to the explicit 500 µs hold margin. A
+cache v5, and playback falls back to the explicit 500 µs hold margin. A
 measurement/integrity failure preserves the previous cache. The correction is
 applied only to the hold floor; it never leads the playback target, changes
 `down_late_grace`, or claims game-observed timing. Full-calibration checkpoints use plain-text SHA256
 sidecars and a stable common provenance manifest. Resume and finalization
 reject any bucket whose source/build identity, native source fingerprint,
-Rust version, QPC frequency, Windows build, CPU identity, topology, or
-efficiency-class histogram differs from the other five; only the observation
-timestamp may differ. Runtime cache loading also requires the stable host
-fingerprint to match the current native host. The final artifact and cache are
-published only after the complete matrix and cache have both passed validation.
+Rust version, QPC frequency, Windows build, CPU identity, topology,
+efficiency-class histogram, or scheduling-aid acquisition labels differs from
+the other five; only the observation timestamp may differ. Each native result
+records the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
+waiter mode. Runtime cache loading also requires the stable host fingerprint to
+match the current native host. The final artifact and cache are published only
+after the complete matrix and cache have both passed validation.
 
 ## 3. Planning and physical target
 

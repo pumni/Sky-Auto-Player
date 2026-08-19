@@ -112,6 +112,9 @@ pub enum CalibrationError {
     #[error("calibration state lock was poisoned")]
     StateLockFailed,
 
+    #[error("calibration scheduling-aid provenance changed between buckets")]
+    SchedulingAidProvenanceMismatch,
+
     #[error("calibration sequence id exhausted")]
     SequenceOverflow,
 
@@ -649,7 +652,7 @@ pub enum SampleClass {
 }
 
 pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 5;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 10;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 11;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
@@ -742,6 +745,20 @@ impl CalibrationConfig {
     }
 }
 
+/// Scheduling aids acquired for the native calibration measurement.
+///
+/// `power_throttling_active` means that the guard successfully disabled
+/// execution-speed throttling (the HighQoS opt-out), not that throttling is
+/// being enabled. Labels are captured at acquisition time so the evidence
+/// records the actual runtime path rather than only the requested policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulingAidProvenance {
+    pub mmcss_acquired: &'static str,
+    pub mmcss_active: bool,
+    pub power_throttling_active: bool,
+    pub waiter_mode: &'static str,
+}
+
 // ─── Output schema ────────────────────────────────────────────────────────────
 
 /// The complete output of one protocol-vNext calibration run.
@@ -758,6 +775,7 @@ pub struct CalibrationOutput {
     pub rustc_version: &'static str,
     pub evidence_kind: &'static str,
     pub host_fingerprint: HostFingerprint,
+    pub scheduling_aids: SchedulingAidProvenance,
     pub configuration: CalibrationConfig,
     /// Protocol-vNext pair matrix. The six required production cells live here.
     pub pair_buckets: HashMap<u8, HashMap<String, BucketStats>>,
@@ -797,6 +815,7 @@ pub struct CalibrationPairBucketOutput {
     pub rustc_version: &'static str,
     pub evidence_kind: &'static str,
     pub host_fingerprint: HostFingerprint,
+    pub scheduling_aids: SchedulingAidProvenance,
     pub configuration: CalibrationConfig,
     pub class: SampleClass,
     pub polyphony: u8,
@@ -2660,9 +2679,15 @@ mod platform {
             ));
         }
         let polyphony = config.polyphonies[0];
-        let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
-        let _power = PowerThrottlingGuard::disable_current_thread();
+        let mmcss = MmcssGuard::acquire(PriorityMode::Auto);
+        let power = PowerThrottlingGuard::disable_current_thread();
         let mut session = CalibrationSession::open()?;
+        let scheduling_aids = SchedulingAidProvenance {
+            mmcss_acquired: mmcss.acquired(),
+            mmcss_active: mmcss.is_active(),
+            power_throttling_active: power.is_active(),
+            waiter_mode: session.precision_waiter.mode(),
+        };
         let measurement_deadline = session.measurement_deadline(config.budget_seconds)?;
         session.set_measurement_deadline(measurement_deadline);
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..polyphony as usize];
@@ -2785,6 +2810,7 @@ mod platform {
             rustc_version: env!("SKY_RUSTC_VERSION"),
             evidence_kind: CALIBRATION_EVIDENCE_KIND,
             host_fingerprint: build_host_fingerprint()?,
+            scheduling_aids,
             configuration: config.clone(),
             class,
             polyphony,
@@ -2809,6 +2835,7 @@ mod platform {
         let mut measured_anomalous = 0u64;
         let mut measured_timed_out = 0u64;
         let mut measured_class_mismatch = 0u64;
+        let mut scheduling_aids: Option<SchedulingAidProvenance> = None;
         let mut cleanup = CleanupOutcome {
             cleanup_attempted: true,
             cleanup_success: true,
@@ -2823,6 +2850,13 @@ mod platform {
                 let mut bucket_config = config.clone();
                 bucket_config.polyphonies = vec![polyphony];
                 let bucket = run_calibration_pair_bucket(&bucket_config, class)?;
+                if let Some(expected) = scheduling_aids.as_ref() {
+                    if expected != &bucket.scheduling_aids {
+                        return Err(CalibrationError::SchedulingAidProvenanceMismatch);
+                    }
+                } else {
+                    scheduling_aids = Some(bucket.scheduling_aids.clone());
+                }
                 let stats = bucket.pair_bucket.clone();
                 warmup_attempted = warmup_attempted.saturating_add(bucket.warmup_pairs);
                 warmup_anomalous = warmup_anomalous.saturating_add(bucket.warmup_rejected);
@@ -2853,6 +2887,8 @@ mod platform {
             rustc_version: env!("SKY_RUSTC_VERSION"),
             evidence_kind: CALIBRATION_EVIDENCE_KIND,
             host_fingerprint: build_host_fingerprint()?,
+            scheduling_aids: scheduling_aids
+                .ok_or(CalibrationError::SchedulingAidProvenanceMismatch)?,
             configuration: config.clone(),
             pair_buckets,
             warmup_attempted,
@@ -3246,7 +3282,7 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 10);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 11);
         assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 5);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
@@ -3255,6 +3291,21 @@ mod tests {
         assert_eq!(cfg.hot_gap_target_us, 5_000);
         assert_eq!(cfg.cold_threshold_us, 20_000);
         assert_eq!(cfg.cold_idle_gap_us, 25_000);
+    }
+
+    #[test]
+    fn scheduling_aid_provenance_serializes_runtime_labels() {
+        let provenance = SchedulingAidProvenance {
+            mmcss_acquired: "mmcss:Games",
+            mmcss_active: true,
+            power_throttling_active: true,
+            waiter_mode: "event+high_resolution_timer",
+        };
+        let value = serde_json::to_value(provenance).expect("scheduling provenance JSON");
+        assert_eq!(value["mmcss_acquired"], "mmcss:Games");
+        assert_eq!(value["mmcss_active"], true);
+        assert_eq!(value["power_throttling_active"], true);
+        assert_eq!(value["waiter_mode"], "event+high_resolution_timer");
     }
 
     fn timing_point(

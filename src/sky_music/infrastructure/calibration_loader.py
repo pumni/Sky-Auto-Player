@@ -21,14 +21,15 @@ SOURCE_DEFAULT_500: str = "default_500"
 SOURCE_OUT_OF_ENVELOPE_DEFAULT_500: str = "out_of_envelope_default_500"
 SOURCE_INVALID_CACHE_DEFAULT_500: str = "invalid_cache_default_500"
 SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
-SUPPORTED_CACHE_VERSION: int = 4
+SUPPORTED_CACHE_VERSION: int = 5
 LEGACY_CACHE_VERSION: int = 3
-SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 10
+PREVIOUS_CACHE_VERSION: int = 4
+SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 11
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 5
 SOURCE_FORMULA_VERSION: int = 4
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
 HOST_FINGERPRINT_VERSION: int = 2
-CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 7
+CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 8
 CALIBRATION_EVIDENCE_KIND: str = "injected_raw_input_total_hold_proxy"
 MIN_CALIBRATION_SAMPLE_COUNT: int = 100
 MAX_SHRINK_US: int = 100_000
@@ -132,6 +133,7 @@ class CalibrationCacheSummary:
     ceiling_us: int
     candidate_margin_us: int
     host_fingerprint: dict[str, object]
+    scheduling_aids: dict[str, object]
     down_us: CalibrationQuantiles | None = None
     up_us: CalibrationQuantiles | None = None
 
@@ -209,6 +211,36 @@ def _validate_host_fingerprint(value: object, *, name: str = "host_fingerprint")
     return value
 
 
+def _validate_scheduling_aids(
+    value: object, *, name: str = "scheduling_aids"
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{name} must be an object")
+    mmcss = value.get("mmcss_acquired")
+    if not isinstance(mmcss, str) or mmcss not in {
+        "off",
+        "mmcss:Games",
+        "thread:highest",
+        "thread:time_critical",
+    }:
+        raise ValueError(f"{name}.mmcss_acquired is invalid")
+    mmcss_active = value.get("mmcss_active")
+    if not isinstance(mmcss_active, bool) or mmcss_active != (mmcss != "off"):
+        raise ValueError(f"{name}.mmcss_active is inconsistent")
+    power_active = value.get("power_throttling_active")
+    if not isinstance(power_active, bool):
+        raise ValueError(f"{name}.power_throttling_active is invalid")
+    waiter_mode = value.get("waiter_mode")
+    if not isinstance(waiter_mode, str) or waiter_mode not in {
+        "event+high_resolution_timer",
+        "high_resolution_timer",
+        "event+timer_resolution_fallback",
+        "timer_resolution_fallback",
+    }:
+        raise ValueError(f"{name}.waiter_mode is invalid")
+    return value
+
+
 def _host_identity(value: dict[str, object]) -> tuple[object, ...]:
     efficiency = cast(list[int], value["cpu_set_efficiency_classes"])
     return (
@@ -265,6 +297,7 @@ def _validate_provenance(data: dict[str, object], *, require_extended: bool) -> 
     if data.get("dirty_worktree") is not False:
         raise ValueError("calibration provenance is dirty")
     _validate_host_fingerprint(data.get("host_fingerprint"))
+    _validate_scheduling_aids(data.get("scheduling_aids"))
 
 
 def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]:
@@ -358,6 +391,7 @@ def _summary(
     floor: int,
     ceiling: int,
     host_fingerprint: dict[str, object],
+    scheduling_aids: dict[str, object],
 ) -> CalibrationCacheSummary:
     return CalibrationCacheSummary(
         status=status,
@@ -372,10 +406,11 @@ def _summary(
         ceiling_us=ceiling,
         candidate_margin_us=candidate_margin_us,
         host_fingerprint=host_fingerprint,
+        scheduling_aids=scheduling_aids,
     )
 
 
-def _parse_v4(data: dict[str, object]) -> CalibrationCacheSummary:
+def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
     if data.get("source_formula_version") != SOURCE_FORMULA_VERSION:
         raise ValueError("unsupported calibration source formula")
     _validate_provenance(data, require_extended=True)
@@ -426,6 +461,7 @@ def _parse_v4(data: dict[str, object]) -> CalibrationCacheSummary:
         floor=floor,
         ceiling=ceiling,
         host_fingerprint=_validate_host_fingerprint(data.get("host_fingerprint")),
+        scheduling_aids=_validate_scheduling_aids(data.get("scheduling_aids")),
     )
 
 
@@ -449,7 +485,7 @@ def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
         raise ValueError("unsupported measurement protocol")
     if data.get("source") != SOURCE_DEVICE_CACHE:
         raise ValueError("invalid calibration source")
-    return _parse_v4(data)
+    return _parse_v5(data)
 
 
 def load_calibration_resolution(
@@ -476,7 +512,7 @@ def load_calibration_resolution(
                 summary=None,
             )
     if isinstance(data, dict) and (
-        data.get("version") in (2, LEGACY_CACHE_VERSION)
+        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION)
         or data.get("measurement_protocol_version") == 4
         or data.get("evidence_kind") == "injected_raw_input_delivery_proxy"
     ):

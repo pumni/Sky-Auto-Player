@@ -36,14 +36,15 @@ from sky_music.infrastructure.calibration_loader import (
     REQUIRED_BUCKETS,
     CalibrationCacheSummary,
     CalibrationStatus,
+    _validate_scheduling_aids,
     PairBucketSummary,
     parse_calibration_cache_summary,
     qualify_calibration_margin,
 )
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 10
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 11
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 5
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 7
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 8
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
@@ -273,6 +274,10 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
                 "native calibration build does not match the frozen release"
             )
     _validate_host_fingerprint(data.get("host_fingerprint"))
+    try:
+        _validate_scheduling_aids(data.get("scheduling_aids"))
+    except (TypeError, ValueError) as exc:
+        raise NativeCalibrationError(str(exc)) from exc
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
     for field, expected in (
         ("cleanup_success", True),
@@ -495,7 +500,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v4(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v5(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -529,7 +534,7 @@ def _cache_v4(result: dict[str, Any]) -> dict[str, Any]:
         "applied_margin_us": qualification_result.applied_margin_us,
     }
     return {
-        "version": 4,
+        "version": 5,
         "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "source": "device_cache",
         "status": qualification_result.status.value,
@@ -543,6 +548,7 @@ def _cache_v4(result: dict[str, Any]) -> dict[str, Any]:
         "rustc_version": result.get("rustc_version"),
         "dirty_worktree": result.get("dirty_worktree"),
         "host_fingerprint": result.get("host_fingerprint"),
+        "scheduling_aids": result.get("scheduling_aids"),
         "required_buckets": list(REQUIRED_BUCKETS),
         "pair_buckets": flattened,
         "qualification": qualification,
@@ -742,6 +748,7 @@ def _artifact_from_bucket(
         "dirty_worktree": bucket["dirty_worktree"],
         "rustc_version": bucket["rustc_version"],
         "host_fingerprint": bucket["host_fingerprint"],
+        "scheduling_aids": bucket["scheduling_aids"],
         "class": bucket["class"],
         "polyphony": bucket["polyphony"],
         "attempted_pairs": bucket["attempted_pairs"],
@@ -771,6 +778,7 @@ def _provenance_identity(data: dict[str, Any]) -> dict[str, Any]:
         "native_source_fingerprint": data.get("native_source_fingerprint"),
         "dirty_worktree": data.get("dirty_worktree"),
         "rustc_version": data.get("rustc_version"),
+        "scheduling_aids": _validate_scheduling_aids(data.get("scheduling_aids")),
         "qpc_frequency_hz": qpc_frequency,
         "win32_build": win32_build,
         "host_fingerprint": {
@@ -813,6 +821,7 @@ def _validate_provenance_manifest(value: object) -> dict[str, Any]:
         "qpc_frequency_hz",
         "win32_build",
         "host_fingerprint",
+        "scheduling_aids",
     }
     if set(value) != expected:
         raise NativeCalibrationError("calibration checkpoint provenance manifest is incomplete")
@@ -873,6 +882,7 @@ def _finalize_artifacts(
         "dirty_worktree": common_provenance["dirty_worktree"],
         "rustc_version": common_provenance["rustc_version"],
         "host_fingerprint": first["host_fingerprint"],
+        "scheduling_aids": common_provenance["scheduling_aids"],
         "orchestration_configuration": orchestration,
         "pair_buckets": buckets,
         "measured_attempted": len(REQUIRED_BUCKETS) * FULL_SAMPLE_COUNT,
@@ -1040,7 +1050,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v4(final)
+    cache = _cache_v5(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1086,7 +1096,7 @@ def run_native_calibration(
     budget = min(MAX_CALIBRATION_BUDGET_SECONDS, max(6, math.floor(timeout)))
     result = _run_process(_find_binary(), budget_seconds=budget, timeout_seconds=timeout, samples=FULL_SAMPLE_COUNT)
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v4(result)
+    cache = _cache_v5(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1106,7 +1116,7 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v4(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v5(result))
     return PublishedCalibrationResult(
         status=summary.status,
         margin_us=summary.margin_us,

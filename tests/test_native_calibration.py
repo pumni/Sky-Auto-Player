@@ -45,6 +45,15 @@ def _host_fingerprint() -> dict[str, object]:
     }
 
 
+def _scheduling_aids() -> dict[str, object]:
+    return {
+        "mmcss_acquired": "mmcss:Games",
+        "mmcss_active": True,
+        "power_throttling_active": True,
+        "waiter_mode": "event+high_resolution_timer",
+    }
+
+
 def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> dict[str, object]:
     total = clean if attempted is None else attempted
     rejected = total - clean
@@ -89,7 +98,7 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 10,
+        "version": 11,
         "measurement_protocol_version": 5,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
@@ -98,6 +107,7 @@ def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) 
         "native_source_fingerprint": "test-fingerprint",
         "rustc_version": "rustc test",
         "host_fingerprint": _host_fingerprint(),
+        "scheduling_aids": _scheduling_aids(),
         "configuration": _configuration(polyphonies=[polyphony], samples=samples),
         "class": class_name,
         "polyphony": polyphony,
@@ -126,7 +136,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 10,
+        "version": 11,
         "measurement_protocol_version": 5,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
@@ -135,6 +145,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         "native_source_fingerprint": "test-fingerprint",
         "rustc_version": "rustc test",
         "host_fingerprint": _host_fingerprint(),
+        "scheduling_aids": _scheduling_aids(),
         "configuration": _configuration(polyphonies=[1, 5, 15]),
         "pair_buckets": pair_buckets,
         "measured_attempted": 600,
@@ -161,8 +172,15 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 10
+    assert result["version"] == 11
     assert result["measurement_protocol_version"] == 5
+
+
+def test_native_result_requires_scheduling_aid_provenance() -> None:
+    result = _native_result()
+    del result["scheduling_aids"]
+    with pytest.raises(native_calibration.NativeCalibrationError, match="scheduling_aids"):
+        native_calibration._validate_result(result)
 
 
 def test_native_result_rejects_missing_required_bucket() -> None:
@@ -217,11 +235,11 @@ def test_directional_execution_is_rejected() -> None:
         )
 
 
-def test_cache_v4_uses_max_positive_total_proxy_p99_and_preserves_signed_values() -> None:
+def test_cache_v5_uses_max_positive_total_proxy_p99_and_preserves_signed_values() -> None:
     result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
-    cache = native_calibration._cache_v4(result)
+    cache = native_calibration._cache_v5(result)
     summary = loader.parse_calibration_cache_summary(cache)
-    assert cache["version"] == 4
+    assert cache["version"] == 5
     assert summary.global_shrink_p99_us == 42
     assert summary.worst_bucket == "15/cold"
     assert summary.margin_us == 300
@@ -236,7 +254,7 @@ def test_cache_v1_is_rejected_and_falls_back() -> None:
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
-    cache = native_calibration._cache_v4(_native_result())
+    cache = native_calibration._cache_v5(_native_result())
     cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
     cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="clean pairs"):
@@ -269,7 +287,7 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     result = _native_result(
         p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
     )
-    cache = native_calibration._cache_v4(result)
+    cache = native_calibration._cache_v5(result)
     summary = loader.parse_calibration_cache_summary(cache)
 
     assert summary.margin_us is None
@@ -287,14 +305,14 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     ],
 )
 def test_v4_rejects_tampered_qualification(field: str, value: object) -> None:
-    cache = native_calibration._cache_v4(_native_result())
+    cache = native_calibration._cache_v5(_native_result())
     cast(dict[str, object], cache["qualification"])[field] = value
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(cache)
 
 
 def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
-    cache = native_calibration._cache_v4(
+    cache = native_calibration._cache_v5(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
         )
@@ -305,7 +323,7 @@ def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
 
 
 def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
-    out_cache = native_calibration._cache_v4(
+    out_cache = native_calibration._cache_v5(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12_088)
         )
@@ -314,17 +332,17 @@ def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(out_cache)
 
-    valid_cache = native_calibration._cache_v4(_native_result())
+    valid_cache = native_calibration._cache_v5(_native_result())
     cast(dict[str, object], valid_cache["qualification"])["applied_margin_us"] = None
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(valid_cache)
 
 
-@pytest.mark.parametrize("legacy_version", [2, 3])
+@pytest.mark.parametrize("legacy_version", [2, 3, 4])
 def test_legacy_cache_is_rejected_without_reinterpreting_vnext(
     legacy_version: int,
 ) -> None:
-    legacy = native_calibration._cache_v4(_native_result())
+    legacy = native_calibration._cache_v5(_native_result())
     legacy["version"] = legacy_version
     legacy["source_formula_version"] = 3
     with pytest.raises(ValueError, match=r"legacy|unsupported"):
@@ -346,7 +364,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     assert corrupt.resolved_margin_us == 500
     assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_DEFAULT_500
 
-    valid_cache = native_calibration._cache_v4(
+    valid_cache = native_calibration._cache_v5(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
     )
     valid = loader.load_calibration_resolution(data=valid_cache)
@@ -354,7 +372,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     assert valid.resolved_margin_us == 800
     assert valid.margin_source == loader.SOURCE_DEVICE_CACHE
 
-    out_cache = native_calibration._cache_v4(
+    out_cache = native_calibration._cache_v5(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088))
     )
     out = loader.load_calibration_resolution(data=out_cache)
@@ -366,7 +384,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
 def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cache = native_calibration._cache_v4(_native_result())
+    cache = native_calibration._cache_v5(_native_result())
     current = _host_fingerprint()
     monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: current)
     cache["host_fingerprint"]["sampled_at_us"] = 999_999  # type: ignore[index]
@@ -395,7 +413,7 @@ def test_each_required_host_identity_field_mismatch_is_incompatible(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
 ) -> None:
-    cache = native_calibration._cache_v4(_native_result())
+    cache = native_calibration._cache_v5(_native_result())
     current = _host_fingerprint()
     changed = dict(current)
     value = changed[field]

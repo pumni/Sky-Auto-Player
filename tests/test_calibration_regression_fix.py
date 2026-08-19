@@ -54,20 +54,26 @@ _HOST_FINGERPRINT = {
     "sampled_at_us": 123,
 }
 _INTEGRATION_CACHE: dict = {
-    "version": 4,
-    "artifact_schema_version": 7,
+    "version": 5,
+    "artifact_schema_version": 8,
     "status": "valid",
     "source": "device_cache",
     "evidence_kind": "injected_raw_input_total_hold_proxy",
     "source_formula_version": 4,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
-    "native_calibration_version": 10,
+    "native_calibration_version": 11,
     "measurement_protocol_version": 5,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
     "dirty_worktree": False,
     "host_fingerprint": _HOST_FINGERPRINT,
+    "scheduling_aids": {
+        "mmcss_acquired": "mmcss:Games",
+        "mmcss_active": True,
+        "power_throttling_active": True,
+        "waiter_mode": "event+high_resolution_timer",
+    },
     "required_buckets": list(_REQUIRED_BUCKETS),
     "pair_buckets": {
         key: {
