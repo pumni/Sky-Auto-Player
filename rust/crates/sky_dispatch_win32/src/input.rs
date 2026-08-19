@@ -20,8 +20,8 @@ pub use outcome::{
 
 pub use packet::{
     MAX_PACKET_EVENTS, PreparedPhysicalPacket, send_physical_packet_once_with_clock,
-    send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_cutoff,
-    send_prepared_physical_packet_once_with_start,
+    send_prepared_physical_packet_once, send_prepared_physical_packet_once_at_target_with_cutoff,
+    send_prepared_physical_packet_once_with_cutoff, send_prepared_physical_packet_once_with_start,
     send_prepared_physical_packet_once_with_start_and_cutoff,
 };
 pub use physical::is_scan_code_physically_down;

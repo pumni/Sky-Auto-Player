@@ -36,6 +36,13 @@ pub(super) fn recover_missed_down_boundary(
         let Some(prepared_up_packet) = view.prepared_up_recovery_packet.as_ref() else {
             return DispatchStep::TerminateStatic("missing_prepared_up_recovery_packet");
         };
+        #[cfg(any(test, feature = "test-support"))]
+        let result = backend.send_prepared_physical_packet_with_start_and_cutoff(
+            prepared_up_packet,
+            observed_qpc,
+            None,
+        );
+        #[cfg(not(any(test, feature = "test-support")))]
         let result = backend.send_prepared_physical_packet_with_cutoff(prepared_up_packet, None);
         if backend.timing_error.take().is_some() {
             return DispatchStep::TerminateStatic("QPC failure during missed Down Up recovery");

@@ -14,10 +14,7 @@ use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
-use super::{
-    AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue, SpinSendError,
-    spin_and_send_prepared,
-};
+use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -225,12 +222,11 @@ fn commit_down_send_outcome(
         coordinator,
         clock_state,
         effective_now_ticks,
+        now_ticks,
         physical_target_qpc,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
-        test_direct_boundary
-            .then_some(now_ticks)
-            .filter(|ticks| *ticks > physical_target_qpc),
+        test_direct_boundary.then_some(now_ticks),
         observer,
     )
 }
@@ -593,6 +589,7 @@ fn record_down_send_outcome(
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
+    _now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
     admission: &AdmissionOutcome,
     #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
@@ -622,45 +619,14 @@ fn record_down_send_outcome(
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result = match spin_and_send_prepared(
+    let result = backend.send_prepared_physical_packet_at_target_with_cutoff(
+        prepared_packet,
         qpc_clock,
         physical_target_qpc,
         latest_allowed_down_qpc,
-        backend,
-        prepared_packet,
         #[cfg(any(test, feature = "test-support"))]
         test_now_ticks,
-    ) {
-        Ok(result) => result,
-        Err(SpinSendError::DownHardLateAbort) => {
-            if !runtime.musical_physical_commit_started {
-                return DispatchStep::TerminateStatic("down_hard_late_abort");
-            }
-            let observed_qpc = match qpc_clock.now() {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    return DispatchStep::Terminate(format!(
-                        "QPC hard-late recovery failure: {error:?}"
-                    ));
-                }
-            };
-            return recover_missed_down_boundary(
-                view,
-                config,
-                runtime,
-                local_metrics,
-                backend,
-                coordinator,
-                clock_state,
-                physical_target_qpc,
-                observed_qpc,
-                DownMissReason::HardLate,
-            );
-        }
-        Err(SpinSendError::Qpc(error)) => {
-            return DispatchStep::Terminate(format!("QPC spin failure: {error:?}"));
-        }
-    };
+    );
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
             qpc_clock,
@@ -693,7 +659,17 @@ fn record_down_send_outcome(
         if !runtime.musical_physical_commit_started {
             return DispatchStep::TerminateStatic("down_deadline_missed_before_send");
         }
-        let observed_qpc = result.evidence.started_ticks.unwrap_or(physical_target_qpc);
+        #[cfg(any(test, feature = "test-support"))]
+        let observed_qpc = test_now_ticks.unwrap_or(_now_ticks);
+        #[cfg(not(any(test, feature = "test-support")))]
+        let observed_qpc = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "QPC hard-late recovery failure: {error:?}"
+                ));
+            }
+        };
         return recover_missed_down_boundary(
             view,
             config,

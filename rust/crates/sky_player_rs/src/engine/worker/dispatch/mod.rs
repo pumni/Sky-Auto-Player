@@ -140,11 +140,10 @@ pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 
-use super::super::{ActionKind, DurationTicks, QpcClock, QpcTicks, TimelineTicks, TrackedKeyState};
+use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
-use sky_dispatch_win32::clock::QpcError;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 #[derive(Clone, Debug)]
@@ -161,52 +160,10 @@ pub(crate) enum PhysicalCommit {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SpinSendError {
-    Qpc(QpcError),
-    DownHardLateAbort,
-}
-
 #[inline]
+#[cfg(test)]
 fn down_late_grace_reached(now_ticks: QpcTicks, latest_allowed_down_qpc: Option<QpcTicks>) -> bool {
     latest_allowed_down_qpc.is_some_and(|latest| now_ticks > latest)
-}
-
-#[inline]
-pub(crate) fn spin_and_send_prepared(
-    qpc_clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-    latest_allowed_down_qpc: Option<QpcTicks>,
-    backend: &mut TrackedKeyState,
-    prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
-    #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
-) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, SpinSendError> {
-    loop {
-        #[cfg(any(test, feature = "test-support"))]
-        let now_ticks = match test_now_ticks {
-            Some(ticks) => ticks,
-            None => qpc_clock.now().map_err(SpinSendError::Qpc)?,
-        };
-        #[cfg(not(any(test, feature = "test-support")))]
-        let now_ticks = qpc_clock.now().map_err(SpinSendError::Qpc)?;
-        if now_ticks >= physical_target_qpc {
-            if down_late_grace_reached(now_ticks, latest_allowed_down_qpc) {
-                return Err(SpinSendError::DownHardLateAbort);
-            }
-            #[cfg(any(test, feature = "test-support"))]
-            return Ok(backend.send_prepared_physical_packet_with_start_and_cutoff(
-                prepared_packet,
-                now_ticks,
-                latest_allowed_down_qpc,
-            ));
-            #[cfg(not(any(test, feature = "test-support")))]
-            return Ok(backend.send_prepared_physical_packet_with_cutoff(
-                prepared_packet,
-                latest_allowed_down_qpc,
-            ));
-        }
-        std::hint::spin_loop();
-    }
 }
 
 #[cfg(test)]

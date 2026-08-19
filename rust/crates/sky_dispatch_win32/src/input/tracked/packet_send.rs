@@ -2,6 +2,7 @@ use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
+use super::super::packet::send_prepared_physical_packet_once_at_target_with_cutoff;
 use super::super::packet::send_prepared_physical_packet_once_with_cutoff;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::packet::send_prepared_physical_packet_once_with_start_and_cutoff;
@@ -418,6 +419,106 @@ impl TrackedKeyState {
                 )
             }
         };
+        self.apply_packet_outcome(packet, outcome)
+    }
+
+    /// Send a trusted prepared packet on the production precision path.
+    ///
+    /// The target-crossing loop and the one SendInput attempt are owned by
+    /// the Win32 packet primitive. Test support may provide an already
+    /// controlled crossing sample or a deterministic packet emitter.
+    pub fn send_prepared_physical_packet_at_target_with_cutoff(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        qpc_clock: crate::clock::QpcClock,
+        physical_target_qpc: QpcTicks,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+        #[cfg(any(test, feature = "test-support"))] test_started_ticks: Option<QpcTicks>,
+    ) -> SendTransactionOutcome {
+        let packet = prepared.packet();
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            let started_ticks = if let Some(started_ticks) = test_started_ticks {
+                Some(started_ticks)
+            } else if self.custom_packet_emitter.is_some() {
+                Some(loop {
+                    let ticks = match qpc_clock.now() {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            self.timing_error = Some(error);
+                            return self.apply_packet_outcome(
+                                packet,
+                                SendTransactionOutcome {
+                                    status: SendTransactionStatus::ClockFailureBeforeSend,
+                                    evidence: SendEvidence {
+                                        requested_mask: packet.up_mask | packet.down_mask,
+                                        confirmed_mask: 0,
+                                        skipped_mask: 0,
+                                        first_inserted: 0,
+                                        attempts: 0,
+                                        zero_progress_retries: 0,
+                                        retry_reason: PacketRetryReason::None,
+                                        first_win32_error: None,
+                                        last_win32_error: None,
+                                        started_ticks: None,
+                                        completed_ticks: None,
+                                        timing_error: Some(error),
+                                    },
+                                },
+                            );
+                        }
+                    };
+                    if ticks >= physical_target_qpc {
+                        break ticks;
+                    }
+                    std::hint::spin_loop();
+                })
+            } else {
+                None
+            };
+            if let Some(started_ticks) = started_ticks {
+                if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+                    return self.apply_packet_outcome(
+                        packet,
+                        deadline_missed_before_send_outcome(packet, started_ticks),
+                    );
+                }
+                if self.custom_packet_emitter.is_some() {
+                    let mut outcome = {
+                        let emitter = self
+                            .custom_packet_emitter
+                            .as_ref()
+                            .expect("packet emitter checked above");
+                        emitter(packet)
+                    };
+                    outcome.evidence.started_ticks = Some(started_ticks);
+                    if outcome
+                        .evidence
+                        .completed_ticks
+                        .is_some_and(|completed| completed < started_ticks)
+                    {
+                        outcome.evidence.completed_ticks = Some(started_ticks);
+                    }
+                    return self.apply_packet_outcome(packet, outcome);
+                }
+                if test_started_ticks.is_some() {
+                    let outcome = send_prepared_physical_packet_once_with_start_and_cutoff(
+                        prepared,
+                        qpc_clock,
+                        started_ticks,
+                        latest_allowed_down_qpc,
+                    );
+                    return self.apply_packet_outcome(packet, outcome);
+                }
+            }
+        }
+
+        let outcome = send_prepared_physical_packet_once_at_target_with_cutoff(
+            prepared,
+            qpc_clock,
+            physical_target_qpc,
+            latest_allowed_down_qpc,
+        );
         self.apply_packet_outcome(packet, outcome)
     }
 
