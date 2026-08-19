@@ -219,7 +219,12 @@ def _validate_pair_bucket(
     clean = _int(bucket.get("clean"), f"{name}.clean")
     clean_count = _int(bucket.get("clean_sample_count"), f"{name}.clean_sample_count")
     rejected = _int(bucket.get("rejected"), f"{name}.rejected")
-    if attempted < expected_attempts or bucket.get("sample_count") != attempted:
+    maximum_attempts = expected_attempts * 2
+    if (
+        attempted < expected_attempts
+        or attempted > maximum_attempts
+        or bucket.get("sample_count") != attempted
+    ):
         raise NativeCalibrationError(f"{name} has an unexpected attempt count")
     if clean != clean_count or clean + rejected != attempted:
         raise NativeCalibrationError(f"{name} clean/rejected totals are inconsistent")
@@ -243,6 +248,11 @@ def _validate_pair_bucket(
             f"partial_send={counter_values['partial_send']}, "
             f"anomaly_count={counter_values['anomaly_count']}, "
             f"error_count={counter_values['error_count']}"
+        )
+    if require_quantiles and clean != expected_attempts:
+        raise NativeCalibrationError(
+            f"{name} has an unexpected clean pair count: "
+            f"target={expected_attempts}, clean={clean}"
         )
     pair_quantiles = bucket.get("pair_worst_total_proxy_shrink_us")
     if pair_quantiles is None and not require_quantiles:
@@ -431,7 +441,7 @@ def _validate_pair_bucket_result(
     if config.get("warmup_samples") != warmup_samples or config.get("budget_seconds") != budget_seconds:
         raise NativeCalibrationError("native pair bucket configuration provenance mismatch")
     attempted_pairs = _int(data.get("attempted_pairs"), "attempted_pairs")
-    if attempted_pairs < samples:
+    if attempted_pairs < samples or attempted_pairs > samples * 2:
         raise NativeCalibrationError("native pair bucket has the wrong attempt count")
     pair_bucket = _require_mapping(data.get("pair_bucket"), "pair_bucket")
     if pair_bucket.get("attempted") != attempted_pairs:

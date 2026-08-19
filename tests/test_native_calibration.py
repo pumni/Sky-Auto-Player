@@ -268,20 +268,21 @@ def test_native_pair_bucket_command_has_no_directional_kind(monkeypatch: pytest.
     assert "--kind" not in captured["command"]  # type: ignore[operator]
 
 
+@pytest.mark.parametrize("attempted", [100, 101, 200])
 def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    attempted: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     payload = _pair_bucket_result(polyphony=5, class_name="cold")
-    payload["attempted_pairs"] = 101
+    payload["attempted_pairs"] = attempted
     bucket = cast(dict[str, object], payload["pair_bucket"])
     bucket.update(
         {
-            "attempted": 101,
-            "sample_count": 101,
+            "attempted": attempted,
+            "sample_count": attempted,
             "clean": 100,
             "clean_sample_count": 100,
-            "rejected": 1,
-            "error_count": 1,
+            "rejected": attempted - 100,
+            "error_count": attempted - 100,
         }
     )
 
@@ -302,7 +303,80 @@ def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
         timeout_seconds=120.0,
         progress=False,
     )
-    assert result["attempted_pairs"] == 101
+    assert result["attempted_pairs"] == attempted
+
+
+def test_native_pair_bucket_rejects_attempts_above_bounded_retry_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _pair_bucket_result(polyphony=5, class_name="cold")
+    payload["attempted_pairs"] = 201
+    bucket = cast(dict[str, object], payload["pair_bucket"])
+    bucket.update(
+        {
+            "attempted": 201,
+            "sample_count": 201,
+            "clean": 100,
+            "clean_sample_count": 100,
+            "rejected": 101,
+            "error_count": 101,
+        }
+    )
+    monkeypatch.setattr(
+        native_calibration.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, json.dumps(payload), ""
+        ),
+    )
+
+    with pytest.raises(native_calibration.NativeCalibrationError, match="attempt count"):
+        native_calibration._execute_native_bucket(
+            tmp_path / "native.exe",
+            class_name="cold",
+            polyphony=5,
+            samples=100,
+            warmup_samples=4,
+            budget_seconds=120,
+            timeout_seconds=120.0,
+            progress=False,
+        )
+
+
+def test_native_pair_bucket_rejects_more_clean_pairs_than_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _pair_bucket_result(polyphony=5, class_name="cold")
+    payload["attempted_pairs"] = 101
+    bucket = cast(dict[str, object], payload["pair_bucket"])
+    bucket.update(
+        {
+            "attempted": 101,
+            "sample_count": 101,
+            "clean": 101,
+            "clean_sample_count": 101,
+            "rejected": 0,
+        }
+    )
+    monkeypatch.setattr(
+        native_calibration.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, json.dumps(payload), ""
+        ),
+    )
+
+    with pytest.raises(native_calibration.NativeCalibrationError, match="clean pair count"):
+        native_calibration._execute_native_bucket(
+            tmp_path / "native.exe",
+            class_name="cold",
+            polyphony=5,
+            samples=100,
+            warmup_samples=4,
+            budget_seconds=120,
+            timeout_seconds=120.0,
+            progress=False,
+        )
 
 
 def test_directional_execution_is_rejected() -> None:
