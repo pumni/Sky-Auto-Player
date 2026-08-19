@@ -380,6 +380,39 @@ def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
     assert result.resolved_margin_us == 500
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cpu_family",
+        "cpu_stepping",
+        "cpu_set_efficiency_classes",
+        "win32_build",
+        "qpc_frequency_hz",
+        "host_fingerprint_version",
+    ],
+)
+def test_each_required_host_identity_field_mismatch_is_incompatible(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    cache = native_calibration._cache_v4(_native_result())
+    current = _host_fingerprint()
+    changed = dict(current)
+    value = changed[field]
+    if isinstance(value, list):
+        changed[field] = [8, 16, 16, 16]
+    elif isinstance(value, str):
+        changed[field] = f"changed-{value}"
+    else:
+        changed[field] = int(cast(int, value)) + 1
+
+    monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: changed)
+    result = loader.load_calibration_resolution(data=cache)
+
+    assert result.status is loader.CalibrationStatus.INCOMPATIBLE
+    assert result.resolved_margin_us == 500
+
+
 def test_diagnostic_run_writes_report_but_never_production_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

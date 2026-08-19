@@ -149,9 +149,11 @@ diagnostic, not game-observed timing evidence.
 The publishable calibration contract is a balanced Down/Up pair for each of
 `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`, and `15/cold`. The native
 process tags every packet with direction and sequence, records Raw Input at
-the `WM_INPUT` handler entry, and pairs receipts by scan code. Each direction
-has four authoritative QPC boundaries: absolute target, fused sender crossing,
-SendInput completion, and first receipt. For each key it computes direct signed
+the `WM_INPUT` handler entry, and pairs receipts by scan code. The tagged
+calibration INPUT array is prepared before the `T - 700 µs` precision handoff;
+the wait layer uses zero spin and the shared fused sender owns the final target
+crossing. Each direction has four authoritative QPC boundaries: absolute
+target, fused sender crossing, SendInput completion, and first receipt. For each key it computes direct signed
 total hold shrink `(up_target - down_target) - (up_receipt - down_receipt)`;
 scheduler, SendInput, and delivery shrink are diagnostics that must sum to that
 direct value. Only clean pairs enter the signed quantiles. At least 100 clean

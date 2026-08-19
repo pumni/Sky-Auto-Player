@@ -35,7 +35,7 @@
 //! On non-Windows targets the public surface compiles but every function
 //! returns [`CalibrationError::PlatformUnsupported`].
 
-use crate::clock::{QpcClock, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
+use crate::clock::{DurationTicks, QpcClock, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
 use crate::input::PlatformSendResult;
 use serde::{Deserialize, Serialize};
 use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
@@ -656,6 +656,9 @@ pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
 pub const CALIBRATION_MIN_MEASUREMENT_SECONDS: u64 = 1;
 pub const CALIBRATION_MIN_TOTAL_BUDGET_SECONDS: u64 =
     CALIBRATION_CLEANUP_RESERVE_SECONDS + CALIBRATION_MIN_MEASUREMENT_SECONDS;
+/// Fixed production precision handoff. The waiter reaches `T - 700 µs` with
+/// no busy-spin; the fused sender owns the final crossing to physical `T`.
+pub const CALIBRATION_PRECISION_HANDOFF_US: u64 = 700;
 
 fn exact_sendinput_boundaries(
     result: &PlatformSendResult,
@@ -1513,14 +1516,24 @@ mod platform {
             Ok(session)
         }
 
-        fn wait_to_precision_target(
+        fn wait_to_precision_boundary(
             &self,
             physical_target_qpc: QpcTicks,
         ) -> Result<(), CalibrationError> {
             self.ensure_budget()?;
-            let result = self.precision_waiter.wait_until_ticks_with_metrics(
-                physical_target_qpc,
-                700,
+            let handoff_ticks = self
+                .qpc_clock
+                .duration_from_us(CALIBRATION_PRECISION_HANDOFF_US)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let handoff_target_qpc = QpcTicks::from_raw(
+                physical_target_qpc
+                    .as_u64()
+                    .saturating_sub(handoff_ticks.as_u64()),
+            );
+            let result = self.precision_waiter.wait_until_ticks_with_metrics_typed(
+                self.qpc_clock,
+                handoff_target_qpc,
+                DurationTicks::ZERO,
                 &self.wait_interrupt,
             );
             match result.outcome {
@@ -1723,9 +1736,9 @@ mod platform {
             self.measure_packet_at_target(scan_codes, key_up, target, receipt_timeout)
         }
 
-        /// Inject one tagged packet at an absolute QPC target. The waitable
-        /// timer/700 µs handoff is outside the fused sender; the sender owns
-        /// the authoritative target-crossing sample and completion boundary.
+        /// Inject one tagged packet at an absolute QPC target. The complete
+        /// tagged INPUT array is prepared before the `T - 700 µs` handoff;
+        /// the sender owns the final target crossing and completion boundary.
         pub fn measure_packet_at_target(
             &mut self,
             scan_codes: &[u16],
@@ -1766,16 +1779,16 @@ mod platform {
                 g.pending_receipts.clear();
             }
 
-            // The tagged sender owns the target crossing and both QPC
-            // boundaries. Do not add outer timestamps around SendInput.
-            self.wait_to_precision_target(physical_target_qpc)?;
-            let psr = crate::input::send_tagged_packet_at_target(
-                scan_codes,
-                key_up,
-                extra,
-                self.qpc_clock,
-                physical_target_qpc,
-            );
+            // Materialize the tagged INPUT payload before entering the same
+            // precision handoff used by production dispatch. Nothing after
+            // the handoff may construct or allocate an INPUT payload.
+            let prepared =
+                crate::input::PreparedTaggedCalibrationPacket::try_new(scan_codes, key_up, extra)
+                    .ok_or(CalibrationError::PolyphonyTooLarge(n))?;
+            self.wait_to_precision_boundary(physical_target_qpc)?;
+            // The shared sender owns the final QPC crossing, authoritative P,
+            // one SendInput call, and completion C.
+            let psr = prepared.send_at_target(self.qpc_clock, physical_target_qpc);
             let (call_started, call_completed) = match exact_sendinput_boundaries(&psr) {
                 Ok(boundaries) => boundaries,
                 Err(error) => {
@@ -3236,6 +3249,7 @@ mod tests {
         assert_eq!(CALIBRATION_SCHEMA_VERSION, 10);
         assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 5);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
+        assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
         assert_eq!(CALIBRATION_CLEANUP_RESERVE_SECONDS, 5);
         assert_eq!(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, 6);
         assert_eq!(cfg.hot_gap_target_us, 5_000);
@@ -3294,6 +3308,66 @@ mod tests {
         assert_eq!(shrink.sendinput_shrink_ticks, 0);
         assert_eq!(shrink.delivery_shrink_ticks, 100);
         assert_eq!(shrink.total_proxy_shrink_ticks, 100);
+    }
+
+    #[test]
+    fn paired_total_shrink_has_no_shrink_case() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 110, 120, 130),
+            timing_point(1_100, 1_110, 1_120, 1_130),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 0);
+        assert_eq!(shrink.sendinput_shrink_ticks, 0);
+        assert_eq!(shrink.delivery_shrink_ticks, 0);
+        assert_eq!(shrink.total_proxy_shrink_ticks, 0);
+    }
+
+    #[test]
+    fn paired_total_shrink_preserves_mixed_signed_components() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 140, 170, 230),
+            timing_point(1_100, 1_120, 1_155, 1_195),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 20);
+        assert_eq!(shrink.sendinput_shrink_ticks, -5);
+        assert_eq!(shrink.delivery_shrink_ticks, 20);
+        assert_eq!(shrink.total_proxy_shrink_ticks, 35);
+    }
+
+    #[test]
+    fn calibration_precision_boundary_prepares_before_handoff_and_send() {
+        let source = include_str!("calibration.rs");
+        let prepare = source
+            .find("PreparedTaggedCalibrationPacket::try_new")
+            .expect("prepared calibration payload");
+        let handoff = source
+            .find("self.wait_to_precision_boundary(physical_target_qpc)")
+            .expect("precision handoff");
+        let send = source
+            .find("prepared.send_at_target(self.qpc_clock, physical_target_qpc)")
+            .expect("fused calibration sender");
+        assert!(prepare < handoff && handoff < send);
+
+        let wait_body = source
+            .split("fn wait_to_precision_boundary")
+            .nth(1)
+            .expect("precision boundary implementation");
+        assert!(wait_body.contains("CALIBRATION_PRECISION_HANDOFF_US"));
+        assert!(wait_body.contains("DurationTicks::ZERO"));
+        assert!(wait_body.contains("wait_until_ticks_with_metrics_typed"));
+    }
+
+    #[test]
+    fn calibration_accepts_monophony_and_maximum_polyphony_boundaries() {
+        for polyphony in [1, 15] {
+            let config = CalibrationConfig {
+                polyphonies: vec![polyphony],
+                ..CalibrationConfig::default()
+            };
+            assert!(validate_calibration_config(&config).is_ok());
+        }
     }
 
     #[test]

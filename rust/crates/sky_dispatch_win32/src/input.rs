@@ -18,7 +18,7 @@ pub use outcome::{
     SendTransactionStatus,
 };
 
-pub(crate) use packet::send_tagged_packet_at_target;
+pub(crate) use packet::PreparedTaggedCalibrationPacket;
 pub use packet::{
     MAX_PACKET_EVENTS, PreparedPhysicalPacket, send_physical_packet_once_with_clock,
     send_prepared_physical_packet_once, send_prepared_physical_packet_once_at_target_with_cutoff,

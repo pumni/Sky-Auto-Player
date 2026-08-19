@@ -61,6 +61,102 @@ impl PreparedPhysicalPacket {
     }
 }
 
+/// Fixed-capacity calibration payload prepared before the precision handoff.
+///
+/// The correlation tag belongs only to the calibration Raw Input observer and
+/// never enters production packet identity or reconciliation state.
+pub(crate) struct PreparedTaggedCalibrationPacket {
+    requested: u8,
+    #[cfg(windows)]
+    inputs: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; 15],
+}
+
+impl PreparedTaggedCalibrationPacket {
+    /// Materialize the complete tagged INPUT array before the final wait
+    /// handoff. The caller validates instrument scan codes; this constructor
+    /// still rejects an empty or oversized packet so the seam is fail-closed.
+    pub(crate) fn try_new(scan_codes: &[u16], key_up: bool, extra: usize) -> Option<Self> {
+        let requested = u8::try_from(scan_codes.len()).ok()?;
+        if requested == 0 || scan_codes.len() > 15 {
+            return None;
+        }
+
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
+            };
+
+            let mut inputs: [INPUT; 15] = unsafe { std::mem::zeroed() };
+            let mut flags = KEYEVENTF_SCANCODE;
+            if key_up {
+                flags |= KEYEVENTF_KEYUP;
+            }
+            for (index, &scan_code) in scan_codes.iter().enumerate() {
+                inputs[index] = INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: 0,
+                            wScan: scan_code,
+                            dwFlags: flags,
+                            time: 0,
+                            dwExtraInfo: extra,
+                        },
+                    },
+                };
+            }
+            Some(Self { requested, inputs })
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = (key_up, extra);
+            Some(Self { requested })
+        }
+    }
+
+    /// Enter the shared target-crossing envelope with an already materialized
+    /// tagged payload. No INPUT construction or allocation is allowed here.
+    pub(crate) fn send_at_target(
+        &self,
+        clock: QpcClock,
+        physical_target_qpc: QpcTicks,
+    ) -> PlatformSendResult {
+        #[cfg(windows)]
+        let result = send_input_view_at_target(
+            PreparedInputView {
+                requested: self.requested,
+                length: usize::from(self.requested),
+                inputs: self.inputs.as_ptr(),
+                cb_size: std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>(
+                ) as i32,
+            },
+            clock,
+            physical_target_qpc,
+            None,
+        );
+
+        #[cfg(not(windows))]
+        let result = send_input_view_at_target(self.requested, clock, physical_target_qpc, None);
+
+        match result {
+            Ok(result) => result,
+            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
+                requested: self.requested,
+                inserted: 0,
+                started_ticks: started.unwrap_or(QpcTicks::ZERO),
+                completed_ticks: None,
+                win32_error: 0,
+                timing_error: Some(error),
+            },
+            Err(PreparedSendFailure::DeadlineMissed { .. }) => {
+                unreachable!("tagged calibration packets do not use a Down cutoff")
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
 const MAX_SCAN_CODE: usize = 0x36;
 
@@ -912,92 +1008,6 @@ pub fn send_prepared_physical_packet_once_at_target_with_cutoff(
     prepared_send_outcome(packet, first)
 }
 
-/// Crate-private tagged calibration packet entry point. Packet materialization
-/// is completed before the shared target-crossing envelope begins; the
-/// correlation tag never enters the production packet identity.
-pub(crate) fn send_tagged_packet_at_target(
-    scan_codes: &[u16],
-    key_up: bool,
-    extra: usize,
-    clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-) -> PlatformSendResult {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
-        };
-
-        let requested = scan_codes.len().min(15) as u8;
-        let mut inputs: [INPUT; 15] = unsafe { std::mem::zeroed() };
-        let mut flags = KEYEVENTF_SCANCODE;
-        if key_up {
-            flags |= KEYEVENTF_KEYUP;
-        }
-        for (index, &scan_code) in scan_codes.iter().take(15).enumerate() {
-            inputs[index] = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: 0,
-                        wScan: scan_code,
-                        dwFlags: flags,
-                        time: 0,
-                        dwExtraInfo: extra,
-                    },
-                },
-            };
-        }
-        let result = send_input_view_at_target(
-            PreparedInputView {
-                requested,
-                length: usize::from(requested),
-                inputs: inputs.as_ptr(),
-                cb_size: std::mem::size_of::<INPUT>() as i32,
-            },
-            clock,
-            physical_target_qpc,
-            None,
-        );
-        match result {
-            Ok(result) => result,
-            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
-                requested,
-                inserted: 0,
-                started_ticks: started.unwrap_or(QpcTicks::ZERO),
-                completed_ticks: None,
-                win32_error: 0,
-                timing_error: Some(error),
-            },
-            Err(PreparedSendFailure::DeadlineMissed { .. }) => {
-                unreachable!("tagged calibration packets do not use a Down cutoff")
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = (scan_codes, key_up, extra);
-        match send_input_view_at_target(
-            u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
-            clock,
-            physical_target_qpc,
-            None,
-        ) {
-            Ok(result) => result,
-            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
-                requested: u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
-                inserted: 0,
-                started_ticks: started.unwrap_or(QpcTicks::ZERO),
-                completed_ticks: None,
-                win32_error: 0,
-                timing_error: Some(error),
-            },
-            Err(PreparedSendFailure::DeadlineMissed { .. }) => unreachable!(),
-        }
-    }
-}
-
 #[cfg(test)]
 fn send_prepared_physical_packet_once_at_target_scripted(
     prepared: &PreparedPhysicalPacket,
@@ -1075,6 +1085,33 @@ mod tests {
         assert!(!body.contains("send_physical_packet_once_impl"));
         assert!(!body.contains("valid_packet("));
         assert!(!body.contains("event_count() == 0"));
+    }
+
+    #[test]
+    fn tagged_calibration_payload_is_materialized_before_sender_handoff() {
+        let source = include_str!("packet.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production packet implementation");
+        let constructor = production
+            .split("pub(crate) fn try_new(")
+            .nth(1)
+            .expect("prepared tagged constructor");
+        let sender = production
+            .split("pub(crate) fn send_at_target(")
+            .nth(1)
+            .expect("prepared tagged sender")
+            .split("#[cfg(windows)]\nconst MAX_SCAN_CODE")
+            .next()
+            .expect("prepared tagged sender body");
+
+        assert!(constructor.contains("INPUT {"));
+        assert!(constructor.contains("std::mem::zeroed"));
+        assert!(!sender.contains("inputs[index] = INPUT {"));
+        assert!(!sender.contains("KEYBDINPUT"));
+        assert!(!sender.contains("std::mem::zeroed"));
+        assert!(!sender.contains("Vec::"));
     }
 
     #[test]

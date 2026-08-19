@@ -88,10 +88,17 @@ target-to-receipt total hold proxy, not game polling, rendering, audio, or
 network latency. The sender boundary is measured as:
 
 ```text
-validate/build/tag packet -> arm sequence -> precision handoff
--> target_crossing/pre_call_qpc -> SendInput -> sendinput_completion_qpc
+validate/build/tag packet -> arm sequence -> prepare fixed INPUT array
+-> wait to `T - 700 µs` with zero waiter spin
+-> fused sender target_crossing/pre_call_qpc -> SendInput -> sendinput_completion_qpc
 -> validate receipt
 ```
+
+The calibration precision boundary follows production dispatch: tagged INPUT
+materialization is complete before the handoff, the wait layer owns only the
+low-occupancy wait to `T - 700 µs`, and the shared fused sender owns the final
+QPC crossing, authoritative `P`, and the single `SendInput` call. No INPUT
+construction or allocation is permitted after the handoff.
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
 Up packets must both match their direction, sequence, and scan code. A clean
