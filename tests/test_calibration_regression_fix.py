@@ -63,7 +63,7 @@ _INTEGRATION_CACHE: dict = {
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
     "native_calibration_version": 11,
-    "measurement_protocol_version": 5,
+    "measurement_protocol_version": 6,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
     "dirty_worktree": False,

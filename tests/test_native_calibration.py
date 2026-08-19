@@ -99,7 +99,7 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
         "version": 11,
-        "measurement_protocol_version": 5,
+        "measurement_protocol_version": 6,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -137,7 +137,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
     }
     return {
         "version": 11,
-        "measurement_protocol_version": 5,
+        "measurement_protocol_version": 6,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -173,13 +173,35 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
     assert result["version"] == 11
-    assert result["measurement_protocol_version"] == 5
+    assert result["measurement_protocol_version"] == 6
 
 
 def test_native_result_requires_scheduling_aid_provenance() -> None:
     result = _native_result()
     del result["scheduling_aids"]
     with pytest.raises(native_calibration.NativeCalibrationError, match="scheduling_aids"):
+        native_calibration._validate_result(result)
+
+
+def test_native_result_reports_insufficient_clean_pairs_before_null_quantiles() -> None:
+    result = _native_result()
+    bucket = cast(dict[str, object], result["pair_buckets"]["5"]["cold"])  # type: ignore[index]
+    bucket.update(
+        {
+            "clean": 0,
+            "clean_sample_count": 0,
+            "rejected": 100,
+            "partial_send": 0,
+            "sample_count": 100,
+            "error_count": 100,
+            "pair_worst_total_proxy_shrink_us": None,
+        }
+    )
+
+    with pytest.raises(
+        native_calibration.NativeCalibrationError,
+        match=r"5/cold.*insufficient clean pairs.*clean=0.*rejected=100.*class_mismatch_count=0.*anomaly_count=0",
+    ):
         native_calibration._validate_result(result)
 
 
@@ -246,6 +268,43 @@ def test_native_pair_bucket_command_has_no_directional_kind(monkeypatch: pytest.
     assert "--kind" not in captured["command"]  # type: ignore[operator]
 
 
+def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _pair_bucket_result(polyphony=5, class_name="cold")
+    payload["attempted_pairs"] = 101
+    bucket = cast(dict[str, object], payload["pair_bucket"])
+    bucket.update(
+        {
+            "attempted": 101,
+            "sample_count": 101,
+            "clean": 100,
+            "clean_sample_count": 100,
+            "rejected": 1,
+            "error_count": 1,
+        }
+    )
+
+    monkeypatch.setattr(
+        native_calibration.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, json.dumps(payload), ""
+        ),
+    )
+    result = native_calibration._execute_native_bucket(
+        tmp_path / "native.exe",
+        class_name="cold",
+        polyphony=5,
+        samples=100,
+        warmup_samples=4,
+        budget_seconds=120,
+        timeout_seconds=120.0,
+        progress=False,
+    )
+    assert result["attempted_pairs"] == 101
+
+
 def test_directional_execution_is_rejected() -> None:
     with pytest.raises(native_calibration.NativeCalibrationError, match="directional"):
         native_calibration._execute_native_bucket(
@@ -277,6 +336,16 @@ def test_cache_v1_is_rejected_and_falls_back() -> None:
     old = {"version": 1, "n": 20, "down_us": {"p50": 1, "p90": 2, "p99": 3}, "up_us": {"p50": 1, "p90": 2, "p99": 3}}
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(old)
+
+
+def test_previous_measurement_protocol_is_not_reinterpreted() -> None:
+    cache = native_calibration._cache_v5(_native_result())
+    cache["measurement_protocol_version"] = 5
+    with pytest.raises(ValueError, match="measurement protocol"):
+        loader.parse_calibration_cache_summary(cache)
+    resolution = loader.load_calibration_resolution(data=cache)
+    assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
+    assert resolution.resolved_margin_us == 500
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
@@ -512,6 +581,10 @@ def test_full_configuration_is_six_pair_buckets() -> None:
     ]
     config = native_calibration.full_orchestration_configuration()
     assert config["minimum_clean_pairs_per_bucket"] == 100
+    assert "chunk_samples" not in config
+    assert native_calibration.full_orchestration_configuration(
+        global_budget_seconds=45
+    )["global_budget_seconds"] == 45.0
 
 
 def test_checkpoint_sha256_sidecar_is_plain_text_round_trip(tmp_path: Path) -> None:

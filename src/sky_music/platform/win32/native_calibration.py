@@ -2,7 +2,7 @@
 
 The native process owns the Raw Input window and emits signed paired evidence.
 This adapter validates the complete result before writing an artifact or the
-version-4 production cache. Diagnostic runs may be saved as reports, never as
+version-5 production cache. Diagnostic runs may be saved as reports, never as
 production cache.
 """
 
@@ -43,7 +43,7 @@ from sky_music.infrastructure.calibration_loader import (
 )
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 11
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 5
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 6
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 8
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
@@ -61,7 +61,6 @@ HOT_GAP_TARGET_US = 5_000
 COLD_THRESHOLD_US = 20_000
 FULL_COLD_IDLE_GAP_US = 25_000
 FULL_WARMUP_SAMPLES = 4
-FULL_CHUNK_SAMPLES = 25
 CALIBRATION_CLASSES = ("hot", "cold")
 MAX_DIAGNOSTIC_SAMPLES = 5_000
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
@@ -220,10 +219,11 @@ def _validate_pair_bucket(
     clean = _int(bucket.get("clean"), f"{name}.clean")
     clean_count = _int(bucket.get("clean_sample_count"), f"{name}.clean_sample_count")
     rejected = _int(bucket.get("rejected"), f"{name}.rejected")
-    if attempted != expected_attempts or bucket.get("sample_count") != attempted:
+    if attempted < expected_attempts or bucket.get("sample_count") != attempted:
         raise NativeCalibrationError(f"{name} has an unexpected attempt count")
     if clean != clean_count or clean + rejected != attempted:
         raise NativeCalibrationError(f"{name} clean/rejected totals are inconsistent")
+    counter_values: dict[str, int] = {}
     for field in (
         "timeout_count",
         "anomaly_count",
@@ -231,8 +231,19 @@ def _validate_pair_bucket(
         "partial_send",
         "error_count",
     ):
-        if _int(bucket.get(field), f"{name}.{field}") > rejected:
+        counter_values[field] = _int(bucket.get(field), f"{name}.{field}")
+        if counter_values[field] > rejected:
             raise NativeCalibrationError(f"{name}.{field} exceeds rejected pairs")
+    if clean < expected_attempts and require_quantiles:
+        raise NativeCalibrationError(
+            f"{name} has insufficient clean pairs: target={expected_attempts}, "
+            f"clean={clean}, attempted={attempted}, rejected={rejected}, "
+            f"class_mismatch_count={counter_values['class_mismatch_count']}, "
+            f"timeout_count={counter_values['timeout_count']}, "
+            f"partial_send={counter_values['partial_send']}, "
+            f"anomaly_count={counter_values['anomaly_count']}, "
+            f"error_count={counter_values['error_count']}"
+        )
     pair_quantiles = bucket.get("pair_worst_total_proxy_shrink_us")
     if pair_quantiles is None and not require_quantiles:
         return bucket
@@ -356,7 +367,7 @@ def _validate_result(
             "measured_class_mismatch",
         )
     }
-    if counts["measured_attempted"] != len(REQUIRED_BUCKETS) * expected_samples:
+    if counts["measured_attempted"] < len(REQUIRED_BUCKETS) * expected_samples:
         raise NativeCalibrationError("native calibration measured attempt total is inconsistent")
     if counts["total_attempted"] != sum(
         counts[name] for name in ("warmup_attempted", "measured_attempted", "setup_attempted")
@@ -380,14 +391,18 @@ def _validate_result(
     if counts["setup_attempted"] != 0:
         raise NativeCalibrationError("protocol-vNext must not publish directional setup attempts")
     bucket_totals = {"anomaly_count": 0, "timeout_count": 0, "class_mismatch_count": 0}
+    measured_bucket_attempted = 0
     for polyphony in FULL_POLYPHONIES:
         classes = _require_mapping(raw_buckets[str(polyphony)], f"pair_buckets.{polyphony}")
         for class_name in CALIBRATION_CLASSES:
             bucket = _require_mapping(
                 classes[class_name], f"pair_buckets.{polyphony}.{class_name}"
             )
+            measured_bucket_attempted += _int(bucket.get("attempted"), "attempted")
             for name in bucket_totals:
                 bucket_totals[name] += _int(bucket.get(name), name)
+    if measured_bucket_attempted != counts["measured_attempted"]:
+        raise NativeCalibrationError("pair bucket attempts do not match measured_attempted")
     if bucket_totals["anomaly_count"] != counts["measured_anomalous"]:
         raise NativeCalibrationError("pair anomaly total does not match measured_anomalous")
     if bucket_totals["timeout_count"] != counts["measured_timed_out"]:
@@ -405,6 +420,7 @@ def _validate_pair_bucket_result(
     samples: int,
     warmup_samples: int,
     budget_seconds: int,
+    publishable: bool,
 ) -> dict[str, Any]:
     data = _require_mapping(result, "pair bucket root")
     _validate_common_metadata(data)
@@ -414,10 +430,14 @@ def _validate_pair_bucket_result(
     config = _require_mapping(data["configuration"], "configuration")
     if config.get("warmup_samples") != warmup_samples or config.get("budget_seconds") != budget_seconds:
         raise NativeCalibrationError("native pair bucket configuration provenance mismatch")
-    if data.get("attempted_pairs") != samples:
+    attempted_pairs = _int(data.get("attempted_pairs"), "attempted_pairs")
+    if attempted_pairs < samples:
         raise NativeCalibrationError("native pair bucket has the wrong attempt count")
+    pair_bucket = _require_mapping(data.get("pair_bucket"), "pair_bucket")
+    if pair_bucket.get("attempted") != attempted_pairs:
+        raise NativeCalibrationError("native pair bucket attempt totals are inconsistent")
     _validate_pair_bucket(
-        data.get("pair_bucket"), "pair_bucket", samples, require_quantiles=False
+        pair_bucket, "pair_bucket", samples, require_quantiles=publishable
     )
     if not isinstance(data.get("worst_pairs"), list) or len(data["worst_pairs"]) > 16:
         raise NativeCalibrationError("native pair evidence is not bounded")
@@ -488,7 +508,6 @@ def full_orchestration_configuration(
         "minimum_clean_pairs_per_bucket": MIN_CALIBRATION_SAMPLE_COUNT,
         "global_budget_seconds": float(global_budget_seconds),
         "publication_reserve_seconds": PUBLICATION_RESERVE_SECONDS,
-        "chunk_samples": FULL_CHUNK_SAMPLES,
     }
 
 
@@ -581,6 +600,7 @@ def _execute_native_bucket(
     budget_seconds: int,
     timeout_seconds: float,
     progress: bool,
+    publishable: bool = True,
     # Kept as a rejected compatibility argument so independent directional
     # evidence cannot silently re-enter the protocol.
     kind: str | None = None,
@@ -646,6 +666,7 @@ def _execute_native_bucket(
         samples=samples,
         warmup_samples=warmup_samples,
         budget_seconds=budget_seconds,
+        publishable=publishable,
     )
 
 
@@ -718,6 +739,7 @@ def run_diagnostic_calibration(
             budget_seconds=budget,
             timeout_seconds=timeout,
             progress=True,
+            publishable=False,
         )
     except NativeCalibrationError as exc:
         if failure_report_path is not None:
@@ -891,7 +913,10 @@ def _finalize_artifacts(
         "scheduling_aids": common_provenance["scheduling_aids"],
         "orchestration_configuration": orchestration,
         "pair_buckets": buckets,
-        "measured_attempted": len(REQUIRED_BUCKETS) * FULL_SAMPLE_COUNT,
+        "measured_attempted": sum(
+            _int(item["attempted_pairs"], f"{key}.attempted_pairs")
+            for key, item in artifacts.items()
+        ),
         "cleanup": {
             "cleanup_attempted": True,
             "cleanup_success": True,
@@ -901,7 +926,10 @@ def _finalize_artifacts(
             "pump_thread_failed": False,
         },
     }
-    final["warmup_attempted"] = len(REQUIRED_BUCKETS) * FULL_WARMUP_SAMPLES
+    final["warmup_attempted"] = sum(
+        _int(item["warmup_pairs"], f"{key}.warmup_pairs")
+        for key, item in artifacts.items()
+    )
     final["setup_attempted"] = 0
     measured_attempted = _int(final["measured_attempted"], "measured_attempted")
     warmup_attempted = _int(final["warmup_attempted"], "warmup_attempted")
@@ -931,7 +959,7 @@ def run_full_calibration(
         raise NativeCalibrationError("full calibration timeout is too short for publication reserve")
     checkpoint = Path(checkpoint_dir)
     checkpoint.mkdir(parents=True, exist_ok=True)
-    orchestration = full_orchestration_configuration()
+    orchestration = full_orchestration_configuration(global_budget_seconds=timeout)
     current_provenance = _current_worktree_provenance()
     current_provenance["rustc_version"] = _rustc_version()
     current_static_provenance = _static_provenance(
@@ -1036,7 +1064,16 @@ def finalize_native_calibration(
     if not manifest_path.is_file():
         raise NativeCalibrationError("calibration checkpoint manifest is missing")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    orchestration = full_orchestration_configuration()
+    saved_orchestration = _require_mapping(
+        manifest.get("orchestration_configuration"), "orchestration_configuration"
+    )
+    saved_budget = saved_orchestration.get("global_budget_seconds")
+    if not isinstance(saved_budget, (int, float)) or isinstance(saved_budget, bool):
+        raise NativeCalibrationError("calibration checkpoint budget is invalid")
+    timeout = _finite_timeout(float(saved_budget), default=FULL_CALIBRATION_TIMEOUT_SECONDS)
+    if timeout < MIN_FULL_CALIBRATION_TIMEOUT_SECONDS:
+        raise NativeCalibrationError("calibration checkpoint budget is too short for publication reserve")
+    orchestration = full_orchestration_configuration(global_budget_seconds=timeout)
     if manifest.get("orchestration_configuration") != orchestration:
         raise NativeCalibrationError("calibration checkpoint configuration mismatch")
     if manifest.get("buckets") != sorted(REQUIRED_BUCKETS):

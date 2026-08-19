@@ -120,8 +120,20 @@ total_proxy_shrink = (T_U - T_D) - (R_U - R_D)
 total_proxy_shrink = scheduler_shrink + sendinput_shrink + delivery_shrink
 ```
 
+Each balanced pair anchors its Down target to the preceding packet's exact
+`SendInput` completion plus the requested class gap. After that Down completes,
+the Up target is derived from that exact Down completion plus the same gap.
+Classification uses the observed completion-to-entry idle interval, not the
+requested target spacing. This keeps a late or long Down syscall from silently
+turning a requested cold Up into a hot sample; the pair is either observed in
+the requested class or rejected with its diagnostic counters.
+
 The publishable matrix has six buckets (`1/5/15 × hot/cold`) with at least
-100 clean pairs in each. Qualification uses:
+100 clean pairs in each. The configured `100` is a clean-pair target, not an
+attempt cap: the native runner may make bounded additional attempts and
+serializes the actual attempt count. If the target is not reached, the result
+remains diagnostic/non-publishable and no empty quantile is accepted as
+calibration evidence. Qualification uses:
 
 ```text
 candidate = positive global p99 + 100 µs

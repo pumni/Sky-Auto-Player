@@ -651,7 +651,7 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 5;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 6;
 pub const CALIBRATION_SCHEMA_VERSION: u32 = 11;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
@@ -662,6 +662,9 @@ pub const CALIBRATION_MIN_TOTAL_BUDGET_SECONDS: u64 =
 /// Fixed production precision handoff. The waiter reaches `T - 700 µs` with
 /// no busy-spin; the fused sender owns the final crossing to physical `T`.
 pub const CALIBRATION_PRECISION_HANDOFF_US: u64 = 700;
+/// Bounded retry allowance used to collect the configured number of clean
+/// pairs without allowing a pathological host to run indefinitely.
+pub const CALIBRATION_MAX_ATTEMPT_MULTIPLIER: u32 = 2;
 
 fn exact_sendinput_boundaries(
     result: &PlatformSendResult,
@@ -680,9 +683,9 @@ fn exact_sendinput_boundaries(
 pub struct CalibrationConfig {
     /// Polyphonies to measure (1–15). Must not be empty.
     pub polyphonies: Vec<u8>,
-    /// Number of measured samples per hot bucket.
+    /// Target number of clean measured pairs per hot bucket.
     pub samples_per_hot_bucket: u32,
-    /// Number of measured samples per cold bucket.
+    /// Target number of clean measured pairs per cold bucket.
     pub samples_per_cold_bucket: u32,
     /// Warm-up injections that are not included in any measured bucket.
     pub warmup_samples: u32,
@@ -2606,7 +2609,7 @@ mod platform {
 
     fn balanced_pair_measurements<S>(
         down_target: QpcTicks,
-        up_target: QpcTicks,
+        gap_ticks: DurationTicks,
         mut step: S,
     ) -> Result<(CalibrationSample, CalibrationSample), CalibrationError>
     where
@@ -2617,6 +2620,10 @@ mod platform {
             target_qpc: down_target,
         })?
         .ok_or(CalibrationError::ClockFailure)?;
+        let up_target = down
+            .call_completed_ticks
+            .checked_add_duration(gap_ticks)
+            .map_err(|_| CalibrationError::ClockFailure)?;
         let up = step(BalancedPairAction::Measure {
             key_up: true,
             target_qpc: up_target,
@@ -2643,11 +2650,8 @@ mod platform {
         let down_target = previous_completion
             .checked_add_duration(gap_ticks)
             .map_err(|_| CalibrationError::ClockFailure)?;
-        let up_target = down_target
-            .checked_add_duration(gap_ticks)
-            .map_err(|_| CalibrationError::ClockFailure)?;
         let (down, up) =
-            balanced_pair_measurements(down_target, up_target, |action| match action {
+            balanced_pair_measurements(down_target, gap_ticks, |action| match action {
                 BalancedPairAction::Measure { key_up, target_qpc } => session
                     .measure_classified_packet(
                         scan_codes,
@@ -2746,18 +2750,22 @@ mod platform {
             SampleClass::Hot => config.samples_per_hot_bucket,
             SampleClass::Cold => config.samples_per_cold_bucket,
         };
+        let max_attempts = expected.saturating_mul(CALIBRATION_MAX_ATTEMPT_MULTIPLIER);
         let mut pairs = Vec::with_capacity(expected as usize);
-        for sample_index in 1..=expected {
+        let mut clean_pairs = 0u32;
+        let mut attempt_index = 0u32;
+        while clean_pairs < expected && attempt_index < max_attempts {
+            attempt_index = attempt_index.saturating_add(1);
             eprintln!(
-                "[calibration] polyphony {} / {:?} — pair {} / {}",
-                polyphony, class, sample_index, expected
+                "[calibration] polyphony {} / {:?} — attempt {} / {} (clean {} / {})",
+                polyphony, class, attempt_index, max_attempts, clean_pairs, expected
             );
             if session.budget_expired(measurement_deadline)? {
                 let cleanup = session.close();
                 return Err(pair_bucket_failure(
                     class,
                     polyphony,
-                    sample_index,
+                    attempt_index,
                     "measurement",
                     CalibrationError::BudgetExceeded,
                     cleanup,
@@ -2771,13 +2779,18 @@ mod platform {
                 cold_threshold_ticks,
                 receipt_timeout,
             ) {
-                Ok(pair) => pairs.push(pair),
+                Ok(pair) => {
+                    if pair.is_clean() {
+                        clean_pairs = clean_pairs.saturating_add(1);
+                    }
+                    pairs.push(pair);
+                }
                 Err(source) => {
                     let cleanup = session.close();
                     return Err(pair_bucket_failure(
                         class,
                         polyphony,
-                        sample_index,
+                        attempt_index,
                         "measurement",
                         source,
                         cleanup,
@@ -2798,6 +2811,12 @@ mod platform {
                 },
                 cleanup,
             ));
+        }
+        if clean_pairs < expected {
+            eprintln!(
+                "[calibration] polyphony {} / {:?} — only {} / {} clean pairs after {} attempts",
+                polyphony, class, clean_pairs, expected, attempt_index
+            );
         }
         let pair_bucket = aggregate_pairs(&pairs)?;
         Ok(CalibrationPairBucketOutput {
@@ -2981,7 +3000,7 @@ mod platform {
             let mut events: Vec<String> = Vec::new();
             let result = balanced_pair_measurements(
                 QpcTicks::from_raw(100),
-                QpcTicks::from_raw(200),
+                DurationTicks::from_raw(100),
                 |action| match action {
                     BalancedPairAction::Measure { key_up, target_qpc } => {
                         events.push(format!(
@@ -2994,16 +3013,16 @@ mod platform {
                         measured.call_completed_ticks = if key_up {
                             QpcTicks::from_raw(400)
                         } else {
-                            QpcTicks::from_raw(200)
+                            QpcTicks::from_raw(250)
                         };
                         Ok(Some(measured))
                     }
                 },
             )
             .unwrap();
-            assert_eq!(result.0.call_completed_ticks, QpcTicks::from_raw(200));
+            assert_eq!(result.0.call_completed_ticks, QpcTicks::from_raw(250));
             assert_eq!(result.1.call_completed_ticks, QpcTicks::from_raw(400));
-            assert_eq!(events, vec!["measure_down:100", "measure_up:200"]);
+            assert_eq!(events, vec!["measure_down:100", "measure_up:350"]);
         }
 
         #[test]
@@ -3283,9 +3302,10 @@ mod tests {
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
         assert_eq!(CALIBRATION_SCHEMA_VERSION, 11);
-        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 5);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 6);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
+        assert_eq!(CALIBRATION_MAX_ATTEMPT_MULTIPLIER, 2);
         assert_eq!(CALIBRATION_CLEANUP_RESERVE_SECONDS, 5);
         assert_eq!(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, 6);
         assert_eq!(cfg.hot_gap_target_us, 5_000);

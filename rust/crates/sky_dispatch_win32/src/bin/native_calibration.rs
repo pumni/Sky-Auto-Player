@@ -59,7 +59,7 @@ fn main() -> Result<(), String> {
             // Accepted only for a clear migration error. Protocol vNext has no
             // independent directional bucket.
             "--kind" => {
-                return Err("--kind is retired; protocol v4 measures Down/Up pairs".to_string());
+                return Err("--kind is retired; protocol-vNext measures Down/Up pairs".to_string());
             }
             "--class" => {
                 class =
