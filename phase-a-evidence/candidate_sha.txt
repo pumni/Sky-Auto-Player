@@ -1,3 +1,8 @@
+IMPLEMENTATION_SHA =
 4df28df195c789e8ffb2f483f9c1ec1b7445720f
-Reviewed implementation candidate commit. Correction benchmark/test-support
-changes and this evidence refresh are uncommitted in the working tree.
+EVIDENCE/HARNESS_SHA =
+bd61ff1491f0b8e643b5b05583868fee26cf43d3
+
+The acceptance-matrix correction is currently uncommitted in the working
+tree. After the reviewer accepts this evidence, the final cleanup commit SHA
+must replace this note as the final accepted SHA.

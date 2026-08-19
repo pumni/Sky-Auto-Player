@@ -137,6 +137,7 @@ pub(crate) fn dispatch_due_from_plan(
     #[cfg(any(test, feature = "test-support"))] test_physical_target_qpc: Option<
         sky_dispatch_win32::clock::QpcTicks,
     >,
+    #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
 ) -> super::DispatchStep {
     if let super::planning::NextDispatchPlan::Metadata(metadata) = plan {
         if metadata.physical_target_qpc > now_ticks {
@@ -234,6 +235,8 @@ pub(crate) fn dispatch_due_from_plan(
             lease_timeout_ticks,
             #[cfg(any(test, feature = "test-support"))]
             test_direct_boundary,
+            #[cfg(any(test, feature = "test-support"))]
+            test_inject_sender_start,
         },
         config,
         resources,
@@ -797,6 +800,8 @@ pub(super) fn dispatch(
                 false,
                 #[cfg(any(test, feature = "test-support"))]
                 None,
+                #[cfg(any(test, feature = "test-support"))]
+                false,
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
@@ -919,6 +924,8 @@ pub(super) fn dispatch(
                         true,
                         #[cfg(any(test, feature = "test-support"))]
                         None,
+                        #[cfg(any(test, feature = "test-support"))]
+                        false,
                     ) {
                         super::DispatchStep::Terminate(error) => {
                             core.runtime.force_full_cleanup = true;

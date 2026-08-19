@@ -7,6 +7,7 @@ only Phase A implementation, validation, and benchmark evidence.
 
 The required raw benchmark contract is present as
 `baseline_bench_run_01..05.json` and `candidate_bench_run_01..05.json`.
-Their scope/mode fields are explicit because the sender-only A/B excludes
-waiter/coordinator scheduling; the full real-wait benchmark remains the
-default harness mode.
+Their scope/mode fields identify the corrected production-boundary A/B:
+coordinator dispatch/admission/commit is included, while only kernel waiter
+scheduling is excluded by a test-only direct boundary. The sender-only mode is
+supplemental and is not acceptance authority.

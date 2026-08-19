@@ -50,6 +50,8 @@ pub(crate) fn dispatch_authored_packet(
         lease_timeout_ticks,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
+        #[cfg(any(test, feature = "test-support"))]
+        test_inject_sender_start,
     } = ctx;
     let WorkerResources {
         clock: qpc_clock,
@@ -97,6 +99,8 @@ pub(crate) fn dispatch_authored_packet(
         lease_timeout_ticks,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
+        #[cfg(any(test, feature = "test-support"))]
+        test_inject_sender_start,
         observer,
     )
 }
@@ -133,6 +137,7 @@ fn commit_down_send_outcome(
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
+    #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
@@ -226,7 +231,7 @@ fn commit_down_send_outcome(
         physical_target_qpc,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
-        test_direct_boundary.then_some(now_ticks),
+        test_inject_sender_start.then_some(now_ticks),
         observer,
     )
 }

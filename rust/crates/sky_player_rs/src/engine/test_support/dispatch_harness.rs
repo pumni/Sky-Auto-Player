@@ -775,6 +775,20 @@ impl ProductionDispatchTestHarness {
             .as_u64()
             .saturating_sub(deadline.as_u64())
             .saturating_add(margin.as_u64());
+        // A zero benchmark margin is the production-boundary mode. Keep the
+        // frozen target just inside the Down grace window so the legacy and
+        // fused senders sample immediately instead of spending milliseconds
+        // spinning on an occasionally future target.
+        let epoch = if margin_us == 0 {
+            let past_boundary = self
+                .resources
+                .clock
+                .duration_from_us(100)
+                .expect("benchmark past-boundary conversion");
+            epoch.saturating_sub(past_boundary.as_u64())
+        } else {
+            epoch
+        };
         self.resources.playback.epoch = QpcTicks::from_raw(epoch);
     }
 
@@ -1125,6 +1139,25 @@ impl ProductionDispatchTestHarness {
         allow_pre_deadline: bool,
         test_physical_target_qpc: Option<QpcTicks>,
     ) -> DispatchStep {
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            effective_now_ticks,
+            now_ticks,
+            allow_pre_deadline,
+            test_physical_target_qpc,
+            test_physical_target_qpc.is_some(),
+        )
+    }
+
+    fn dispatch_plan_at_with_sender_option(
+        &mut self,
+        plan: &NextDispatchPlan,
+        effective_now_ticks: TimelineTicks,
+        now_ticks: QpcTicks,
+        allow_pre_deadline: bool,
+        test_physical_target_qpc: Option<QpcTicks>,
+        test_inject_sender_start: bool,
+    ) -> DispatchStep {
         self.effective_now_ticks = effective_now_ticks;
         dispatch_due_from_plan(
             plan,
@@ -1151,6 +1184,7 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             allow_pre_deadline,
             test_physical_target_qpc,
+            test_inject_sender_start,
         )
     }
     /// Invoke the production frozen-plan helper without the kernel wait.
@@ -1268,6 +1302,49 @@ impl ProductionDispatchTestHarness {
         self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(target))
     }
 
+    /// Invoke the coordinator dispatch boundary while leaving the sender's
+    /// authoritative crossing sample to the production packet primitive.
+    ///
+    /// The direct-boundary flag only removes the test wait; it must not inject
+    /// `started_ticks`, otherwise a Phase-A A/B run would measure the
+    /// controlled-start seam instead of the fused target-aware sender.
+    pub fn dispatch_at_phase_a_production_boundary_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("plan target required for Phase-A production boundary");
+        let deadline = plan
+            .deadline_ticks()
+            .expect("plan deadline required for Phase-A production boundary");
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            let completed_ticks = clock.now().expect("production-boundary completion QPC");
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: None,
+                    completed_ticks: Some(completed_ticks),
+                    timing_error: None,
+                },
+            }
+        });
+        self.runtime
+            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
+        self.dispatch_plan_at_with_sender_option(plan, deadline, target, true, Some(target), false)
+    }
+
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
     /// it was future when classified, the worker stalled before the waiter's
     /// first QPC read, and the waiter therefore returned `Due(None)` at an
@@ -1369,6 +1446,7 @@ impl ProductionDispatchTestHarness {
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
             test_direct_boundary: false,
+            test_inject_sender_start: false,
         };
         dispatch_authored_packet(
             ctx,

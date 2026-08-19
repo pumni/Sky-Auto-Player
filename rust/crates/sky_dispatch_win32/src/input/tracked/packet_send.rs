@@ -354,6 +354,13 @@ impl TrackedKeyState {
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
                 let mut outcome = emitter(packet);
                 outcome.evidence.started_ticks = Some(started_ticks);
+                if outcome
+                    .evidence
+                    .completed_ticks
+                    .is_some_and(|completed| completed < started_ticks)
+                {
+                    outcome.evidence.completed_ticks = Some(started_ticks);
+                }
                 outcome
             } else {
                 let Some(clock) = self.qpc_clock else {

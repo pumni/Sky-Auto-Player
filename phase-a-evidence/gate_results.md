@@ -10,8 +10,10 @@ All commands ran from the repository root.
 - `cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_win32` — PASS, 142 tests
 - `cargo test --manifest-path rust/Cargo.toml --workspace --all-features` — PASS; core 47, golden 1, properties 3, win32 142, player 186, no-alloc 20, updater 43, updater E2E 1, safety 5, corpus 1, all doc tests pass
 - `git diff --check` — PASS
-- `uv run --env-file .env python scripts/audit_security_mandates.py` — PASS; no forbidden Windows API references
+- `UV_CACHE_DIR=.uv-cache uv run --env-file .env python scripts/audit_security_mandates.py` — PASS; no forbidden Windows API references
+- Acceptance A/B collection — PASS; 5 baseline + 5 candidate JSON runs, 9 scenarios, 5,000 iterations per scenario, production-boundary mode with `test_started_ticks=None`
 
 The benchmark harness now records wait failures/outliers instead of aborting a
-whole run. The official A/B artifacts use the explicitly labelled
-`phase_a_sender_only` scope; the full real-wait scope remains the default mode.
+whole run. The official A/B artifacts use the corrected
+`phase_a_production_matrix` scope with `phase_a_production_boundary` mode;
+the sender-only scope is supplemental and is not acceptance authority.

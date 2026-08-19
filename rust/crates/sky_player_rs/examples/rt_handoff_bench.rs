@@ -71,12 +71,14 @@ enum BenchmarkMode {
     RealWait,
     PhaseASyntheticTargetPlusOneTick,
     PhaseASenderOnly,
+    PhaseAProductionBoundary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkScope {
     Full,
     PhaseASenderOnly,
+    PhaseAProductionMatrix,
 }
 
 impl BenchmarkScope {
@@ -84,8 +86,9 @@ impl BenchmarkScope {
         match std::env::var("RT_HANDOFF_BENCH_SCOPE").as_deref() {
             Ok("full") | Err(std::env::VarError::NotPresent) => Ok(Self::Full),
             Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
+            Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full or phase_a_sender_only, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, phase_a_sender_only, or phase_a_production_matrix, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -95,6 +98,7 @@ impl BenchmarkScope {
         match self {
             Self::Full => "full",
             Self::PhaseASenderOnly => "phase_a_sender_only",
+            Self::PhaseAProductionMatrix => "phase_a_production_matrix",
         }
     }
 }
@@ -107,8 +111,9 @@ impl BenchmarkMode {
                 Ok(Self::PhaseASyntheticTargetPlusOneTick)
             }
             Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
+            Ok("phase_a_production_boundary") => Ok(Self::PhaseAProductionBoundary),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_MODE must be real_wait, phase_a_synthetic_target_plus_one_tick, or phase_a_sender_only, got {value:?}"
+                "RT_HANDOFF_BENCH_MODE must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
         }
@@ -119,6 +124,7 @@ impl BenchmarkMode {
             Self::RealWait => "real_wait",
             Self::PhaseASyntheticTargetPlusOneTick => "phase_a_synthetic_target_plus_one_tick",
             Self::PhaseASenderOnly => "phase_a_sender_only",
+            Self::PhaseAProductionBoundary => "phase_a_production_boundary",
         }
     }
 
@@ -480,6 +486,18 @@ fn wait_and_dispatch_or_record(
         BenchmarkMode::PhaseASenderOnly => {
             return Err("phase_a_sender_only does not use coordinator dispatch".to_string());
         }
+        BenchmarkMode::PhaseAProductionBoundary => {
+            let target = harness.physical_target_qpc_for_test(plan).ok_or_else(|| {
+                "production-boundary benchmark plan has no physical target".to_string()
+            })?;
+            let step = harness.dispatch_at_phase_a_production_boundary_for_test(plan);
+            let wait = WaitResult {
+                outcome: WaitOutcome::Deadline,
+                wake_qpc: Some(target),
+                spin_ticks: DurationTicks::ZERO,
+            };
+            (step, wait)
+        }
     };
     if matches!(step, DispatchStep::Dispatched) {
         Ok(Some(wait))
@@ -514,7 +532,13 @@ fn run_down(
     for _ in 0..iterations() {
         let mut harness =
             ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
-        harness.align_next_plan_to_benchmark_margin_for_test(due_us());
+        let alignment_margin_us =
+            if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+                0
+            } else {
+                due_us()
+            };
+        harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -555,6 +579,9 @@ fn run_up(
             mode.effective_spin_threshold_us,
         )?;
         while harness.pop_observation().is_some() {}
+        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+            harness.align_next_plan_to_benchmark_margin_for_test(0);
+        }
         assert_eq!(
             harness.current_authored_path(),
             Some(DispatchPath::UpOnly {
@@ -597,6 +624,9 @@ fn run_mixed(
             mode.effective_spin_threshold_us,
         )?;
         while harness.pop_observation().is_some() {}
+        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+            harness.align_next_plan_to_benchmark_margin_for_test(0);
+        }
         let plan = plan_projected(&mut harness);
         let wait =
             match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
@@ -680,6 +710,48 @@ fn phase_a_sender_only_report() -> serde_json::Value {
         "adaptive_spin_enabled": false,
         "effective_spin_threshold_us": 0,
         "synthetic_boundary": "QPC target sampled immediately before sender call",
+        "scenarios": scenarios,
+        "iterations": iterations(),
+    })
+}
+
+fn phase_a_production_matrix_report() -> serde_json::Value {
+    let mode = build_wait_mode("production_boundary", true, true, true);
+    let benchmark_mode = BenchmarkMode::PhaseAProductionBoundary;
+    let mut scenarios = serde_json::Map::new();
+    for key_count in [1, 5, 15] {
+        scenarios.insert(
+            format!("down_only_{key_count}"),
+            summarize(
+                run_down(key_count, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+            ),
+        );
+    }
+    for key_count in [1, 5, 15] {
+        scenarios.insert(
+            format!("up_only_{key_count}"),
+            summarize(
+                run_up(key_count, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+            ),
+        );
+    }
+    for event_count in [2, 10, 30] {
+        scenarios.insert(
+            format!("mixed_{event_count}"),
+            summarize(
+                run_mixed(event_count, mode, benchmark_mode)
+                    .unwrap_or_else(|error| panic!("{error}")),
+            ),
+        );
+    }
+    serde_json::json!({
+        "scope": "Phase-A acceptance production sender boundary; full coordinator dispatch/admission/commit path; waiter scheduling excluded",
+        "waitable_timer_enabled": mode.waitable_timer_enabled,
+        "event_wait_enabled": mode.event_wait_enabled,
+        "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+        "effective_spin_threshold_us": mode.effective_spin_threshold_us,
+        "sender_start_timestamp_source": "production fused target-crossing primitive; test_started_ticks=None",
+        "transport": "deterministic packet emitter with QPC completion sample",
         "scenarios": scenarios,
         "iterations": iterations(),
     })
@@ -831,6 +903,11 @@ fn main() {
     {
         panic!("phase_a_sender_only requires phase_a_sender_only benchmark mode");
     }
+    if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix)
+        && !matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary)
+    {
+        panic!("phase_a_production_matrix requires phase_a_production_boundary benchmark mode");
+    }
     let qpc_frequency = qpc_frequency_checked().expect("QPC frequency");
     let mut mode_reports = serde_json::Map::new();
     if matches!(benchmark_scope, BenchmarkScope::Full) {
@@ -901,6 +978,11 @@ fn main() {
                 }),
             );
         }
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix) {
+        mode_reports.insert(
+            "phase_a_production_boundary".to_string(),
+            phase_a_production_matrix_report(),
+        );
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -924,6 +1006,8 @@ fn main() {
             (BenchmarkScope::Full, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; the production target-aware sender owns the crossing QPC with test_started_ticks=None; waiter scheduling is excluded by a test-only direct boundary; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

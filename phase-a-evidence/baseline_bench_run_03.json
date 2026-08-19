@@ -1,36 +1,158 @@
 {
   "benchmark": "rt_handoff_bench",
-  "benchmark_mode": "phase_a_sender_only",
-  "benchmark_scope": "phase_a_sender_only",
+  "benchmark_mode": "phase_a_production_boundary",
+  "benchmark_scope": "phase_a_production_matrix",
   "deadline_us": 10000,
-  "elapsed_ms": 566,
-  "evidence_scope": "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
+  "elapsed_ms": 4630,
+  "evidence_scope": "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; the production target-aware sender owns the crossing QPC with test_started_ticks=None; waiter scheduling is excluded by a test-only direct boundary; not Raw Input or game-observed latency",
   "iterations": 5000,
   "modes": {
-    "phase_a_sender_only": {
-      "adaptive_spin_enabled": false,
-      "effective_spin_threshold_us": 0,
-      "event_wait_enabled": false,
+    "phase_a_production_boundary": {
+      "adaptive_spin_enabled": true,
+      "effective_spin_threshold_us": 1011,
+      "event_wait_enabled": true,
       "iterations": 5000,
       "scenarios": {
-        "down_only_15": {
+        "down_only_1": {
           "completion_error_us_diagnostic": {
-            "max_abs": null,
-            "p01": null,
-            "p50": null,
-            "p95": null,
-            "p99": null,
-            "samples": 0
+            "max_abs": 237,
+            "p01": 108,
+            "p50": 109,
+            "p95": 113,
+            "p99": 121,
+            "samples": 5000
           },
           "controller": "dispatch_start_error",
           "deadline_missed_before_send_count": 0,
           "dispatch_start_error_us": {
+            "max": 233,
+            "min": 108,
+            "p50": 109,
+            "p95": 113,
+            "p99": 120,
+            "p99_9": 175,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
             "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 14,
             "min": 0,
             "p50": 0,
             "p95": 0,
             "p99": 0,
             "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 237,
+            "p50": 109,
+            "p95": 113,
+            "p99": 121,
+            "p99_9": 176,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "down_only_15": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 184,
+            "p01": 112,
+            "p50": 113,
+            "p95": 117,
+            "p99": 124,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 182,
+            "min": 111,
+            "p50": 112,
+            "p95": 117,
+            "p99": 123,
+            "p99_9": 163,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 16,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 1,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 184,
+            "p50": 113,
+            "p95": 117,
+            "p99": 124,
+            "p99_9": 164,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "down_only_5": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 177,
+            "p01": 109,
+            "p50": 110,
+            "p95": 115,
+            "p99": 122,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 176,
+            "min": 109,
+            "p50": 110,
+            "p95": 115,
+            "p99": 122,
+            "p99_9": 160,
             "samples": 5000
           },
           "early_dispatch_count": 0,
@@ -58,11 +180,72 @@
             "samples": 5000
           },
           "target_to_completion_us": {
-            "max": 1,
+            "max": 177,
+            "p50": 110,
+            "p95": 115,
+            "p99": 122,
+            "p99_9": 161,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
             "p50": 0,
             "p95": 0,
             "p99": 0,
             "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "mixed_10": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 171,
+            "p01": 108,
+            "p50": 109,
+            "p95": 112,
+            "p99": 116,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 171,
+            "min": 108,
+            "p50": 109,
+            "p95": 112,
+            "p99": 115,
+            "p99_9": 130,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 171,
+            "p50": 109,
+            "p95": 112,
+            "p99": 116,
+            "p99_9": 130,
             "samples": 5000
           },
           "wake_to_final_proof_us": {
@@ -76,22 +259,146 @@
         },
         "mixed_2": {
           "completion_error_us_diagnostic": {
-            "max_abs": null,
-            "p01": null,
-            "p50": null,
-            "p95": null,
-            "p99": null,
-            "samples": 0
+            "max_abs": 168,
+            "p01": 106,
+            "p50": 107,
+            "p95": 108,
+            "p99": 111,
+            "samples": 5000
           },
           "controller": "dispatch_start_error",
           "deadline_missed_before_send_count": 0,
           "dispatch_start_error_us": {
+            "max": 167,
+            "min": 106,
+            "p50": 106,
+            "p95": 107,
+            "p99": 111,
+            "p99_9": 119,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
             "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
             "min": 0,
             "p50": 0,
             "p95": 0,
             "p99": 0,
             "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 168,
+            "p50": 107,
+            "p95": 108,
+            "p99": 111,
+            "p99_9": 119,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "mixed_30": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 475,
+            "p01": 114,
+            "p50": 120,
+            "p95": 132,
+            "p99": 168,
+            "samples": 4990
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 474,
+            "min": 114,
+            "p50": 120,
+            "p95": 132,
+            "p99": 168,
+            "p99_9": 334,
+            "samples": 4990
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {
+            "missed Down safety Up missing start boundary": 10
+          },
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 4990
+          },
+          "non_dispatches": 10,
+          "observation_count": 4990,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 4990,
+          "pre_call_to_completion_us": {
+            "max": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 1,
+            "samples": 4990
+          },
+          "target_to_completion_us": {
+            "max": 475,
+            "p50": 120,
+            "p95": 132,
+            "p99": 168,
+            "p99_9": 335,
+            "samples": 4990
+          },
+          "wake_to_final_proof_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 4990
+          }
+        },
+        "up_only_1": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 242,
+            "p01": 105,
+            "p50": 106,
+            "p95": 108,
+            "p99": 111,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 241,
+            "min": 105,
+            "p50": 106,
+            "p95": 108,
+            "p99": 111,
+            "p99_9": 131,
             "samples": 5000
           },
           "early_dispatch_count": 0,
@@ -119,11 +426,11 @@
             "samples": 5000
           },
           "target_to_completion_us": {
-            "max": 0,
-            "p50": 0,
-            "p95": 0,
-            "p99": 0,
-            "p99_9": 0,
+            "max": 242,
+            "p50": 106,
+            "p95": 108,
+            "p99": 111,
+            "p99_9": 132,
             "samples": 5000
           },
           "wake_to_final_proof_us": {
@@ -137,22 +444,22 @@
         },
         "up_only_15": {
           "completion_error_us_diagnostic": {
-            "max_abs": null,
-            "p01": null,
-            "p50": null,
-            "p95": null,
-            "p99": null,
-            "samples": 0
+            "max_abs": 181,
+            "p01": 109,
+            "p50": 109,
+            "p95": 111,
+            "p99": 117,
+            "samples": 5000
           },
           "controller": "dispatch_start_error",
           "deadline_missed_before_send_count": 0,
           "dispatch_start_error_us": {
-            "max": 0,
-            "min": 0,
-            "p50": 0,
-            "p95": 0,
-            "p99": 0,
-            "p99_9": 0,
+            "max": 177,
+            "min": 109,
+            "p50": 109,
+            "p95": 111,
+            "p99": 116,
+            "p99_9": 129,
             "samples": 5000
           },
           "early_dispatch_count": 0,
@@ -171,7 +478,7 @@
           "observation_queue": "bounded_nonblocking_on",
           "physical_dispatches": 5000,
           "pre_call_to_completion_us": {
-            "max": 0,
+            "max": 3,
             "min": 0,
             "p50": 0,
             "p95": 0,
@@ -180,11 +487,72 @@
             "samples": 5000
           },
           "target_to_completion_us": {
+            "max": 181,
+            "p50": 109,
+            "p95": 111,
+            "p99": 117,
+            "p99_9": 129,
+            "samples": 5000
+          },
+          "wake_to_final_proof_us": {
             "max": 0,
             "p50": 0,
             "p95": 0,
             "p99": 0,
             "p99_9": 0,
+            "samples": 5000
+          }
+        },
+        "up_only_5": {
+          "completion_error_us_diagnostic": {
+            "max_abs": 150,
+            "p01": 106,
+            "p50": 107,
+            "p95": 109,
+            "p99": 111,
+            "samples": 5000
+          },
+          "controller": "dispatch_start_error",
+          "deadline_missed_before_send_count": 0,
+          "dispatch_start_error_us": {
+            "max": 150,
+            "min": 106,
+            "p50": 107,
+            "p95": 109,
+            "p99": 111,
+            "p99_9": 122,
+            "samples": 5000
+          },
+          "early_dispatch_count": 0,
+          "failure_reasons": {},
+          "final_spin_us": {
+            "max": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "non_dispatches": 0,
+          "observation_count": 5000,
+          "observation_gaps": 0,
+          "observation_queue": "bounded_nonblocking_on",
+          "physical_dispatches": 5000,
+          "pre_call_to_completion_us": {
+            "max": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "p99_9": 0,
+            "samples": 5000
+          },
+          "target_to_completion_us": {
+            "max": 150,
+            "p50": 107,
+            "p95": 109,
+            "p99": 111,
+            "p99_9": 122,
             "samples": 5000
           },
           "wake_to_final_proof_us": {
@@ -197,24 +565,25 @@
           }
         }
       },
-      "scope": "sender-only; prepared packet and tracked-state reconciliation retained; waiter/coordinator excluded",
-      "synthetic_boundary": "QPC target sampled immediately before sender call",
-      "waitable_timer_enabled": false
+      "scope": "Phase-A acceptance production sender boundary; full coordinator dispatch/admission/commit path; waiter scheduling excluded",
+      "sender_start_timestamp_source": "production fused target-crossing primitive; test_started_ticks=None",
+      "transport": "deterministic packet emitter with QPC completion sample",
+      "waitable_timer_enabled": true
     }
   },
   "observation_enqueue_ab": {
     "available_queue_dropped": 0,
     "available_queue_high_watermark": 0,
     "available_queue_push_ns": {
-      "max": 1300,
-      "p50": 100,
-      "p95": 100,
-      "p99": 100,
-      "p99_9": 400,
+      "max": 10900,
+      "p50": 200,
+      "p95": 200,
+      "p99": 300,
+      "p99_9": 500,
       "samples": 10000
     },
     "baseline_bypass_ns": {
-      "max": 1100,
+      "max": 700,
       "p50": 0,
       "p95": 100,
       "p99": 100,
@@ -227,11 +596,11 @@
     "saturated_queue_dropped": 10000,
     "saturated_queue_high_watermark": 0,
     "saturated_queue_push_ns": {
-      "max": 600,
-      "p50": 100,
-      "p95": 100,
-      "p99": 100,
-      "p99_9": 200,
+      "max": 35500,
+      "p50": 200,
+      "p95": 300,
+      "p99": 400,
+      "p99_9": 700,
       "samples": 10000
     },
     "scope": "producer primitive only; observation construction, copying, and consumer drain excluded"
