@@ -1,6 +1,6 @@
 # Phase B calibration vNext — correction completion report
 
-Date: 2026-08-19
+Date: 2026-08-20
 
 Status: `AUTOMATED CORRECTION GATES PASS — HUMAN PHASE-B ACCEPTANCE PENDING`
 
@@ -13,8 +13,11 @@ Phase B implementation. It does not grant the human real-host acceptance token.
 - Initially reviewed Phase-B candidate: `684762f6d5ff42bb2f4eb97938e73091ef49ac7b`
 - Precision-boundary correction: `91959087e27e1bfbe5dce267e2ca81a175848eec`
 - Scheduling-aid provenance correction: `de0caeb46e4b3f501a8bcee8e5ed842a06bc3300`
+- Current validation tree: `9651b405336dd81bd5eb0909434c09c8d30cbf22`
 - This report and validation-only test-import correction are committed after the
-  correction code.
+  correction code. The four current-tree validation reruns are recorded in
+  [PHASE_B_VALIDATION_EVIDENCE.md](PHASE_B_VALIDATION_EVIDENCE.md) and their
+  raw logs carry the current `SOURCE_SHA`.
 
 ## Precision-boundary correction
 

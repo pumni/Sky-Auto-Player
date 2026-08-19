@@ -1,4 +1,5 @@
-COMMAND: 08-ruff
+SOURCE_SHA: 9651b405336dd81bd5eb0909434c09c8d30cbf22
+COMMAND: uv run --env-file .env ruff check .
 All checks passed!
 warning: Encountered error: Access is denied. (os error 5)
 EXIT_CODE: 0

@@ -1,3 +1,4 @@
-COMMAND: 09-pyright
+SOURCE_SHA: 9651b405336dd81bd5eb0909434c09c8d30cbf22
+COMMAND: uv run --env-file .env pyright
 0 errors, 0 warnings, 0 informations
 EXIT_CODE: 0

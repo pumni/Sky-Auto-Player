@@ -1,11 +1,17 @@
 # Phase B validation execution evidence
 
-Validation date: 2026-08-19
+Validation date: 2026-08-20
 
-Validation tree: `de0caeb46e4b3f501a8bcee8e5ed842a06bc3300`
+Validation tree: `9651b405336dd81bd5eb0909434c09c8d30cbf22`
 
 All logs below are raw command transcripts. Each ends with an explicit
 `EXIT_CODE` line.
+
+The Ruff, Pyright, non-slow pytest, and `git diff --check` transcripts were
+rerun against the clean `9651b405336dd81bd5eb0909434c09c8d30cbf22` tree; each
+raw log records that `SOURCE_SHA`. The Rust, wheel, security, and Phase-A
+benchmark logs retain their earlier provenance because this correction did not
+change those surfaces.
 
 | Command | Exit | Relevant result | Warnings | Raw log |
 | --- | ---: | --- | --- | --- |
