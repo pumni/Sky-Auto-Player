@@ -1,8 +1,0 @@
-{
-  "windows_version": "Microsoft Windows 11 Home",
-  "power_plan": "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)",
-  "commit": "27379119dadaca843f8f1fbb03fb7edf3c788498",
-  "rust_toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-  "cpu": "AMD Ryzen 5 5500U with Radeon Graphics         ",
-  "python_version": "3.14.3 free-threading build (main, Feb 12 2026, 00:41:00) [MSC v.1944 64 bit (AMD64)] GIL_enabled=False"
-}
