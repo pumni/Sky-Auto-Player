@@ -4,6 +4,29 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-08-19
+
+Sky Auto Player v3.4.1 is a focused stability patch for input calibration,
+native updating, and playback reporting.
+
+### Changed
+
+- Hardened native updater replacement, rollback, recovery, and preserved-path
+  handling.
+- Updated Host Input Delivery Calibration so hold correction remains independent
+  from late-event grace and measurements beyond the trusted correction envelope
+  are reported explicitly instead of being saturated.
+
+### Fixed
+
+- Preserved authored Note-On timing and the safe 500 µs playback fallback when
+  calibration is unavailable, invalid, or out of envelope.
+- Corrected missed-note counts shown by the playback UI.
+
+### Security
+
+- Strengthened transactional update integrity and fail-safe recovery behavior.
+
 ## [3.4.0] - 2026-08-18
 
 Sky Auto Player v3.4.0 tightens deterministic playback timing and runtime recovery.
