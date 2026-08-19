@@ -12,6 +12,7 @@ Phase B implementation. It does not grant the human real-host acceptance token.
 - Phase-A clean base: `51b6b1a5205764b230b8cd32be522b319fb7ed2d`
 - Initially reviewed Phase-B candidate: `684762f6d5ff42bb2f4eb97938e73091ef49ac7b`
 - Precision-boundary correction: `91959087e27e1bfbe5dce267e2ca81a175848eec`
+- Scheduling-aid provenance correction: `de0caeb46e4b3f501a8bcee8e5ed842a06bc3300`
 - This report and validation-only test-import correction are committed after the
   correction code.
 
@@ -44,9 +45,17 @@ Direct protections now include:
 - independent fingerprint mismatch tests for CPU family, stepping, efficiency
   histogram, Windows build, QPC frequency, and fingerprint schema version.
 
-No production timing policy, schema/cache version, host identity field, Down
-grace, MMCSS policy, or calibration qualification formula was changed by this
-correction.
+No production timing policy, host identity field, Down grace, MMCSS policy, or
+calibration qualification formula was changed by this correction. Schema
+versions changed only to version the new required provenance fields.
+
+The output/cache schema correction adds `scheduling_aids` with the acquired
+MMCSS label, MMCSS active state, PowerThrottling/HighQoS guard state, and actual
+waiter mode. Native schema is 11, artifact schema is 8, and cache schema is 5;
+older payloads fail closed.
+
+Command-level execution evidence, exit codes, counts, warnings, and raw log
+paths are recorded in [PHASE_B_VALIDATION_EVIDENCE.md](PHASE_B_VALIDATION_EVIDENCE.md).
 
 ## Phase-A post-refactor A/B evidence
 
@@ -126,15 +135,23 @@ updater behavior or security policy.
 
 ## Human gates still pending
 
+The Phase-A sequencing authorization is present and exact:
+
+```text
+PHASE_A_ACCEPTED: proceed to Phase B calibration vNext
+```
+
+It was supplied in the user message before Phase-B work began. It is not a
+substitute for real-host calibration evidence.
+
 The automated correction evidence is complete, but the following are not
 claimed here:
 
 ```text
 VNEXT_REAL_HOST_CALIBRATION = AWAITING_HUMAN_EVIDENCE
-PHASE_B_HUMAN_UNLOCK = AWAITING_HUMAN_REVIEW
+PHASE_B_HUMAN_REVIEW = AWAITING_HUMAN_REVIEW
 ```
 
-The prior conversation contains the Phase-A acceptance token. No real Windows
-game-observed calibration evidence or explicit human Phase-B unlock evidence
-has been supplied in this correction pass. Phase B should therefore remain
-closed for publication until that review is recorded.
+No real Windows game-observed calibration evidence has been supplied in this
+correction pass. Phase B should therefore remain closed for publication until
+that review is recorded.

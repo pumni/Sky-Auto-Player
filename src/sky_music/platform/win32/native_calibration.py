@@ -36,8 +36,8 @@ from sky_music.infrastructure.calibration_loader import (
     REQUIRED_BUCKETS,
     CalibrationCacheSummary,
     CalibrationStatus,
-    _validate_scheduling_aids,
     PairBucketSummary,
+    _validate_scheduling_aids,
     parse_calibration_cache_summary,
     qualify_calibration_margin,
 )

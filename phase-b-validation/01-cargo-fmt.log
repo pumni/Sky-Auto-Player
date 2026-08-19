@@ -1,0 +1,2 @@
+COMMAND: 01-cargo-fmt
+EXIT_CODE: 0

@@ -1,0 +1,9 @@
+COMMAND: 11-security-audit
+=== Sky Auto Player: AGENTS.md P0 security-mandate audit ===
+
+Python source:   D:\Dev\Sky-Auto-Player\src
+Rust source:     D:\Dev\Sky-Auto-Player\rust
+Baseline file:   D:\Dev\Sky-Auto-Player\.config\security_audit_baseline.json
+
+[OK] No forbidden Windows API references in src/ or rust/.
+EXIT_CODE: 0

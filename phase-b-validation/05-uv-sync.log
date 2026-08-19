@@ -1,0 +1,5 @@
+COMMAND: 05-uv-sync
+Resolved 39 packages in 2ms
+Uninstalled 1 package in 3ms
+ - sky-player-rs==0.1.0 (from file:///D:/Dev/Sky-Auto-Player/rust/target/wheels/sky_player_rs-0.1.0-cp314-cp314t-win_amd64.whl)
+EXIT_CODE: 0

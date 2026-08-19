@@ -1,0 +1,35 @@
+COMMAND: 06-rust-wheel-build
+🐍 Found CPython 3.14t at D:\Dev\Sky-Auto-Player\.venv\Scripts\python.exe
+🔗 Found pyo3 bindings
+📡 Using build options bindings from pyproject.toml
+    Finished `release` profile [optimized] target(s) in 0.13s
+📦 Built wheel for CPython 3.14t to D:\Dev\Sky-Auto-Player\rust\target\wheels\sky_player_rs-0.1.0-cp314-cp314t-win_amd64.whl
+Using CPython 3.14.3+freethreaded interpreter at: .venv\Scripts\python.exe
+Creating virtual environment at: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-rust-wheel-p8zdn7i8\venv
+Activate with: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-rust-wheel-p8zdn7i8\venv\Scripts\activate
+Using Python 3.14.3 environment at: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-rust-wheel-p8zdn7i8\venv
+Resolved 1 package in 3ms
+Prepared 1 package in 15ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 62ms
+ + sky-player-rs==0.1.0 (from file:///D:/Dev/Sky-Auto-Player/rust/target/wheels/sky_player_rs-0.1.0-cp314-cp314t-win_amd64.whl)
+build_info: {'rust_core_enabled': True, 'version': '0.1.0', 'rust_core_version': '0.1.0', 'rustc_version': 'rustc 1.97.1 (8bab26f4f 2026-07-14)', 'schema_version': 4, 'native_schema_version': 4, 'pyo3_version': '0.29.0', 'native_abi': 'cp314t-win_amd64', 'qpc_frequency_hz': 10000000, 'native_build_commit': 'de0caeb46e4b3f501a8bcee8e5ed842a06bc3300', 'free_threaded': True, 'win32_backend': True}
+gil_after_import: False
+Resolved 1 package in 3ms
+Prepared 1 package in 1ms
+Installed 1 package in 13ms
+ + sky-player-rs==0.1.0 (from file:///D:/Dev/Sky-Auto-Player/rust/target/wheels/sky_player_rs-0.1.0-cp314-cp314t-win_amd64.whl)
+active_build_info: {'rust_core_enabled': True, 'version': '0.1.0', 'rust_core_version': '0.1.0', 'rustc_version': 'rustc 1.97.1 (8bab26f4f 2026-07-14)', 'schema_version': 4, 'native_schema_version': 4, 'pyo3_version': '0.29.0', 'native_abi': 'cp314t-win_amd64', 'qpc_frequency_hz': 10000000, 'native_build_commit': 'de0caeb46e4b3f501a8bcee8e5ed842a06bc3300', 'free_threaded': True, 'win32_backend': True}
+[build_rust_wheel] Python interpreter: D:\Dev\Sky-Auto-Player\.venv\Scripts\python.exe (3.14.3 free-threading build (main, Feb 12 2026, 00:41:00) [MSC v.1944 64 bit (AMD64)])
+[build_rust_wheel] Initial GIL status: enabled=False
+[build_rust_wheel] Expected build commit: de0caeb46e4b3f501a8bcee8e5ed842a06bc3300
+[build_rust_wheel] Building wheel via maturin (manifest=D:\Dev\Sky-Auto-Player\rust\crates\sky_player_rs\Cargo.toml)...
+[build_rust_wheel] Found built wheel: sky_player_rs-0.1.0-cp314-cp314t-win_amd64.whl
+[build_rust_wheel] Installing exact wheel into clean environment...
+[build_rust_wheel] Verifying exact wheel import, ABI, commit and GIL...
+[build_rust_wheel] Installing exact wheel into the active environment...
+[build_rust_wheel] Verifying the active environment wheel...
+[build_rust_wheel] Native Rust wheel build & verification PASSED cleanly.
+EXIT_CODE: 0

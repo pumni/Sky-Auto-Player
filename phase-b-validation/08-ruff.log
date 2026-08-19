@@ -1,0 +1,4 @@
+COMMAND: uv run --env-file .env ruff check .
+warning: Encountered error: Access is denied. (os error 5)
+All checks passed!
+EXIT_CODE: 0
