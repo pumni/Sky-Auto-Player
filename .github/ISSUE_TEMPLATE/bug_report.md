@@ -14,7 +14,7 @@ assignees: ''
 
 **Environment**
 
-- Install method: packaged `Sky-Auto-Player-v<ver>.zip` executable / `uv run python src/main.py` / winget
+- Install method: packaged `Sky-Auto-Player-v<ver>.zip` executable / `uv run python src/main.py`
 - Version (from `Sky-Auto-Player.exe --version`, or `uv run python src/main.py --version`):
 - Windows version + build, display scaling %, game refresh rate:
 - Keyboard layout / input scan-code mode (`--scan-code-mode`) if changed from default:

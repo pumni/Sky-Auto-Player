@@ -93,7 +93,6 @@ compaction or resume**, since this app touches anti-cheat-adjacent surfaces.
 - `scripts/` — security audit, free-threaded wheel audit, build, telemetry/bench scripts. Most are standalone utilities.
 - `docs/` — see Priority Stack P2 for the normative subset. `docs/INDEX.md` is the documentation map and hierarchy of truth.
 - `rust/crates/sky_updater/` — shipped native updater; security-sensitive: HTTPS host allow-list, SHA256/archive/manifest verification before mutate, transactional rollback, preserve-list (`config.json`, `.env`, `songs/`, `logs/`). It is intentionally unsigned and has no Authenticode gate.
-- `manifests/` — packaging manifests (winget community channel).
 - `.github/workflows/release.yml` — tag-triggered unsigned release pipeline; runs free-threaded + security audits, builds the app with a matching source bootloader, hashes exact unsigned bytes, attests, and uploads `Sky-Auto-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`.
 - `Sky-Auto-Player.spec` — PyInstaller `onedir` spec; see Build Environment step 3.
 - `songs/`, `config.json`, `.env`, `.env.example` — runtime data, not source.

@@ -66,8 +66,7 @@ jobs:
           relevant=false
           while IFS= read -r path; do
             case "$path" in
-              # manifests/* intentionally omitted: winget channel is deferred
-              # and has no CI gate yet (placeholder SHA only).
+              # Winget is not currently supported; no manifest validation is run.
               src/*|tests/*|scripts/*|rust/*|.github/workflows/*|.github/actions/*)
                 relevant=true
                 break
