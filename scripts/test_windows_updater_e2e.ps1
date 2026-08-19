@@ -168,7 +168,51 @@ function Copy-TreeContents {
 
 function Add-PreservedFixture {
     param([string]$Root)
-    [IO.File]::WriteAllText((Join-Path $Root "config.json"), '{"e2e":"preserve"}')
+    # Keep the fixture schema-valid and disable the app's automatic update
+    # worker. The restart acceptance must test updater preservation, not let a
+    # freshly restarted app rewrite its own update-notification state.
+    $config = @'
+{
+    "e2e": "preserve",
+    "schema_version": 3,
+    "default_hold_frames": 1.0,
+    "theme": "aurora",
+    "ui_background_mode": "transparent",
+    "default_tempo_scale": 1.0,
+    "game_fps": 60,
+    "telemetry_enabled_by_default": false,
+    "verbose_hud": false,
+    "hotkeys": {
+        "pause": "f8",
+        "skip": "f9",
+        "quit": "f10",
+        "refocus": "f6",
+        "panic": "ctrl+alt+backspace"
+    },
+    "safety": {
+        "prompt_on_medium_risk": true,
+        "prompt_on_high_risk": true
+    },
+    "songs_dir": "songs",
+    "sky_process_names": [
+        "Sky.exe",
+        "Sky Children of the Light.exe"
+    ],
+    "allow_title_fallback": false,
+    "update": {
+        "auto_check": false,
+        "channel": "stable",
+        "skip_version": "",
+        "check_interval_s": 86400,
+        "last_check_ts": 0,
+        "last_error_ts": 0,
+        "last_notified_version": "",
+        "legacy_old_dir_sweep_pending": false
+    }
+}
+'@
+    $configText = [regex]::Replace($config.Trim(), '\r?\n', [Environment]::NewLine)
+    [IO.File]::WriteAllText((Join-Path $Root "config.json"), $configText)
     [IO.File]::WriteAllText((Join-Path $Root ".env"), "E2E_PRESERVED=1`r`n")
     New-Item -ItemType Directory -Path (Join-Path $Root "songs") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Root "logs") -Force | Out-Null
@@ -347,6 +391,22 @@ function Stop-RestartedApp {
             }
         } catch { }
     }
+}
+
+function Wait-ForPreparedJournal {
+    param(
+        [string]$Install,
+        [int]$TimeoutSeconds = 30
+    )
+    $journal = Join-Path $Install ".sky-update-transaction\journal.json"
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-Path -LiteralPath $journal -PathType Leaf) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
 }
 
 function Assert-PreservedState {
@@ -537,9 +597,9 @@ try {
     $prepared = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
         -CurrentVersion $fromManifest.version -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease `
         -PauseAt "after-replace:apply:Sky-Auto-Player-Updater.exe" -KeepPaused
-    Start-Sleep -Milliseconds 2500
+    $preparedJournal = Wait-ForPreparedJournal $scenario.Install
     Stop-ProcessIfRunning $prepared.Process
-    if (-not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction\journal.json"))) { throw "rollback fault fixture did not leave Prepared journal" }
+    if (-not $preparedJournal) { throw "rollback fault fixture did not leave Prepared journal" }
     $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease `
         -FailAt "rollback:after-restore:Sky-Auto-Player-Updater.exe"
     if ($run.Result.error_code -ne "ROLLBACK_ATOMIC_REPLACE_FAILED" -or -not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "rollback fault safety check failed" }
@@ -557,9 +617,9 @@ try {
     $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
         -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease `
         -PauseAt "after-replace:apply:Sky-Auto-Player-Updater.exe" -KeepPaused
-    Start-Sleep -Milliseconds 2500
+    $crashJournal = Wait-ForPreparedJournal $scenario.Install
     Stop-ProcessIfRunning $first.Process
-    if (-not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction\journal.json"))) { throw "crash fixture did not leave Prepared journal" }
+    if (-not $crashJournal) { throw "crash fixture did not leave Prepared journal" }
     $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease
     if ($run.Result.status -ne "success" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "crash recovery failed" }
     Assert-ManagedManifestFiles $scenario.Install $syntheticManifest | Out-Null

@@ -194,6 +194,7 @@ pub fn error_code(error: &UpdaterError) -> &'static str {
         UpdaterError::RollbackFailed(_) => "ROLLBACK_FAILED",
         UpdaterError::RestartFailed(_) => "RESTART_FAILED",
         UpdaterError::Io(_) => "IO_FAILURE",
+        UpdaterError::IoContext { .. } => "IO_FAILURE",
         UpdaterError::Json(_) => "JSON_FAILURE",
     }
 }
@@ -226,6 +227,17 @@ fn error_details(error: &UpdaterError) -> ErrorDetails {
             path: Some(bound_message(path.clone())),
             os_error: Some(*os_code),
         },
+        UpdaterError::IoContext {
+            phase,
+            operation,
+            path,
+            source,
+        } => ErrorDetails {
+            phase: Some(bound_message(phase.clone())),
+            operation: Some(bound_message(operation.clone())),
+            path: Some(bound_message(path.clone())),
+            os_error: source.raw_os_error().map(|value| value.unsigned_abs()),
+        },
         _ => ErrorDetails::default(),
     }
 }
@@ -250,6 +262,11 @@ fn bounded_log_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::path::Path;
+
+    use crate::error::io_context;
+
     use super::{MAX_MESSAGE_CHARS, bound_message};
 
     #[test]
@@ -265,5 +282,23 @@ mod tests {
         assert_eq!(bounded.chars().count(), MAX_MESSAGE_CHARS);
         assert_eq!(bounded.chars().last(), Some('…'));
         assert!(bounded.is_char_boundary(bounded.len()));
+    }
+
+    #[test]
+    fn io_context_preserves_failure_provenance_in_result() {
+        let error = io_context(
+            "path validation",
+            "read file attributes",
+            Path::new(r"C:\install\deep\file.txt"),
+            io::Error::from_raw_os_error(3),
+        );
+
+        let result = super::failure("3.3.0", "3.4.0", &error);
+
+        assert_eq!(result.error_code.as_deref(), Some("IO_FAILURE"));
+        assert_eq!(result.phase.as_deref(), Some("path validation"));
+        assert_eq!(result.operation.as_deref(), Some("read file attributes"));
+        assert_eq!(result.path.as_deref(), Some(r"C:\install\deep\file.txt"));
+        assert_eq!(result.os_error, Some(3));
     }
 }

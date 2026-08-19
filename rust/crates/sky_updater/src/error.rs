@@ -1,4 +1,5 @@
 use std::io;
+use std::path::Path;
 
 use thiserror::Error;
 
@@ -64,8 +65,25 @@ pub enum UpdaterError {
     RestartFailed(String),
     #[error("I/O failure: {0}")]
     Io(#[from] io::Error),
+    #[error("I/O failure during {phase}/{operation} at {path}: {source}")]
+    IoContext {
+        phase: String,
+        operation: String,
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error("JSON failure: {0}")]
     Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, UpdaterError>;
+
+pub fn io_context(phase: &str, operation: &str, path: &Path, source: io::Error) -> UpdaterError {
+    UpdaterError::IoContext {
+        phase: phase.into(),
+        operation: operation.into(),
+        path: path.display().to_string(),
+        source,
+    }
+}

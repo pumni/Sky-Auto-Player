@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{path_is_safe_under, sha256_file, validate_relative_path};
-use crate::error::{Result, UpdaterError};
+use crate::error::{Result, UpdaterError, io_context};
 use crate::file_replace::{probe_new_destination, probe_replaceable};
 use crate::manifest::{Manifest, PreserveClass, classify_preserved};
 use crate::{CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION, UPDATER_EXE};
@@ -244,7 +244,10 @@ fn prepare_journal_inner(
         install_root,
         &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
     )?;
-    write_json_atomic(&journal_file, &journal)?;
+    write_json_atomic(&journal_file, &journal).map_err(|error| match error {
+        UpdaterError::Io(source) => io_context("prepare", "write journal", &journal_file, source),
+        other => other,
+    })?;
     Ok(journal)
 }
 
@@ -291,7 +294,15 @@ pub fn apply(
     new_manifest: &Manifest,
     plan: &TransactionPlan,
 ) -> Result<()> {
-    let journal = read_journal(install_root)?;
+    let journal = read_journal(install_root).map_err(|error| match error {
+        UpdaterError::Io(source) => io_context(
+            "apply",
+            "read journal",
+            &transaction_root(install_root).join(JOURNAL_FILE_NAME),
+            source,
+        ),
+        other => other,
+    })?;
     if journal.state != JournalState::Prepared {
         return Err(UpdaterError::TransactionRecoveryRequired(
             "transaction is not prepared".into(),
@@ -337,7 +348,15 @@ pub fn apply(
     verify_installed_managed(install_root, new_manifest)?;
     let installed_manifest_path = safe_join(install_root, MANIFEST_NAME)
         .map_err(|error| UpdaterError::PostInstallVerifyFailed(error.to_string()))?;
-    let installed_manifest = Manifest::parse(&fs::read(installed_manifest_path)?)
+    let installed_manifest =
+        Manifest::parse(&fs::read(&installed_manifest_path).map_err(|error| {
+            io_context(
+                "apply",
+                "read installed manifest",
+                &installed_manifest_path,
+                error,
+            )
+        })?)
         .map_err(|error| UpdaterError::PostInstallVerifyFailed(error.to_string()))?;
     if installed_manifest != *new_manifest {
         return Err(UpdaterError::PostInstallVerifyFailed(
@@ -350,7 +369,10 @@ pub fn apply(
         install_root,
         &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
     )?;
-    write_json_atomic(&journal_file, &committed)?;
+    write_json_atomic(&journal_file, &committed).map_err(|error| match error {
+        UpdaterError::Io(source) => io_context("apply", "commit journal", &journal_file, source),
+        other => other,
+    })?;
     Ok(())
 }
 
@@ -375,10 +397,16 @@ fn copy_managed_file(
         )));
     }
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)
+            .map_err(|error| io_context("apply", "create destination parent", parent, error))?;
     }
     let expected_hash = if relative == MANIFEST_NAME {
-        sha256_file(&source)?
+        sha256_file(&source).map_err(|error| match error {
+            UpdaterError::Io(source_error) => {
+                io_context("apply", "hash staged file", &source, source_error)
+            }
+            other => other,
+        })?
     } else {
         new_manifest
             .files_by_path()
@@ -391,7 +419,13 @@ fn copy_managed_file(
             })?
     };
     let replacement =
-        crate::file_replace::prepare_replacement(&source, &destination, &expected_hash, relative)?;
+        crate::file_replace::prepare_replacement(&source, &destination, &expected_hash, relative)
+            .map_err(|error| match error {
+            UpdaterError::Io(source_error) => {
+                io_context("apply", "prepare replacement", &destination, source_error)
+            }
+            other => other,
+        })?;
     if replaces_existing && destination.is_file() {
         crate::file_replace::atomic_replace_existing(replacement, "apply", index)
     } else {
@@ -407,7 +441,14 @@ pub fn verify_installed_managed(install_root: &Path, manifest: &Manifest) -> Res
         let path = safe_join(install_root, &file.path)?;
         let metadata = fs::metadata(&path)
             .map_err(|_| UpdaterError::PostInstallVerifyFailed(file.path.clone()))?;
-        if metadata.len() != file.size || sha256_file(&path)? != file.sha256.to_ascii_lowercase() {
+        if metadata.len() != file.size
+            || sha256_file(&path).map_err(|error| match error {
+                UpdaterError::Io(source_error) => {
+                    io_context("apply", "hash installed file", &path, source_error)
+                }
+                other => other,
+            })? != file.sha256.to_ascii_lowercase()
+        {
             return Err(UpdaterError::PostInstallVerifyFailed(file.path.clone()));
         }
     }
@@ -420,7 +461,10 @@ pub fn read_journal(install_root: &Path) -> Result<Journal> {
         &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
     )
     .map_err(|err| UpdaterError::TransactionRecoveryRequired(err.to_string()))?;
-    let journal: Journal = serde_json::from_slice(&fs::read(journal_file)?)?;
+    let journal: Journal = serde_json::from_slice(
+        &fs::read(&journal_file)
+            .map_err(|error| io_context("recovery", "read journal", &journal_file, error))?,
+    )?;
     if journal.schema_version != SCHEMA_VERSION
         || journal.install_root != install_root.to_string_lossy()
     {
@@ -463,17 +507,22 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| UpdaterError::Io(std::io::Error::other("JSON path has no parent")))?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent)
+        .map_err(|error| io_context("persistence", "create JSON parent", parent, error))?;
     let temporary = path.with_extension("tmp");
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
-        .open(&temporary)?;
+        .open(&temporary)
+        .map_err(|error| io_context("persistence", "open JSON temporary", &temporary, error))?;
     let bytes = serde_json::to_vec_pretty(value)?;
-    file.write_all(&bytes)?;
-    file.flush()?;
-    file.sync_all()?;
+    file.write_all(&bytes)
+        .map_err(|error| io_context("persistence", "write JSON temporary", &temporary, error))?;
+    file.flush()
+        .map_err(|error| io_context("persistence", "flush JSON temporary", &temporary, error))?;
+    file.sync_all()
+        .map_err(|error| io_context("persistence", "sync JSON temporary", &temporary, error))?;
     atomic_replace(&temporary, path)?;
     Ok(())
 }
@@ -497,13 +546,19 @@ fn atomic_replace(temporary: &Path, destination: &Path) -> Result<()> {
             .collect::<Vec<_>>();
         let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
         if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), flags) } == 0 {
-            return Err(UpdaterError::Io(std::io::Error::last_os_error()));
+            return Err(io_context(
+                "persistence",
+                "replace JSON file",
+                destination,
+                std::io::Error::last_os_error(),
+            ));
         }
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        fs::rename(temporary, destination)?;
+        fs::rename(temporary, destination)
+            .map_err(|error| io_context("persistence", "replace JSON file", destination, error))?;
         Ok(())
     }
 }
@@ -529,7 +584,7 @@ fn ensure_no_reparse_components(root: &Path, path: &Path) -> Result<()> {
                 )));
             }
         }
-        Err(error) => return Err(UpdaterError::Io(error)),
+        Err(error) => return Err(io_context("path validation", "inspect root", root, error)),
     }
     let relative = path.strip_prefix(root).map_err(|_| {
         UpdaterError::InstallRootInvalid(format!("path escapes root: {}", path.display()))
@@ -553,7 +608,14 @@ fn ensure_no_reparse_components(root: &Path, path: &Path) -> Result<()> {
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => return Err(UpdaterError::Io(error)),
+            Err(error) => {
+                return Err(io_context(
+                    "path validation",
+                    "inspect component",
+                    &current,
+                    error,
+                ));
+            }
         }
     }
     Ok(())
@@ -567,14 +629,27 @@ fn is_reparse_point(path: &Path) -> Result<bool> {
         FILE_ATTRIBUTE_REPARSE_POINT, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
     };
 
-    let wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    let raw = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let mut wide = if raw.starts_with(&[b'\\' as u16, b'\\' as u16]) {
+        let mut value = r"\\?\UNC\".encode_utf16().collect::<Vec<_>>();
+        value.extend_from_slice(&raw[2..]);
+        value
+    } else if raw.starts_with(&[b'\\' as u16, b'?' as u16, b'\\' as u16]) {
+        raw
+    } else {
+        let mut value = r"\\?\".encode_utf16().collect::<Vec<_>>();
+        value.extend_from_slice(&raw);
+        value
+    };
+    wide.push(0);
     let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
     if attributes == INVALID_FILE_ATTRIBUTES {
-        return Err(UpdaterError::Io(std::io::Error::last_os_error()));
+        return Err(io_context(
+            "path validation",
+            "read file attributes",
+            path,
+            std::io::Error::last_os_error(),
+        ));
     }
     Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
@@ -593,7 +668,8 @@ pub fn cleanup_committed(install_root: &Path) -> Result<()> {
                 "prepared transaction must be recovered".into(),
             ));
         }
-        fs::remove_dir_all(root)?;
+        fs::remove_dir_all(&root)
+            .map_err(|error| io_context("cleanup", "remove transaction directory", &root, error))?;
     }
     crate::file_replace::cleanup_stale_artifacts(install_root)?;
     Ok(())
