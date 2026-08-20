@@ -1037,6 +1037,14 @@ struct ParsedRawKeyboard {
     extra_information: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObserverLifecycle {
+    Active,
+    Sealing,
+    Sealed,
+    Failed,
+}
+
 /// Shared state between the calibration thread (sends packets and awaits
 /// receipts) and the window pump thread (delivers `WM_INPUT` events).
 struct SharedCalibState {
@@ -1059,6 +1067,10 @@ struct SharedCalibState {
     /// Stable reason for an observer-integrity failure. Unlike packet-level
     /// diagnostics, this survives per-packet diagnostic resets.
     observer_failure: Option<&'static str>,
+    /// Owned by the pump thread during the final publishable close. Output
+    /// may be published only after the pump has drained, restored Raw Input,
+    /// and reached `Sealed`.
+    observer_lifecycle: ObserverLifecycle,
     /// Interrupt source shared with the precision waiter. Observer failures
     /// must stop a packet before the final sender handoff.
     wait_interrupt: Arc<OwnedEvent>,
@@ -1092,6 +1104,11 @@ fn invalidate_correlation_boundary(state: &mut SharedCalibState) {
 
 fn can_arm_next_packet(state: &SharedCalibState) -> bool {
     state.active_sequence.is_none() && !state.correlation_boundary_lost
+}
+
+fn mark_observer_seal_failed(state: &mut SharedCalibState) {
+    state.observer_lifecycle = ObserverLifecycle::Failed;
+    invalidate_correlation_boundary(state);
 }
 
 fn arm_packet_state(
@@ -1470,6 +1487,7 @@ mod platform {
     const WM_CALIB_EXIT: u32 = WM_USER + 1;
     const WM_CALIB_ACTIVATE: u32 = WM_USER + 2;
     const WM_CALIB_BARRIER: u32 = WM_USER + 3;
+    const WM_CALIB_SEAL: u32 = WM_USER + 4;
 
     // ── Window procedure ──────────────────────────────────────────────────────
 
@@ -1482,6 +1500,7 @@ mod platform {
 
     struct PumpContext {
         shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
+        previous_raw_input_devices: Vec<RAWINPUTDEVICE>,
         // GetRawInputData requires DWORD-aligned output storage. `usize`
         // provides at least that alignment on every supported Windows target.
         input_buffer: std::cell::RefCell<Vec<usize>>,
@@ -1615,6 +1634,34 @@ mod platform {
         }
     }
 
+    fn unregister_and_restore_raw_input_devices(
+        previous_raw_input_devices: &[RAWINPUTDEVICE],
+    ) -> bool {
+        let unregister = RAWINPUTDEVICE {
+            usUsagePage: HID_USAGE_PAGE_GENERIC,
+            usUsage: 0x06,
+            dwFlags: windows_sys::Win32::UI::Input::RIDEV_REMOVE,
+            hwndTarget: std::ptr::null_mut(),
+        };
+        // SAFETY: unregister is a fully initialized keyboard removal record.
+        let unregister_ok = unsafe {
+            RegisterRawInputDevices(&unregister, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+        } != 0;
+        let restore_ok = restore_raw_input_devices(previous_raw_input_devices);
+        unregister_ok && restore_ok
+    }
+
+    fn observer_seal_can_begin(state: &SharedCalibState) -> bool {
+        state.observer_lifecycle == ObserverLifecycle::Active
+            && state.observer_failure.is_none()
+            && !state.correlation_boundary_lost
+            && state.active_sequence.is_none()
+            && state.pending_receipts.is_empty()
+            && !state.pump_thread_failed
+            && !state.window_closed
+            && !state.should_exit
+    }
+
     unsafe extern "system" fn wnd_proc(
         hwnd: HWND,
         msg: u32,
@@ -1639,6 +1686,37 @@ mod platform {
                 record_pump_diagnostic(&ctx.shared, |diagnostics| {
                     diagnostics.wm_input_seen = diagnostics.wm_input_seen.saturating_add(1);
                 });
+                // Once the pump owns the final seal, no Raw Input may be
+                // admitted as measurement evidence. A message dispatched in
+                // Sealing/Sealed is stale observer evidence and therefore
+                // fails the seal rather than being silently ignored.
+                let admission_closed = {
+                    let (lock, cvar) = ctx.shared.as_ref();
+                    match lock.lock() {
+                        Ok(mut guard) => {
+                            if guard.observer_lifecycle != ObserverLifecycle::Active {
+                                observe_stale_correlation_evidence(&mut guard);
+                                cvar.notify_all();
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Err(poisoned) => {
+                            let mut guard = poisoned.into_inner();
+                            guard.pump_thread_failed = true;
+                            if guard.observer_failure.is_none() {
+                                guard.observer_failure = Some("state_lock_failed");
+                            }
+                            mark_observer_seal_failed(&mut guard);
+                            cvar.notify_all();
+                            true
+                        }
+                    }
+                };
+                if admission_closed {
+                    return complete_wm_input(hwnd, wparam, lparam);
+                }
                 let arrived = match qpc_now_ticks_checked() {
                     Ok(ticks) => ticks,
                     Err(_) => {
@@ -1843,6 +1921,94 @@ mod platform {
                 unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
                 0
             }
+            WM_CALIB_SEAL => {
+                // The seal is owned by this pump thread. A posted request may
+                // overtake queued input, so the handler explicitly drains the
+                // input range before and after Raw Input is unregistered.
+                let can_begin = {
+                    let (lock, cvar) = ctx.shared.as_ref();
+                    match lock.lock() {
+                        Ok(mut guard) => {
+                            if observer_seal_can_begin(&guard) {
+                                guard.observer_lifecycle = ObserverLifecycle::Sealing;
+                                cvar.notify_all();
+                                true
+                            } else {
+                                mark_observer_seal_failed(&mut guard);
+                                cvar.notify_all();
+                                false
+                            }
+                        }
+                        Err(poisoned) => {
+                            let mut guard = poisoned.into_inner();
+                            guard.pump_thread_failed = true;
+                            guard.observer_failure = Some("state_lock_failed");
+                            mark_observer_seal_failed(&mut guard);
+                            cvar.notify_all();
+                            false
+                        }
+                    }
+                };
+
+                let mut sealed = can_begin;
+                if sealed
+                    && !matches!(
+                        drain_pending_wm_input(&ctx.shared, hwnd),
+                        PendingInputDrain::Clean
+                    )
+                {
+                    sealed = false;
+                }
+
+                if sealed
+                    && !unregister_and_restore_raw_input_devices(&ctx.previous_raw_input_devices)
+                {
+                    let (lock, cvar) = ctx.shared.as_ref();
+                    if let Ok(mut guard) = lock.lock() {
+                        guard.raw_input_restore_failed = true;
+                        mark_observer_seal_failed(&mut guard);
+                        cvar.notify_all();
+                    }
+                    sealed = false;
+                }
+
+                // A receipt that was in flight while the first drain ran must
+                // not be allowed to turn a clean final pair into publishable
+                // evidence. Registration is already restored, so this second
+                // pump-thread drain is the final disposition check.
+                if sealed
+                    && !matches!(
+                        drain_pending_wm_input(&ctx.shared, hwnd),
+                        PendingInputDrain::Clean
+                    )
+                {
+                    sealed = false;
+                }
+
+                let (lock, cvar) = ctx.shared.as_ref();
+                if let Ok(mut guard) = lock.lock() {
+                    if sealed
+                        && guard.observer_lifecycle == ObserverLifecycle::Sealing
+                        && guard.observer_failure.is_none()
+                        && !guard.correlation_boundary_lost
+                        && guard.active_sequence.is_none()
+                        && guard.pending_receipts.is_empty()
+                        && !guard.raw_input_restore_failed
+                        && !guard.pump_thread_failed
+                    {
+                        guard.observer_lifecycle = ObserverLifecycle::Sealed;
+                    } else {
+                        mark_observer_seal_failed(&mut guard);
+                    }
+                    guard.should_exit = true;
+                    cvar.notify_all();
+                }
+                // The next GetMessageW call returns 0 for this thread. No
+                // separate posted exit can overtake a late input now that the
+                // registration has been restored and the final drain passed.
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+                0
+            }
             WM_CALIB_EXIT => {
                 // SAFETY: PostQuitMessage is safe to call from within a window
                 // procedure.
@@ -2027,6 +2193,7 @@ mod platform {
         // Install the thread-local context pointer.
         let ctx = PumpContext {
             shared: Arc::clone(&shared),
+            previous_raw_input_devices,
             input_buffer: std::cell::RefCell::new(Vec::with_capacity(4096)),
         };
         let ctx_ptr: *const PumpContext = &ctx;
@@ -2068,19 +2235,17 @@ mod platform {
 
         // Clear the thread-local pointer before the context goes out of scope.
         PUMP_STATE.with(|c| c.set(std::ptr::null()));
-        // Clean up registration so other processes can register normally.
-        let unregister = RAWINPUTDEVICE {
-            usUsagePage: HID_USAGE_PAGE_GENERIC,
-            usUsage: 0x06,
-            dwFlags: windows_sys::Win32::UI::Input::RIDEV_REMOVE,
-            hwndTarget: std::ptr::null_mut(),
-        };
-        // SAFETY: unregister is a valid RAWINPUTDEVICE.
-        let unregister_ok = unsafe {
-            RegisterRawInputDevices(&unregister, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-        } != 0;
-        let restore_ok = restore_raw_input_devices(&previous_raw_input_devices);
-        if !unregister_ok || !restore_ok {
+        // A successful pump-thread seal already restored registration before
+        // publishing `Sealed`; emergency exits still perform the same
+        // unregister/restore operation here.
+        let already_restored = shared
+            .0
+            .lock()
+            .map(|state| state.observer_lifecycle == ObserverLifecycle::Sealed)
+            .unwrap_or(false);
+        if !already_restored
+            && !unregister_and_restore_raw_input_devices(&ctx.previous_raw_input_devices)
+        {
             let (lock, cvar) = shared.as_ref();
             if let Ok(mut g) = lock.lock() {
                 g.raw_input_restore_failed = true;
@@ -2190,6 +2355,7 @@ mod platform {
                 barrier_completed_generation: 0,
                 correlation_boundary_lost: false,
                 observer_failure: None,
+                observer_lifecycle: ObserverLifecycle::Active,
                 wait_interrupt: Arc::clone(&wait_interrupt),
                 abort_requested: Arc::clone(&abort_requested),
                 window_ready: false,
@@ -2889,7 +3055,84 @@ mod platform {
             {
                 return Err(CalibrationError::WindowThreadFailed);
             }
+            if !before_pump_stop && state.observer_lifecycle != ObserverLifecycle::Sealed {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
             Ok(())
+        }
+
+        /// Ask the pump thread to own the final observer seal. The handler
+        /// drains pending input, restores the registration, drains once more,
+        /// marks the lifecycle `Sealed`, and only then posts WM_QUIT.
+        fn seal_pump_thread(&mut self) -> Result<(), CalibrationError> {
+            if self.hwnd == 0 {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+            let posted = unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_SEAL, 0, 0) };
+            if posted == 0 {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+
+            let shared = Arc::clone(&self.shared);
+            let (lock, cvar) = shared.as_ref();
+            let guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            let (guard, timeout) = cvar
+                .wait_timeout_while(guard, Duration::from_millis(250), |state| {
+                    !matches!(
+                        state.observer_lifecycle,
+                        ObserverLifecycle::Sealed | ObserverLifecycle::Failed
+                    ) && !state.pump_thread_failed
+                        && !state.window_closed
+                })
+                .map_err(|_| CalibrationError::StateLockFailed)?;
+            let lifecycle = guard.observer_lifecycle;
+            let mut terminal_error = if timeout.timed_out() {
+                Some(CalibrationError::WindowThreadFailed)
+            } else {
+                None
+            };
+            drop(guard);
+
+            if terminal_error.is_some() {
+                if let Ok(mut state) = shared.0.lock() {
+                    state.should_exit = true;
+                    mark_observer_seal_failed(&mut state);
+                    shared.1.notify_all();
+                }
+                // Failure cleanup may use the emergency exit path; the
+                // publishable path never uses WM_CALIB_EXIT as its seal.
+                unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
+            }
+
+            let handle = self.pump_thread.take();
+            self.hwnd = 0;
+            if let Some(handle) = handle
+                && handle.join().is_err()
+            {
+                if let Ok(mut state) = shared.0.lock() {
+                    state.pump_thread_failed = true;
+                    mark_observer_seal_failed(&mut state);
+                }
+                terminal_error = Some(CalibrationError::WindowThreadFailed);
+            }
+            if let Some(error) = terminal_error {
+                return Err(error);
+            }
+
+            let state = shared
+                .0
+                .lock()
+                .map_err(|_| CalibrationError::StateLockFailed)?;
+            match (
+                lifecycle,
+                state.observer_failure,
+                state.correlation_boundary_lost,
+            ) {
+                (ObserverLifecycle::Sealed, None, false) => Ok(()),
+                (_, Some(reason), _) => Err(CalibrationError::ObserverIntegrityFailure { reason }),
+                (_, _, true) => Err(CalibrationError::CorrelationBoundaryLost),
+                _ => Err(CalibrationError::WindowThreadFailed),
+            }
         }
 
         fn stop_pump_thread(&mut self) {
@@ -2951,7 +3194,10 @@ mod platform {
                 return Err(error);
             }
 
-            self.stop_pump_thread();
+            if let Err(error) = self.seal_pump_thread() {
+                let _ = self.emergency_close_in_place();
+                return Err(error);
+            }
             let post_stop_error = self.check_publishable_close_boundary(false).err();
             let mut cleanup = self.cleanup_keyboard();
             self.cleanup_done = true;
@@ -4318,6 +4564,7 @@ mod platform {
                     barrier_completed_generation: 0,
                     correlation_boundary_lost: false,
                     observer_failure: None,
+                    observer_lifecycle: ObserverLifecycle::Active,
                     wait_interrupt,
                     abort_requested,
                     window_ready: false,
@@ -4373,6 +4620,7 @@ mod platform {
             let shared = empty_shared_state();
             let ctx = PumpContext {
                 shared: Arc::clone(&shared),
+                previous_raw_input_devices: Vec::new(),
                 input_buffer: std::cell::RefCell::new(Vec::new()),
             };
             PUMP_STATE.with(|cell| cell.set(&ctx));
@@ -4409,6 +4657,61 @@ mod platform {
                 )
             };
             assert_eq!(remaining, 0);
+        }
+
+        #[test]
+        fn publishable_seal_fails_if_stale_input_is_pending() {
+            let mut seed = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `seed` is a valid message output record and creates a
+            // queue for the current test thread.
+            unsafe {
+                PeekMessageW(&mut seed, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+                windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                    windows_sys::Win32::System::Threading::GetCurrentThreadId(),
+                    WM_INPUT,
+                    1,
+                    0,
+                );
+            }
+
+            let shared = empty_shared_state();
+            let ctx = PumpContext {
+                shared: Arc::clone(&shared),
+                previous_raw_input_devices: Vec::new(),
+                input_buffer: std::cell::RefCell::new(Vec::new()),
+            };
+            PUMP_STATE.with(|cell| cell.set(&ctx));
+            // SAFETY: `ctx` remains alive while the seal handler drains the
+            // test thread's queue. The pending WM_INPUT is stale because no
+            // packet is active.
+            unsafe { wnd_proc(std::ptr::null_mut(), WM_CALIB_SEAL, 0, 0) };
+            PUMP_STATE.with(|cell| cell.set(std::ptr::null()));
+
+            let state = shared.0.lock().expect("shared calibration state");
+            assert_eq!(state.observer_lifecycle, ObserverLifecycle::Failed);
+            assert!(state.correlation_boundary_lost);
+            assert_ne!(state.observer_lifecycle, ObserverLifecycle::Sealed);
+            drop(state);
+
+            let mut quit = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: consume the quit posted by the failed seal so it cannot
+            // affect the test harness thread.
+            unsafe { PeekMessageW(&mut quit, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+            assert_eq!(quit.message, WM_QUIT);
         }
 
         #[test]
@@ -4467,6 +4770,30 @@ mod platform {
             assert_eq!(state.active_sequence, None);
             assert!(state.correlation_boundary_lost);
             assert!(state.abort_requested.load(Ordering::Acquire));
+        }
+
+        #[test]
+        fn observer_seal_requires_clean_active_boundary() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            assert!(observer_seal_can_begin(&state));
+
+            state.observer_lifecycle = ObserverLifecycle::Sealing;
+            assert!(!observer_seal_can_begin(&state));
+            state.observer_lifecycle = ObserverLifecycle::Active;
+            invalidate_correlation_boundary(&mut state);
+            assert!(!observer_seal_can_begin(&state));
+        }
+
+        #[test]
+        fn publishable_observer_requires_sealed_lifecycle() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            assert_ne!(state.observer_lifecycle, ObserverLifecycle::Sealed);
+            state.observer_lifecycle = ObserverLifecycle::Sealing;
+            assert_ne!(state.observer_lifecycle, ObserverLifecycle::Sealed);
+            state.observer_lifecycle = ObserverLifecycle::Sealed;
+            assert_eq!(state.observer_lifecycle, ObserverLifecycle::Sealed);
         }
 
         #[test]
@@ -4669,6 +4996,7 @@ mod platform {
             let shared = empty_shared_state();
             let ctx = PumpContext {
                 shared: Arc::clone(&shared),
+                previous_raw_input_devices: Vec::new(),
                 input_buffer: std::cell::RefCell::new(Vec::new()),
             };
             PUMP_STATE.with(|cell| cell.set(&ctx));

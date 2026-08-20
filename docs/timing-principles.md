@@ -138,9 +138,10 @@ total_proxy_shrink = scheduler_shrink + sendinput_shrink + delivery_shrink
 The five-key startup correlation probe verifies physical All-Up read-only after
 its balanced Down/Up sequence; it must not send an untagged All-Up packet while
 the exact-tag observer is active. A publishable bucket performs one final
-queue/trust seal, stops the Raw Input pump, and restores its registration before
-physical cleanup. A failure before or during that seal terminates the bucket
-and cannot be published.
+pump-thread-owned queue/trust seal: the pump enters `Sealing`, drains pending
+`WM_INPUT`, restores its Raw Input registration, drains once more, and reaches
+`Sealed` before posting its exit and allowing physical cleanup. A failure before
+or during that seal terminates the bucket and cannot be published.
 
 `R - C` is intentionally signed. The pump thread may observe a foreground
 `WM_INPUT` while the measurement thread is still inside `SendInput`, so
