@@ -101,8 +101,8 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 12,
-        "measurement_protocol_version": 7,
+        "version": 13,
+        "measurement_protocol_version": 8,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -139,8 +139,8 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 12,
-        "measurement_protocol_version": 7,
+        "version": 13,
+        "measurement_protocol_version": 8,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -179,8 +179,21 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 12
-    assert result["measurement_protocol_version"] == 7
+    assert result["version"] == 13
+    assert result["measurement_protocol_version"] == 8
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("version", 12), ("measurement_protocol_version", 7)],
+)
+def test_previous_native_schema_or_protocol_is_rejected(
+    field: str, value: int
+) -> None:
+    result = _native_result()
+    result[field] = value
+    with pytest.raises(native_calibration.NativeCalibrationError):
+        native_calibration._validate_result(result)
 
 
 def test_native_result_requires_scheduling_aid_provenance() -> None:
@@ -198,6 +211,7 @@ def test_native_result_reports_insufficient_clean_pairs_before_null_quantiles() 
             "clean": 0,
             "clean_sample_count": 0,
             "rejected": 100,
+            "anomaly_count": 100,
             "partial_send": 0,
             "sample_count": 100,
             "pair_worst_total_proxy_shrink_us": None,
@@ -206,8 +220,41 @@ def test_native_result_reports_insufficient_clean_pairs_before_null_quantiles() 
 
     with pytest.raises(
         native_calibration.NativeCalibrationError,
-        match=r"5/cold.*insufficient clean pairs.*clean=0.*rejected=100.*class_mismatch_count=0.*anomaly_count=0",
+        match=r"5/cold.*insufficient clean pairs.*clean=0.*rejected=100.*class_mismatch_count=0.*anomaly_count=100",
     ):
+        native_calibration._validate_result(result)
+
+
+@pytest.mark.parametrize(
+    "counter",
+    [
+        "timeout_count",
+        "class_mismatch_count",
+        "partial_send",
+        "pairing_anomaly_count",
+        "duplicate_receipt_count",
+        "unexpected_scan_code_count",
+        "direction_mismatch_count",
+        "reordered_receipt_count",
+    ],
+)
+def test_native_result_rejects_diagnostic_counter_above_anomaly_count(counter: str) -> None:
+    result = _native_result()
+    bucket = cast(dict[str, object], result["pair_buckets"]["5"]["hot"])  # type: ignore[index]
+    bucket.update(
+        {"clean": 98, "clean_sample_count": 98, "rejected": 2, "anomaly_count": 1}
+    )
+    bucket[counter] = 2
+    with pytest.raises(native_calibration.NativeCalibrationError, match="exceeds anomaly_count"):
+        native_calibration._validate_result(result)
+
+
+def test_native_result_requires_unsigned_call_duration_quantiles() -> None:
+    result = _native_result()
+    bucket = cast(dict[str, object], result["pair_buckets"]["5"]["hot"])  # type: ignore[index]
+    duration = cast(dict[str, int], bucket["down_call_duration_us"])
+    duration["min"] = -1
+    with pytest.raises(native_calibration.NativeCalibrationError, match="down_call_duration_us"):
         native_calibration._validate_result(result)
 
 
@@ -319,11 +366,12 @@ def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
         {
             "attempted": attempted,
             "sample_count": attempted,
-            "clean": 100,
-            "clean_sample_count": 100,
-            "rejected": attempted - 100,
-        }
-    )
+                "clean": 100,
+                "clean_sample_count": 100,
+                "rejected": attempted - 100,
+                "anomaly_count": attempted - 100,
+            }
+        )
 
     monkeypatch.setattr(
         native_calibration.subprocess,
@@ -472,7 +520,7 @@ def test_cache_requires_100_clean_pairs_per_cell() -> None:
     ("attempted", "clean", "accepted"),
     [(100, 100, True), (200, 100, True), (201, 100, False), (101, 101, False)],
 )
-def test_cache_enforces_protocol7_bounded_retry_invariant(
+def test_cache_enforces_protocol8_bounded_retry_invariant(
     attempted: int, clean: int, accepted: bool
 ) -> None:
     cache = native_calibration._cache_v5(_native_result())
@@ -785,7 +833,7 @@ def test_finalizer_rejects_mixed_provenance_before_publication(tmp_path: Path) -
     assert cache.read_text(encoding="utf-8") == "old cache\n"
 
 
-@pytest.mark.parametrize("artifact_schema_version", [None, 8, 10])
+@pytest.mark.parametrize("artifact_schema_version", [None, 9, 11])
 def test_finalizer_rejects_wrong_artifact_schema_version(
     tmp_path: Path, artifact_schema_version: int | None
 ) -> None:

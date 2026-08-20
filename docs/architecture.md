@@ -148,8 +148,12 @@ diagnostic, not game-observed timing evidence.
 
 The publishable calibration contract is a balanced Down/Up pair for each of
 `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`, and `15/cold`. The native
-process tags every packet with direction and sequence, records Raw Input at
-the `WM_INPUT` handler entry, and pairs receipts by scan code. The tagged
+process carries an optional direction/sequence tag, records Raw Input at
+the `WM_INPUT` handler entry, and pairs receipts by exact scan-code,
+make/break direction, and extended-flag identity. The Raw Input tag is
+corroborating evidence only because Windows does not document preservation of
+`KEYBDINPUT.dwExtraInfo`; one active packet plus a message-queue barrier
+prevents stale receipts from aliasing the next packet. The tagged
 calibration INPUT array is prepared before the `T - 700 µs` precision handoff;
 the wait layer uses zero spin and the shared fused sender owns the final target
 crossing. Each direction has four authoritative QPC boundaries: absolute
@@ -160,11 +164,11 @@ direct value. Receipt delivery is signed: a Raw Input receipt may be observed
 before `SendInput` returns and remains valid evidence; only target/pre-call/
 completion chronology and cross-direction identity/order failures reject a pair.
 Only clean pairs enter the signed quantiles. At least 100 clean pairs are
-required in every production bucket. Native output schema 12 and artifact
-schema 9 record bounded anomaly evidence, the signed receipt-before-completion
+required in every production bucket. Native output schema 13 and artifact
+schema 10 record bounded anomaly evidence, the signed receipt-before-completion
 counter, the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
 actual waiter mode alongside host provenance. The cache is version 5 (native
-schema 12, measurement protocol 7); older evidence is
+schema 13, measurement protocol 8); older evidence is
 incompatible and falls back rather than being reinterpreted. Qualification is:
 
 ```text

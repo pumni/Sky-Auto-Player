@@ -23,9 +23,11 @@
 //! calibration run.  Raw keyboard input is registered for that window using
 //! `RIDEV_INPUTSINK` so receipts arrive regardless of foreground focus.
 //!
-//! Each calibration packet is tagged with an 8-bit marker plus a 24-bit
-//! `sequence_id` in the 32-bit `dwExtraInfo` value received by Raw Input.
-//! Correlation still requires sequence, scan code and make/break direction.
+//! Each calibration packet carries an optional 8-bit marker plus 24-bit
+//! `sequence_id` in `dwExtraInfo`. Windows Raw Input does not document that
+//! this value preserves `KEYBDINPUT.dwExtraInfo`, so the tag is corroborating
+//! evidence only. Admission uses one active packet, an ordered message-queue
+//! barrier, and exact scan-code/direction/extended-flag identity.
 //!
 //! The window message pump runs on a dedicated thread so it does not interfere
 //! with the calling thread's timing measurements.
@@ -36,7 +38,7 @@
 //! returns [`CalibrationError::PlatformUnsupported`].
 
 use crate::clock::{DurationTicks, QpcClock, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
-use crate::input::PlatformSendResult;
+use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, PlatformSendResult};
 use serde::{Deserialize, Serialize};
 use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use smallvec::SmallVec;
@@ -68,6 +70,9 @@ pub enum CalibrationError {
 
     #[error("scan code {scan_code} is not an instrument key")]
     InvalidScanCode { scan_code: u16 },
+
+    #[error("scan code {scan_code} appears more than once in a calibration packet")]
+    DuplicateScanCode { scan_code: u16 },
 
     #[error("polyphony {0} exceeds maximum of 15")]
     PolyphonyTooLarge(usize),
@@ -652,8 +657,8 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 7;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 12;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 8;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 13;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
@@ -926,6 +931,23 @@ fn validate_calibration_config(config: &CalibrationConfig) -> Result<(), Calibra
     Ok(())
 }
 
+fn validate_packet_scan_codes(scan_codes: &[u16]) -> Result<(), CalibrationError> {
+    if scan_codes.is_empty() || scan_codes.len() > 15 {
+        return Err(CalibrationError::PolyphonyTooLarge(scan_codes.len()));
+    }
+    let mut seen = SmallVec::<[u16; 15]>::new();
+    for &scan_code in scan_codes {
+        if !PHYSICAL_INSTRUMENT_SCAN_CODES.contains(&scan_code) {
+            return Err(CalibrationError::InvalidScanCode { scan_code });
+        }
+        if seen.contains(&scan_code) {
+            return Err(CalibrationError::DuplicateScanCode { scan_code });
+        }
+        seen.push(scan_code);
+    }
+    Ok(())
+}
+
 // ─── Internal raw-input receipt state (shared between pump and collector) ─────
 
 /// A single Raw Input receipt delivered by the message pump.
@@ -938,6 +960,69 @@ struct RawInputReceipt {
     extended_flags: u8,
 }
 
+const MAX_DIAGNOSTIC_ACCEPTED_IDENTITIES: usize = 32;
+const MAX_PENDING_RECEIPTS: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AcceptedReceiptIdentity {
+    sequence_id: u32,
+    scan_code: u16,
+    key_up: bool,
+    extended_flags: u8,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PumpDiagnostics {
+    wm_input_seen: u64,
+    qpc_failed: u64,
+    state_lock_failed: u64,
+    raw_size_query_failed: u64,
+    raw_size_invalid: u64,
+    raw_read_failed: u64,
+    raw_payload_too_small: u64,
+    raw_alignment_failed: u64,
+    non_keyboard: u64,
+    tag_decode_failed: u64,
+    stale_sequence: u64,
+    wrong_direction: u64,
+    unexpected_identity: u64,
+    duplicate_receipt: u64,
+    pending_receipt_overflow: u64,
+    accepted_receipts: u64,
+    accepted_identities: SmallVec<[AcceptedReceiptIdentity; 32]>,
+}
+
+impl PumpDiagnostics {
+    fn remember_accepted(&mut self, receipt: RawInputReceipt) {
+        self.accepted_receipts = self.accepted_receipts.saturating_add(1);
+        if self.accepted_identities.len() < MAX_DIAGNOSTIC_ACCEPTED_IDENTITIES {
+            self.accepted_identities.push(AcceptedReceiptIdentity {
+                sequence_id: receipt.sequence_id,
+                scan_code: receipt.scan_code,
+                key_up: receipt.key_up,
+                extended_flags: receipt.extended_flags,
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawInputParseError {
+    BufferLengthInvalid,
+    Misaligned,
+    TruncatedHeader,
+    InvalidHeaderSize,
+    TruncatedKeyboardPayload,
+    NonKeyboard { raw_type: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedRawKeyboard {
+    scan_code: u16,
+    flags: u16,
+    extra_information: usize,
+}
+
 /// Shared state between the calibration thread (sends packets and awaits
 /// receipts) and the window pump thread (delivers `WM_INPUT` events).
 struct SharedCalibState {
@@ -945,6 +1030,15 @@ struct SharedCalibState {
     pending_receipts: SmallVec<[RawInputReceipt; 15]>,
     /// Sequence ID of the currently expected packet, `None` when idle.
     active_sequence: Option<u32>,
+    /// Expected packet identity used by the pump for bounded diagnostics.
+    active_expected_scan_codes: SmallVec<[u16; 15]>,
+    active_expected_key_up: Option<bool>,
+    pump_diagnostics: PumpDiagnostics,
+    /// Message-queue barrier generations completed by the pump. A
+    /// barrier drains all earlier WM_INPUT messages while no packet is
+    /// active, preventing an untagged stale receipt from aliasing the
+    /// next packet.
+    barrier_completed_generation: u64,
     /// Set by the pump thread when the window is ready.
     window_ready: bool,
     /// Set to signal the pump thread to exit gracefully (checked on resume).
@@ -956,6 +1050,12 @@ struct SharedCalibState {
     clock_failed: bool,
     raw_input_restore_failed: bool,
     pump_thread_failed: bool,
+}
+
+fn clear_active_packet(state: &mut SharedCalibState) {
+    state.active_sequence = None;
+    state.active_expected_scan_codes.clear();
+    state.active_expected_key_up = None;
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1004,7 +1104,7 @@ pub fn check_foreground_owned(hwnd: isize) -> bool {
 mod platform {
     use super::*;
     use crate::event::OwnedEvent;
-    use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, send_input_raw};
+    use crate::input::send_input_raw;
     use crate::mmcss::{MmcssGuard, PriorityMode};
     use crate::power::PowerThrottlingGuard;
     use crate::wait::{HybridWaiter, WaitOutcome};
@@ -1025,6 +1125,127 @@ mod platform {
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
     const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+    const RIM_TYPEKEYBOARD: u32 = 1;
+
+    /// Parse one `GetRawInputData(RID_INPUT)` result without dereferencing a
+    /// header or keyboard payload until both alignment and byte length have
+    /// been proved. The Windows API requires DWORD-aligned output storage;
+    /// the caller provides the aligned storage while this function remains
+    /// pure and directly testable.
+    fn parse_raw_keyboard_input(
+        buffer: &[u8],
+        bytes_read: usize,
+    ) -> Result<ParsedRawKeyboard, RawInputParseError> {
+        if bytes_read > buffer.len() {
+            return Err(RawInputParseError::BufferLengthInvalid);
+        }
+        let data = &buffer[..bytes_read];
+        let header_align = std::mem::align_of::<RAWINPUTHEADER>();
+        if data.as_ptr().align_offset(header_align) != 0 {
+            return Err(RawInputParseError::Misaligned);
+        }
+        let header_size = std::mem::size_of::<RAWINPUTHEADER>();
+        if data.len() < header_size {
+            return Err(RawInputParseError::TruncatedHeader);
+        }
+
+        // SAFETY: the slice is aligned for RAWINPUTHEADER and has been
+        // checked to contain the complete header.
+        let header = unsafe { &*(data.as_ptr().cast::<RAWINPUTHEADER>()) };
+        if (header.dwSize as usize) < header_size || (header.dwSize as usize) > data.len() {
+            return Err(RawInputParseError::InvalidHeaderSize);
+        }
+        if header.dwType != RIM_TYPEKEYBOARD {
+            return Err(RawInputParseError::NonKeyboard {
+                raw_type: header.dwType,
+            });
+        }
+
+        let keyboard_offset = std::mem::offset_of!(RAWINPUT, data);
+        let keyboard_size = std::mem::size_of::<windows_sys::Win32::UI::Input::RAWKEYBOARD>();
+        let required_size = keyboard_offset
+            .checked_add(keyboard_size)
+            .ok_or(RawInputParseError::TruncatedKeyboardPayload)?;
+        if data.len() < required_size {
+            return Err(RawInputParseError::TruncatedKeyboardPayload);
+        }
+        let keyboard_ptr = unsafe { data.as_ptr().add(keyboard_offset) };
+        if keyboard_ptr.align_offset(std::mem::align_of::<
+            windows_sys::Win32::UI::Input::RAWKEYBOARD,
+        >()) != 0
+        {
+            return Err(RawInputParseError::Misaligned);
+        }
+        // SAFETY: the keyboard union arm is selected by the validated header,
+        // and the complete RAWKEYBOARD payload and alignment are present.
+        let keyboard =
+            unsafe { &*(keyboard_ptr.cast::<windows_sys::Win32::UI::Input::RAWKEYBOARD>()) };
+        Ok(ParsedRawKeyboard {
+            scan_code: keyboard.MakeCode,
+            flags: keyboard.Flags,
+            extra_information: keyboard.ExtraInformation as usize,
+        })
+    }
+
+    fn record_pump_diagnostic(
+        shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
+        update: impl FnOnce(&mut PumpDiagnostics),
+    ) {
+        let (lock, cvar) = shared.as_ref();
+        match lock.lock() {
+            Ok(mut state) => update(&mut state.pump_diagnostics),
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.pump_thread_failed = true;
+                state.pump_diagnostics.state_lock_failed =
+                    state.pump_diagnostics.state_lock_failed.saturating_add(1);
+                cvar.notify_all();
+            }
+        }
+    }
+
+    fn tagged_sequence_matches_active(active_sequence: u32, tagged_sequence: Option<u32>) -> bool {
+        tagged_sequence.is_none_or(|tagged| tagged == active_sequence)
+    }
+
+    #[cfg(any(test, not(feature = "test-support")))]
+    fn format_probe_failure_detail(
+        direction: &str,
+        scan_codes: &[u16],
+        sample: &CalibrationSample,
+        diagnostics: &PumpDiagnostics,
+    ) -> String {
+        let accepted_receipts: Vec<AcceptedReceiptIdentity> = sample
+            .receipts
+            .iter()
+            .take(MAX_DIAGNOSTIC_ACCEPTED_IDENTITIES)
+            .map(|receipt| AcceptedReceiptIdentity {
+                sequence_id: receipt.sequence_id,
+                scan_code: receipt.scan_code,
+                key_up: receipt.key_up,
+                extended_flags: receipt.extended_flags,
+            })
+            .collect();
+        format!(
+            "tagged {direction} probe was not clean: anomalies={:?}; expected_receipt_count={}; accepted_receipt_count={}; expected_scan_codes={scan_codes:?}; accepted_receipts={accepted_receipts:?}; pump_diagnostics={diagnostics:?}",
+            sample.anomalies, sample.expected_receipt_count, sample.receipt_count,
+        )
+    }
+
+    #[cfg(any(test, not(feature = "test-support")))]
+    fn format_probe_error_detail(
+        direction: &str,
+        scan_codes: &[u16],
+        error: &CalibrationError,
+        diagnostics: &PumpDiagnostics,
+    ) -> String {
+        format!(
+            "tagged {direction} probe failed before a complete sample: error={error}; expected_receipt_count={}; accepted_receipt_count={}; expected_scan_codes={scan_codes:?}; accepted_receipts={:?}; pump_diagnostics={diagnostics:?}",
+            scan_codes.len(),
+            diagnostics.accepted_receipts,
+            diagnostics.accepted_identities,
+        )
+    }
 
     fn snapshot_raw_input_devices() -> Option<Vec<RAWINPUTDEVICE>> {
         let mut count = 0u32;
@@ -1073,6 +1294,7 @@ mod platform {
 
     const WM_CALIB_EXIT: u32 = WM_USER + 1;
     const WM_CALIB_ACTIVATE: u32 = WM_USER + 2;
+    const WM_CALIB_BARRIER: u32 = WM_USER + 3;
 
     // ── Window procedure ──────────────────────────────────────────────────────
 
@@ -1123,9 +1345,15 @@ mod platform {
 
         match msg {
             WM_INPUT => {
+                record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                    diagnostics.wm_input_seen = diagnostics.wm_input_seen.saturating_add(1);
+                });
                 let arrived = match qpc_now_ticks_checked() {
                     Ok(ticks) => ticks,
                     Err(_) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.qpc_failed = diagnostics.qpc_failed.saturating_add(1);
+                        });
                         let (lock, cvar) = ctx.shared.as_ref();
                         if let Ok(mut guard) = lock.lock() {
                             guard.clock_failed = true;
@@ -1147,67 +1375,169 @@ mod platform {
                         std::mem::size_of::<RAWINPUTHEADER>() as u32,
                     )
                 };
-                if queried == u32::MAX || size == 0 || size > 4096 {
+                if queried == u32::MAX {
+                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                        diagnostics.raw_size_query_failed =
+                            diagnostics.raw_size_query_failed.saturating_add(1);
+                    });
                     return complete_wm_input(hwnd, wparam, lparam);
                 }
-                let mut buf = ctx.input_buffer.borrow_mut();
-                let word_size = std::mem::size_of::<usize>();
-                let word_count = (size as usize).div_ceil(word_size);
-                buf.resize(word_count, 0);
-                // SAFETY: `buf` is DWORD-aligned and has enough byte storage
-                // for the size reported by the previous query.
-                let read = unsafe {
-                    GetRawInputData(
-                        hri,
-                        RID_INPUT,
-                        buf.as_mut_ptr().cast(),
-                        &mut size,
-                        std::mem::size_of::<RAWINPUTHEADER>() as u32,
-                    )
-                };
-                if read == u32::MAX
-                    || read as usize > buf.len() * word_size
-                    || read < std::mem::size_of::<RAWINPUT>() as u32
+                if size == 0
+                    || size > 4096
+                    || (size as usize) < std::mem::size_of::<RAWINPUTHEADER>()
                 {
+                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                        diagnostics.raw_size_invalid =
+                            diagnostics.raw_size_invalid.saturating_add(1);
+                    });
                     return complete_wm_input(hwnd, wparam, lparam);
                 }
-                // SAFETY: `buf` is aligned, at least sizeof(RAWINPUT), and
-                // GetRawInputData reported that many initialized bytes.
-                let raw: &RAWINPUT = unsafe { &*(buf.as_ptr().cast()) };
-                let rtype = raw.header.dwType;
-                // RIM_TYPEKEYBOARD = 1
-                if rtype != 1 {
-                    return complete_wm_input(hwnd, wparam, lparam);
-                }
-                let keyboard = unsafe { &raw.data.keyboard };
-                let scan_code = keyboard.MakeCode;
-                let extra = keyboard.ExtraInformation as usize;
-                let Some(seq_id) = calibration_extra_info_sequence(extra) else {
-                    // Not one of our injected packets — ignore.
-                    return complete_wm_input(hwnd, wparam, lparam);
+                let parsed = {
+                    let mut buf = ctx.input_buffer.borrow_mut();
+                    let word_size = std::mem::size_of::<usize>();
+                    let word_count = (size as usize).div_ceil(word_size);
+                    buf.resize(word_count, 0);
+                    // SAFETY: `buf` is DWORD-aligned and has enough byte
+                    // storage for the size reported by the previous query.
+                    let read = unsafe {
+                        GetRawInputData(
+                            hri,
+                            RID_INPUT,
+                            buf.as_mut_ptr().cast(),
+                            &mut size,
+                            std::mem::size_of::<RAWINPUTHEADER>() as u32,
+                        )
+                    };
+                    if read == u32::MAX || read as usize > buf.len() * word_size {
+                        Err(RawInputParseError::BufferLengthInvalid)
+                    } else {
+                        // SAFETY: `buf` is aligned storage owned by this
+                        // thread and stays alive for the pure parser call.
+                        let bytes = unsafe {
+                            std::slice::from_raw_parts(
+                                buf.as_ptr().cast::<u8>(),
+                                buf.len() * word_size,
+                            )
+                        };
+                        parse_raw_keyboard_input(bytes, read as usize)
+                    }
                 };
+                let parsed = match parsed {
+                    Ok(parsed) => parsed,
+                    Err(RawInputParseError::NonKeyboard { .. }) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.non_keyboard = diagnostics.non_keyboard.saturating_add(1);
+                        });
+                        return complete_wm_input(hwnd, wparam, lparam);
+                    }
+                    Err(RawInputParseError::Misaligned) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.raw_alignment_failed =
+                                diagnostics.raw_alignment_failed.saturating_add(1);
+                        });
+                        return complete_wm_input(hwnd, wparam, lparam);
+                    }
+                    Err(RawInputParseError::InvalidHeaderSize) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.raw_size_invalid =
+                                diagnostics.raw_size_invalid.saturating_add(1);
+                        });
+                        return complete_wm_input(hwnd, wparam, lparam);
+                    }
+                    Err(RawInputParseError::TruncatedHeader)
+                    | Err(RawInputParseError::TruncatedKeyboardPayload) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.raw_payload_too_small =
+                                diagnostics.raw_payload_too_small.saturating_add(1);
+                        });
+                        return complete_wm_input(hwnd, wparam, lparam);
+                    }
+                    Err(RawInputParseError::BufferLengthInvalid) => {
+                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                            diagnostics.raw_read_failed =
+                                diagnostics.raw_read_failed.saturating_add(1);
+                        });
+                        return complete_wm_input(hwnd, wparam, lparam);
+                    }
+                };
+                // `RAWKEYBOARD.ExtraInformation` has no documented contract
+                // that it preserves `KEYBDINPUT.dwExtraInfo` across
+                // SendInput. Treat the tag as optional corroboration rather
+                // than the admission key; the active packet and exact
+                // physical identity below are authoritative.
+                let tagged_sequence = calibration_extra_info_sequence(parsed.extra_information);
+                if tagged_sequence.is_none() {
+                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
+                        diagnostics.tag_decode_failed =
+                            diagnostics.tag_decode_failed.saturating_add(1);
+                    });
+                }
 
                 // RI_KEY_BREAK is the documented Raw Input make/break bit.
                 // Keep the direction in the correlated receipt; scan-code and
                 // sequence equality alone cannot prove a balanced pair.
-                let receipt = RawInputReceipt {
-                    arrived_ticks: arrived,
-                    scan_code,
-                    sequence_id: seq_id,
-                    key_up: (keyboard.Flags & 0x0001) != 0,
-                    // RI_KEY_E0/RI_KEY_E1 are part of the physical identity;
-                    // never let an extended key alias an instrument scan code.
-                    extended_flags: keyboard.Flags as u8 & (0x0002 | 0x0004),
-                };
-
                 let (lock, cvar) = ctx.shared.as_ref();
-                if let Ok(mut guard) = lock.lock() {
-                    #[allow(clippy::collapsible_if)]
-                    if guard.active_sequence == Some(seq_id) {
-                        guard.pending_receipts.push(receipt);
-                        cvar.notify_one();
+                match lock.lock() {
+                    Ok(mut guard) => {
+                        let Some(active_sequence) = guard.active_sequence else {
+                            guard.pump_diagnostics.stale_sequence =
+                                guard.pump_diagnostics.stale_sequence.saturating_add(1);
+                            return complete_wm_input(hwnd, wparam, lparam);
+                        };
+                        if !tagged_sequence_matches_active(active_sequence, tagged_sequence) {
+                            guard.pump_diagnostics.stale_sequence =
+                                guard.pump_diagnostics.stale_sequence.saturating_add(1);
+                        } else {
+                            let receipt = RawInputReceipt {
+                                arrived_ticks: arrived,
+                                scan_code: parsed.scan_code,
+                                // The active packet generation is authoritative
+                                // when the optional tag is absent.
+                                sequence_id: active_sequence,
+                                key_up: (parsed.flags & 0x0001) != 0,
+                                // RI_KEY_E0/RI_KEY_E1 are part of the physical
+                                // identity; never alias an extended key.
+                                extended_flags: parsed.flags as u8 & (0x0002 | 0x0004),
+                            };
+                            if !guard
+                                .active_expected_scan_codes
+                                .contains(&receipt.scan_code)
+                                || receipt.extended_flags != 0
+                            {
+                                guard.pump_diagnostics.unexpected_identity =
+                                    guard.pump_diagnostics.unexpected_identity.saturating_add(1);
+                            }
+                            if guard.active_expected_key_up != Some(receipt.key_up) {
+                                guard.pump_diagnostics.wrong_direction =
+                                    guard.pump_diagnostics.wrong_direction.saturating_add(1);
+                            }
+                            let duplicate = guard.pending_receipts.iter().any(|pending| {
+                                pending.sequence_id == receipt.sequence_id
+                                    && pending.scan_code == receipt.scan_code
+                                    && pending.key_up == receipt.key_up
+                                    && pending.extended_flags == receipt.extended_flags
+                            });
+                            if duplicate {
+                                guard.pump_diagnostics.duplicate_receipt =
+                                    guard.pump_diagnostics.duplicate_receipt.saturating_add(1);
+                            }
+                            if guard.pending_receipts.len() >= MAX_PENDING_RECEIPTS {
+                                guard.pump_diagnostics.pending_receipt_overflow = guard
+                                    .pump_diagnostics
+                                    .pending_receipt_overflow
+                                    .saturating_add(1);
+                            } else {
+                                guard.pending_receipts.push(receipt);
+                                guard.pump_diagnostics.remember_accepted(receipt);
+                                cvar.notify_one();
+                            }
+                        }
                     }
-                    // Receipts for stale sequence IDs are silently discarded.
+                    Err(poisoned) => {
+                        let mut guard = poisoned.into_inner();
+                        guard.pump_thread_failed = true;
+                        cvar.notify_all();
+                    }
                 }
                 complete_wm_input(hwnd, wparam, lparam)
             }
@@ -1233,6 +1563,22 @@ mod platform {
                     SetForegroundWindow(hwnd);
                     SetFocus(hwnd);
                 };
+                0
+            }
+            WM_CALIB_BARRIER => {
+                let (lock, cvar) = ctx.shared.as_ref();
+                match lock.lock() {
+                    Ok(mut guard) => {
+                        guard.barrier_completed_generation =
+                            guard.barrier_completed_generation.max(wparam as u64);
+                        cvar.notify_all();
+                    }
+                    Err(poisoned) => {
+                        let mut guard = poisoned.into_inner();
+                        guard.pump_thread_failed = true;
+                        cvar.notify_all();
+                    }
+                }
                 0
             }
 
@@ -1453,6 +1799,7 @@ mod platform {
         measurement_deadline: Option<QpcTicks>,
         precision_waiter: HybridWaiter,
         wait_interrupt: OwnedEvent,
+        next_barrier_generation: u64,
     }
 
     fn stop_pump_on_startup_failure(
@@ -1472,8 +1819,48 @@ mod platform {
         let _ = handle.join();
     }
 
+    fn measurement_deadline_from_clock(
+        qpc_clock: &QpcClock,
+        budget_seconds: u64,
+    ) -> Result<QpcTicks, CalibrationError> {
+        let measurement_us = remaining_measurement_budget_us(budget_seconds, 0)?;
+        let duration = qpc_clock
+            .duration_from_us(measurement_us)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let now = qpc_clock
+            .now()
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        now.checked_add_duration(duration)
+            .map_err(|_| CalibrationError::ClockFailure)
+    }
+
+    fn remaining_measurement_budget_us(
+        budget_seconds: u64,
+        elapsed_us: u64,
+    ) -> Result<u64, CalibrationError> {
+        let budget_us = budget_seconds
+            .checked_mul(1_000_000)
+            .ok_or(CalibrationError::ClockFailure)?;
+        let cleanup_reserve_us = CALIBRATION_CLEANUP_RESERVE_SECONDS.saturating_mul(1_000_000);
+        budget_us
+            .checked_sub(cleanup_reserve_us)
+            .and_then(|measurement_us| measurement_us.checked_sub(elapsed_us))
+            .ok_or(CalibrationError::BudgetExceeded)
+    }
+
+    fn global_measurement_deadline(budget_seconds: u64) -> Result<QpcTicks, CalibrationError> {
+        let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
+        measurement_deadline_from_clock(&qpc_clock, budget_seconds)
+    }
+
     impl CalibrationSession {
         pub fn open() -> Result<Self, CalibrationError> {
+            Self::open_with_measurement_deadline(None)
+        }
+
+        fn open_with_measurement_deadline(
+            measurement_deadline: Option<QpcTicks>,
+        ) -> Result<Self, CalibrationError> {
             let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
             let precision_waiter = HybridWaiter::production();
             if let Some(failure) = precision_waiter.initial_failure() {
@@ -1489,6 +1876,10 @@ mod platform {
             let initial = SharedCalibState {
                 pending_receipts: SmallVec::new(),
                 active_sequence: None,
+                active_expected_scan_codes: SmallVec::new(),
+                active_expected_key_up: None,
+                pump_diagnostics: PumpDiagnostics::default(),
+                barrier_completed_generation: 0,
                 window_ready: false,
                 should_exit: false,
                 window_closed: false,
@@ -1542,9 +1933,10 @@ mod platform {
                 next_sequence: 1,
                 possibly_active_mask: 0,
                 last_send_completed_ticks: None,
-                measurement_deadline: None,
+                measurement_deadline,
                 precision_waiter,
                 wait_interrupt,
+                next_barrier_generation: 0,
             };
 
             if let Err(err) = session.acquire_foreground(Duration::from_secs(5)) {
@@ -1566,6 +1958,76 @@ mod platform {
             }
 
             Ok(session)
+        }
+
+        /// Drain all WM_INPUT messages already queued on the pump thread
+        /// before arming the next packet. This is the packet-boundary proof
+        /// needed when Raw Input does not preserve the optional injection tag.
+        fn drain_pump_before_arm(&mut self) -> Result<(), CalibrationError> {
+            self.next_barrier_generation = self
+                .next_barrier_generation
+                .checked_add(1)
+                .ok_or(CalibrationError::SequenceOverflow)?;
+            let generation = self.next_barrier_generation;
+            if self.hwnd == 0
+                || unsafe {
+                    PostMessageW(self.hwnd as HWND, WM_CALIB_BARRIER, generation as WPARAM, 0)
+                } == 0
+            {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+            let (lock, cvar) = self.shared.as_ref();
+            let guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            let (guard, timeout) = cvar
+                .wait_timeout_while(guard, Duration::from_millis(100), |state| {
+                    state.barrier_completed_generation < generation
+                        && !state.pump_thread_failed
+                        && !state.window_closed
+                })
+                .map_err(|_| CalibrationError::StateLockFailed)?;
+            if timeout.timed_out() || guard.pump_thread_failed || guard.window_closed {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+            Ok(())
+        }
+
+        fn reset_pump_diagnostics(&self) -> Result<(), CalibrationError> {
+            let (lock, _cvar) = self.shared.as_ref();
+            let mut state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            state.pump_diagnostics = PumpDiagnostics::default();
+            Ok(())
+        }
+
+        #[cfg(not(any(test, feature = "test-support")))]
+        fn probe_failure_detail(
+            &self,
+            direction: &str,
+            scan_codes: &[u16],
+            sample: &CalibrationSample,
+        ) -> String {
+            let diagnostics = self
+                .shared
+                .0
+                .lock()
+                .map(|state| state.pump_diagnostics.clone())
+                .unwrap_or_default();
+            format_probe_failure_detail(direction, scan_codes, sample, &diagnostics)
+        }
+
+        #[cfg(not(any(test, feature = "test-support")))]
+        fn probe_error_detail(
+            &self,
+            direction: &str,
+            scan_codes: &[u16],
+            error: &CalibrationError,
+        ) -> String {
+            let diagnostics = self
+                .shared
+                .0
+                .lock()
+                .map(|state| state.pump_diagnostics.clone())
+                .unwrap_or_default();
+            format_probe_error_detail(direction, scan_codes, error, &diagnostics)
         }
 
         fn wait_to_precision_boundary(
@@ -1603,24 +2065,32 @@ mod platform {
         fn correlation_self_test(&mut self) -> Result<(), CalibrationError> {
             let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..5];
             let timeout = Duration::from_millis(200);
-            let down = self
-                .measure_packet(scan_codes, false, timeout)
-                .map_err(|error| CalibrationError::CorrelationSelfTestFailed {
-                    detail: format!("tagged Down probe failed: {error}"),
-                })?;
+            self.reset_pump_diagnostics()?;
+            let down = match self.measure_packet(scan_codes, false, timeout) {
+                Ok(sample) => sample,
+                Err(error) => {
+                    return Err(CalibrationError::CorrelationSelfTestFailed {
+                        detail: self.probe_error_detail("Down", scan_codes, &error),
+                    });
+                }
+            };
             if !down.is_complete() || down.anomalies.any() {
                 return Err(CalibrationError::CorrelationSelfTestFailed {
-                    detail: format!("tagged Down probe was not clean: {:?}", down.anomalies),
+                    detail: self.probe_failure_detail("Down", scan_codes, &down),
                 });
             }
-            let up = self
-                .measure_packet(scan_codes, true, timeout)
-                .map_err(|error| CalibrationError::CorrelationSelfTestFailed {
-                    detail: format!("tagged Up probe failed: {error}"),
-                })?;
+            self.reset_pump_diagnostics()?;
+            let up = match self.measure_packet(scan_codes, true, timeout) {
+                Ok(sample) => sample,
+                Err(error) => {
+                    return Err(CalibrationError::CorrelationSelfTestFailed {
+                        detail: self.probe_error_detail("Up", scan_codes, &error),
+                    });
+                }
+            };
             if !up.is_complete() || up.anomalies.any() {
                 return Err(CalibrationError::CorrelationSelfTestFailed {
-                    detail: format!("tagged Up probe was not clean: {:?}", up.anomalies),
+                    detail: self.probe_failure_detail("Up", scan_codes, &up),
                 });
             }
             if self.last_send_completed_ticks.is_none() {
@@ -1703,21 +2173,7 @@ mod platform {
             &self,
             budget_seconds: u64,
         ) -> Result<QpcTicks, CalibrationError> {
-            let budget_us = budget_seconds
-                .checked_mul(1_000_000)
-                .ok_or(CalibrationError::ClockFailure)?;
-            let cleanup_reserve_us = CALIBRATION_CLEANUP_RESERVE_SECONDS.saturating_mul(1_000_000);
-            let measurement_us = budget_us.saturating_sub(cleanup_reserve_us);
-            let duration = self
-                .qpc_clock
-                .duration_from_us(measurement_us)
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            let now = self
-                .qpc_clock
-                .now()
-                .map_err(|_| CalibrationError::ClockFailure)?;
-            now.checked_add_duration(duration)
-                .map_err(|_| CalibrationError::ClockFailure)
+            measurement_deadline_from_clock(&self.qpc_clock, budget_seconds)
         }
 
         pub fn budget_expired(&self, deadline: QpcTicks) -> Result<bool, CalibrationError> {
@@ -1799,16 +2255,12 @@ mod platform {
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
             self.ensure_foreground_owned()?;
+            self.reset_pump_diagnostics()?;
 
             let n = scan_codes.len();
-            if n == 0 || n > 15 {
-                return Err(CalibrationError::PolyphonyTooLarge(n));
-            }
-            for &sc in scan_codes {
-                if !PHYSICAL_INSTRUMENT_SCAN_CODES.contains(&sc) {
-                    return Err(CalibrationError::InvalidScanCode { scan_code: sc });
-                }
-            }
+            validate_packet_scan_codes(scan_codes)?;
+
+            self.drain_pump_before_arm()?;
 
             let seq = self.next_sequence;
             if seq == 0 {
@@ -1828,6 +2280,9 @@ mod platform {
                 let (lock, _cvar) = self.shared.as_ref();
                 let mut g = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 g.active_sequence = Some(seq);
+                g.active_expected_scan_codes.clear();
+                g.active_expected_scan_codes.extend_from_slice(scan_codes);
+                g.active_expected_key_up = Some(key_up);
                 g.pending_receipts.clear();
             }
 
@@ -1846,7 +2301,7 @@ mod platform {
                 Err(error) => {
                     let (lock, cvar) = self.shared.as_ref();
                     let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-                    guard.active_sequence = None;
+                    clear_active_packet(&mut guard);
                     cvar.notify_all();
                     return Err(error);
                 }
@@ -1871,7 +2326,7 @@ mod platform {
             if partial_send {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-                guard.active_sequence = None;
+                clear_active_packet(&mut guard);
                 cvar.notify_all();
                 return Err(CalibrationError::PacketIntegrity {
                     phase: "partial_send",
@@ -1888,8 +2343,18 @@ mod platform {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 loop {
+                    if guard.pump_thread_failed {
+                        clear_active_packet(&mut guard);
+                        cvar.notify_all();
+                        return Err(CalibrationError::WindowThreadFailed);
+                    }
+                    if guard.window_closed {
+                        clear_active_packet(&mut guard);
+                        cvar.notify_all();
+                        return Err(CalibrationError::CalibrationWindowClosed);
+                    }
                     if guard.clock_failed {
-                        guard.active_sequence = None;
+                        clear_active_packet(&mut guard);
                         cvar.notify_all();
                         return Err(CalibrationError::ClockFailure);
                     }
@@ -1906,7 +2371,7 @@ mod platform {
                             .map_err(|_| CalibrationError::ClockFailure)?;
                         let budget_remaining =
                             budget_deadline.checked_duration_since(now).map_err(|_| {
-                                guard.active_sequence = None;
+                                clear_active_packet(&mut guard);
                                 cvar.notify_all();
                                 CalibrationError::BudgetExceeded
                             })?;
@@ -1915,7 +2380,7 @@ mod platform {
                             .duration_to_us(budget_remaining)
                             .map_err(|_| CalibrationError::ClockFailure)?;
                         if budget_remaining_us == 0 {
-                            guard.active_sequence = None;
+                            clear_active_packet(&mut guard);
                             cvar.notify_all();
                             return Err(CalibrationError::BudgetExceeded);
                         }
@@ -1935,7 +2400,7 @@ mod platform {
                 }
 
                 let receipts = std::mem::take(&mut guard.pending_receipts);
-                guard.active_sequence = None;
+                clear_active_packet(&mut guard);
                 cvar.notify_all();
                 drop(guard);
 
@@ -2767,6 +3232,14 @@ mod platform {
         config: &CalibrationConfig,
         class: SampleClass,
     ) -> Result<CalibrationPairBucketOutput, CalibrationError> {
+        run_calibration_pair_bucket_with_deadline(config, class, None)
+    }
+
+    fn run_calibration_pair_bucket_with_deadline(
+        config: &CalibrationConfig,
+        class: SampleClass,
+        global_deadline: Option<QpcTicks>,
+    ) -> Result<CalibrationPairBucketOutput, CalibrationError> {
         super::validate_calibration_config(config)?;
         if config.polyphonies.len() != 1 {
             return Err(CalibrationError::PolyphonyTooLarge(
@@ -2776,14 +3249,19 @@ mod platform {
         let polyphony = config.polyphonies[0];
         let mmcss = MmcssGuard::acquire(PriorityMode::Auto);
         let power = PowerThrottlingGuard::disable_current_thread();
-        let mut session = CalibrationSession::open()?;
+        let mut session = match global_deadline {
+            Some(deadline) => CalibrationSession::open_with_measurement_deadline(Some(deadline))?,
+            None => CalibrationSession::open()?,
+        };
         let scheduling_aids = SchedulingAidProvenance {
             mmcss_acquired: mmcss.acquired(),
             mmcss_active: mmcss.is_active(),
             power_throttling_active: power.is_active(),
             waiter_mode: session.precision_waiter.mode(),
         };
-        let measurement_deadline = session.measurement_deadline(config.budget_seconds)?;
+        let measurement_deadline = global_deadline
+            .map(Ok)
+            .unwrap_or_else(|| session.measurement_deadline(config.budget_seconds))?;
         session.set_measurement_deadline(measurement_deadline);
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..polyphony as usize];
         let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
@@ -2938,6 +3416,10 @@ mod platform {
         config: &CalibrationConfig,
     ) -> Result<CalibrationOutput, CalibrationError> {
         super::validate_calibration_config(config)?;
+        // Quick mode is one process and one calibration run. Establish the
+        // measurement deadline once so each of the six buckets consumes the
+        // same global budget instead of resetting a fresh 120-second window.
+        let global_deadline = global_measurement_deadline(config.budget_seconds)?;
         let mut pair_buckets = HashMap::new();
         let mut warmup_attempted = 0u64;
         let mut warmup_anomalous = 0u64;
@@ -2960,7 +3442,11 @@ mod platform {
             for class in [SampleClass::Hot, SampleClass::Cold] {
                 let mut bucket_config = config.clone();
                 bucket_config.polyphonies = vec![polyphony];
-                let bucket = run_calibration_pair_bucket(&bucket_config, class)?;
+                let bucket = run_calibration_pair_bucket_with_deadline(
+                    &bucket_config,
+                    class,
+                    Some(global_deadline),
+                )?;
                 if let Some(expected) = scheduling_aids.as_ref() {
                     if expected != &bucket.scheduling_aids {
                         return Err(CalibrationError::SchedulingAidProvenanceMismatch);
@@ -3028,6 +3514,154 @@ mod platform {
     mod pair_tests {
         use super::*;
 
+        fn raw_keyboard_fixture(
+            raw_type: u32,
+            flags: u16,
+            extra_information: usize,
+        ) -> (Vec<usize>, usize) {
+            let payload_size = std::mem::offset_of!(RAWINPUT, data)
+                + std::mem::size_of::<windows_sys::Win32::UI::Input::RAWKEYBOARD>();
+            let word_size = std::mem::size_of::<usize>();
+            let mut storage = vec![0usize; payload_size.div_ceil(word_size)];
+            // SAFETY: `storage` is zeroed, usize-aligned storage large enough
+            // for the RAWINPUT header and keyboard union arm.
+            let raw = unsafe { &mut *storage.as_mut_ptr().cast::<RAWINPUT>() };
+            raw.header.dwType = raw_type;
+            raw.header.dwSize = payload_size as u32;
+            raw.data.keyboard.MakeCode = 30;
+            raw.data.keyboard.Flags = flags;
+            raw.data.keyboard.ExtraInformation = extra_information as u32;
+            (storage, payload_size)
+        }
+
+        fn raw_bytes(storage: &[usize]) -> &[u8] {
+            // SAFETY: usize storage is aligned and the byte slice remains
+            // borrowed from the original storage.
+            unsafe {
+                std::slice::from_raw_parts(
+                    storage.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(storage),
+                )
+            }
+        }
+
+        #[test]
+        fn raw_input_parser_accepts_minimum_keyboard_payload() {
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let parsed = parse_raw_keyboard_input(raw_bytes(&storage), bytes_read).unwrap();
+            assert_eq!(parsed.scan_code, 30);
+            assert_eq!(parsed.flags, 0);
+            assert_eq!(parsed.extra_information, 0);
+        }
+
+        #[test]
+        fn raw_input_parser_rejects_truncated_header_and_keyboard_payload() {
+            let (storage, _bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let bytes = raw_bytes(&storage);
+            assert_eq!(
+                parse_raw_keyboard_input(bytes, std::mem::size_of::<RAWINPUTHEADER>() - 1),
+                Err(RawInputParseError::TruncatedHeader)
+            );
+            let (mut truncated_storage, truncated_bytes) =
+                raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let truncated_raw = unsafe { &mut *truncated_storage.as_mut_ptr().cast::<RAWINPUT>() };
+            truncated_raw.header.dwSize = (truncated_bytes - 1) as u32;
+            assert_eq!(
+                parse_raw_keyboard_input(raw_bytes(&truncated_storage), truncated_bytes - 1),
+                Err(RawInputParseError::TruncatedKeyboardPayload)
+            );
+
+            let (mut storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let raw = unsafe { &mut *storage.as_mut_ptr().cast::<RAWINPUT>() };
+            raw.header.dwSize = std::mem::size_of::<RAWINPUTHEADER>() as u32 - 1;
+            assert_eq!(
+                parse_raw_keyboard_input(raw_bytes(&storage), bytes_read),
+                Err(RawInputParseError::InvalidHeaderSize)
+            );
+        }
+
+        #[test]
+        fn raw_input_parser_rejects_unaligned_storage() {
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let source = raw_bytes(&storage);
+            let alignment = std::mem::align_of::<RAWINPUTHEADER>();
+            let mut unaligned = vec![0u8; source.len() + alignment];
+            let base = unaligned.as_ptr() as usize;
+            let offset = (0..alignment)
+                .find(|candidate| !(base + candidate).is_multiple_of(alignment))
+                .expect("an unaligned byte offset");
+            unaligned[offset..offset + source.len()].copy_from_slice(source);
+            assert_eq!(
+                parse_raw_keyboard_input(&unaligned[offset..], bytes_read),
+                Err(RawInputParseError::Misaligned)
+            );
+        }
+
+        #[test]
+        fn raw_input_parser_classifies_non_keyboard_input() {
+            let (storage, bytes_read) = raw_keyboard_fixture(0, 0, 0);
+            assert_eq!(
+                parse_raw_keyboard_input(raw_bytes(&storage), bytes_read),
+                Err(RawInputParseError::NonKeyboard { raw_type: 0 })
+            );
+        }
+
+        #[test]
+        fn raw_input_parser_preserves_extended_flags() {
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0x0006, 0);
+            let parsed = parse_raw_keyboard_input(raw_bytes(&storage), bytes_read).unwrap();
+            assert_eq!(parsed.flags & (0x0002 | 0x0004), 0x0006);
+        }
+
+        #[test]
+        fn raw_input_parser_reports_tag_present_absent_and_undecodable() {
+            let tagged = make_calibration_extra_info(7).unwrap();
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, tagged);
+            let parsed = parse_raw_keyboard_input(raw_bytes(&storage), bytes_read).unwrap();
+            assert_eq!(
+                calibration_extra_info_sequence(parsed.extra_information),
+                Some(7)
+            );
+
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let parsed = parse_raw_keyboard_input(raw_bytes(&storage), bytes_read).unwrap();
+            assert_eq!(
+                calibration_extra_info_sequence(parsed.extra_information),
+                None
+            );
+
+            let (storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0xAB00_0001);
+            let parsed = parse_raw_keyboard_input(raw_bytes(&storage), bytes_read).unwrap();
+            assert_eq!(
+                calibration_extra_info_sequence(parsed.extra_information),
+                None
+            );
+        }
+
+        #[test]
+        fn optional_sequence_tag_cannot_admit_stale_packets() {
+            assert!(tagged_sequence_matches_active(7, Some(7)));
+            assert!(tagged_sequence_matches_active(7, None));
+            assert!(!tagged_sequence_matches_active(7, Some(6)));
+        }
+
+        #[test]
+        fn global_budget_remaining_is_not_reset_per_bucket() {
+            assert_eq!(remaining_measurement_budget_us(6, 0).unwrap(), 1_000_000);
+            assert_eq!(
+                remaining_measurement_budget_us(120, 110_000_000).unwrap(),
+                5_000_000
+            );
+            assert_eq!(
+                remaining_measurement_budget_us(120, 115_000_000).unwrap(),
+                0
+            );
+            assert!(matches!(
+                remaining_measurement_budget_us(120, 115_000_001),
+                Err(CalibrationError::BudgetExceeded)
+            ));
+        }
+
         fn sample(receipts: SmallVec<[RawInputReceipt; 15]>) -> CalibrationSample {
             let first = receipts.iter().map(|receipt| receipt.arrived_ticks).min();
             let last = receipts.iter().map(|receipt| receipt.arrived_ticks).max();
@@ -3046,6 +3680,41 @@ mod platform {
                 anomalies: SampleAnomalies::default(),
                 receipts,
             }
+        }
+
+        #[test]
+        fn correlation_failure_detail_contains_bounded_observer_diagnostics() {
+            let mut failed = sample(SmallVec::new());
+            failed.expected_receipt_count = 5;
+            let diagnostics = PumpDiagnostics {
+                wm_input_seen: 5,
+                tag_decode_failed: 5,
+                ..PumpDiagnostics::default()
+            };
+            let detail =
+                format_probe_failure_detail("Down", &[30, 31, 32, 33, 34], &failed, &diagnostics);
+            assert!(detail.contains("expected_receipt_count=5"));
+            assert!(detail.contains("accepted_receipt_count=0"));
+            assert!(detail.contains("expected_scan_codes=[30, 31, 32, 33, 34]"));
+            assert!(detail.contains("tag_decode_failed: 5"));
+        }
+
+        #[test]
+        fn correlation_error_detail_keeps_observer_diagnostics() {
+            let diagnostics = PumpDiagnostics {
+                wm_input_seen: 3,
+                raw_read_failed: 1,
+                ..PumpDiagnostics::default()
+            };
+            let detail = format_probe_error_detail(
+                "Up",
+                &[30, 31, 32, 33, 34],
+                &CalibrationError::WindowThreadFailed,
+                &diagnostics,
+            );
+            assert!(detail.contains("expected_receipt_count=5"));
+            assert!(detail.contains("accepted_receipt_count=0"));
+            assert!(detail.contains("raw_read_failed: 1"));
         }
 
         #[test]
@@ -3106,6 +3775,8 @@ mod platform {
 
             duplicate.push(receipt(34, 7, false, 201));
             assert!(has_expected_receipts(&duplicate, &expected, 7, false));
+            let (_, _, _, anomalies, _) = analyse_receipts(&duplicate, &expected, 7, false);
+            assert!(anomalies.duplicate_receipt);
         }
 
         #[test]
@@ -3129,6 +3800,15 @@ mod platform {
 
             let stale_sequence = vec![receipt(30, 6, false, 100), receipt(31, 7, false, 101)];
             assert!(!has_expected_receipts(&stale_sequence, &expected, 7, false));
+        }
+
+        #[test]
+        fn packet_identity_rejects_duplicate_scan_codes() {
+            assert!(matches!(
+                validate_packet_scan_codes(&[0x15, 0x15]),
+                Err(CalibrationError::DuplicateScanCode { scan_code: 0x15 })
+            ));
+            assert!(validate_packet_scan_codes(&[0x15, 0x16]).is_ok());
         }
 
         #[test]
@@ -3454,8 +4134,8 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 12);
-        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 7);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 13);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 8);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
         assert_eq!(CALIBRATION_MAX_ATTEMPT_MULTIPLIER, 2);
@@ -3654,7 +4334,6 @@ mod tests {
         assert!(source.contains("fn complete_wm_input"));
         assert!(source.contains("DefWindowProcW(hwnd, WM_INPUT"));
         assert!(source.contains("input_buffer: std::cell::RefCell<Vec<usize>>"));
-        assert!(source.contains("read < std::mem::size_of::<RAWINPUT>() as u32"));
         assert!(source.contains("if r == -1"));
         assert!(source.contains("guard.pump_thread_failed = true"));
     }

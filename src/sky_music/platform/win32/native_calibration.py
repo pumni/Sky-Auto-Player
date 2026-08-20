@@ -15,6 +15,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -42,9 +43,9 @@ from sky_music.infrastructure.calibration_loader import (
     qualify_calibration_margin,
 )
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 12
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 7
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 9
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 13
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 8
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 10
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
@@ -98,12 +99,47 @@ class NativeCalibrationError(RuntimeError):
         self.failure_report = failure_report
 
 
-def _require_bounded_stdout(output: str, *, context: str) -> str:
-    if len(output.encode("utf-8")) > MAX_NATIVE_CALIBRATION_STDOUT_BYTES:
+def _read_bounded_process_stream(stream: Any, *, context: str) -> str:
+    stream.seek(0)
+    raw = stream.read(MAX_NATIVE_CALIBRATION_STDOUT_BYTES + 1)
+    if len(raw) > MAX_NATIVE_CALIBRATION_STDOUT_BYTES:
         raise NativeCalibrationError(
-            f"{context} stdout exceeds the {MAX_NATIVE_CALIBRATION_STDOUT_BYTES}-byte limit"
+            f"{context} exceeds the {MAX_NATIVE_CALIBRATION_STDOUT_BYTES}-byte limit"
         )
-    return output
+    return raw.decode("utf-8", errors="replace")
+
+
+def _run_native_command(
+    command: list[str], *, timeout_seconds: float
+) -> tuple[int, str, str]:
+    """Run native calibration with bounded in-memory output.
+
+    The child writes to temporary files so a malformed diagnostic stream cannot
+    grow Python's memory before the size gate is applied. The small fallback
+    for CompletedProcess.stdout/stderr keeps unit-test doubles compatible with
+    the real subprocess contract.
+    """
+
+    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
+        mode="w+b"
+    ) as stderr_file:
+        completed = subprocess.run(
+            command,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            timeout=timeout_seconds,
+            check=False,
+            shell=False,
+        )
+        for stream, file in (
+            (getattr(completed, "stdout", None), stdout_file),
+            (getattr(completed, "stderr", None), stderr_file),
+        ):
+            if stream is not None:
+                file.write(stream.encode("utf-8") if isinstance(stream, str) else stream)
+        stdout = _read_bounded_process_stream(stdout_file, context="native stdout")
+        stderr = _read_bounded_process_stream(stderr_file, context="native stderr")
+    return completed.returncode, stdout, stderr
 
 
 def _require_mapping(value: object, name: str) -> dict[str, Any]:
@@ -185,6 +221,16 @@ def _validate_quantiles(value: object, name: str) -> dict[str, int]:
     return values
 
 
+def _validate_unsigned_quantiles(value: object, name: str) -> dict[str, int]:
+    raw = _require_mapping(value, name)
+    fields = ("min", "p50", "p90", "p95", "p99", "max", "mean")
+    values = {field: _int(raw.get(field), f"{name}.{field}") for field in fields}
+    ordered = [values[field] for field in fields[:-1]]
+    if ordered != sorted(ordered) or any(item > 100_000 for item in ordered):
+        raise NativeCalibrationError(f"{name} has invalid unsigned quantile ordering")
+    return values
+
+
 def _validate_host_fingerprint(value: object) -> dict[str, Any]:
     host = _require_mapping(value, "host_fingerprint")
     if host.get("host_fingerprint_version") != HOST_FINGERPRINT_VERSION:
@@ -251,6 +297,11 @@ def _validate_pair_bucket(
         counter_values[field] = _int(bucket.get(field), f"{name}.{field}")
         if counter_values[field] > rejected:
             raise NativeCalibrationError(f"{name}.{field} exceeds rejected pairs")
+    for field, value in counter_values.items():
+        if field != "anomaly_count" and value > counter_values["anomaly_count"]:
+            raise NativeCalibrationError(f"{name}.{field} exceeds anomaly_count")
+    if counter_values["anomaly_count"] != rejected:
+        raise NativeCalibrationError(f"{name}.anomaly_count must equal rejected")
     receipt_before_completion_count = _int(
         bucket.get("receipt_before_completion_count"),
         f"{name}.receipt_before_completion_count",
@@ -285,6 +336,8 @@ def _validate_pair_bucket(
     _validate_quantiles(pair_quantiles, f"{name}.pair_worst_total_proxy_shrink_us")
     for field in ("scheduler_shrink_us", "sendinput_shrink_us", "delivery_shrink_us"):
         _validate_quantiles(bucket.get(field), f"{name}.{field}")
+    _validate_unsigned_quantiles(bucket.get("down_call_duration_us"), f"{name}.down_call_duration_us")
+    _validate_unsigned_quantiles(bucket.get("up_call_duration_us"), f"{name}.up_call_duration_us")
     return bucket
 
 
@@ -684,30 +737,26 @@ def _execute_native_bucket(
         str(FULL_COLD_IDLE_GAP_US),
     ]
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
+        returncode, output, diagnostics = _run_native_command(
+            command, timeout_seconds=timeout_seconds
         )
     except subprocess.TimeoutExpired as exc:
-        output = exc.output.decode("utf-8", errors="replace") if isinstance(exc.output, bytes) else str(exc.output or "")
-        report = _failure_report(class_name=class_name, polyphony=polyphony, detail=output or "native calibration timed out")
+        report = _failure_report(
+            class_name=class_name,
+            polyphony=polyphony,
+            detail="native calibration timed out",
+        )
         raise NativeCalibrationError("native calibration timed out", failure_report=report) from exc
     except OSError as exc:
         report = _failure_report(class_name=class_name, polyphony=polyphony, detail=str(exc))
         raise NativeCalibrationError(str(exc), failure_report=report) from exc
-    output = _require_bounded_stdout(completed.stdout or "", context="native pair bucket")
-    diagnostics = completed.stderr or ""
     if progress:
         for line in diagnostics.splitlines():
             if line.startswith("[calibration]"):
                 print(line, file=sys.stderr)
-    if completed.returncode != 0:
+    if returncode != 0:
         raise NativeCalibrationError(
-            f"native pair bucket failed ({completed.returncode}): {diagnostics[-2000:]}",
+            f"native pair bucket failed ({returncode}): {diagnostics[-2000:]}",
             failure_report=_failure_report(class_name=class_name, polyphony=polyphony, detail=diagnostics[-2000:]),
         )
     try:
@@ -746,21 +795,15 @@ def _run_process(
         str(FULL_COLD_IDLE_GAP_US),
     ]
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
+        returncode, output, diagnostics = _run_native_command(
+            command, timeout_seconds=timeout_seconds
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NativeCalibrationError("native calibration process failed") from exc
-    if completed.returncode != 0:
+    if returncode != 0:
         raise NativeCalibrationError(
-            f"native calibration failed ({completed.returncode}): {completed.stderr[-2000:]}"
+            f"native calibration failed ({returncode}): {diagnostics[-2000:]}"
         )
-    output = _require_bounded_stdout(completed.stdout or "", context="native calibration")
     try:
         payload = json.loads(output)
     except json.JSONDecodeError as exc:

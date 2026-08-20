@@ -101,7 +101,10 @@ QPC crossing, authoritative `P`, and the single `SendInput` call. No INPUT
 construction or allocation is permitted after the handoff.
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
-Up packets must both match their direction, sequence, and scan code. A clean
+Up packets must both match their direction, exact scan code, and extended
+flags. The optional injection sequence tag is corroborating evidence only;
+an ordered pump barrier drains prior messages before the next active packet is
+armed, so missing tags cannot silently alias stale receipts. A clean
 pair computes signed per-key values:
 
 ```text
