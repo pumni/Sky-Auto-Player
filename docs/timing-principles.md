@@ -100,9 +100,13 @@ low-occupancy wait to `T - 700 µs`, and the shared fused sender owns the final
 QPC crossing, authoritative `P`, and the single `SendInput` call. No INPUT
 construction or allocation is permitted after the handoff.
 
-The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
-Up packets must both match their direction, exact scan code, and extended
-flags. Publishable calibration requires the injection sequence tag to decode
+The Raw Input QPC timestamp is taken at entry to the `WM_INPUT` handler. The
+same handler preserves the raw uint32-millisecond `GetMessageTime()` queue
+timestamp as diagnostic evidence. Queue-time differences use modular uint32
+subtraction across wraparound; queue time is not converted to the QPC epoch and
+does not participate in qualification. Down and Up packets must both match
+their direction, exact scan code, and extended flags. Publishable calibration
+requires the injection sequence tag to decode
 and match on every receipt; Windows does not document preservation of
 `KEYBDINPUT.dwExtraInfo` in `RAWKEYBOARD.ExtraInformation`, so a missing tag is
 terminal rather than silently correlated. The pump-thread barrier handler

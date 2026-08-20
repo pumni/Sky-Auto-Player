@@ -6,6 +6,8 @@
 //! proxy** evidence only. Concretely it captures four QPC boundaries for each
 //! direction: the absolute target, the fused sender crossing immediately
 //! before `SendInput`, syscall completion, and the first `WM_INPUT` receipt.
+//! Diagnostic key evidence also preserves the raw uint32 `GetMessageTime`
+//! queue timestamp; it is never converted to QPC or used for qualification.
 //!
 //! The measured boundary is:
 //! ```text
@@ -443,10 +445,16 @@ pub struct KeyShrinkEvidence {
     pub down_pre_call_ticks: u64,
     pub down_completion_ticks: u64,
     pub down_receipt_ticks: u64,
+    /// Raw `GetMessageTime` value for the Down `WM_INPUT` (uint32 ms).
+    pub down_message_time_ms: u32,
     pub up_target_ticks: u64,
     pub up_pre_call_ticks: u64,
     pub up_completion_ticks: u64,
     pub up_receipt_ticks: u64,
+    /// Raw `GetMessageTime` value for the Up `WM_INPUT` (uint32 ms).
+    pub up_message_time_ms: u32,
+    /// Queue-observed Down-to-Up hold using modular uint32 subtraction.
+    pub queue_receipt_hold_ms: u32,
     pub down_latency_us: i64,
     pub up_latency_us: i64,
     /// Legacy delivery-only alias retained for diagnostic readers.
@@ -672,7 +680,7 @@ pub enum SampleClass {
 }
 
 pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 9;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 13;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 14;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
@@ -968,6 +976,7 @@ fn validate_packet_scan_codes(scan_codes: &[u16]) -> Result<(), CalibrationError
 #[derive(Debug, Clone, Copy)]
 struct RawInputReceipt {
     arrived_ticks: QpcTicks,
+    message_time_ms: u32,
     scan_code: u16,
     sequence_id: u32,
     key_up: bool,
@@ -976,6 +985,31 @@ struct RawInputReceipt {
 
 const MAX_DIAGNOSTIC_ACCEPTED_IDENTITIES: usize = 32;
 const MAX_PENDING_RECEIPTS: usize = 64;
+
+/// Elapsed `GetMessageTime` milliseconds across the documented uint32 wrap.
+/// Calibration pairs are bounded to seconds, far below the half-range where
+/// modular ordering would become ambiguous.
+fn message_time_elapsed_ms(earlier: u32, later: u32) -> u32 {
+    later.wrapping_sub(earlier)
+}
+
+fn correlated_raw_input_receipt(
+    arrived_ticks: QpcTicks,
+    message_time_ms: u32,
+    scan_code: u16,
+    sequence_id: u32,
+    key_up: bool,
+    extended_flags: u8,
+) -> RawInputReceipt {
+    RawInputReceipt {
+        arrived_ticks,
+        message_time_ms,
+        scan_code,
+        sequence_id,
+        key_up,
+        extended_flags,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AcceptedReceiptIdentity {
@@ -1201,10 +1235,10 @@ mod platform {
         RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RegisterRawInputDevices,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
-        PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow,
-        ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_QUIT, WM_USER,
-        WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageTime,
+        GetMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SW_SHOW,
+        SetForegroundWindow, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_QUIT,
+        WM_USER, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
@@ -1683,6 +1717,14 @@ mod platform {
 
         match msg {
             WM_INPUT => {
+                // GetMessageTime returns the raw uint32 millisecond time at
+                // which this message was created/placed in the pump thread
+                // queue. Capture it before any handler-side locking. Preserve
+                // its bit pattern; it has a different epoch and resolution
+                // from QPC and must never be converted to absolute QPC time.
+                // SAFETY: GetMessageTime takes no pointers and reads the
+                // timestamp associated with this pump thread's last message.
+                let message_time_ms = unsafe { GetMessageTime() } as u32;
                 record_pump_diagnostic(&ctx.shared, |diagnostics| {
                     diagnostics.wm_input_seen = diagnostics.wm_input_seen.saturating_add(1);
                 });
@@ -1879,17 +1921,18 @@ mod platform {
                             observe_stale_correlation_evidence(&mut guard);
                             cvar.notify_all();
                         } else {
-                            let receipt = RawInputReceipt {
-                                arrived_ticks: arrived,
-                                scan_code: parsed.scan_code,
-                                // The decoded tag was already matched against
-                                // the active packet generation.
-                                sequence_id: active_sequence,
-                                key_up: (parsed.flags & 0x0001) != 0,
-                                // RI_KEY_E0/RI_KEY_E1 are part of the physical
-                                // identity; never alias an extended key.
-                                extended_flags: parsed.flags as u8 & (0x0002 | 0x0004),
-                            };
+                            // The decoded tag was already matched against the
+                            // active packet generation. RI_KEY_E0/RI_KEY_E1
+                            // are part of the physical identity; never alias
+                            // an extended key.
+                            let receipt = correlated_raw_input_receipt(
+                                arrived,
+                                message_time_ms,
+                                parsed.scan_code,
+                                active_sequence,
+                                (parsed.flags & 0x0001) != 0,
+                                parsed.flags as u8 & (0x0002 | 0x0004),
+                            );
                             if observe_incompatible_receipt(&mut guard, receipt) {
                                 cvar.notify_all();
                             } else {
@@ -3404,10 +3447,16 @@ mod platform {
                 down_pre_call_ticks: down.call_started_ticks.as_u64(),
                 down_completion_ticks: down.call_completed_ticks.as_u64(),
                 down_receipt_ticks: down_matches[0].arrived_ticks.as_u64(),
+                down_message_time_ms: down_matches[0].message_time_ms,
                 up_target_ticks: up.target_ticks.as_u64(),
                 up_pre_call_ticks: up.call_started_ticks.as_u64(),
                 up_completion_ticks: up.call_completed_ticks.as_u64(),
                 up_receipt_ticks: up_matches[0].arrived_ticks.as_u64(),
+                up_message_time_ms: up_matches[0].message_time_ms,
+                queue_receipt_hold_ms: message_time_elapsed_ms(
+                    down_matches[0].message_time_ms,
+                    up_matches[0].message_time_ms,
+                ),
                 down_latency_us: down_latency,
                 up_latency_us: up_latency,
                 shrink_us: shrink,
@@ -4458,9 +4507,24 @@ mod platform {
         }
 
         #[test]
+        fn correlated_receipt_records_raw_queue_timestamp() {
+            let receipt = correlated_raw_input_receipt(
+                QpcTicks::from_raw(123_456),
+                0xFEDC_BA98,
+                30,
+                7,
+                false,
+                0,
+            );
+            assert_eq!(receipt.arrived_ticks, QpcTicks::from_raw(123_456));
+            assert_eq!(receipt.message_time_ms, 0xFEDC_BA98);
+        }
+
+        #[test]
         fn receipt_direction_mismatch_is_anomaly() {
             let receipts: SmallVec<[RawInputReceipt; 15]> = smallvec::smallvec![RawInputReceipt {
                 arrived_ticks: QpcTicks::from_raw(100),
+                message_time_ms: 100,
                 scan_code: 30,
                 sequence_id: 7,
                 key_up: true,
@@ -4475,6 +4539,7 @@ mod platform {
         fn sequence_mismatch_is_not_silently_correlated() {
             let receipts: SmallVec<[RawInputReceipt; 15]> = smallvec::smallvec![RawInputReceipt {
                 arrived_ticks: QpcTicks::from_raw(100),
+                message_time_ms: 100,
                 scan_code: 30,
                 sequence_id: 8,
                 key_up: false,
@@ -4492,6 +4557,7 @@ mod platform {
         ) -> RawInputReceipt {
             RawInputReceipt {
                 arrived_ticks: QpcTicks::from_raw(arrived),
+                message_time_ms: arrived as u32,
                 scan_code,
                 sequence_id,
                 key_up,
@@ -5034,6 +5100,7 @@ mod platform {
                 let receipts: SmallVec<[RawInputReceipt; 15]> =
                     smallvec::smallvec![RawInputReceipt {
                         arrived_ticks: QpcTicks::from_raw(100),
+                        message_time_ms: 100,
                         scan_code: 30,
                         sequence_id: 7,
                         key_up: false,
@@ -5080,6 +5147,7 @@ mod platform {
             let down = sample(smallvec::smallvec![
                 RawInputReceipt {
                     arrived_ticks: QpcTicks::from_raw(12_000_000),
+                    message_time_ms: 1_202,
                     scan_code: 31,
                     sequence_id: 7,
                     key_up: false,
@@ -5087,6 +5155,7 @@ mod platform {
                 },
                 RawInputReceipt {
                     arrived_ticks: QpcTicks::from_raw(11_000_000),
+                    message_time_ms: 1_101,
                     scan_code: 30,
                     sequence_id: 7,
                     key_up: false,
@@ -5096,6 +5165,7 @@ mod platform {
             let mut up = sample(smallvec::smallvec![
                 RawInputReceipt {
                     arrived_ticks: QpcTicks::from_raw(21_000_000),
+                    message_time_ms: 2_103,
                     scan_code: 31,
                     sequence_id: 7,
                     key_up: true,
@@ -5103,6 +5173,7 @@ mod platform {
                 },
                 RawInputReceipt {
                     arrived_ticks: QpcTicks::from_raw(22_000_000),
+                    message_time_ms: 2_204,
                     scan_code: 30,
                     sequence_id: 7,
                     key_up: true,
@@ -5133,13 +5204,73 @@ mod platform {
                 pair.pair_worst_shrink_us,
                 Some(pair.key_evidence[1].shrink_us)
             );
+            assert_eq!(pair.key_evidence[0].down_message_time_ms, 1_101);
+            assert_eq!(pair.key_evidence[0].up_message_time_ms, 2_204);
+            assert_eq!(pair.key_evidence[0].queue_receipt_hold_ms, 1_103);
+            assert_eq!(pair.key_evidence[1].down_message_time_ms, 1_202);
+            assert_eq!(pair.key_evidence[1].up_message_time_ms, 2_103);
+            assert_eq!(pair.key_evidence[1].queue_receipt_hold_ms, 901);
             assert!(pair.is_clean());
+        }
+
+        #[test]
+        fn queue_timestamps_do_not_change_qpc_shrink_or_worst_key() {
+            let down = sample(smallvec::smallvec![
+                receipt(30, 7, false, 11_000_000),
+                receipt(31, 7, false, 12_000_000),
+            ]);
+            let mut up = sample(smallvec::smallvec![
+                receipt(30, 7, true, 22_000_000),
+                receipt(31, 7, true, 21_000_000),
+            ]);
+            up.call_completed_ticks = QpcTicks::from_raw(20_000_000);
+
+            let mut changed_down = down.clone();
+            let mut changed_up = up.clone();
+            changed_down.receipts[0].message_time_ms = u32::MAX - 5;
+            changed_down.receipts[1].message_time_ms = 10;
+            changed_up.receipts[0].message_time_ms = 4;
+            changed_up.receipts[1].message_time_ms = 22;
+
+            let pair = pair_packets(
+                down,
+                up,
+                &[30, 31],
+                DurationTicks::from_raw(1),
+                DurationTicks::from_raw(1),
+            )
+            .unwrap();
+            let changed = pair_packets(
+                changed_down,
+                changed_up,
+                &[30, 31],
+                DurationTicks::from_raw(1),
+                DurationTicks::from_raw(1),
+            )
+            .unwrap();
+
+            assert_eq!(
+                pair.pair_worst_total_proxy_shrink_us,
+                changed.pair_worst_total_proxy_shrink_us
+            );
+            assert_eq!(
+                pair.key_evidence
+                    .iter()
+                    .map(|evidence| evidence.total_proxy_shrink_us)
+                    .collect::<Vec<_>>(),
+                changed
+                    .key_evidence
+                    .iter()
+                    .map(|evidence| evidence.total_proxy_shrink_us)
+                    .collect::<Vec<_>>()
+            );
         }
 
         #[test]
         fn pair_packets_propagates_chronology_failure() {
             let mut down = sample(smallvec::smallvec![RawInputReceipt {
                 arrived_ticks: QpcTicks::from_raw(400),
+                message_time_ms: 40,
                 scan_code: 30,
                 sequence_id: 7,
                 key_up: false,
@@ -5151,6 +5282,7 @@ mod platform {
 
             let mut up = sample(smallvec::smallvec![RawInputReceipt {
                 arrived_ticks: QpcTicks::from_raw(1_200),
+                message_time_ms: 120,
                 scan_code: 30,
                 sequence_id: 7,
                 key_up: true,
@@ -5387,7 +5519,7 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 13);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 14);
         assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 9);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
@@ -5397,6 +5529,57 @@ mod tests {
         assert_eq!(cfg.hot_gap_target_us, 5_000);
         assert_eq!(cfg.cold_threshold_us, 20_000);
         assert_eq!(cfg.cold_idle_gap_us, 25_000);
+    }
+
+    #[test]
+    fn message_time_elapsed_ms_uses_uint32_modular_subtraction() {
+        assert_eq!(message_time_elapsed_ms(100, 112), 12);
+        assert_eq!(message_time_elapsed_ms(u32::MAX - 5, 6), 12);
+    }
+
+    #[test]
+    fn queue_time_evidence_distinguishes_post_queue_handler_gap() {
+        let handler_entry_gap_us = 12_000;
+        let queue_gap_ms = message_time_elapsed_ms(5_000, 5_001);
+        assert_eq!(handler_entry_gap_us, 12_000);
+        assert_eq!(queue_gap_ms, 1);
+    }
+
+    #[test]
+    fn queue_time_evidence_preserves_pre_handler_gap() {
+        let handler_entry_gap_us = 12_000;
+        let queue_gap_ms = message_time_elapsed_ms(5_000, 5_012);
+        assert_eq!(handler_entry_gap_us, 12_000);
+        assert_eq!(queue_gap_ms, 12);
+    }
+
+    #[test]
+    fn key_evidence_serializes_raw_queue_times_without_qpc_conversion() {
+        let evidence = KeyShrinkEvidence {
+            scan_code: 30,
+            down_target_ticks: 1,
+            down_pre_call_ticks: 2,
+            down_completion_ticks: 3,
+            down_receipt_ticks: 4,
+            down_message_time_ms: u32::MAX - 5,
+            up_target_ticks: 11,
+            up_pre_call_ticks: 12,
+            up_completion_ticks: 13,
+            up_receipt_ticks: 14,
+            up_message_time_ms: 6,
+            queue_receipt_hold_ms: message_time_elapsed_ms(u32::MAX - 5, 6),
+            down_latency_us: 1,
+            up_latency_us: 1,
+            shrink_us: 0,
+            scheduler_shrink_us: 0,
+            sendinput_shrink_us: 0,
+            delivery_shrink_us: 0,
+            total_proxy_shrink_us: 0,
+        };
+        let value = serde_json::to_value(evidence).expect("key evidence JSON");
+        assert_eq!(value["down_message_time_ms"], u64::from(u32::MAX - 5));
+        assert_eq!(value["up_message_time_ms"], 6);
+        assert_eq!(value["queue_receipt_hold_ms"], 12);
     }
 
     #[test]

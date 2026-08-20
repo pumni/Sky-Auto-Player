@@ -24,7 +24,12 @@ SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
 SUPPORTED_CACHE_VERSION: int = 5
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
-SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 13
+SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 14
+# Schema 14 adds diagnostic-only WM_INPUT queue timestamps. Schema 13 cache
+# qualification data has identical protocol-9 semantics and remains loadable.
+COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset(
+    {13, 14}
+)
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 9
 SOURCE_FORMULA_VERSION: int = 4
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
@@ -509,7 +514,7 @@ def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
         raise ValueError("invalid calibration evidence kind")
     if data.get("artifact_schema_version") != CALIBRATION_ARTIFACT_SCHEMA_VERSION:
         raise ValueError("unsupported calibration artifact schema")
-    if data.get("native_calibration_version") != SUPPORTED_NATIVE_CALIBRATION_VERSION:
+    if data.get("native_calibration_version") not in COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS:
         raise ValueError("unsupported native calibration schema")
     if data.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
         raise ValueError("unsupported measurement protocol")

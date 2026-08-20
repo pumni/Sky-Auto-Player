@@ -167,6 +167,10 @@ scheduler, SendInput, and delivery shrink are diagnostics that must sum to that
 direct value. Receipt delivery is signed: a Raw Input receipt may be observed
 before `SendInput` returns and remains valid evidence; only target/pre-call/
 completion chronology and cross-direction identity/order failures reject a pair.
+Diagnostic key evidence additionally preserves each correlated message's raw
+uint32-millisecond `GetMessageTime()` queue timestamp. Queue-time differences
+use modular uint32 subtraction across wraparound; the values are not mapped to
+the QPC epoch and do not participate in production qualification.
 An incomplete or timed-out packet invalidates the correlation boundary and
 prevents the session from arming another packet; any stale-generation evidence
 found by the pump, during a barrier or normal dispatch, likewise prevents
@@ -176,12 +180,15 @@ stale-generation evidence; a scheduling class mismatch remains a rejected
 sample rather than an observer-boundary failure. Only clean pairs enter the
 signed quantiles. At least
 100 clean pairs are
-required in every production bucket. Native output schema 13 and artifact
+required in every production bucket. Native output schema 14 and artifact
 schema 10 record bounded anomaly evidence, the signed receipt-before-completion
 counter, the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
-actual waiter mode alongside host provenance. The cache is version 5 (native
-schema 13, measurement protocol 9); older evidence is
-incompatible and falls back rather than being reinterpreted. Qualification is:
+actual waiter mode alongside host provenance. The cache is version 5 (current
+native schema 14, measurement protocol 9). Protocol-9 cache evidence produced
+by native schema 13 remains compatible because schema 14 adds diagnostic-only
+queue timestamps and does not change cached qualification data; older native
+schemas are incompatible and fall back rather than being reinterpreted.
+Qualification is:
 
 ```text
 candidate = max(0, required_bucket_p99_total_proxy_shrink) + 100

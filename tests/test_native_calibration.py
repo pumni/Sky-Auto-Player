@@ -101,7 +101,7 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 13,
+        "version": 14,
         "measurement_protocol_version": 9,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
@@ -139,7 +139,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 13,
+        "version": 14,
         "measurement_protocol_version": 9,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
@@ -179,7 +179,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 13
+    assert result["version"] == 14
     assert result["measurement_protocol_version"] == 9
 
 
@@ -187,6 +187,7 @@ def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     ("field", "value"),
     [
         ("version", 12),
+        ("version", 13),
         ("measurement_protocol_version", 7),
         ("measurement_protocol_version", 8),
     ],
@@ -296,6 +297,26 @@ def test_cache_signed_mean_must_lie_between_min_and_max() -> None:
     cache = native_calibration._cache_v5(_native_result())
     cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["mean"] = 999_999  # type: ignore[index]
     with pytest.raises(ValueError, match="ordered"):
+        loader.parse_calibration_cache_summary(cache)
+
+
+def test_cache_keeps_protocol_9_schema_13_qualification_compatible() -> None:
+    current_cache = native_calibration._cache_v5(_native_result())
+    previous_cache = json.loads(json.dumps(current_cache))
+    previous_cache["native_calibration_version"] = 13
+
+    current = loader.parse_calibration_cache_summary(current_cache)
+    previous = loader.parse_calibration_cache_summary(previous_cache)
+
+    assert previous.status is current.status
+    assert previous.candidate_margin_us == current.candidate_margin_us
+    assert previous.margin_us == current.margin_us
+
+
+def test_cache_rejects_native_schema_before_diagnostic_compatibility_floor() -> None:
+    cache = native_calibration._cache_v5(_native_result())
+    cache["native_calibration_version"] = 12
+    with pytest.raises(ValueError, match="native calibration schema"):
         loader.parse_calibration_cache_summary(cache)
 
 
@@ -779,6 +800,9 @@ def test_diagnostic_run_writes_report_but_never_production_cache(
         class_name="hot", polyphony=1, samples=5, output_path=report
     )
     assert result["acceptance_eligible"] is False
+    assert result["version"] == 14
+    assert result["measurement_protocol_version"] == 9
+    assert result["artifact_schema_version"] == 10
     assert report.is_file()
     assert not cache.exists()
 
