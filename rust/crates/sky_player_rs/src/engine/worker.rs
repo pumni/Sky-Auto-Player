@@ -97,6 +97,8 @@ pub(crate) use wait::{
 
 use super::shared::SessionShared;
 use super::*;
+#[cfg(feature = "test-support")]
+use sky_dispatch_core::coordinator::AuthoredPreparationEvidence;
 use sky_dispatch_core::model::RuntimeSchedule;
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
@@ -111,9 +113,17 @@ pub(crate) struct DispatchPreparationProbe {
     #[cfg(any(test, feature = "test-support"))]
     packet_header_reads: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
+    expected_up_intents: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    expected_down_intents: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
     up_intent_visits: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
     down_intent_visits: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    secondary_batch_visits: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    secondary_batch_visit_bound: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
     registry_lookups: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
@@ -130,21 +140,28 @@ pub(crate) struct DispatchPreparationProbe {
 
 impl DispatchPreparationProbe {
     #[inline]
-    pub(crate) fn record_logical_prepare(&self, _up_intents: usize, _down_intents: usize) {
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            self.packet_header_reads.fetch_add(1, Ordering::Relaxed);
-            self.up_intent_visits
-                .fetch_add(_up_intents as u64, Ordering::Relaxed);
-            self.down_intent_visits
-                .fetch_add(_down_intents as u64, Ordering::Relaxed);
-            self.registry_lookups.fetch_add(
-                (_up_intents.saturating_add(_down_intents)) as u64,
-                Ordering::Relaxed,
-            );
-            self.view_packet_calls.fetch_add(1, Ordering::Relaxed);
-            self.commit_freeze_calls.fetch_add(1, Ordering::Relaxed);
-        }
+    #[cfg(feature = "test-support")]
+    pub(crate) fn record_authored_preparation(&self, evidence: AuthoredPreparationEvidence) {
+        self.packet_header_reads
+            .fetch_add(evidence.packet_header_reads, Ordering::Relaxed);
+        self.expected_up_intents
+            .fetch_add(evidence.expected_up_intents, Ordering::Relaxed);
+        self.expected_down_intents
+            .fetch_add(evidence.expected_down_intents, Ordering::Relaxed);
+        self.up_intent_visits
+            .fetch_add(evidence.up_intent_visits, Ordering::Relaxed);
+        self.down_intent_visits
+            .fetch_add(evidence.down_intent_visits, Ordering::Relaxed);
+        self.secondary_batch_visits
+            .fetch_add(evidence.secondary_batch_visits, Ordering::Relaxed);
+        self.secondary_batch_visit_bound
+            .fetch_add(evidence.secondary_batch_visit_bound, Ordering::Relaxed);
+        self.registry_lookups
+            .fetch_add(evidence.registry_lookups, Ordering::Relaxed);
+        self.view_packet_calls
+            .fetch_add(evidence.view_packet_calls, Ordering::Relaxed);
+        self.commit_freeze_calls
+            .fetch_add(evidence.commit_freeze_calls, Ordering::Relaxed);
     }
 
     #[inline]
@@ -175,8 +192,12 @@ impl DispatchPreparationProbe {
     pub(crate) fn counts(&self) -> PreparationCounts {
         PreparationCounts {
             packet_header_reads: self.packet_header_reads.load(Ordering::Relaxed),
+            expected_up_intents: self.expected_up_intents.load(Ordering::Relaxed),
+            expected_down_intents: self.expected_down_intents.load(Ordering::Relaxed),
             up_intent_visits: self.up_intent_visits.load(Ordering::Relaxed),
             down_intent_visits: self.down_intent_visits.load(Ordering::Relaxed),
+            secondary_batch_visits: self.secondary_batch_visits.load(Ordering::Relaxed),
+            secondary_batch_visit_bound: self.secondary_batch_visit_bound.load(Ordering::Relaxed),
             registry_lookups: self.registry_lookups.load(Ordering::Relaxed),
             view_packet_calls: self.view_packet_calls.load(Ordering::Relaxed),
             commit_freeze_calls: self.commit_freeze_calls.load(Ordering::Relaxed),
@@ -189,8 +210,12 @@ impl DispatchPreparationProbe {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn reset(&self) {
         self.packet_header_reads.store(0, Ordering::Relaxed);
+        self.expected_up_intents.store(0, Ordering::Relaxed);
+        self.expected_down_intents.store(0, Ordering::Relaxed);
         self.up_intent_visits.store(0, Ordering::Relaxed);
         self.down_intent_visits.store(0, Ordering::Relaxed);
+        self.secondary_batch_visits.store(0, Ordering::Relaxed);
+        self.secondary_batch_visit_bound.store(0, Ordering::Relaxed);
         self.registry_lookups.store(0, Ordering::Relaxed);
         self.view_packet_calls.store(0, Ordering::Relaxed);
         self.commit_freeze_calls.store(0, Ordering::Relaxed);
@@ -204,8 +229,12 @@ impl DispatchPreparationProbe {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreparationCounts {
     pub packet_header_reads: u64,
+    pub expected_up_intents: u64,
+    pub expected_down_intents: u64,
     pub up_intent_visits: u64,
     pub down_intent_visits: u64,
+    pub secondary_batch_visits: u64,
+    pub secondary_batch_visit_bound: u64,
     pub registry_lookups: u64,
     pub view_packet_calls: u64,
     pub commit_freeze_calls: u64,
@@ -536,31 +565,5 @@ mod observer_profile_tests {
         let state = WorkerObserverState::default();
         assert!(state.pending.is_none());
         assert!(state.runtime.is_none());
-    }
-}
-
-#[cfg(test)]
-mod preparation_probe_tests {
-    use super::DispatchPreparationProbe;
-
-    #[test]
-    fn logical_prepare_counts_one_header_and_one_visit_per_intent() {
-        let probe = DispatchPreparationProbe::default();
-        probe.record_logical_prepare(2, 3);
-
-        assert_eq!(
-            probe.counts(),
-            super::PreparationCounts {
-                packet_header_reads: 1,
-                up_intent_visits: 2,
-                down_intent_visits: 3,
-                registry_lookups: 5,
-                view_packet_calls: 1,
-                commit_freeze_calls: 1,
-                conflict_calls: 0,
-                input_build_calls: 0,
-                preflight_calls: 0,
-            }
-        );
     }
 }

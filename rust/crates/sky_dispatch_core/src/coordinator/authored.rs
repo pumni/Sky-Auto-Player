@@ -1,3 +1,5 @@
+#[cfg(feature = "test-support")]
+use super::AuthoredPreparationEvidence;
 use super::{
     ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
     PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame, PreparedAuthoredPacket,
@@ -109,7 +111,7 @@ impl RuntimeDispatchCoordinator {
         packet: &CompiledPacket,
         intent_index: usize,
         kind: ActionKind,
-    ) -> Result<u32, CoordinatorError> {
+    ) -> Result<(u32, u64), CoordinatorError> {
         let first_batch = usize::try_from(packet.first_batch_index).map_err(|_| {
             CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
                 "packet first batch index does not fit in usize".into(),
@@ -121,12 +123,14 @@ impl RuntimeDispatchCoordinator {
             .ok_or(CoordinatorError::Time(
                 crate::time::TimeArithmeticError::Overflow,
             ))?;
+        let mut batch_visits = 0u64;
         for batch in self
             .schedule
             .batches
             .get(first_batch..last_batch)
             .ok_or(CoordinatorError::InvalidBatchIndex { index: first_batch })?
         {
+            batch_visits = batch_visits.saturating_add(1);
             if batch.kind != kind {
                 continue;
             }
@@ -142,7 +146,7 @@ impl RuntimeDispatchCoordinator {
                         crate::time::TimeArithmeticError::Overflow,
                     ))?;
             if (start..end).contains(&intent_index) {
-                return Ok(batch.source_action_index);
+                return Ok((batch.source_action_index, batch_visits));
             }
         }
         Err(CoordinatorError::Invariant(
@@ -170,9 +174,24 @@ impl RuntimeDispatchCoordinator {
             ))
         })?;
         let authored_ticks = self.effective_batch_scheduled_ticks(self.cursor)?;
-        let packet = self
-            .schedule
-            .view_packet_ticks_unvalidated_registry(packet_index, authored_ticks)?;
+        #[cfg(feature = "test-support")]
+        let mut preparation_evidence = AuthoredPreparationEvidence::default();
+        let packet = {
+            #[cfg(feature = "test-support")]
+            {
+                preparation_evidence.packet_header_reads =
+                    preparation_evidence.packet_header_reads.saturating_add(1);
+                preparation_evidence.view_packet_calls =
+                    preparation_evidence.view_packet_calls.saturating_add(1);
+            }
+            self.schedule
+                .view_packet_ticks_unvalidated_registry(packet_index, authored_ticks)?
+        };
+        #[cfg(feature = "test-support")]
+        {
+            preparation_evidence.expected_up_intents = packet.up_intents.len() as u64;
+            preparation_evidence.expected_down_intents = packet.down_intents.len() as u64;
+        }
         if packet.header.first_batch_index as usize != self.cursor {
             return Err(CoordinatorError::Invariant(
                 CoordinatorInvariantError::Accounting(
@@ -190,6 +209,13 @@ impl RuntimeDispatchCoordinator {
         let mut stale_up_count = 0u8;
         let mut up_intents = SmallVec::new();
         for (offset, compact) in packet.up_intents.iter().copied().enumerate() {
+            #[cfg(feature = "test-support")]
+            {
+                preparation_evidence.up_intent_visits =
+                    preparation_evidence.up_intent_visits.saturating_add(1);
+                preparation_evidence.registry_lookups =
+                    preparation_evidence.registry_lookups.saturating_add(1);
+            }
             let intent_index = up_start.checked_add(offset).ok_or(CoordinatorError::Time(
                 crate::time::TimeArithmeticError::Overflow,
             ))?;
@@ -228,11 +254,23 @@ impl RuntimeDispatchCoordinator {
                 });
             } else {
                 deferred_up_mask |= bit;
-                let source_action_index = self.packet_intent_source_action_index(
-                    packet.header,
-                    intent_index,
-                    ActionKind::Up,
-                )?;
+                let source_action_index = {
+                    let (source_action_index, batch_visits) = self
+                        .packet_intent_source_action_index(
+                            packet.header,
+                            intent_index,
+                            ActionKind::Up,
+                        )?;
+                    #[cfg(feature = "test-support")]
+                    {
+                        preparation_evidence.secondary_batch_visits = preparation_evidence
+                            .secondary_batch_visits
+                            .saturating_add(batch_visits);
+                    }
+                    #[cfg(not(feature = "test-support"))]
+                    let _ = batch_visits;
+                    source_action_index
+                };
                 up_intents.push(PreparedUpIntent {
                     intent: compact,
                     source_action_index,
@@ -242,6 +280,13 @@ impl RuntimeDispatchCoordinator {
 
         let mut down_intents = SmallVec::new();
         for intent in packet.down_intents.iter().copied() {
+            #[cfg(feature = "test-support")]
+            {
+                preparation_evidence.down_intent_visits =
+                    preparation_evidence.down_intent_visits.saturating_add(1);
+                preparation_evidence.registry_lookups =
+                    preparation_evidence.registry_lookups.saturating_add(1);
+            }
             let slot = intent.key_slot();
             let scan_code = packet
                 .registry
@@ -298,16 +343,34 @@ impl RuntimeDispatchCoordinator {
             down_mask: packet.header.down_mask,
             stale_up_count,
         };
+        #[cfg(feature = "test-support")]
+        {
+            preparation_evidence.secondary_batch_visit_bound =
+                u64::from(deferred_up_mask.count_ones())
+                    .saturating_mul(u64::from(packet.header.batch_count));
+        }
+        let batch_source_action_index = packet
+            .header
+            .down_source_action_index
+            .unwrap_or(batch.source_action_index);
         let commit = PreparedAuthoredCommit {
             frame,
             up_intents,
             down_intents,
             down_source_action_index: packet.header.down_source_action_index,
         };
+        #[cfg(feature = "test-support")]
+        {
+            preparation_evidence.commit_freeze_calls =
+                preparation_evidence.commit_freeze_calls.saturating_add(1);
+        }
         Ok(Some(PreparedAuthoredPacket {
             frame,
             packet,
             commit,
+            batch_source_action_index,
+            #[cfg(feature = "test-support")]
+            preparation_evidence,
         }))
     }
 
@@ -377,7 +440,7 @@ impl RuntimeDispatchCoordinator {
             if self.pending_release_by_slot[usize::from(slot)].is_some() {
                 return Err(CoordinatorError::PendingReleaseAlreadyRegistered { slot });
             }
-            let source_action_index = self.packet_intent_source_action_index(
+            let (source_action_index, _) = self.packet_intent_source_action_index(
                 &packet,
                 up_start.checked_add(offset).ok_or(CoordinatorError::Time(
                     crate::time::TimeArithmeticError::Overflow,
@@ -594,7 +657,7 @@ impl RuntimeDispatchCoordinator {
                     source_action_index: 0,
                 });
             } else if prepared.deferred_up_mask & bit != 0 {
-                let source_action_index = self.packet_intent_source_action_index(
+                let (source_action_index, _) = self.packet_intent_source_action_index(
                     &packet,
                     up_start.checked_add(offset).ok_or(CoordinatorError::Time(
                         crate::time::TimeArithmeticError::Overflow,

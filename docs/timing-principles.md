@@ -360,6 +360,11 @@ sender repeats only that cutoff predicate against its authoritative
 sample or adaptive controller. The trusted sender uses the same materialized
 session margin; it does not re-read microseconds or compute a new threshold.
 
+The handoff benchmark reports `final_proof_to_pre_call_us` as the authoritative
+diagnostic envelope for the precision proof through the prepared sender. It does
+not label the outer admission wait's `WaitResult.spin_ticks` as final sender
+spin; that wait belongs to the earlier `T - 2,000 µs` admission stage.
+
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the waiter
 returns `Deadline`, including when an interrupt wake and the target race. The

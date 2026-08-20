@@ -44,9 +44,19 @@ reused by waiting, due selection, and physical dispatch. Commands,
 focus/pause transitions, target changes, lease-only wakes, and interrupts
 invalidate it and cause a replan.
 
+The planner writes this product into the caller-owned plan slot instead of
+returning the large physical enum through the `Result` ABI. The release
+assembly audit in `scripts/audit_dispatch_assembly.ps1` covers the planner,
+physical-plan construction, the dispatch-loop caller, due dispatch, and missed-
+Down recovery; bounded materialization remains before the precision wait.
+
 Authored logical preparation validates and consumes the selected packet's
-compact intents once, freezing the commit proof from that same packet view;
-pending-release merging remains a separate bounded mask operation. Physical
+compact intents in one primary pass, freezing the commit proof and the batch
+source metadata from that same packet view; deferred Up ownership may perform
+the bounded source-batch resolution required to identify its original action.
+That resolution is part of preparation evidence and never occurs after the
+frozen product is handed to the player layer. Pending-release merging remains
+a separate bounded mask operation. Physical
 packet storage initializes only its `0..len` prefix. Borrowed packet views expose
 that initialized prefix and never expose the unused fixed-capacity tail; Mixed
 missed-Down recovery reuses the primary packet's canonical Up prefix instead of
@@ -59,6 +69,11 @@ use the source-action identity needed by the pending-release table. The
 active-generation ledger stores ownership identity, scan code, slot, source
 action, and the authored hold floor; dispatch start/completion timestamps remain
 transport observations rather than per-key hot-state fields.
+
+Test-support preparation counters are emitted at the coordinator operations
+that acquire the packet view, visit each intent, perform registry lookups,
+resolve deferred source batches, and construct the frozen commit. They are not
+derived afterward from slice lengths.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored timestamps are used as authored. Release deadlines

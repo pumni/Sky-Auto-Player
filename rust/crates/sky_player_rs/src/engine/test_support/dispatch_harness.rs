@@ -976,11 +976,15 @@ impl ProductionDispatchTestHarness {
 
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
         self.align_epoch_to_selected_boundary_before_planning();
-        let mut plan = plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
-            coordinator: &self.resources.coordinator,
-            epoch_qpc: self.resources.playback.epoch,
-            preparation_probe: &self.runtime.preparation_probe,
-        })
+        let mut plan = NextDispatchPlan::default();
+        plan_next_dispatch_projected(
+            crate::engine::worker::PlanningInput {
+                coordinator: &self.resources.coordinator,
+                epoch_qpc: self.resources.playback.epoch,
+                preparation_probe: &self.runtime.preparation_probe,
+            },
+            &mut plan,
+        )
         .expect("projected dispatch plan");
         preflight_prepared_plan(
             &mut plan,

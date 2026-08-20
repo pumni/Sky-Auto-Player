@@ -771,12 +771,16 @@ pub(super) fn dispatch(
                     &mut core.metrics.observer_queue_high_watermark,
                 );
             }
-            let mut dispatch_plan = match plan_next_dispatch_projected(PlanningInput {
-                coordinator: &resources.coordinator,
-                epoch_qpc: resources.playback.epoch,
-                preparation_probe: &core.runtime.preparation_probe,
-            }) {
-                Ok(plan) => plan,
+            let mut dispatch_plan = super::planning::NextDispatchPlan::default();
+            match plan_next_dispatch_projected(
+                PlanningInput {
+                    coordinator: &resources.coordinator,
+                    epoch_qpc: resources.playback.epoch,
+                    preparation_probe: &core.runtime.preparation_probe,
+                },
+                &mut dispatch_plan,
+            ) {
+                Ok(()) => {}
                 Err(error) => {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("planning failure: {error}"));

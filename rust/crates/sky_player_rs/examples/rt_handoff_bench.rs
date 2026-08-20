@@ -10,12 +10,12 @@
 
 use serde_json::json;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, qpc_frequency_checked};
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
     PhysicalPacket, PreparedPhysicalPacket, SendTransactionOutcome, SendTransactionStatus,
 };
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WaitResult, WakeErrorStats};
+use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
@@ -138,8 +138,12 @@ impl BenchmarkMode {
 struct Samples {
     plan_build_us: Vec<u64>,
     packet_header_reads_per_plan: Vec<u64>,
+    expected_up_intents_per_plan: Vec<u64>,
+    expected_down_intents_per_plan: Vec<u64>,
     up_intent_visits_per_plan: Vec<u64>,
     down_intent_visits_per_plan: Vec<u64>,
+    secondary_batch_visits_per_plan: Vec<u64>,
+    secondary_batch_visit_bounds_per_plan: Vec<u64>,
     intent_visits_per_plan: Vec<u64>,
     registry_lookups_per_plan: Vec<u64>,
     view_packet_calls_per_plan: Vec<u64>,
@@ -148,7 +152,6 @@ struct Samples {
     precision_wake_error_us: Vec<i64>,
     precision_wake_to_final_proof_us: Vec<i64>,
     final_proof_to_pre_call_us: Vec<i64>,
-    final_spin_us: Vec<u64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
     completion_to_rt_ready_us: Vec<i64>,
@@ -434,7 +437,6 @@ fn record_precision_handoff(
 fn add_observation(
     samples: &mut Samples,
     observation: DispatchObservation,
-    wait: WaitResult,
     precision_threshold_us: u64,
 ) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
@@ -449,11 +451,6 @@ fn add_observation(
                 value.sendinput_completion_qpc,
                 value.dispatch_ready_qpc,
                 qpc_clock,
-            );
-            samples.final_spin_us.push(
-                qpc_clock
-                    .duration_to_us(wait.spin_ticks)
-                    .expect("spin duration"),
             );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
@@ -500,11 +497,6 @@ fn add_observation(
                 value.dispatch_ready_qpc,
                 qpc_clock,
             );
-            samples.final_spin_us.push(
-                qpc_clock
-                    .duration_to_us(wait.spin_ticks)
-                    .expect("spin duration"),
-            );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
                 value.sendinput_completion_qpc,
@@ -548,16 +540,59 @@ fn plan_projected(
 }
 
 fn record_preparation_sample(samples: &mut Samples, counts: PreparationCounts, elapsed_ns: u64) {
+    assert_eq!(
+        counts.packet_header_reads, 1,
+        "authored preparation must acquire one packet header"
+    );
+    assert_eq!(
+        counts.view_packet_calls, 1,
+        "authored preparation must build one packet view"
+    );
+    assert_eq!(
+        counts.up_intent_visits, counts.expected_up_intents,
+        "Up operation visits must match the packet cardinality captured at acquisition"
+    );
+    assert_eq!(
+        counts.down_intent_visits, counts.expected_down_intents,
+        "Down operation visits must match the packet cardinality captured at acquisition"
+    );
+    assert!(
+        counts.secondary_batch_visits <= counts.secondary_batch_visit_bound,
+        "deferred source resolution exceeded its bounded batch range"
+    );
+    assert_eq!(
+        counts.commit_freeze_calls, 1,
+        "authored preparation must freeze one commit token"
+    );
+    assert_eq!(
+        counts.registry_lookups,
+        counts
+            .up_intent_visits
+            .saturating_add(counts.down_intent_visits),
+        "registry lookup evidence must match actual intent operations"
+    );
     samples.plan_build_us.push(elapsed_ns / 1_000);
     samples
         .packet_header_reads_per_plan
         .push(counts.packet_header_reads);
+    samples
+        .expected_up_intents_per_plan
+        .push(counts.expected_up_intents);
+    samples
+        .expected_down_intents_per_plan
+        .push(counts.expected_down_intents);
     samples
         .up_intent_visits_per_plan
         .push(counts.up_intent_visits);
     samples
         .down_intent_visits_per_plan
         .push(counts.down_intent_visits);
+    samples
+        .secondary_batch_visits_per_plan
+        .push(counts.secondary_batch_visits);
+    samples
+        .secondary_batch_visit_bounds_per_plan
+        .push(counts.secondary_batch_visit_bound);
     samples.intent_visits_per_plan.push(
         counts
             .up_intent_visits
@@ -579,8 +614,8 @@ fn wait_and_dispatch_or_record(
     plan: &sky_player_rs::engine::dispatch_primitives::NextDispatchPlan,
     benchmark_mode: BenchmarkMode,
     samples: &mut Samples,
-) -> Result<Option<WaitResult>, String> {
-    let (step, wait) = match benchmark_mode {
+) -> Result<Option<()>, String> {
+    let step = match benchmark_mode {
         BenchmarkMode::RealWait => {
             let step = match harness.wait_and_dispatch_current_plan(plan) {
                 Ok(step) => step,
@@ -589,44 +624,32 @@ fn wait_and_dispatch_or_record(
                     return Ok(None);
                 }
             };
-            let wait = harness
+            harness
                 .last_wait_result()
                 .ok_or_else(|| "real benchmark dispatch did not record wait result".to_string())?;
-            (step, wait)
+            step
         }
         BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
-            let target = harness
-                .physical_target_qpc_for_test(plan)
-                .ok_or_else(|| "synthetic benchmark plan has no physical target".to_string())?;
-            let step = harness.dispatch_at_phase_a_benchmark_boundary_for_test(
+            if harness.physical_target_qpc_for_test(plan).is_none() {
+                return Err("synthetic benchmark plan has no physical target".to_string());
+            }
+            harness.dispatch_at_phase_a_benchmark_boundary_for_test(
                 plan,
                 SYNTHETIC_TRANSPORT_COMPLETION_US,
-            );
-            let wait = WaitResult {
-                outcome: WaitOutcome::Deadline,
-                wake_qpc: Some(target),
-                spin_ticks: DurationTicks::ZERO,
-            };
-            (step, wait)
+            )
         }
         BenchmarkMode::PhaseASenderOnly => {
             return Err("phase_a_sender_only does not use coordinator dispatch".to_string());
         }
         BenchmarkMode::PhaseAProductionBoundary => {
-            let target = harness.physical_target_qpc_for_test(plan).ok_or_else(|| {
-                "production-boundary benchmark plan has no physical target".to_string()
-            })?;
-            let step = harness.dispatch_at_phase_a_production_boundary_for_test(plan);
-            let wait = WaitResult {
-                outcome: WaitOutcome::Deadline,
-                wake_qpc: Some(target),
-                spin_ticks: DurationTicks::ZERO,
-            };
-            (step, wait)
+            if harness.physical_target_qpc_for_test(plan).is_none() {
+                return Err("production-boundary benchmark plan has no physical target".to_string());
+            }
+            harness.dispatch_at_phase_a_production_boundary_for_test(plan)
         }
     };
     if matches!(step, DispatchStep::Dispatched) {
-        Ok(Some(wait))
+        Ok(Some(()))
     } else {
         samples.record_step_failure(&step);
         Ok(None)
@@ -636,14 +659,13 @@ fn wait_and_dispatch_or_record(
 fn drain_observations(
     harness: &mut ProductionDispatchTestHarness,
     samples: &mut Samples,
-    wait: WaitResult,
     precision_threshold_us: u64,
 ) {
     let mut count = 0;
     while let Some(observation) = harness.pop_observation() {
         count += 1;
         samples.observation_count += 1;
-        add_observation(samples, observation, wait, precision_threshold_us);
+        add_observation(samples, observation, precision_threshold_us);
     }
     if count != 1 {
         samples.observation_gaps += 1;
@@ -680,18 +702,12 @@ fn run_down(
             harness.preparation_counts(),
             elapsed_ns(plan_started),
         );
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(
-            &mut harness,
-            &mut samples,
-            wait,
-            mode.effective_spin_threshold_us,
-        );
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -738,18 +754,12 @@ fn run_up(
             harness.preparation_counts(),
             elapsed_ns(plan_started),
         );
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(
-            &mut harness,
-            &mut samples,
-            wait,
-            mode.effective_spin_threshold_us,
-        );
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -789,18 +799,12 @@ fn run_mixed(
             harness.preparation_counts(),
             elapsed_ns(plan_started),
         );
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(
-            &mut harness,
-            &mut samples,
-            wait,
-            mode.effective_spin_threshold_us,
-        );
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -825,7 +829,6 @@ fn add_sender_only_sample(
     };
     samples.physical_dispatches += 1;
     samples.observation_count += 1;
-    samples.final_spin_us.push(0);
     samples
         .dispatch_start_error_us
         .push(signed_qpc_us(clock, started, target));
@@ -932,8 +935,20 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "preparation": {
             "plan_build_us": unsigned_summary(samples.plan_build_us),
             "packet_header_reads_per_plan": unsigned_summary(samples.packet_header_reads_per_plan),
+            "expected_up_intents_per_plan": unsigned_summary(
+                samples.expected_up_intents_per_plan,
+            ),
+            "expected_down_intents_per_plan": unsigned_summary(
+                samples.expected_down_intents_per_plan,
+            ),
             "up_intent_visits_per_plan": unsigned_summary(samples.up_intent_visits_per_plan),
             "down_intent_visits_per_plan": unsigned_summary(samples.down_intent_visits_per_plan),
+            "secondary_batch_visits_per_plan": unsigned_summary(
+                samples.secondary_batch_visits_per_plan,
+            ),
+            "secondary_batch_visit_bounds_per_plan": unsigned_summary(
+                samples.secondary_batch_visit_bounds_per_plan,
+            ),
             "intent_visits_per_plan": unsigned_summary(samples.intent_visits_per_plan),
             "registry_lookups_per_plan": unsigned_summary(samples.registry_lookups_per_plan),
             "view_packet_calls_per_plan": unsigned_summary(samples.view_packet_calls_per_plan),
@@ -947,7 +962,6 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             samples.precision_wake_to_final_proof_us,
         ),
         "final_proof_to_pre_call_us": signed_summary(samples.final_proof_to_pre_call_us),
-        "final_spin_us": unsigned_summary(samples.final_spin_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
         "completion_error_us_diagnostic": {
             "p01": quantile(&mut samples.completion_error_us, 1, 100),

@@ -2713,14 +2713,12 @@ mod platform {
             }
 
             #[cfg(not(any(test, feature = "test-support")))]
-            if raw_input_enabled {
-                if let Err(err) = session.correlation_self_test() {
-                    // The probe is deliberately excluded from all statistics, but
-                    // a failed probe must still clean up before the session is
-                    // allowed to escape.
-                    let _ = session.close();
-                    return Err(err);
-                }
+            if raw_input_enabled && let Err(err) = session.correlation_self_test() {
+                // The probe is deliberately excluded from all statistics, but
+                // a failed probe must still clean up before the session is
+                // allowed to escape.
+                let _ = session.close();
+                return Err(err);
             }
 
             Ok(session)

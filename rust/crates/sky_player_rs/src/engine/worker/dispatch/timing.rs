@@ -216,8 +216,9 @@ pub(crate) fn prepare_authored_frame_view_from_prepared(
 ) -> BatchViewResult {
     let PreparedAuthoredPacket {
         frame,
-        packet,
         commit,
+        batch_source_action_index,
+        ..
     } = prepared;
     let selected_up_mask = frame.immediate_up_mask | pending_release_mask;
     let selected_down_mask = frame.down_mask;
@@ -230,17 +231,6 @@ pub(crate) fn prepare_authored_frame_view_from_prepared(
     preparation_probe.record_conflict();
     let conflict_mask =
         coordinator.check_packet_down_conflicts(selected_up_mask, selected_down_mask);
-    let batch_source_action_index = packet
-        .header
-        .down_source_action_index
-        .or_else(|| {
-            coordinator
-                .schedule
-                .batches
-                .get(packet.header.first_batch_index as usize)
-                .map(|batch| batch.source_action_index)
-        })
-        .unwrap_or(0);
     preparation_probe.record_input_build();
     let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(
         selected_packet,

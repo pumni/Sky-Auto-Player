@@ -181,11 +181,16 @@ pub(crate) fn plan_next_dispatch(
     _timing: &TimingOptions,
     preparation_probe: &DispatchPreparationProbe,
 ) -> Result<NextDispatchPlan, PlanningError> {
-    plan_next_dispatch_projected(PlanningInput {
-        coordinator,
-        epoch_qpc,
-        preparation_probe,
-    })
+    let mut plan = NextDispatchPlan::default();
+    plan_next_dispatch_projected(
+        PlanningInput {
+            coordinator,
+            epoch_qpc,
+            preparation_probe,
+        },
+        &mut plan,
+    )?;
+    Ok(plan)
 }
 
 pub(crate) struct PlanningInput<'a> {
@@ -194,20 +199,23 @@ pub(crate) struct PlanningInput<'a> {
     pub(crate) preparation_probe: &'a DispatchPreparationProbe,
 }
 
+/// Write the epoch product into the caller-owned slot so the approximately
+/// 1.9 KiB physical plan is not returned through the `Result` ABI.
+#[inline(never)]
 pub(crate) fn plan_next_dispatch_projected(
     input: PlanningInput<'_>,
-) -> Result<NextDispatchPlan, PlanningError> {
+    plan: &mut NextDispatchPlan,
+) -> Result<(), PlanningError> {
+    *plan = NextDispatchPlan::NoWork;
     let PlanningInput {
         coordinator,
         epoch_qpc,
         preparation_probe,
     } = input;
     let authored_packet = coordinator.prepare_current_authored_packet()?;
+    #[cfg(feature = "test-support")]
     if let Some(prepared) = authored_packet.as_ref() {
-        preparation_probe.record_logical_prepare(
-            prepared.packet.up_intents.len(),
-            prepared.packet.down_intents.len(),
-        );
+        preparation_probe.record_authored_preparation(prepared.preparation_evidence);
     }
     let pending_target = coordinator.earliest_pending_release_ticks();
     let authored_target = authored_packet
@@ -228,7 +236,7 @@ pub(crate) fn plan_next_dispatch_projected(
             target,
             preparation_probe,
         ))?;
-        return physical_plan_from_view(view, epoch_qpc);
+        return physical_plan_from_view(view, epoch_qpc, plan);
     }
 
     let Some(authored_packet) = authored_packet else {
@@ -240,9 +248,9 @@ pub(crate) fn plan_next_dispatch_projected(
                 target,
                 preparation_probe,
             ))?;
-            return physical_plan_from_view(view, epoch_qpc);
+            return physical_plan_from_view(view, epoch_qpc, plan);
         }
-        return Ok(NextDispatchPlan::NoWork);
+        return Ok(());
     };
 
     let frame = authored_packet.frame;
@@ -260,11 +268,12 @@ pub(crate) fn plan_next_dispatch_projected(
             .map_err(|error| {
                 PlanningError::Prepared(format!("metadata target arithmetic failure: {error}"))
             })?;
-        return Ok(NextDispatchPlan::Metadata(MetadataBoundaryPlan {
+        *plan = NextDispatchPlan::Metadata(MetadataBoundaryPlan {
             commit,
             deadline_ticks: frame.authored_ticks,
             physical_target_qpc,
-        }));
+        });
+        return Ok(());
     }
 
     let authored_view = planning_view(prepare_authored_frame_view_from_prepared(
@@ -274,7 +283,7 @@ pub(crate) fn plan_next_dispatch_projected(
         frame.authored_ticks,
         preparation_probe,
     ))?;
-    physical_plan_from_view(authored_view, epoch_qpc)
+    physical_plan_from_view(authored_view, epoch_qpc, plan)
 }
 
 fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningError> {
@@ -291,10 +300,12 @@ fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningE
     }
 }
 
+#[inline(never)]
 fn physical_plan_from_view(
     authored_view: AuthoredBatchView,
     epoch_qpc: QpcTicks,
-) -> Result<NextDispatchPlan, PlanningError> {
+    plan: &mut NextDispatchPlan,
+) -> Result<(), PlanningError> {
     let deadline_ticks = authored_view.prepared_batch.effective_scheduled_ticks;
     let physical_target_qpc = epoch_qpc
         .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
@@ -310,14 +321,14 @@ fn physical_plan_from_view(
     } else {
         TargetProof::NotRequired
     };
-    let plan = NextDispatchPlan::Physical(PhysicalDispatchPlan {
+    *plan = NextDispatchPlan::Physical(PhysicalDispatchPlan {
         authored,
         physical_target_qpc,
         authored_view,
         target_proof,
     });
-    debug_assert!(plan_structure_is_valid(&plan));
-    Ok(plan)
+    debug_assert!(plan_structure_is_valid(plan));
+    Ok(())
 }
 
 #[cfg(test)]
