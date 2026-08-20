@@ -107,8 +107,8 @@ pump-thread barrier handler explicitly removes already-queued `WM_INPUT`
 messages with an input-range filter before the next active packet is armed, so
 missing tags cannot silently alias stale receipts. If a packet is incomplete or
 times out, the correlation boundary is lost and the session cannot arm another
-packet; finding stale input during the drain likewise prevents barrier
-publication. A clean
+packet; finding stale-generation evidence during the drain or normal dispatch
+likewise prevents further packet arming. A clean
 pair computes signed per-key values:
 
 ```text

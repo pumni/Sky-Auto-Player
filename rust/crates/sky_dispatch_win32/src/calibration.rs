@@ -1223,6 +1223,12 @@ mod platform {
         tagged_sequence.is_none_or(|tagged| tagged == active_sequence)
     }
 
+    fn observe_stale_correlation_evidence(state: &mut SharedCalibState) {
+        state.pump_diagnostics.stale_sequence =
+            state.pump_diagnostics.stale_sequence.saturating_add(1);
+        invalidate_correlation_boundary(state);
+    }
+
     #[cfg(any(test, not(feature = "test-support")))]
     fn format_probe_failure_detail(
         direction: &str,
@@ -1432,8 +1438,8 @@ mod platform {
                 Ok(mut state) => {
                     state.pump_diagnostics.wm_input_seen =
                         state.pump_diagnostics.wm_input_seen.saturating_add(1);
-                    state.pump_diagnostics.stale_sequence =
-                        state.pump_diagnostics.stale_sequence.saturating_add(1);
+                    observe_stale_correlation_evidence(&mut state);
+                    shared.1.notify_all();
                 }
                 Err(poisoned) => {
                     let mut state = poisoned.into_inner();
@@ -1611,13 +1617,13 @@ mod platform {
                 match lock.lock() {
                     Ok(mut guard) => {
                         let Some(active_sequence) = guard.active_sequence else {
-                            guard.pump_diagnostics.stale_sequence =
-                                guard.pump_diagnostics.stale_sequence.saturating_add(1);
+                            observe_stale_correlation_evidence(&mut guard);
+                            cvar.notify_all();
                             return complete_wm_input(hwnd, wparam, lparam);
                         };
                         if !tagged_sequence_matches_active(active_sequence, tagged_sequence) {
-                            guard.pump_diagnostics.stale_sequence =
-                                guard.pump_diagnostics.stale_sequence.saturating_add(1);
+                            observe_stale_correlation_evidence(&mut guard);
+                            cvar.notify_all();
                         } else {
                             let receipt = RawInputReceipt {
                                 arrived_ticks: arrived,
@@ -1713,20 +1719,7 @@ mod platform {
                             }
                         }
                     }
-                    PendingInputDrain::StaleInput => {
-                        let (lock, cvar) = ctx.shared.as_ref();
-                        match lock.lock() {
-                            Ok(mut guard) => {
-                                invalidate_correlation_boundary(&mut guard);
-                                cvar.notify_all();
-                            }
-                            Err(poisoned) => {
-                                let mut guard = poisoned.into_inner();
-                                guard.pump_thread_failed = true;
-                                cvar.notify_all();
-                            }
-                        }
-                    }
+                    PendingInputDrain::StaleInput => {}
                     PendingInputDrain::Quit | PendingInputDrain::Failed => {}
                 }
                 0
@@ -2504,6 +2497,11 @@ mod platform {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 loop {
+                    if guard.correlation_boundary_lost {
+                        clear_active_packet(&mut guard);
+                        cvar.notify_all();
+                        return Err(CalibrationError::CorrelationBoundaryLost);
+                    }
                     if guard.pump_thread_failed {
                         clear_active_packet(&mut guard);
                         cvar.notify_all();
@@ -4092,6 +4090,37 @@ mod platform {
             invalidate_correlation_boundary(&mut state);
             assert!(!can_arm_next_packet(&state));
             assert!(state.active_sequence.is_none());
+        }
+
+        #[test]
+        fn idle_stale_receipt_invalidates_boundary() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            observe_stale_correlation_evidence(&mut state);
+            assert_eq!(state.pump_diagnostics.stale_sequence, 1);
+            assert!(state.correlation_boundary_lost);
+            assert!(!can_arm_next_packet(&state));
+        }
+
+        #[test]
+        fn mismatched_tag_invalidates_boundary() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            state.active_sequence = Some(9);
+            assert!(!tagged_sequence_matches_active(9, Some(8)));
+            observe_stale_correlation_evidence(&mut state);
+            assert_eq!(state.pump_diagnostics.stale_sequence, 1);
+            assert!(state.correlation_boundary_lost);
+            assert!(state.active_sequence.is_none());
+        }
+
+        #[test]
+        fn diagnostic_reset_does_not_restore_boundary_trust() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            invalidate_correlation_boundary(&mut state);
+            state.pump_diagnostics = PumpDiagnostics::default();
+            assert!(!can_arm_next_packet(&state));
         }
 
         #[test]

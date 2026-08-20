@@ -166,9 +166,10 @@ direct value. Receipt delivery is signed: a Raw Input receipt may be observed
 before `SendInput` returns and remains valid evidence; only target/pre-call/
 completion chronology and cross-direction identity/order failures reject a pair.
 An incomplete or timed-out packet invalidates the correlation boundary and
-prevents the session from arming another packet; stale input found during a
-barrier likewise prevents barrier publication. Only clean pairs enter the
-signed quantiles. At least 100 clean pairs are
+prevents the session from arming another packet; any stale-generation evidence
+found by the pump, during a barrier or normal dispatch, likewise prevents
+further packet arming. Only clean pairs enter the signed quantiles. At least
+100 clean pairs are
 required in every production bucket. Native output schema 13 and artifact
 schema 10 record bounded anomaly evidence, the signed receipt-before-completion
 counter, the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
