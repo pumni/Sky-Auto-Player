@@ -9,6 +9,7 @@ use super::{
     plan_next_dispatch_projected, process_command_control, publish_backend_metrics,
     record_wait_failure, suspend_live_input, target_stamp_still_current, wait_for_next_boundary,
 };
+use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -407,9 +408,12 @@ pub(super) fn dispatch(
                 core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
                 core.runtime.focus_restore_started_ticks = None;
-                if !resources.playback.has_pause_reason("focus") {
+                if !resources.playback.has_pause_reason(PauseReason::Focus) {
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    if let Err(error) = resources.playback.enter_pause("focus", now_ticks) {
+                    if let Err(error) = resources
+                        .playback
+                        .enter_pause(PauseReason::Focus, now_ticks)
+                    {
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("playback clock failure: {error}"));
@@ -425,9 +429,15 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
+                    try_publish_metrics(
+                        &core.metrics,
+                        metrics,
+                        qpc_clock,
+                        qpc_us_or_terminal!(),
+                        true,
+                    );
                 }
-            } else if resources.playback.has_pause_reason("focus") {
+            } else if resources.playback.has_pause_reason(PauseReason::Focus) {
                 let restored_at = *core
                     .runtime
                     .focus_restore_started_ticks
@@ -444,7 +454,7 @@ pub(super) fn dispatch(
                 if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     let manual_pause_active =
-                        manual_pause || resources.playback.has_pause_reason("manual");
+                        manual_pause || resources.playback.has_pause_reason(PauseReason::Manual);
                     core.runtime.verified_target = None;
                     if !manual_pause_active {
                         if let Err(error) = suspend_live_input(
@@ -489,7 +499,10 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
-                    if let Err(error) = resources.playback.exit_pause("focus", resumed_ticks) {
+                    if let Err(error) = resources
+                        .playback
+                        .exit_pause(PauseReason::Focus, resumed_ticks)
+                    {
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -510,11 +523,17 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
+                    try_publish_metrics(
+                        &core.metrics,
+                        metrics,
+                        qpc_clock,
+                        qpc_us_or_terminal!(),
+                        true,
+                    );
                 }
             }
 
-            if manual_pause && !resources.playback.has_pause_reason("manual") {
+            if manual_pause && !resources.playback.has_pause_reason(PauseReason::Manual) {
                 core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
@@ -535,9 +554,18 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
+                    try_publish_metrics(
+                        &core.metrics,
+                        metrics,
+                        qpc_clock,
+                        qpc_us_or_terminal!(),
+                        true,
+                    );
                 }
-                if let Err(error) = resources.playback.enter_pause("manual", now_ticks) {
+                if let Err(error) = resources
+                    .playback
+                    .enter_pause(PauseReason::Manual, now_ticks)
+                {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
@@ -546,8 +574,8 @@ pub(super) fn dispatch(
                     .publication
                     .progress_clock
                     .publish(&resources.playback);
-            } else if !manual_pause && resources.playback.has_pause_reason("manual") {
-                if !resources.playback.has_pause_reason("focus") {
+            } else if !manual_pause && resources.playback.has_pause_reason(PauseReason::Manual) {
+                if !resources.playback.has_pause_reason(PauseReason::Focus) {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
                         &resources.backend,
@@ -574,7 +602,10 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
-                    if let Err(error) = resources.playback.exit_pause("manual", resumed_ticks) {
+                    if let Err(error) = resources
+                        .playback
+                        .exit_pause(PauseReason::Manual, resumed_ticks)
+                    {
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -591,7 +622,7 @@ pub(super) fn dispatch(
             }
 
             #[cfg(any(test, feature = "test-support"))]
-            if resources.playback.has_pause_reason("manual")
+            if resources.playback.has_pause_reason(PauseReason::Manual)
                 && command_timing.needs_acknowledgment()
             {
                 let acknowledged_ticks = match qpc_clock.now() {

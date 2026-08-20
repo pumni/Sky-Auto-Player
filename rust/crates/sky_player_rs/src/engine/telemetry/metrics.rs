@@ -1,5 +1,6 @@
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -46,7 +47,11 @@ pub struct WorkerMetricsLocal {
     pub late_10ms: u64,
     /// Essential production scalar evidence measured immediately before the
     /// prepared SendInput call.
+    ///
+    /// This remains the public snapshot field.  The producer updates the
+    /// tick-domain companion below and publication derives this value once.
     pub max_sendinput_pre_call_lateness_us: u64,
+    pub(crate) max_sendinput_pre_call_lateness_ticks: u64,
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
@@ -344,14 +349,23 @@ pub(crate) struct SharedMetrics {
 pub(crate) fn try_publish_metrics(
     local: &WorkerMetricsLocal,
     shared: &SharedMetrics,
+    qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
 ) {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
-    if (force || now_us.saturating_sub(last) >= 50_000) && shared.snapshot.try_publish(local) {
-        shared.last_publish_us.store(now_us, Ordering::Relaxed);
-        #[cfg(test)]
-        shared.publish_count.fetch_add(1, Ordering::Relaxed);
+    if force || now_us.saturating_sub(last) >= 50_000 {
+        let mut published = local.clone();
+        published.max_sendinput_pre_call_lateness_us = qpc_clock
+            .duration_to_us(DurationTicks::from_raw(
+                local.max_sendinput_pre_call_lateness_ticks,
+            ))
+            .unwrap_or_default();
+        if shared.snapshot.try_publish(&published) {
+            shared.last_publish_us.store(now_us, Ordering::Relaxed);
+            #[cfg(test)]
+            shared.publish_count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -361,7 +375,9 @@ pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotBuffer, WorkerMetricsLocal};
+    use super::{SharedMetrics, SnapshotBuffer, WorkerMetricsLocal, try_publish_metrics};
+    use sky_dispatch_win32::clock::QpcClock;
+    use std::num::NonZeroU64;
     use std::sync::Arc;
     use std::thread;
 
@@ -384,5 +400,22 @@ mod tests {
             assert_eq!(snapshot.elapsed_us, snapshot.total_us);
         }
         writer.join().expect("snapshot writer thread");
+    }
+
+    #[test]
+    fn publication_derives_public_lateness_microseconds_from_ticks() {
+        let shared = SharedMetrics::default();
+        let local = WorkerMetricsLocal {
+            max_sendinput_pre_call_lateness_ticks: 1_234,
+            max_sendinput_pre_call_lateness_us: 999_999,
+            ..WorkerMetricsLocal::default()
+        };
+        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+
+        try_publish_metrics(&local, &shared, qpc_clock, 0, true);
+
+        let published = shared.snapshot.load();
+        assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
+        assert_eq!(published.max_sendinput_pre_call_lateness_us, 1_234);
     }
 }

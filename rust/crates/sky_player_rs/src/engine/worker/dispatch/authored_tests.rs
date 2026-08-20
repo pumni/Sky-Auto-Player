@@ -1,4 +1,4 @@
-use super::super::PhysicalCommit;
+use super::super::{PhysicalCommit, RecoveryDescriptor};
 use super::*;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::PhysicalPacketKind;
@@ -24,7 +24,7 @@ fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
         dispatch_path: DispatchPath::DownOnly { down_count: 1 },
         packet_masks: PhysicalPacket::new(0, 0b001),
         prepared_packet: PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001)).unwrap(),
-        prepared_up_recovery_packet: None,
+        recovery: RecoveryDescriptor::None,
         commit: PhysicalCommit::Authored(PreparedAuthoredCommit {
             frame: sky_dispatch_core::coordinator::PreparedAuthoredFrame {
                 first_batch_index: 0,
@@ -36,8 +36,7 @@ fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
                 down_mask: 0b001,
                 stale_up_count: 0,
             },
-            immediate_up_intents: smallvec::SmallVec::new(),
-            deferred_up_intents: smallvec::SmallVec::new(),
+            up_intents: smallvec::SmallVec::new(),
             down_intents: smallvec::SmallVec::new(),
             down_source_action_index: Some(0),
         }),

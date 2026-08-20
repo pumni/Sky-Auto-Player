@@ -195,6 +195,34 @@ fn current_authored_packet_can_be_prepared_before_its_deadline() {
 }
 
 #[test]
+fn one_pass_authored_packet_freezes_the_same_commit_identity() {
+    let schedule = compile_runtime_intents(
+        &[KeyActionInput {
+            source_action_index: 7,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: vec![0x15].into(),
+            reason: "one-pass".into(),
+        }],
+        &[0x15],
+    )
+    .expect("valid schedule");
+    let coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+
+    let prepared = coordinator
+        .prepare_current_authored_packet()
+        .expect("one-pass preparation")
+        .expect("authored packet exists");
+    let separately_frozen = coordinator
+        .prepare_authored_commit(prepared.frame)
+        .expect("legacy identity comparison preparation");
+
+    assert_eq!(prepared.packet.packet_index, prepared.frame.packet_index);
+    assert_eq!(prepared.commit, separately_frozen);
+}
+
+#[test]
 fn down_commit_uses_pre_send_timestamp() {
     let schedule = compile_runtime_intents(
         &[
@@ -236,13 +264,10 @@ fn down_commit_uses_pre_send_timestamp() {
         .expect("commit down");
 
     let active = coordinator.active_for_slot(0).expect("active generation");
+    assert_eq!(active.key_slot, 0);
     assert_eq!(
-        active.down_dispatch_started_ticks,
-        crate::time::TimelineTicks::from_raw(120)
-    );
-    assert_eq!(
-        active.down_dispatch_completed_ticks,
-        crate::time::TimelineTicks::from_raw(150)
+        active.release_not_before_ticks,
+        crate::time::TimelineTicks::ZERO
     );
 }
 

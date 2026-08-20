@@ -109,7 +109,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Default)]
 pub(crate) struct DispatchPreparationProbe {
     #[cfg(any(test, feature = "test-support"))]
-    packet_view_calls: AtomicU64,
+    packet_header_reads: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    up_intent_visits: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    down_intent_visits: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    registry_lookups: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    view_packet_calls: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    commit_freeze_calls: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
     conflict_calls: AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
@@ -120,9 +130,27 @@ pub(crate) struct DispatchPreparationProbe {
 
 impl DispatchPreparationProbe {
     #[inline]
-    pub(crate) fn record_packet_view(&self) {
+    pub(crate) fn record_logical_prepare(&self, _up_intents: usize, _down_intents: usize) {
         #[cfg(any(test, feature = "test-support"))]
-        self.packet_view_calls.fetch_add(1, Ordering::Relaxed);
+        {
+            self.packet_header_reads.fetch_add(1, Ordering::Relaxed);
+            self.up_intent_visits
+                .fetch_add(_up_intents as u64, Ordering::Relaxed);
+            self.down_intent_visits
+                .fetch_add(_down_intents as u64, Ordering::Relaxed);
+            self.registry_lookups.fetch_add(
+                (_up_intents.saturating_add(_down_intents)) as u64,
+                Ordering::Relaxed,
+            );
+            self.view_packet_calls.fetch_add(1, Ordering::Relaxed);
+            self.commit_freeze_calls.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn record_packet_view(&self) {
+        self.view_packet_calls.fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
@@ -144,14 +172,46 @@ impl DispatchPreparationProbe {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn counts(&self) -> (u64, u64, u64, u64) {
-        (
-            self.packet_view_calls.load(Ordering::Relaxed),
-            self.conflict_calls.load(Ordering::Relaxed),
-            self.input_build_calls.load(Ordering::Relaxed),
-            self.preflight_calls.load(Ordering::Relaxed),
-        )
+    pub(crate) fn counts(&self) -> PreparationCounts {
+        PreparationCounts {
+            packet_header_reads: self.packet_header_reads.load(Ordering::Relaxed),
+            up_intent_visits: self.up_intent_visits.load(Ordering::Relaxed),
+            down_intent_visits: self.down_intent_visits.load(Ordering::Relaxed),
+            registry_lookups: self.registry_lookups.load(Ordering::Relaxed),
+            view_packet_calls: self.view_packet_calls.load(Ordering::Relaxed),
+            commit_freeze_calls: self.commit_freeze_calls.load(Ordering::Relaxed),
+            conflict_calls: self.conflict_calls.load(Ordering::Relaxed),
+            input_build_calls: self.input_build_calls.load(Ordering::Relaxed),
+            preflight_calls: self.preflight_calls.load(Ordering::Relaxed),
+        }
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn reset(&self) {
+        self.packet_header_reads.store(0, Ordering::Relaxed);
+        self.up_intent_visits.store(0, Ordering::Relaxed);
+        self.down_intent_visits.store(0, Ordering::Relaxed);
+        self.registry_lookups.store(0, Ordering::Relaxed);
+        self.view_packet_calls.store(0, Ordering::Relaxed);
+        self.commit_freeze_calls.store(0, Ordering::Relaxed);
+        self.conflict_calls.store(0, Ordering::Relaxed);
+        self.input_build_calls.store(0, Ordering::Relaxed);
+        self.preflight_calls.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreparationCounts {
+    pub packet_header_reads: u64,
+    pub up_intent_visits: u64,
+    pub down_intent_visits: u64,
+    pub registry_lookups: u64,
+    pub view_packet_calls: u64,
+    pub commit_freeze_calls: u64,
+    pub conflict_calls: u64,
+    pub input_build_calls: u64,
+    pub preflight_calls: u64,
 }
 
 /// Mutable state owned exclusively by the worker thread.
@@ -279,6 +339,12 @@ pub(crate) struct WorkerTimingState {
     pub(super) paused_poll_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
+    /// First QPC tick whose floored public duration is strictly over the
+    /// corresponding pre-call lateness bucket.  These are converted once at
+    /// worker admission so the physical send path only compares integers.
+    pub(super) pre_call_2ms_ticks: DurationTicks,
+    pub(super) pre_call_5ms_ticks: DurationTicks,
+    pub(super) pre_call_10ms_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
@@ -298,6 +364,12 @@ impl WorkerTimingState {
             paused_poll_ticks: DurationTicks::ZERO,
             lease_timeout_ticks: DurationTicks::ZERO,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
+            // Test harnesses replace these with the captured clock-domain
+            // values when they exercise lateness buckets.  MAX keeps a
+            // synthetic timing state from classifying every sample as late.
+            pre_call_2ms_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_5ms_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_10ms_ticks: DurationTicks::from_raw(u64::MAX),
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
             start_process_cpu_us: 0,
@@ -464,5 +536,31 @@ mod observer_profile_tests {
         let state = WorkerObserverState::default();
         assert!(state.pending.is_none());
         assert!(state.runtime.is_none());
+    }
+}
+
+#[cfg(test)]
+mod preparation_probe_tests {
+    use super::DispatchPreparationProbe;
+
+    #[test]
+    fn logical_prepare_counts_one_header_and_one_visit_per_intent() {
+        let probe = DispatchPreparationProbe::default();
+        probe.record_logical_prepare(2, 3);
+
+        assert_eq!(
+            probe.counts(),
+            super::PreparationCounts {
+                packet_header_reads: 1,
+                up_intent_visits: 2,
+                down_intent_visits: 3,
+                registry_lookups: 5,
+                view_packet_calls: 1,
+                commit_freeze_calls: 1,
+                conflict_calls: 0,
+                input_build_calls: 0,
+                preflight_calls: 0,
+            }
+        );
     }
 }

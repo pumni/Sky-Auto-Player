@@ -1,4 +1,4 @@
-use super::TrackedKeyState;
+use super::{TrackedKeyState, WorkerTimingState};
 use crate::engine::telemetry::{SharedMetrics, WorkerMetricsLocal};
 
 pub(crate) const HEALTH_WINDOW_CAPACITY: usize = 64;
@@ -264,27 +264,24 @@ pub(crate) fn record_lateness(
 /// profile. Diagnostic profiles derive richer histograms and traces on the
 /// deferred observer instead.
 pub(crate) fn record_sendinput_pre_call_lateness(
-    qpc_clock: sky_dispatch_win32::clock::QpcClock,
     target_qpc: sky_dispatch_win32::clock::QpcTicks,
     started_qpc: sky_dispatch_win32::clock::QpcTicks,
+    timing: &WorkerTimingState,
     local_metrics: &mut WorkerMetricsLocal,
 ) -> Result<(), String> {
     let lateness_ticks = started_qpc
         .checked_duration_since(target_qpc)
         .map_err(|_| "SendInput pre-call preceded authored target".to_string())?;
-    let lateness_us = qpc_clock
-        .duration_to_us(lateness_ticks)
-        .map_err(|error| format!("SendInput pre-call lateness conversion failure: {error:?}"))?;
-    local_metrics.max_sendinput_pre_call_lateness_us = local_metrics
-        .max_sendinput_pre_call_lateness_us
-        .max(lateness_us);
-    if lateness_us > 10_000 {
+    local_metrics.max_sendinput_pre_call_lateness_ticks = local_metrics
+        .max_sendinput_pre_call_lateness_ticks
+        .max(lateness_ticks.as_u64());
+    if lateness_ticks >= timing.pre_call_10ms_ticks {
         local_metrics.pre_call_late_10ms = local_metrics.pre_call_late_10ms.saturating_add(1);
     }
-    if lateness_us > 5_000 {
+    if lateness_ticks >= timing.pre_call_5ms_ticks {
         local_metrics.pre_call_late_5ms = local_metrics.pre_call_late_5ms.saturating_add(1);
     }
-    if lateness_us > 2_000 {
+    if lateness_ticks >= timing.pre_call_2ms_ticks {
         local_metrics.pre_call_late_2ms = local_metrics.pre_call_late_2ms.saturating_add(1);
     }
     Ok(())
@@ -498,13 +495,46 @@ mod tests {
         DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
         HealthState, HealthTransition, HealthWindow, HealthWindowPolicy, build_dispatch_budget,
         observe_dispatch_health, observe_observer_health, observe_wait_health,
-        record_degraded_sample, record_input_path_health,
+        record_degraded_sample, record_input_path_health, record_sendinput_pre_call_lateness,
     };
     use crate::engine::telemetry::metrics::WorkerMetricsLocal;
+    use crate::engine::worker::WorkerTimingState;
+    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     #[test]
     fn send_warning_budget_uses_fixed_floor() {
         let options = DispatchHealthOptions::default();
         assert_eq!(options.sendinput_warn_floor_us, 300);
+    }
+
+    #[test]
+    fn sendinput_pre_call_buckets_compare_ticks_and_keep_public_max_lazy() {
+        let mut timing = WorkerTimingState::create_test_timing();
+        timing.pre_call_2ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(3);
+        timing.pre_call_5ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(5);
+        timing.pre_call_10ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(7);
+        let mut metrics = WorkerMetricsLocal::default();
+
+        record_sendinput_pre_call_lateness(
+            QpcTicks::from_raw(10),
+            QpcTicks::from_raw(13),
+            &timing,
+            &mut metrics,
+        )
+        .expect("valid lateness");
+
+        assert_eq!(metrics.max_sendinput_pre_call_lateness_ticks, 3);
+        assert_eq!(metrics.max_sendinput_pre_call_lateness_us, 0);
+        assert_eq!(metrics.pre_call_late_2ms, 1);
+        assert_eq!(metrics.pre_call_late_5ms, 0);
+        assert_eq!(metrics.pre_call_late_10ms, 0);
+
+        let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
+        assert_eq!(
+            clock.duration_to_us(sky_dispatch_core::time::DurationTicks::from_raw(
+                metrics.max_sendinput_pre_call_lateness_ticks,
+            )),
+            Ok(3)
+        );
     }
 
     #[test]

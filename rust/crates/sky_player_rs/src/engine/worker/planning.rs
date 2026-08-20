@@ -8,10 +8,7 @@ use super::DispatchPreparationProbe;
 use super::admission::TargetStamp;
 use super::dispatch::{
     AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit,
-    timing::{
-        prepare_authored_frame_view, prepare_authored_frame_view_with_pending,
-        prepare_pending_release_view,
-    },
+    timing::{prepare_authored_frame_view_from_prepared, prepare_pending_release_view},
 };
 use super::health::DispatchPath;
 #[cfg(any(test, feature = "test-support"))]
@@ -205,9 +202,17 @@ pub(crate) fn plan_next_dispatch_projected(
         epoch_qpc,
         preparation_probe,
     } = input;
-    let authored_frame = coordinator.prepare_current_authored_frame()?;
+    let authored_packet = coordinator.prepare_current_authored_packet()?;
+    if let Some(prepared) = authored_packet.as_ref() {
+        preparation_probe.record_logical_prepare(
+            prepared.packet.up_intents.len(),
+            prepared.packet.down_intents.len(),
+        );
+    }
     let pending_target = coordinator.earliest_pending_release_ticks();
-    let authored_target = authored_frame.map(|frame| frame.authored_ticks);
+    let authored_target = authored_packet
+        .as_ref()
+        .map(|prepared| prepared.frame.authored_ticks);
 
     let select_pending = match (pending_target, authored_target) {
         (Some(pending), Some(authored)) => pending < authored,
@@ -226,7 +231,7 @@ pub(crate) fn plan_next_dispatch_projected(
         return physical_plan_from_view(view, epoch_qpc);
     }
 
-    let Some(frame) = authored_frame else {
+    let Some(authored_packet) = authored_packet else {
         if let Some(target) = pending_target {
             let release_mask = coordinator.pending_release_mask_due_at(target);
             let view = planning_view(prepare_pending_release_view(
@@ -240,6 +245,7 @@ pub(crate) fn plan_next_dispatch_projected(
         return Ok(NextDispatchPlan::NoWork);
     };
 
+    let frame = authored_packet.frame;
     let coalesced_pending_mask = match pending_target {
         Some(target) if target == frame.authored_ticks => {
             coordinator.pending_release_mask_due_at(target)
@@ -248,7 +254,7 @@ pub(crate) fn plan_next_dispatch_projected(
     };
     let authored_is_physical = frame.immediate_up_mask != 0 || frame.down_mask != 0;
     if !authored_is_physical && coalesced_pending_mask == 0 {
-        let commit = coordinator.prepare_authored_commit(frame)?;
+        let commit = authored_packet.commit;
         let physical_target_qpc = epoch_qpc
             .checked_add_duration(DurationTicks::from_raw(frame.authored_ticks.as_u64()))
             .map_err(|error| {
@@ -261,21 +267,13 @@ pub(crate) fn plan_next_dispatch_projected(
         }));
     }
 
-    let authored_view = if coalesced_pending_mask == 0 {
-        planning_view(prepare_authored_frame_view(
-            coordinator,
-            frame,
-            preparation_probe,
-        ))?
-    } else {
-        planning_view(prepare_authored_frame_view_with_pending(
-            coordinator,
-            frame,
-            coalesced_pending_mask,
-            frame.authored_ticks,
-            preparation_probe,
-        ))?
-    };
+    let authored_view = planning_view(prepare_authored_frame_view_from_prepared(
+        coordinator,
+        authored_packet,
+        coalesced_pending_mask,
+        frame.authored_ticks,
+        preparation_probe,
+    ))?;
     physical_plan_from_view(authored_view, epoch_qpc)
 }
 
@@ -320,4 +318,66 @@ fn physical_plan_from_view(
     });
     debug_assert!(plan_structure_is_valid(&plan));
     Ok(plan)
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{AuthoredBatchView, NextDispatchPlan, PhysicalDispatchPlan};
+    use sky_dispatch_core::clock::PlaybackClockState;
+    use sky_dispatch_core::coordinator::{ActiveGeneration, PreparedAuthoredCommit};
+    use sky_dispatch_win32::input::PreparedPhysicalPacket;
+    use std::collections::HashSet;
+    use std::mem::size_of;
+
+    #[allow(dead_code)]
+    struct LegacyPlaybackClockLayout {
+        start_perf: sky_dispatch_core::time::QpcTicks,
+        pause_time: sky_dispatch_core::time::DurationTicks,
+        pause_reasons: HashSet<String>,
+        pause_interval_started: Option<sky_dispatch_core::time::QpcTicks>,
+        pause_open_reason: Option<String>,
+        epoch: sky_dispatch_core::time::QpcTicks,
+    }
+
+    #[test]
+    fn report_hot_dispatch_layout() {
+        println!(
+            "layout target_os_windows={} target_arch_x86_64={} target_pointer_width_64={}",
+            cfg!(target_os = "windows"),
+            cfg!(target_arch = "x86_64"),
+            cfg!(target_pointer_width = "64"),
+        );
+        println!(
+            "size_of::<PreparedPhysicalPacket>()={}",
+            size_of::<PreparedPhysicalPacket>()
+        );
+        println!(
+            "size_of::<PreparedAuthoredCommit>()={}",
+            size_of::<PreparedAuthoredCommit>()
+        );
+        println!(
+            "size_of::<AuthoredBatchView>()={}",
+            size_of::<AuthoredBatchView>()
+        );
+        println!(
+            "size_of::<PhysicalDispatchPlan>()={}",
+            size_of::<PhysicalDispatchPlan>()
+        );
+        println!(
+            "size_of::<NextDispatchPlan>()={}",
+            size_of::<NextDispatchPlan>()
+        );
+        println!(
+            "size_of::<ActiveGeneration>()={}",
+            size_of::<ActiveGeneration>()
+        );
+        println!(
+            "size_of::<PlaybackClockState>()={}",
+            size_of::<PlaybackClockState>()
+        );
+        println!(
+            "size_of::<LegacyPlaybackClockLayout>()={}",
+            size_of::<LegacyPlaybackClockLayout>()
+        );
+    }
 }

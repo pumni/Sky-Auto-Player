@@ -90,6 +90,12 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) test_inject_sender_start: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecoveryDescriptor {
+    None,
+    UpPrefix { up_len: u8, up_mask: u16 },
+}
+
 /// Snapshot of the prepared authored batch plus the projection of the
 /// schedule view used by admission, send, and telemetry.
 ///
@@ -109,8 +115,7 @@ pub(crate) struct AuthoredBatchView {
     pub(super) dispatch_path: DispatchPath,
     pub(super) packet_masks: PhysicalPacket,
     pub(super) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
-    pub(super) prepared_up_recovery_packet:
-        Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
+    pub(super) recovery: RecoveryDescriptor,
     pub(super) commit: PhysicalCommit,
 }
 
@@ -127,8 +132,7 @@ pub(crate) struct AuthoredBatchView {
     pub(crate) dispatch_path: DispatchPath,
     pub(crate) packet_masks: PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
-    pub(crate) prepared_up_recovery_packet:
-        Option<sky_dispatch_win32::input::PreparedPhysicalPacket>,
+    pub(crate) recovery: RecoveryDescriptor,
     pub(crate) commit: PhysicalCommit,
 }
 

@@ -18,7 +18,8 @@ use sky_dispatch_win32::input::{
 use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WaitResult, WakeErrorStats};
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, ProductionDispatchTestHarness,
+    PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
+    ProductionDispatchTestHarness,
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -135,10 +136,22 @@ impl BenchmarkMode {
 
 #[derive(Default)]
 struct Samples {
-    wake_to_admission_us: Vec<u64>,
+    plan_build_us: Vec<u64>,
+    packet_header_reads_per_plan: Vec<u64>,
+    up_intent_visits_per_plan: Vec<u64>,
+    down_intent_visits_per_plan: Vec<u64>,
+    intent_visits_per_plan: Vec<u64>,
+    registry_lookups_per_plan: Vec<u64>,
+    view_packet_calls_per_plan: Vec<u64>,
+    commit_freeze_calls_per_plan: Vec<u64>,
+    admission_wake_to_precision_wake_us: Vec<i64>,
+    precision_wake_error_us: Vec<i64>,
+    precision_wake_to_final_proof_us: Vec<i64>,
+    final_proof_to_pre_call_us: Vec<i64>,
     final_spin_us: Vec<u64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
+    completion_to_rt_ready_us: Vec<i64>,
     target_to_completion_us: Vec<i64>,
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
@@ -211,6 +224,42 @@ fn nanos_summary(mut values: Vec<u64>) -> serde_json::Value {
         "p99": quantile(&mut values, 99, 100),
         "p99_9": quantile(&mut values, 999, 1000),
         "max": values.iter().copied().max(),
+        "samples": values.len(),
+    })
+}
+
+fn unsigned_summary(mut values: Vec<u64>) -> serde_json::Value {
+    let min = values.iter().copied().min();
+    let max = values.iter().copied().max();
+    let p50 = quantile(&mut values, 50, 100);
+    let p95 = quantile(&mut values, 95, 100);
+    let p99 = quantile(&mut values, 99, 100);
+    let p99_9 = quantile(&mut values, 999, 1000);
+    json!({
+        "min": min,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "p99_9": p99_9,
+        "max": max,
+        "samples": values.len(),
+    })
+}
+
+fn signed_summary(mut values: Vec<i64>) -> serde_json::Value {
+    let min = values.iter().copied().min();
+    let max = values.iter().copied().max();
+    let p50 = quantile(&mut values, 50, 100);
+    let p95 = quantile(&mut values, 95, 100);
+    let p99 = quantile(&mut values, 99, 100);
+    let p99_9 = quantile(&mut values, 999, 1000);
+    json!({
+        "min": min,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "p99_9": p99_9,
+        "max": max,
         "samples": values.len(),
     })
 }
@@ -327,25 +376,80 @@ fn signed_timeline_us(clock: QpcClock, end: TimelineTicks, start: TimelineTicks)
     if negative { -value } else { value }
 }
 
-fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait: WaitResult) {
+#[allow(clippy::too_many_arguments)]
+fn record_precision_handoff(
+    samples: &mut Samples,
+    handoff: Option<PrecisionHandoffEvidence>,
+    physical_target_qpc: QpcTicks,
+    precision_threshold_us: u64,
+    pre_call_qpc: QpcTicks,
+    sendinput_completion_qpc: QpcTicks,
+    dispatch_ready_qpc: Option<QpcTicks>,
+    qpc_clock: QpcClock,
+) {
+    let Some(handoff) = handoff else {
+        return;
+    };
+    if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
+        samples
+            .admission_wake_to_precision_wake_us
+            .push(signed_qpc_us(
+                qpc_clock,
+                handoff.precision_wake_qpc,
+                admission_wake_qpc,
+            ));
+    }
+    let precision_threshold_ticks = qpc_clock
+        .duration_from_us(precision_threshold_us)
+        .expect("precision threshold conversion");
+    let precision_target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(precision_threshold_ticks.as_u64()),
+    );
+    samples.precision_wake_error_us.push(signed_qpc_us(
+        qpc_clock,
+        handoff.precision_wake_qpc,
+        precision_target_qpc,
+    ));
+    samples.precision_wake_to_final_proof_us.push(signed_qpc_us(
+        qpc_clock,
+        handoff.final_proof_qpc,
+        handoff.precision_wake_qpc,
+    ));
+    samples.final_proof_to_pre_call_us.push(signed_qpc_us(
+        qpc_clock,
+        pre_call_qpc,
+        handoff.final_proof_qpc,
+    ));
+    if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
+        samples.completion_to_rt_ready_us.push(signed_qpc_us(
+            qpc_clock,
+            dispatch_ready_qpc,
+            sendinput_completion_qpc,
+        ));
+    }
+}
+
+fn add_observation(
+    samples: &mut Samples,
+    observation: DispatchObservation,
+    wait: WaitResult,
+    precision_threshold_us: u64,
+) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
     match observation {
         DispatchObservation::Down(value) => {
-            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
-                value
-                    .final_proof_qpc
-                    .checked_duration_since(wake)
-                    .ok()
-                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
-            }).unwrap_or_else(|| {
-                panic!(
-                    "missing Down wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
-                    value.wake_qpc,
-                    value.final_proof_qpc,
-                    value.sendinput_completion_qpc
-                )
-            });
-            samples.wake_to_admission_us.push(wake_to_proof_us);
+            record_precision_handoff(
+                samples,
+                value.precision_handoff,
+                value.physical_target_qpc,
+                precision_threshold_us,
+                value.pre_call_qpc,
+                value.sendinput_completion_qpc,
+                value.dispatch_ready_qpc,
+                qpc_clock,
+            );
             samples.final_spin_us.push(
                 qpc_clock
                     .duration_to_us(wait.spin_ticks)
@@ -386,21 +490,16 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             ));
         }
         DispatchObservation::Up(value) => {
-            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
-                value
-                    .final_proof_qpc
-                    .checked_duration_since(wake)
-                    .ok()
-                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
-            }).unwrap_or_else(|| {
-                panic!(
-                    "missing Up wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
-                    value.wake_qpc,
-                    value.final_proof_qpc,
-                    value.sendinput_completion_qpc
-                )
-            });
-            samples.wake_to_admission_us.push(wake_to_proof_us);
+            record_precision_handoff(
+                samples,
+                value.precision_handoff,
+                value.physical_target_qpc,
+                precision_threshold_us,
+                value.pre_call_qpc,
+                value.sendinput_completion_qpc,
+                value.dispatch_ready_qpc,
+                qpc_clock,
+            );
             samples.final_spin_us.push(
                 qpc_clock
                     .duration_to_us(wait.spin_ticks)
@@ -446,6 +545,33 @@ fn plan_projected(
     harness: &mut ProductionDispatchTestHarness,
 ) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
     harness.plan_current_dispatch_projected()
+}
+
+fn record_preparation_sample(samples: &mut Samples, counts: PreparationCounts, elapsed_ns: u64) {
+    samples.plan_build_us.push(elapsed_ns / 1_000);
+    samples
+        .packet_header_reads_per_plan
+        .push(counts.packet_header_reads);
+    samples
+        .up_intent_visits_per_plan
+        .push(counts.up_intent_visits);
+    samples
+        .down_intent_visits_per_plan
+        .push(counts.down_intent_visits);
+    samples.intent_visits_per_plan.push(
+        counts
+            .up_intent_visits
+            .saturating_add(counts.down_intent_visits),
+    );
+    samples
+        .registry_lookups_per_plan
+        .push(counts.registry_lookups);
+    samples
+        .view_packet_calls_per_plan
+        .push(counts.view_packet_calls);
+    samples
+        .commit_freeze_calls_per_plan
+        .push(counts.commit_freeze_calls);
 }
 
 fn wait_and_dispatch_or_record(
@@ -511,12 +637,13 @@ fn drain_observations(
     harness: &mut ProductionDispatchTestHarness,
     samples: &mut Samples,
     wait: WaitResult,
+    precision_threshold_us: u64,
 ) {
     let mut count = 0;
     while let Some(observation) = harness.pop_observation() {
         count += 1;
         samples.observation_count += 1;
-        add_observation(samples, observation, wait);
+        add_observation(samples, observation, wait, precision_threshold_us);
     }
     if count != 1 {
         samples.observation_gaps += 1;
@@ -532,6 +659,7 @@ fn run_down(
     for _ in 0..iterations() {
         let mut harness =
             ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
+        harness.enable_dispatch_ready_timing_for_benchmark();
         let alignment_margin_us =
             if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
                 0
@@ -544,14 +672,26 @@ fn run_down(
             mode.event_wait_enabled,
             mode.effective_spin_threshold_us,
         )?;
+        harness.reset_preparation_counts_for_test();
+        let plan_started = Instant::now();
         let plan = plan_projected(&mut harness);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
         let wait =
             match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
                 Some(wait) => wait,
                 None => continue,
             };
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(
+            &mut harness,
+            &mut samples,
+            wait,
+            mode.effective_spin_threshold_us,
+        );
     }
     Ok(samples)
 }
@@ -573,6 +713,7 @@ fn run_up(
                 continue;
             }
         };
+        harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -589,14 +730,26 @@ fn run_up(
             }),
             "authored benchmark setup did not leave the requested physical UpOnly packet"
         );
+        harness.reset_preparation_counts_for_test();
+        let plan_started = Instant::now();
         let plan = plan_projected(&mut harness);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
         let wait =
             match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
                 Some(wait) => wait,
                 None => continue,
             };
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(
+            &mut harness,
+            &mut samples,
+            wait,
+            mode.effective_spin_threshold_us,
+        );
     }
     Ok(samples)
 }
@@ -618,6 +771,7 @@ fn run_mixed(
                 continue;
             }
         };
+        harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -627,14 +781,26 @@ fn run_mixed(
         if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
+        harness.reset_preparation_counts_for_test();
+        let plan_started = Instant::now();
         let plan = plan_projected(&mut harness);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
         let wait =
             match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
                 Some(wait) => wait,
                 None => continue,
             };
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(
+            &mut harness,
+            &mut samples,
+            wait,
+            mode.effective_spin_threshold_us,
+        );
     }
     Ok(samples)
 }
@@ -659,13 +825,6 @@ fn add_sender_only_sample(
     };
     samples.physical_dispatches += 1;
     samples.observation_count += 1;
-    samples.wake_to_admission_us.push(
-        started
-            .checked_duration_since(target)
-            .ok()
-            .and_then(|ticks| clock.duration_to_us(ticks).ok())
-            .unwrap_or(0),
-    );
     samples.final_spin_us.push(0);
     samples
         .dispatch_start_error_us
@@ -759,11 +918,6 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
 
 fn summarize(mut samples: Samples) -> serde_json::Value {
     assert_eq!(
-        samples.wake_to_admission_us.len(),
-        samples.observation_count,
-        "every collected observation must have one raw wake-to-send sample"
-    );
-    assert_eq!(
         samples.dispatch_start_error_us.len(),
         samples.observation_count,
         "every collected observation must have one start-error sample"
@@ -775,31 +929,26 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     );
     json!({
         "controller": "dispatch_start_error",
-            "wake_to_final_proof_us": {
-            "p50": quantile(&mut samples.wake_to_admission_us, 50, 100),
-            "p95": quantile(&mut samples.wake_to_admission_us, 95, 100),
-            "p99": quantile(&mut samples.wake_to_admission_us, 99, 100),
-            "p99_9": quantile(&mut samples.wake_to_admission_us, 999, 1000),
-            "max": samples.wake_to_admission_us.iter().copied().max(),
-            "samples": samples.wake_to_admission_us.len(),
+        "preparation": {
+            "plan_build_us": unsigned_summary(samples.plan_build_us),
+            "packet_header_reads_per_plan": unsigned_summary(samples.packet_header_reads_per_plan),
+            "up_intent_visits_per_plan": unsigned_summary(samples.up_intent_visits_per_plan),
+            "down_intent_visits_per_plan": unsigned_summary(samples.down_intent_visits_per_plan),
+            "intent_visits_per_plan": unsigned_summary(samples.intent_visits_per_plan),
+            "registry_lookups_per_plan": unsigned_summary(samples.registry_lookups_per_plan),
+            "view_packet_calls_per_plan": unsigned_summary(samples.view_packet_calls_per_plan),
+            "commit_freeze_calls_per_plan": unsigned_summary(samples.commit_freeze_calls_per_plan),
         },
-        "final_spin_us": {
-            "p50": quantile(&mut samples.final_spin_us, 50, 100),
-            "p95": quantile(&mut samples.final_spin_us, 95, 100),
-            "p99": quantile(&mut samples.final_spin_us, 99, 100),
-            "p99_9": quantile(&mut samples.final_spin_us, 999, 1000),
-            "max": samples.final_spin_us.iter().copied().max(),
-            "samples": samples.final_spin_us.len(),
-        },
-        "dispatch_start_error_us": {
-            "min": samples.dispatch_start_error_us.iter().copied().min(),
-            "p50": quantile(&mut samples.dispatch_start_error_us, 50, 100),
-            "p95": quantile(&mut samples.dispatch_start_error_us, 95, 100),
-            "p99": quantile(&mut samples.dispatch_start_error_us, 99, 100),
-            "p99_9": quantile(&mut samples.dispatch_start_error_us, 999, 1000),
-            "max": samples.dispatch_start_error_us.iter().copied().max(),
-            "samples": samples.dispatch_start_error_us.len(),
-        },
+        "admission_wake_to_precision_wake_us": signed_summary(
+            samples.admission_wake_to_precision_wake_us,
+        ),
+        "precision_wake_error_us": signed_summary(samples.precision_wake_error_us),
+        "precision_wake_to_final_proof_us": signed_summary(
+            samples.precision_wake_to_final_proof_us,
+        ),
+        "final_proof_to_pre_call_us": signed_summary(samples.final_proof_to_pre_call_us),
+        "final_spin_us": unsigned_summary(samples.final_spin_us),
+        "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
         "completion_error_us_diagnostic": {
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
@@ -808,23 +957,9 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max_abs": samples.completion_error_us.iter().map(|value| value.unsigned_abs()).max(),
             "samples": samples.completion_error_us.len(),
         },
-        "pre_call_to_completion_us": {
-            "min": samples.pre_call_to_completion_us.iter().copied().min(),
-            "p50": quantile(&mut samples.pre_call_to_completion_us, 50, 100),
-            "p95": quantile(&mut samples.pre_call_to_completion_us, 95, 100),
-            "p99": quantile(&mut samples.pre_call_to_completion_us, 99, 100),
-            "p99_9": quantile(&mut samples.pre_call_to_completion_us, 999, 1000),
-            "max": samples.pre_call_to_completion_us.iter().copied().max(),
-            "samples": samples.pre_call_to_completion_us.len(),
-        },
-        "target_to_completion_us": {
-            "p50": quantile(&mut samples.target_to_completion_us, 50, 100),
-            "p95": quantile(&mut samples.target_to_completion_us, 95, 100),
-            "p99": quantile(&mut samples.target_to_completion_us, 99, 100),
-            "p99_9": quantile(&mut samples.target_to_completion_us, 999, 1000),
-            "max": samples.target_to_completion_us.iter().copied().max(),
-            "samples": samples.target_to_completion_us.len(),
-        },
+        "pre_call_to_completion_us": unsigned_summary(samples.pre_call_to_completion_us),
+        "completion_to_rt_ready_us": signed_summary(samples.completion_to_rt_ready_us),
+        "target_to_completion_us": signed_summary(samples.target_to_completion_us),
         "physical_dispatches": samples.physical_dispatches,
         "early_dispatch_count": samples.early_dispatch_count,
         "non_dispatches": samples.non_dispatches,

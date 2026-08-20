@@ -133,7 +133,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 .map_err(|_| QpcError::ConversionOverflow)
         });
         match metrics_us {
-            Ok(value) => try_publish_metrics(local_metrics, metrics, value, true),
+            Ok(value) => try_publish_metrics(local_metrics, metrics, qpc_clock, value, true),
             Err(error) => {
                 *force_full_cleanup = true;
                 *terminal_error = Some(format!("QPC runtime failure: {error:?}"));

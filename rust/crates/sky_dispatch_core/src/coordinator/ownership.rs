@@ -88,8 +88,8 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         batch_index: usize,
         sent_scan_codes: &[u16],
-        dispatch_started: TimelineTicks,
-        dispatch_completed: TimelineTicks,
+        _dispatch_started: TimelineTicks,
+        _dispatch_completed: TimelineTicks,
         excluded_mask: u16,
     ) -> Result<(), CoordinatorError> {
         let batch = self
@@ -147,9 +147,6 @@ impl RuntimeDispatchCoordinator {
                 scan_code,
                 key_slot: slot,
                 source_action_index,
-                scheduled_down_ticks,
-                down_dispatch_started_ticks: dispatch_started,
-                down_dispatch_completed_ticks: dispatch_completed,
                 release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(slot);
@@ -162,8 +159,8 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         intents: &[RuntimeKeyIntent],
         sent_scan_codes: &[u16],
-        dispatch_started_ticks: TimelineTicks,
-        dispatch_completed_ticks: TimelineTicks,
+        _dispatch_started_ticks: TimelineTicks,
+        _dispatch_completed_ticks: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
         for intent in intents {
             let Some(generation_id) = intent.generation_id else {
@@ -197,9 +194,6 @@ impl RuntimeDispatchCoordinator {
                 scan_code: intent.scan_code,
                 key_slot: intent.key_slot,
                 source_action_index: intent.source_action_index,
-                scheduled_down_ticks,
-                down_dispatch_started_ticks: dispatch_started_ticks,
-                down_dispatch_completed_ticks: dispatch_completed_ticks,
                 release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(intent.key_slot);

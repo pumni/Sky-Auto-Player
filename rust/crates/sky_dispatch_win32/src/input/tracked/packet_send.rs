@@ -3,10 +3,11 @@ use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
 use super::super::packet::send_prepared_physical_packet_once_at_target_with_cutoff;
-use super::super::packet::send_prepared_physical_packet_once_with_cutoff;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::packet::send_prepared_physical_packet_once_with_start_and_cutoff;
-use super::super::packet::{PreparedPhysicalPacket, send_physical_packet_once_with_start};
+use super::super::packet::{
+    PreparedPacketView, PreparedPhysicalPacket, send_physical_packet_once_with_start,
+};
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
     no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock,
@@ -342,6 +343,22 @@ impl TrackedKeyState {
         started_ticks: QpcTicks,
         latest_allowed_down_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_view_with_start_and_cutoff(
+            prepared.as_view(),
+            started_ticks,
+            latest_allowed_down_qpc,
+        )
+    }
+
+    /// Test-support prepared borrowed-view send with a caller-controlled
+    /// authoritative start timestamp and the same pre-syscall Down cutoff.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn send_prepared_physical_packet_view_with_start_and_cutoff(
+        &mut self,
+        prepared: PreparedPacketView<'_>,
+        started_ticks: QpcTicks,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+    ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
             return self.apply_packet_outcome(
@@ -386,7 +403,7 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                send_prepared_physical_packet_once_with_start_and_cutoff(
+                super::super::packet::send_prepared_physical_packet_view_once_with_start_and_cutoff(
                     prepared,
                     clock,
                     started_ticks,
@@ -418,7 +435,7 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                send_prepared_physical_packet_once_with_start_and_cutoff(
+                super::super::packet::send_prepared_physical_packet_view_once_with_start_and_cutoff(
                     prepared,
                     clock,
                     started_ticks,
@@ -570,6 +587,19 @@ impl TrackedKeyState {
         prepared: &PreparedPhysicalPacket,
         latest_allowed_down_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_view_with_cutoff(
+            prepared.as_view(),
+            latest_allowed_down_qpc,
+        )
+    }
+
+    /// Send a trusted borrowed prepared packet and enforce an optional
+    /// Down-only hard cutoff against the sender's authoritative QPC sample.
+    pub fn send_prepared_physical_packet_view_with_cutoff(
+        &mut self,
+        prepared: PreparedPacketView<'_>,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+    ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
         let outcome = if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -598,7 +628,11 @@ impl TrackedKeyState {
                     },
                 );
             };
-            send_prepared_physical_packet_once_with_cutoff(prepared, clock, latest_allowed_down_qpc)
+            super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
+                prepared,
+                clock,
+                latest_allowed_down_qpc,
+            )
         };
         #[cfg(not(any(test, feature = "test-support")))]
         let outcome = {
@@ -625,7 +659,11 @@ impl TrackedKeyState {
                     },
                 );
             };
-            send_prepared_physical_packet_once_with_cutoff(prepared, clock, latest_allowed_down_qpc)
+            super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
+                prepared,
+                clock,
+                latest_allowed_down_qpc,
+            )
         };
         self.apply_packet_outcome(packet, outcome)
     }

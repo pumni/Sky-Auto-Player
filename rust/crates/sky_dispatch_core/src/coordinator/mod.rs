@@ -201,9 +201,6 @@ pub struct ActiveGeneration {
     pub scan_code: u16,
     pub key_slot: KeySlot,
     pub source_action_index: u32,
-    pub scheduled_down_ticks: TimelineTicks,
-    pub down_dispatch_started_ticks: TimelineTicks,
-    pub down_dispatch_completed_ticks: TimelineTicks,
     pub release_not_before_ticks: TimelineTicks,
 }
 
@@ -239,11 +236,20 @@ pub struct PreparedAuthoredFrame {
     pub stale_up_count: u8,
 }
 
-/// Frozen authored commit evidence.  The worker builds this while preparing
-/// the immutable dispatch plan; the post-SendInput path applies it directly to
-/// the bounded generation ledger without rediscovering schedule ranges.
+/// One allocation-free logical preparation product.  The coordinator builds
+/// the frame classification, validated packet view, and frozen commit token
+/// from one authoritative packet traversal before the timed wait.
+#[derive(Debug, Clone)]
+pub struct PreparedAuthoredPacket<'a> {
+    pub frame: PreparedAuthoredFrame,
+    pub packet: PacketView<'a>,
+    pub commit: PreparedAuthoredCommit,
+}
+
+/// One prepared authored Up intent. Immediate and deferred releases share one
+/// bounded vector; the frame masks classify each entry at commit time.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedDeferredReleaseIntent {
+pub struct PreparedUpIntent {
     pub intent: CompactIntent,
     pub source_action_index: u32,
 }
@@ -257,8 +263,7 @@ pub struct PreparedDownIntent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedAuthoredCommit {
     pub frame: PreparedAuthoredFrame,
-    pub immediate_up_intents: SmallVec<[CompactIntent; MAX_KEYS]>,
-    pub deferred_up_intents: SmallVec<[PreparedDeferredReleaseIntent; MAX_KEYS]>,
+    pub up_intents: SmallVec<[PreparedUpIntent; MAX_KEYS]>,
     pub down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]>,
     pub down_source_action_index: Option<u32>,
 }

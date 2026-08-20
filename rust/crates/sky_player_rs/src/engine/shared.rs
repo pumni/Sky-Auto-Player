@@ -187,6 +187,7 @@ pub(super) struct SessionShared {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sky_dispatch_core::clock::PauseReason;
     use std::num::NonZeroU64;
 
     fn test_qpc_clock() -> QpcClock {
@@ -220,7 +221,7 @@ mod tests {
         let qpc_clock = test_qpc_clock();
 
         clock
-            .enter_pause("manual", QpcTicks::from_raw(2_000))
+            .enter_pause(PauseReason::Manual, QpcTicks::from_raw(2_000))
             .unwrap();
         shared.publish(&clock);
         let paused_anchor = shared.load().expect("published pause anchor");
@@ -231,7 +232,7 @@ mod tests {
         );
 
         clock
-            .exit_pause("manual", QpcTicks::from_raw(5_000))
+            .exit_pause(PauseReason::Manual, QpcTicks::from_raw(5_000))
             .unwrap();
         shared.publish(&clock);
         let resumed_anchor = shared.load().expect("published resume anchor");
@@ -275,7 +276,9 @@ mod tests {
     fn focus_pause_before_future_epoch_remains_clamped() {
         let mut clock =
             PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        clock.enter_pause("focus", QpcTicks::from_raw(900)).unwrap();
+        clock
+            .enter_pause(PauseReason::Focus, QpcTicks::from_raw(900))
+            .unwrap();
         let shared = SharedProgressClock::default();
         shared.publish(&clock);
         let anchor = shared.load().expect("published focus anchor");

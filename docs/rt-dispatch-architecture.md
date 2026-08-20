@@ -30,6 +30,10 @@ reorder, retry, or commit physical input. Diagnostic shutdown signals the
 consumer, joins it, merges its local metrics, and then publishes the final
 report.
 
+Playback pause ownership is a closed typed set (`Manual` and `Focus`) backed by
+a bitmask. The clock retains the first opener as typed attribution, so pause
+overlap bookkeeping has no hash table or reason-string allocation.
+
 ## 2. Immutable plan
 
 One outer worker epoch builds one typed plan from the coordinator. The plan is
@@ -39,6 +43,22 @@ target. Observer health budgets are not physical-plan inputs. The plan is
 reused by waiting, due selection, and physical dispatch. Commands,
 focus/pause transitions, target changes, lease-only wakes, and interrupts
 invalidate it and cause a replan.
+
+Authored logical preparation validates and consumes the selected packet's
+compact intents once, freezing the commit proof from that same packet view;
+pending-release merging remains a separate bounded mask operation. Physical
+packet storage initializes only its `0..len` prefix. Borrowed packet views expose
+that initialized prefix and never expose the unused fixed-capacity tail; Mixed
+missed-Down recovery reuses the primary packet's canonical Up prefix instead of
+materializing a second payload.
+
+The authored commit token stores immediate and deferred Up identities in one
+bounded vector. `immediate_up_mask` and `deferred_up_mask` classify those
+entries during the single bounded commit pass, while only deferred entries
+use the source-action identity needed by the pending-release table. The
+active-generation ledger stores ownership identity, scan code, slot, source
+action, and the authored hold floor; dispatch start/completion timestamps remain
+transport observations rather than per-key hot-state fields.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored timestamps are used as authored. Release deadlines
@@ -215,8 +235,9 @@ authoritative and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
-the dispatch path does not take a redundant QPC sample or reconstruct the
-physical target from wake time.
+the precision wait result likewise preserves its raw deadline wake QPC for
+diagnostic handoff evidence. Neither path takes a redundant QPC sample or
+reconstructs the physical target from wake time.
 
 MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
 TimeCritical is not the default and priority setup failure is reported rather
@@ -247,8 +268,9 @@ An unobserved overdue Down is a recoverable Production deadline miss after the
 first successful musical Down: the Down portion is omitted, the frozen
 coordinator frame is committed as missed, and playback advances to the next
 authored target without rebasing or changing timestamps. A Mixed frame sends
-only its required Up subset through one fixed recovery packet; a failed or
-uncertain safety Up remains terminal. Up-only safety releases are exempt from
+only its required Up subset through one borrowed view of the prepared primary
+packet's canonical Up prefix; no second recovery payload is materialized. A
+failed or uncertain safety Up remains terminal. Up-only safety releases are exempt from
 the musical backlog rule and are sent even when late. Strict-timing diagnostic
 mode may retain terminal behavior for qualification. In every mode, missed
 Downs are never retried or emitted as a catch-up burst.

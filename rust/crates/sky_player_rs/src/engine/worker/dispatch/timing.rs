@@ -15,8 +15,10 @@ use super::super::{
     DispatchPath, DispatchPreparationProbe, WorkerConfig, WorkerHealthState, WorkerRuntime,
     WorkerTimingState, signed_timeline_delta_ticks,
 };
-use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit};
-use sky_dispatch_core::coordinator::{PreparedAuthoredFrame, PreparedBatch};
+use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit, RecoveryDescriptor};
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_core::coordinator::PreparedAuthoredFrame;
+use sky_dispatch_core::coordinator::{PreparedAuthoredPacket, PreparedBatch};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
@@ -164,7 +166,7 @@ pub(crate) fn prepare_authored_batch_view(
                 )));
             }
         };
-    let prepared_up_recovery_packet = prepare_up_recovery_packet(packet_masks)?;
+    let recovery = prepare_up_recovery_descriptor(packet_masks);
     let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
     let authored_ticks = coordinator
         .effective_batch_scheduled_ticks(batch_index)
@@ -197,40 +199,26 @@ pub(crate) fn prepare_authored_batch_view(
         dispatch_path,
         packet_masks,
         prepared_packet,
-        prepared_up_recovery_packet,
+        recovery,
         commit: PhysicalCommit::Authored(commit),
     }))
 }
 
-/// Build a physical view from the coordinator's per-key frame classification.
-/// Deferred unrelated releases are intentionally absent from the packet.
-pub(crate) fn prepare_authored_frame_view(
+/// Materialize the physical packet from the coordinator's one-pass logical
+/// product.  The borrowed packet view and frozen commit are consumed here;
+/// this stage must not re-read schedule ranges or rebuild the commit token.
+pub(crate) fn prepare_authored_frame_view_from_prepared(
     coordinator: &RuntimeDispatchCoordinator,
-    frame: PreparedAuthoredFrame,
-    preparation_probe: &DispatchPreparationProbe,
-) -> BatchViewResult {
-    prepare_authored_frame_view_with_pending(
-        coordinator,
-        frame,
-        0,
-        frame.authored_ticks,
-        preparation_probe,
-    )
-}
-
-pub(crate) fn prepare_authored_frame_view_with_pending(
-    coordinator: &RuntimeDispatchCoordinator,
-    frame: PreparedAuthoredFrame,
+    prepared: PreparedAuthoredPacket<'_>,
     pending_release_mask: u16,
     pending_due_ticks: TimelineTicks,
     preparation_probe: &DispatchPreparationProbe,
 ) -> BatchViewResult {
-    let packet = coordinator
-        .schedule
-        .view_packet_ticks(frame.packet_index, frame.authored_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("runtime packet view failure: {error}"))
-        })?;
+    let PreparedAuthoredPacket {
+        frame,
+        packet,
+        commit,
+    } = prepared;
     let selected_up_mask = frame.immediate_up_mask | pending_release_mask;
     let selected_down_mask = frame.down_mask;
     let selected_packet = PhysicalPacket::new(selected_up_mask, selected_down_mask);
@@ -239,12 +227,12 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
             .map_err(|error| {
                 DispatchStep::Terminate(format!("physical packet kind failure: {error}"))
             })?;
-    preparation_probe.record_packet_view();
     preparation_probe.record_conflict();
     let conflict_mask =
         coordinator.check_packet_down_conflicts(selected_up_mask, selected_down_mask);
-    let down_source_action_index = packet.header.down_source_action_index;
-    let batch_source_action_index = down_source_action_index
+    let batch_source_action_index = packet
+        .header
+        .down_source_action_index
         .or_else(|| {
             coordinator
                 .schedule
@@ -260,7 +248,7 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
     .map_err(|error| {
         DispatchStep::Terminate(format!("physical packet preparation failure: {error}"))
     })?;
-    let prepared_up_recovery_packet = prepare_up_recovery_packet(selected_packet)?;
+    let recovery = prepare_up_recovery_descriptor(selected_packet);
     let up_count = selected_up_mask.count_ones() as usize;
     let down_count = selected_down_mask.count_ones() as usize;
     let dispatch_path = match packet_kind {
@@ -280,11 +268,6 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
         packet_batch_count: frame.packet_batch_count,
         packet_kind,
     };
-    let authored_commit = coordinator
-        .prepare_authored_commit(frame)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("authored commit preparation failure: {error}"))
-        })?;
     Ok(Some(AuthoredBatchView {
         prepared_batch,
         batch_source_action_index,
@@ -300,12 +283,12 @@ pub(crate) fn prepare_authored_frame_view_with_pending(
         dispatch_path,
         packet_masks: selected_packet,
         prepared_packet,
-        prepared_up_recovery_packet,
+        recovery,
         commit: if pending_release_mask == 0 {
-            PhysicalCommit::Authored(authored_commit)
+            PhysicalCommit::Authored(commit)
         } else {
             PhysicalCommit::Coalesced {
-                authored: authored_commit,
+                authored: commit,
                 release_mask: pending_release_mask,
                 due_ticks: pending_due_ticks,
             }
@@ -354,7 +337,7 @@ pub(crate) fn prepare_pending_release_view(
         dispatch_path: DispatchPath::UpOnly { up_count: count },
         packet_masks: packet,
         prepared_packet,
-        prepared_up_recovery_packet: None,
+        recovery: RecoveryDescriptor::None,
         commit: PhysicalCommit::PendingRelease {
             release_mask,
             due_ticks,
@@ -362,28 +345,21 @@ pub(crate) fn prepare_pending_release_view(
     }))
 }
 
-fn prepare_up_recovery_packet(
-    packet: PhysicalPacket,
-) -> Result<Option<sky_dispatch_win32::input::PreparedPhysicalPacket>, DispatchStep> {
+fn prepare_up_recovery_descriptor(packet: PhysicalPacket) -> RecoveryDescriptor {
     if packet.down_mask == 0 || packet.up_mask == 0 {
-        return Ok(None);
+        return RecoveryDescriptor::None;
     }
-    sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(PhysicalPacket::new(
-        packet.up_mask,
-        0,
-    ))
-    .map(Some)
-    .map_err(|error| {
-        DispatchStep::Terminate(format!(
-            "physical Up recovery packet preparation failure: {error}"
-        ))
-    })
+    RecoveryDescriptor::UpPrefix {
+        up_len: packet.up_mask.count_ones() as u8,
+        up_mask: packet.up_mask,
+    }
 }
 
 /// Timing-derived evidence captured from the note-on SendInput call.
 pub(crate) struct DownSendTiming {
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
+    pub(crate) precision_wake_qpc: Option<QpcTicks>,
     pub(crate) final_proof_qpc: QpcTicks,
     pub(crate) pre_call_qpc: QpcTicks,
     pub(crate) sendinput_completion_qpc: QpcTicks,
@@ -523,6 +499,7 @@ pub(crate) fn interpret_down_send_timing(
     runtime: &mut WorkerRuntime,
     _qpc_clock: QpcClock,
     physical_target_qpc: QpcTicks,
+    precision_wake_qpc: Option<QpcTicks>,
     final_proof_qpc: QpcTicks,
     coordinator: &mut RuntimeDispatchCoordinator,
     _health: &WorkerHealthState,
@@ -612,6 +589,7 @@ pub(crate) fn interpret_down_send_timing(
     Ok(DownSendTiming {
         epoch_qpc: clock_state.epoch,
         allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
+        precision_wake_qpc,
         final_proof_qpc,
         pre_call_qpc,
         sendinput_completion_qpc,

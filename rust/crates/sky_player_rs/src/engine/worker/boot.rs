@@ -218,6 +218,39 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
+    // The old producer-side rule converted lateness to floored microseconds
+    // and then tested `> 2/5/10 ms`.  Convert the first strictly-over value
+    // once so the tick comparisons below preserve that exact boundary.
+    let pre_call_2ms_ticks = match qpc_clock.duration_from_us(2_001) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 2ms threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_5ms_ticks = match qpc_clock.duration_from_us(5_001) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 5ms threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_10ms_ticks = match qpc_clock.duration_from_us(10_001) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 10ms threshold conversion failed: {error:?}"),
+            );
+        }
+    };
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
@@ -376,6 +409,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         paused_poll_ticks,
         lease_timeout_ticks,
         effective_spin_threshold_ticks,
+        pre_call_2ms_ticks,
+        pre_call_5ms_ticks,
+        pre_call_10ms_ticks,
         start_wall_time_us,
         start_thread_cpu_us,
         start_process_cpu_us,

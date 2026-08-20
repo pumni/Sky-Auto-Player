@@ -398,6 +398,8 @@ reorder input.
 The authoritative sender-side metrics are:
 
 - `final_proof_qpc`, `pre_call_qpc`, and `sendinput_completion_qpc`;
+- diagnostic-only `precision_handoff` evidence carrying the admission wake
+  (when present), precision-wait wake, and final-proof QPC boundaries;
 - signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
   as the primary pre-call timing metric; it is not a syscall-entry or game-
   receipt timestamp;
@@ -406,6 +408,12 @@ The authoritative sender-side metrics are:
 - requested/confirmed/skipped packet masks;
 - release-floor/defer evidence; and
 - diagnostic-only observer queue/drop and telemetry counters.
+
+The producer-side maximum SendInput pre-call lateness is retained in raw QPC
+ticks. The `2 ms`, `5 ms`, and `10 ms` bucket cutoffs are converted once during
+worker admission; the compatibility/public microsecond maximum is derived only
+when a metrics snapshot is published. This preserves the public schema and
+bucket semantics without a QPC frequency conversion on every physical send.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
 They must not be described as game-observed timing. The compatibility report
@@ -421,10 +429,12 @@ The serialized `send_started_ticks`, `send_completed_ticks`, and
 callers. They map to `pre_call_qpc`, `sendinput_completion_qpc`, and
 `pre_call_to_completion`; production does not take a second QPC sample to
 preserve the old names.
-The optional `dispatch_ready_qpc` and `core_post_send_duration_us` fields are
-diagnostic-only and are not sampled by the production sender. The dispatch
-worker CPU metric is likewise captured during worker finalization, never by
-the deferred observer thread.
+The optional `dispatch_ready_qpc`, `precision_handoff`, and
+`core_post_send_duration_us` fields are diagnostic-only and are not sampled by
+the production sender. `precision_handoff` reuses the precision waiter's raw
+deadline wake evidence and does not add a QPC read. The dispatch worker CPU
+metric is likewise captured during worker finalization, never by the deferred
+observer thread.
 
 ## 8. Validation obligations
 
