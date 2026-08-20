@@ -164,21 +164,21 @@ class OptionModal(PickerModal[object | None]):
 
 
 class CalibrationProgressModal(PickerModal[None]):
-    """Modal displayed while host input delivery calibration is running."""
+    """Modal displayed while sender hold-margin calibration is running."""
 
     BINDINGS: list[tuple[str, str, str]] = []
 
     def __init__(self, *, theme_name: str = "aurora") -> None:
         PickerModal.__init__(
             self,
-            "Host Input Delivery Calibration",
+            "Host Hold Margin Calibration",
             [],
             theme_name=theme_name,
         )
 
     def compose_modal_content(self) -> ComposeResult:
         text = (
-            "Host input delivery calibration is running.\n\n"
+            "Host sender hold-margin calibration is running.\n\n"
             "Keep the separate calibration window focused.\n"
             "Keyboard commands are temporarily disabled."
         )

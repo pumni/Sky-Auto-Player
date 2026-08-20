@@ -54,16 +54,16 @@ _HOST_FINGERPRINT = {
     "sampled_at_us": 123,
 }
 _INTEGRATION_CACHE: dict = {
-    "version": 5,
-    "artifact_schema_version": 10,
+    "version": 6,
+    "artifact_schema_version": 11,
     "status": "valid",
     "source": "device_cache",
-    "evidence_kind": "injected_raw_input_total_hold_proxy",
-    "source_formula_version": 4,
+    "evidence_kind": "sender_completion_hold_shrink",
+    "source_formula_version": 5,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
-    "native_calibration_version": 13,
-    "measurement_protocol_version": 9,
+    "native_calibration_version": 14,
+    "measurement_protocol_version": 10,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
     "dirty_worktree": False,
@@ -80,18 +80,18 @@ _INTEGRATION_CACHE: dict = {
             "attempted": 100,
             "clean_pair_count": 100,
             "rejected": 0,
-            "pair_worst_total_proxy_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
+            "pair_sender_hold_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
             "scheduler_shrink_us": _signed_stats(6),
             "sendinput_shrink_us": _signed_stats(6),
-            "delivery_shrink_us": _signed_stats(6),
-            "pair_worst_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
+            "down_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
+            "up_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
         }
         for key in _REQUIRED_BUCKETS
     },
     "qualification": {
-        "basis": "max_required_bucket_p99_positive_pair_total_proxy_hold_shrink",
+        "basis": "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink",
         "worst_bucket": "15/cold",
-        "global_shrink_p99_us": 700,
+        "sender_hold_shrink_p99_us": 700,
         "guard_us": 100,
         "floor_us": 300,
         "ceiling_us": 2000,
@@ -441,7 +441,7 @@ class TestKeymapCommandRename:
         cmd = self._get_command("calibrate_latency")
         assert cmd is not None, "calibrate_latency command missing from COMMANDS"
         assert cmd.key == "c", f"Expected key='c', got key={cmd.key!r}"
-        assert cmd.label == "Host Input Delivery Calibration"
+        assert cmd.label == "Host Hold Margin Calibration"
 
     def test_calibration_has_no_direct_key(self) -> None:
         """Telemetry recommendation command must not be bound to 'c'."""
@@ -602,17 +602,17 @@ class TestPublishedCalibrationResultContract:
             source="device_cache",
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
-            evidence_kind="injected_raw_input_delivery_proxy",
+            evidence_kind="sender_completion_hold_shrink",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
             pair_buckets={},
             worst_bucket="15/cold",
-            global_shrink_p99_us=700,
+            sender_hold_shrink_p99_us=700,
             guard_us=100,
             ceiling_us=2_000,
         )
-        assert pub.global_shrink_p99_us == 700
-        assert pub.evidence_kind == "injected_raw_input_delivery_proxy"
+        assert pub.sender_hold_shrink_p99_us == 700
+        assert pub.evidence_kind == "sender_completion_hold_shrink"
 
     def test_published_result_extracts_pair_quantiles_from_cache(self) -> None:
         """parse_calibration_cache_summary extracts signed pair quantiles."""
@@ -621,7 +621,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert summary.pair_buckets["15/cold"].pair_worst_total_proxy_shrink_us.p99 == 700
+        assert summary.pair_buckets["15/cold"].pair_sender_hold_shrink_us.p99 == 700
         assert summary.margin_us == 800
 
     def test_published_result_contains_numeric_signed_pair_quantiles(self) -> None:
@@ -631,8 +631,8 @@ class TestPublishedCalibrationResultContract:
         )
 
         summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
-        assert type(summary.pair_buckets["1/hot"].pair_worst_total_proxy_shrink_us.p50) is int
-        assert summary.pair_buckets["1/hot"].pair_worst_total_proxy_shrink_us.min < 0
+        assert type(summary.pair_buckets["1/hot"].pair_sender_hold_shrink_us.p50) is int
+        assert summary.pair_buckets["1/hot"].pair_sender_hold_shrink_us.min < 0
 
     def test_published_result_accepts_margin_floor_300(self) -> None:
         """Recommended margin floor is 300 µs when paired p99 is small."""
@@ -642,9 +642,9 @@ class TestPublishedCalibrationResultContract:
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
         for bucket in cache["pair_buckets"].values():
-            bucket["pair_worst_total_proxy_shrink_us"] = _signed_stats(-2)
+            bucket["pair_sender_hold_shrink_us"] = _signed_stats(-2)
         cache["qualification"].update(
-            {"worst_bucket": "1/hot", "global_shrink_p99_us": 0, "candidate_margin_us": 100, "applied_margin_us": 300}
+            {"worst_bucket": "1/hot", "sender_hold_shrink_p99_us": 0, "candidate_margin_us": 100, "applied_margin_us": 300}
         )
         summary = parse_calibration_cache_summary(cache)
         assert summary.margin_us == 300
@@ -658,7 +658,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        del cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["p50"]
+        del cache["pair_buckets"]["1/hot"]["pair_sender_hold_shrink_us"]["p50"]
         with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
@@ -671,7 +671,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        del cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["p99"]
+        del cache["pair_buckets"]["1/hot"]["pair_sender_hold_shrink_us"]["p99"]
         with pytest.raises((TypeError, ValueError)):
             parse_calibration_cache_summary(cache)
 
@@ -684,7 +684,7 @@ class TestPublishedCalibrationResultContract:
         )
 
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
-        cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"].update(
+        cache["pair_buckets"]["1/hot"]["pair_sender_hold_shrink_us"].update(
             {"p50": 9, "p90": 2}
         )
         with pytest.raises(ValueError):
@@ -705,12 +705,12 @@ class TestPublishedCalibrationResultContract:
             source="device_cache",
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
-            evidence_kind="injected_raw_input_delivery_proxy",
+            evidence_kind="sender_completion_hold_shrink",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
             pair_buckets={},
             worst_bucket="15/cold",
-            global_shrink_p99_us=700,
+            sender_hold_shrink_p99_us=700,
             guard_us=100,
             ceiling_us=2_000,
         )
@@ -719,7 +719,7 @@ class TestPublishedCalibrationResultContract:
             f"Device margin: {pub.margin_us} µs\n"
             f"Source: {pub.source}\n"
             f"Cache: {pub.cache_path}\n\n"
-            f"Host delivery hold-shrink p99: {pub.global_shrink_p99_us} µs\n"
+            f"Host sender hold-shrink p99: {pub.sender_hold_shrink_p99_us} µs\n"
             f"Worst bucket: {pub.worst_bucket}\n"
             f"Evidence: {pub.evidence_kind} (SendInput → app-owned WM_INPUT)."
         )

@@ -1,9 +1,9 @@
-"""Strict loader for the paired total-hold calibration cache.
+"""Strict loader for the sender-side completion-hold calibration cache.
 
-The cache is host-side target-to-receipt evidence for an app-owned
-``WM_INPUT`` path.  It is not game, rendering, audio, or network latency.
-Legacy independent Down/Up evidence is intentionally rejected rather than
-reinterpreted as paired total-hold evidence.
+The cache is host-side ``T/P/C`` sender evidence for Rust plus Windows
+``SendInput``. It is not game, rendering, audio, or Raw Input delivery
+latency. Legacy receipt evidence is intentionally rejected rather than
+reinterpreted as sender completion evidence.
 """
 
 from __future__ import annotations
@@ -21,21 +21,17 @@ SOURCE_DEFAULT_500: str = "default_500"
 SOURCE_OUT_OF_ENVELOPE_DEFAULT_500: str = "out_of_envelope_default_500"
 SOURCE_INVALID_CACHE_DEFAULT_500: str = "invalid_cache_default_500"
 SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
-SUPPORTED_CACHE_VERSION: int = 5
+SUPPORTED_CACHE_VERSION: int = 6
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
 SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 14
-# Schema 14 adds diagnostic-only WM_INPUT queue timestamps. Schema 13 cache
-# qualification data has identical protocol-9 semantics and remains loadable.
-COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset(
-    {13, 14}
-)
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 9
-SOURCE_FORMULA_VERSION: int = 4
+COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset({14})
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 10
+SOURCE_FORMULA_VERSION: int = 5
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
 HOST_FINGERPRINT_VERSION: int = 2
-CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 10
-CALIBRATION_EVIDENCE_KIND: str = "injected_raw_input_total_hold_proxy"
+CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 11
+CALIBRATION_EVIDENCE_KIND: str = "sender_completion_hold_shrink"
 MIN_CALIBRATION_SAMPLE_COUNT: int = 100
 MAX_SHRINK_US: int = 100_000
 MARGIN_GUARD_US: int = 100
@@ -68,15 +64,15 @@ class CalibrationQualification:
 
 
 def qualify_calibration_margin(
-    global_shrink_p99_us: int,
+    sender_hold_shrink_p99_us: int,
 ) -> CalibrationQualification:
-    """Apply the one authoritative host-delivery qualification formula."""
+    """Apply the authoritative sender completion-hold qualification formula."""
 
-    if not isinstance(global_shrink_p99_us, int) or isinstance(
-        global_shrink_p99_us, bool
+    if not isinstance(sender_hold_shrink_p99_us, int) or isinstance(
+        sender_hold_shrink_p99_us, bool
     ):
-        raise TypeError("global_shrink_p99_us must be an integer")
-    positive_p99 = max(0, global_shrink_p99_us)
+        raise TypeError("sender_hold_shrink_p99_us must be an integer")
+    positive_p99 = max(0, sender_hold_shrink_p99_us)
     candidate = positive_p99 + MARGIN_GUARD_US
     if candidate > MARGIN_CEILING_US:
         return CalibrationQualification(
@@ -116,12 +112,11 @@ class PairBucketSummary:
     attempted: int
     clean_pair_count: int
     rejected: int
-    pair_worst_total_proxy_shrink_us: SignedQuantiles
+    pair_sender_hold_shrink_us: SignedQuantiles
     scheduler_shrink_us: SignedQuantiles
     sendinput_shrink_us: SignedQuantiles
-    delivery_shrink_us: SignedQuantiles
-    # Legacy delivery-only diagnostics are retained for display/audit only.
-    pair_worst_shrink_us: SignedQuantiles | None = None
+    down_call_duration_us: SignedQuantiles | None = None
+    up_call_duration_us: SignedQuantiles | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +127,7 @@ class CalibrationCacheSummary:
     sample_count: int
     pair_buckets: dict[str, PairBucketSummary]
     worst_bucket: str
-    global_shrink_p99_us: int
+    sender_hold_shrink_p99_us: int
     guard_us: int
     floor_us: int
     ceiling_us: int
@@ -361,9 +356,9 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
             attempted=attempted,
             clean_pair_count=clean,
             rejected=rejected,
-            pair_worst_total_proxy_shrink_us=_quantiles(
-                bucket.get("pair_worst_total_proxy_shrink_us"),
-                f"{key}.pair_worst_total_proxy_shrink_us",
+            pair_sender_hold_shrink_us=_quantiles(
+                bucket.get("pair_sender_hold_shrink_us"),
+                f"{key}.pair_sender_hold_shrink_us",
             ),
             scheduler_shrink_us=_quantiles(
                 bucket.get("scheduler_shrink_us"), f"{key}.scheduler_shrink_us"
@@ -371,14 +366,12 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
             sendinput_shrink_us=_quantiles(
                 bucket.get("sendinput_shrink_us"), f"{key}.sendinput_shrink_us"
             ),
-            delivery_shrink_us=_quantiles(
-                bucket.get("delivery_shrink_us"), f"{key}.delivery_shrink_us"
+            down_call_duration_us=_quantiles(
+                bucket.get("down_call_duration_us"), f"{key}.down_call_duration_us"
             ),
-            pair_worst_shrink_us=_quantiles(
-                bucket.get("pair_worst_shrink_us"), f"{key}.pair_worst_shrink_us"
-            )
-            if bucket.get("pair_worst_shrink_us") is not None
-            else None,
+            up_call_duration_us=_quantiles(
+                bucket.get("up_call_duration_us"), f"{key}.up_call_duration_us"
+            ),
         )
     return pair_buckets
 
@@ -387,7 +380,7 @@ def _recompute_qualification(
     pair_buckets: dict[str, PairBucketSummary],
 ) -> tuple[int, str, CalibrationQualification]:
     p99_values = {
-        key: max(0, bucket.pair_worst_total_proxy_shrink_us.p99)
+        key: max(0, bucket.pair_sender_hold_shrink_us.p99)
         for key, bucket in pair_buckets.items()
     }
     global_p99 = max(0, *(p99_values[key] for key in REQUIRED_BUCKETS))
@@ -434,7 +427,7 @@ def _summary(
         sample_count=min(bucket.clean_pair_count for bucket in pair_buckets.values()),
         pair_buckets=pair_buckets,
         worst_bucket=worst_bucket,
-        global_shrink_p99_us=global_p99,
+        sender_hold_shrink_p99_us=global_p99,
         guard_us=guard,
         floor_us=floor,
         ceiling_us=ceiling,
@@ -444,9 +437,9 @@ def _summary(
     )
 
 
-def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
+def _parse_v6(data: dict[str, object]) -> CalibrationCacheSummary:
     if data.get("source_formula_version") != SOURCE_FORMULA_VERSION:
-        raise ValueError("unsupported calibration source formula")
+        raise ValueError("unsupported sender calibration source formula")
     _validate_provenance(data, require_extended=True)
     scheduling_aids = _validate_publishable_scheduling_aids(data.get("scheduling_aids"))
     pair_buckets = _parse_pair_buckets(data)
@@ -455,11 +448,11 @@ def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
     raw = data.get("qualification")
     if not isinstance(raw, dict):
         raise TypeError("qualification must be an object")
-    if raw.get("basis") != "max_required_bucket_p99_positive_pair_total_proxy_hold_shrink":
+    if raw.get("basis") != "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink":
         raise ValueError("qualification basis is missing or invalid")
     if raw.get("worst_bucket") != worst_bucket:
         raise ValueError("qualification worst bucket is inconsistent")
-    if raw.get("global_shrink_p99_us") != global_p99:
+    if raw.get("sender_hold_shrink_p99_us") != global_p99:
         raise ValueError("qualification p99 is inconsistent")
     guard, floor, ceiling = _validate_policy_constants(raw, name="qualification")
     candidate = _int(raw.get("candidate_margin_us"), "qualification.candidate_margin_us", minimum=0)
@@ -473,7 +466,7 @@ def _parse_v5(data: dict[str, object]) -> CalibrationCacheSummary:
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid calibration cache status") from exc
     if status not in (CalibrationStatus.VALID, CalibrationStatus.OUT_OF_ENVELOPE):
-        raise ValueError("v4 cache has a non-publishable status")
+        raise ValueError("v6 cache has a non-publishable status")
     if status is not qualification.status:
         raise ValueError("qualification status is inconsistent")
 
@@ -520,7 +513,7 @@ def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
         raise ValueError("unsupported measurement protocol")
     if data.get("source") != SOURCE_DEVICE_CACHE:
         raise ValueError("invalid calibration source")
-    return _parse_v5(data)
+    return _parse_v6(data)
 
 
 def load_calibration_resolution(
@@ -547,10 +540,12 @@ def load_calibration_resolution(
                 summary=None,
             )
     if isinstance(data, dict) and (
-        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION)
+        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION, 5)
         or data.get("measurement_protocol_version") == 4
         or data.get("measurement_protocol_version") == 8
+        or data.get("measurement_protocol_version") == 9
         or data.get("evidence_kind") == "injected_raw_input_delivery_proxy"
+        or data.get("evidence_kind") == "injected_raw_input_total_hold_proxy"
     ):
         return CalibrationLoadResult(
             status=CalibrationStatus.INCOMPATIBLE,

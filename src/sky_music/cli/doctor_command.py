@@ -31,7 +31,7 @@ def run_doctor_command(
         print("=" * 60)
     elif calibrate:
         print("=" * 60)
-        print("    SKY MUSIC PLAYER — HOST INPUT DELIVERY CALIBRATION")
+        print("    SKY MUSIC PLAYER — HOST HOLD MARGIN CALIBRATION")
         print("=" * 60)
         from sky_music.platform.win32 import window_target
         if window_target.get_sky_window() is not None:
@@ -41,8 +41,8 @@ def run_doctor_command(
             return 1
         
         print("Creating calibration window. Please keep the window focused.")
-        print("Injecting balanced Down/Up pairs and measuring the host-side total hold proxy...")
-        print("This is SendInput target-to-receipt evidence, not game/audio onset truth.")
+        print("Sending balanced Down/Up pairs and measuring sender-side completion hold shrink...")
+        print("This is Rust + SendInput evidence, not Raw Input, game, or audio onset truth.")
         try:
             from sky_music.infrastructure.calibration_loader import CalibrationStatus
             from sky_music.platform.win32.native_calibration import (
@@ -51,21 +51,21 @@ def run_doctor_command(
 
             res = run_published_native_calibration()
             print(
-                "Host total-hold proxy shrink p99 (us): "
-                f"{res.global_shrink_p99_us} (worst bucket: {res.worst_bucket})"
+                "Host sender hold shrink p99 (us): "
+                f"{res.sender_hold_shrink_p99_us} (worst bucket: {res.worst_bucket})"
             )
-            print(f"Candidate hold correction (us): {res.candidate_margin_us}")
+            print(f"Required hold margin (us): {res.candidate_margin_us}")
             print(f"Policy guard (us): {res.guard_us}")
             print(f"Trusted correction ceiling (us): {res.ceiling_us}")
             print(f"Evidence: {res.evidence_kind}")
             print(f"Cache: {res.cache_path.as_posix()}")
             if res.status is CalibrationStatus.VALID:
                 assert res.margin_us is not None
-                print("Host Input Delivery Calibration: VALID")
+                print("Host Sender Hold Calibration: VALID")
                 print(f"Applied hold margin (us): {res.margin_us}")
                 print(f"Materialized authored hold (us): {res.effective_min_hold_us}")
             else:
-                print("Host Input Delivery Calibration: OUT OF ENVELOPE")
+                print("Host Sender Hold Calibration: OUT OF ENVELOPE")
                 print("Applied calibrated margin: NONE")
                 print("Playback hold fallback: 500 us (not calibrated)")
                 print("Calibration measurement completed, but host qualification failed.")

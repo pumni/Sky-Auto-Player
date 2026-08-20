@@ -1312,11 +1312,11 @@ class PickerScreen(Screen[SongPickerResult]):
             PickerOption("no", "Cancel"),
         ]
         text = (
-            "This measures the host-side injected Raw Input total target-to-receipt hold proxy; it does not measure Sky polling, rendering, or audio latency.\n\n"
+            "This measures sender-side completion Down→Up hold shrink for Rust + Windows SendInput; it does not measure Sky polling, Raw Input delivery, rendering, or audio latency.\n\n"
             "1. A separate Windows calibration window will open.\n"
             "2. Keep that window focused and avoid pressing keys until it completes.\n"
             "3. A bounded series of Down/Up calibration pairs will be sent across the required polyphony and hot/cold buckets.\n"
-            "4. The result is saved only after correlation, cleanup, and evidence gates pass.\n\n"
+            "4. The result is saved only after sender, cleanup, and evidence gates pass.\n\n"
             "Would you like to proceed?"
         )
         
@@ -1326,7 +1326,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
         self.app.push_screen(
             OptionModal(
-                "Host Input Delivery Calibration",
+                "Host Hold Margin Calibration",
                 options,
                 info_text=text,
                 theme_name=self.active_theme,
@@ -1399,11 +1399,11 @@ class PickerScreen(Screen[SongPickerResult]):
 
         if published.status is CalibrationStatus.OUT_OF_ENVELOPE:
             message = (
-                "Host Input Delivery Calibration: OUT OF ENVELOPE\n\n"
-                f"Host total-hold proxy shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                "Host Sender Hold Calibration: OUT OF ENVELOPE\n\n"
+                f"Host sender hold shrink p99     : {published.sender_hold_shrink_p99_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
-                f"Required hold correction       : {published.candidate_margin_us} \u00b5s\n"
+                f"Required hold margin           : {published.candidate_margin_us} \u00b5s\n"
                 f"Trusted correction ceiling    : {published.ceiling_us} \u00b5s\n\n"
                 "Applied calibrated margin      : NONE\n"
                 "Playback hold fallback         : 500 \u00b5s (not calibrated)\n"
@@ -1412,21 +1412,21 @@ class PickerScreen(Screen[SongPickerResult]):
                 f"Cache                          : {published.cache_path}\n\n"
                 "Note-On timestamps: unchanged\n\n"
                 "Reason:\n"
-                "Measured host delivery behavior is outside the trusted\n"
-                "calibration correction envelope."
+                "Measured Rust/SendInput completion-hold compression exceeds\n"
+                "the trusted calibration correction envelope."
             )
-            title = "Host Input Delivery Calibration: OUT OF ENVELOPE"
+            title = "Host Sender Hold Calibration: OUT OF ENVELOPE"
         else:
             assert published.status is CalibrationStatus.VALID
             assert published.margin_us is not None
             assert published.effective_min_hold_us is not None
             message = (
-                "Host Input Delivery Calibration: VALID\n\n"
-                f"Host total-hold proxy shrink p99 : {published.global_shrink_p99_us} \u00b5s\n"
+                "Host Sender Hold Calibration: VALID\n\n"
+                f"Host sender hold shrink p99      : {published.sender_hold_shrink_p99_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
-                f"Candidate hold correction      : {published.candidate_margin_us} \u00b5s\n"
-                f"Applied hold margin            : {published.margin_us} \u00b5s\n"
+                f"Required hold margin            : {published.candidate_margin_us} \u00b5s\n"
+                f"Applied calibrated margin       : {published.margin_us} \u00b5s\n"
                 f"Trusted correction ceiling     : {published.ceiling_us} \u00b5s\n"
                 f"Materialized authored hold     : {published.effective_min_hold_us} \u00b5s\n"
                 f"Clean pairs / required bucket  : {published.sample_count}\n"
@@ -1434,7 +1434,7 @@ class PickerScreen(Screen[SongPickerResult]):
                 f"Cache                          : {published.cache_path}\n\n"
                 "Note-On timestamps: unchanged"
             )
-            title = "Host Input Delivery Calibration: VALID"
+            title = "Host Sender Hold Calibration: VALID"
 
         self.app.push_screen(InfoModal(title, message, theme_name=self.active_theme))
 

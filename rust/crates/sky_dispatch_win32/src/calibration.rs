@@ -1,36 +1,34 @@
-//! Chord-aware `SendInput` delivery-proxy calibration harness.
+//! Chord-aware sender-side `SendInput` hold-margin calibration harness.
 //!
 //! # Evidence scope
 //!
-//! This module measures **injected Raw Input target-to-receipt total hold
-//! proxy** evidence only. Concretely it captures four QPC boundaries for each
-//! direction: the absolute target, the fused sender crossing immediately
-//! before `SendInput`, syscall completion, and the first `WM_INPUT` receipt.
-//! Diagnostic key evidence also preserves the raw uint32 `GetMessageTime`
-//! queue timestamp; it is never converted to QPC or used for qualification.
+//! The publishable path measures sender-side completion hold shrink only. It
+//! captures three QPC boundaries for each direction: the absolute target, the
+//! fused sender crossing immediately before `SendInput`, and syscall
+//! completion. Raw Input receipt evidence is optional diagnostic machinery and
+//! never participates in the publishable result.
 //!
 //! The measured boundary is:
 //! ```text
 //! target_ticks         — absolute target requested by the calibration pair
 //! call_started_ticks   — fused crossing QPC immediately before SendInput
 //! call_completed_ticks — QPC immediately after SendInput returns
-//! first_receipt_ticks  — QPC when the first WM_INPUT for this packet arrives
+//! completion_ticks     — QPC immediately after SendInput returns
 //! ```
 //!
 //! This is **not** game-observed latency.  Do not label it as such.
 //!
 //! # Design
 //!
-//! A dedicated invisible top-level window is created for the duration of the
-//! calibration run.  Raw keyboard input is registered for that window using
-//! `RIDEV_INPUTSINK` so receipts arrive regardless of foreground focus.
+//! A dedicated calibration window is created for the duration of the sender
+//! run to preserve the existing foreground/focus safety boundary. The default
+//! publishable path does not register Raw Input.
 //!
-//! Each calibration packet carries an 8-bit marker plus 24-bit `sequence_id`
-//! in `dwExtraInfo`. Windows Raw Input does not document that this value
-//! preserves `KEYBDINPUT.dwExtraInfo`; therefore a missing or mismatched tag
-//! is terminal for publishable calibration rather than silently correlated by
-//! physical identity alone. Admission still uses one active packet, an ordered
-//! message-queue barrier, and exact scan-code/direction/extended-flag identity.
+//! The publishable sender path reuses the ordinary prepared physical packet and
+//! does not need a Raw Input tag. The optional observer diagnostic retains the
+//! legacy 8-bit marker plus 24-bit `sequence_id` in `dwExtraInfo`. Windows Raw
+//! Input does not document that this value preserves `KEYBDINPUT.dwExtraInfo`,
+//! so missing or mismatched tags are terminal in that diagnostic path.
 //!
 //! The window message pump runs on a dedicated thread so it does not interfere
 //! with the calling thread's timing measurements.
@@ -247,6 +245,46 @@ pub struct PairedTimingShrinkUs {
     pub total_proxy_shrink_us: i64,
 }
 
+/// The three authoritative sender-side QPC boundaries for one direction.
+///
+/// `receipt_ticks` intentionally does not exist in this production model. A
+/// sender pair owns one Down triple and one Up triple regardless of packet
+/// polyphony.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SenderTimingPoint {
+    pub target_ticks: QpcTicks,
+    pub pre_call_ticks: QpcTicks,
+    pub completion_ticks: QpcTicks,
+}
+
+/// Signed sender-side hold-shrink components in raw QPC ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SenderPairEvidenceTicks {
+    pub target_hold_ticks: i128,
+    pub completion_hold_ticks: i128,
+    pub scheduler_down_late_ticks: i128,
+    pub scheduler_up_late_ticks: i128,
+    pub scheduler_shrink_ticks: i128,
+    pub down_send_duration_ticks: i128,
+    pub up_send_duration_ticks: i128,
+    pub sendinput_shrink_ticks: i128,
+    pub sender_hold_shrink_ticks: i128,
+}
+
+/// Signed sender-side hold-shrink components converted to microseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SenderPairEvidenceUs {
+    pub target_hold_us: i64,
+    pub completion_hold_us: i64,
+    pub scheduler_down_late_us: i64,
+    pub scheduler_up_late_us: i64,
+    pub scheduler_shrink_us: i64,
+    pub down_send_duration_us: i64,
+    pub up_send_duration_us: i64,
+    pub sendinput_shrink_us: i64,
+    pub sender_hold_shrink_us: i64,
+}
+
 fn ordered_delta(
     later: QpcTicks,
     earlier: QpcTicks,
@@ -351,6 +389,90 @@ pub fn paired_timing_shrink_us(
         sendinput_shrink_us: signed_ticks_to_us(clock, shrink.sendinput_shrink_ticks)?,
         delivery_shrink_us: signed_ticks_to_us(clock, shrink.delivery_shrink_ticks)?,
         total_proxy_shrink_us: signed_ticks_to_us(clock, shrink.total_proxy_shrink_ticks)?,
+    })
+}
+
+/// Compute the authoritative sender-side hold shrink in raw ticks.
+///
+/// The identity is proved before any QPC-to-microsecond conversion:
+///
+/// `target_hold - completion_hold == scheduler_shrink + sendinput_shrink`.
+pub fn sender_pair_evidence_ticks(
+    down: SenderTimingPoint,
+    up: SenderTimingPoint,
+) -> Result<SenderPairEvidenceTicks, CalibrationError> {
+    let scheduler_down_late = ordered_delta(
+        down.pre_call_ticks,
+        down.target_ticks,
+        "down pre_call before target",
+    )?;
+    let scheduler_up_late = ordered_delta(
+        up.pre_call_ticks,
+        up.target_ticks,
+        "up pre_call before target",
+    )?;
+    let down_send_duration = ordered_delta(
+        down.completion_ticks,
+        down.pre_call_ticks,
+        "down completion before pre_call",
+    )?;
+    let up_send_duration = ordered_delta(
+        up.completion_ticks,
+        up.pre_call_ticks,
+        "up completion before pre_call",
+    )?;
+    let target_hold = ordered_delta(
+        up.target_ticks,
+        down.target_ticks,
+        "up target before down target",
+    )?;
+    let completion_hold = ordered_delta(
+        up.completion_ticks,
+        down.completion_ticks,
+        "up completion before down completion",
+    )?;
+    let scheduler_shrink = scheduler_down_late
+        .checked_sub(scheduler_up_late)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let sendinput_shrink = down_send_duration
+        .checked_sub(up_send_duration)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let sender_hold_shrink = target_hold
+        .checked_sub(completion_hold)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    let decomposed = scheduler_shrink
+        .checked_add(sendinput_shrink)
+        .ok_or(CalibrationError::TimestampArithmeticOverflow)?;
+    if sender_hold_shrink != decomposed {
+        return Err(CalibrationError::TimestampArithmeticOverflow);
+    }
+    Ok(SenderPairEvidenceTicks {
+        target_hold_ticks: target_hold,
+        completion_hold_ticks: completion_hold,
+        scheduler_down_late_ticks: scheduler_down_late,
+        scheduler_up_late_ticks: scheduler_up_late,
+        scheduler_shrink_ticks: scheduler_shrink,
+        down_send_duration_ticks: down_send_duration,
+        up_send_duration_ticks: up_send_duration,
+        sendinput_shrink_ticks: sendinput_shrink,
+        sender_hold_shrink_ticks: sender_hold_shrink,
+    })
+}
+
+pub fn sender_pair_evidence_us(
+    clock: QpcClock,
+    evidence: SenderPairEvidenceTicks,
+) -> Result<SenderPairEvidenceUs, CalibrationError> {
+    Ok(SenderPairEvidenceUs {
+        target_hold_us: signed_ticks_to_us(clock, evidence.target_hold_ticks)?,
+        completion_hold_us: signed_ticks_to_us(clock, evidence.completion_hold_ticks)?,
+        scheduler_down_late_us: signed_ticks_to_us(clock, evidence.scheduler_down_late_ticks)?,
+        scheduler_up_late_us: signed_ticks_to_us(clock, evidence.scheduler_up_late_ticks)?,
+        scheduler_shrink_us: signed_ticks_to_us(clock, evidence.scheduler_shrink_ticks)?,
+        down_send_duration_us: signed_ticks_to_us(clock, evidence.down_send_duration_ticks)?,
+        up_send_duration_us: signed_ticks_to_us(clock, evidence.up_send_duration_ticks)?,
+        sendinput_shrink_us: signed_ticks_to_us(clock, evidence.sendinput_shrink_ticks)?,
+        sender_hold_shrink_us: signed_ticks_to_us(clock, evidence.sender_hold_shrink_ticks)?,
     })
 }
 
@@ -515,6 +637,43 @@ pub struct PairSampleEvidence {
     pub up_anomalies: SampleAnomalies,
 }
 
+/// One publishable sender-side Down/Up pair. There is exactly one evidence
+/// value per packet pair; it is never expanded or summed per scan code.
+#[derive(Debug, Clone)]
+pub struct SenderPairSample {
+    pub down: CalibrationSample,
+    pub up: CalibrationSample,
+    pub down_idle_gap_ticks: sky_dispatch_core::time::DurationTicks,
+    pub up_idle_gap_ticks: sky_dispatch_core::time::DurationTicks,
+    pub evidence: SenderPairEvidenceUs,
+    pub class_mismatch: bool,
+}
+
+impl SenderPairSample {
+    pub fn is_clean(&self) -> bool {
+        !self.class_mismatch
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SenderPairSampleEvidence {
+    pub clean: bool,
+    pub actual_down_gap_us: u64,
+    pub actual_up_gap_us: u64,
+    pub target_hold_us: i64,
+    pub completion_hold_us: i64,
+    pub scheduler_down_late_us: i64,
+    pub scheduler_up_late_us: i64,
+    pub scheduler_shrink_us: i64,
+    pub down_send_duration_us: i64,
+    pub up_send_duration_us: i64,
+    pub sendinput_shrink_us: i64,
+    pub sender_hold_shrink_us: i64,
+    pub down_call_duration_us: u64,
+    pub up_call_duration_us: u64,
+    pub class_mismatch: bool,
+}
+
 /// Signed tick delta in microseconds: `later - earlier`.
 fn signed_delta_us(later: QpcTicks, earlier: QpcTicks) -> Result<i64, CalibrationError> {
     if later.as_u64() >= earlier.as_u64() {
@@ -622,16 +781,20 @@ pub struct BucketStats {
     pub direction_mismatch_count: u64,
     pub reordered_receipt_count: u64,
     pub class_mismatch_count: u64,
-    /// Count of per-key Raw Input timestamps observed before SendInput return.
+    /// Diagnostic-only receipt ordering counter; sender qualification ignores it.
     pub receipt_before_completion_count: u64,
     pub down_call_duration_us: QuantileStats,
     pub up_call_duration_us: QuantileStats,
-    /// Legacy delivery-only diagnostic retained for audit readers.
+    /// Authoritative one-value-per-Down/Up-pair sender completion shrink.
     #[serde(default)]
+    pub pair_sender_hold_shrink_us: Option<SignedQuantileStats>,
+    /// Legacy Raw Input diagnostics are retained in memory only and are never
+    /// serialized into the production sender artifact.
+    #[serde(default)]
+    #[serde(skip_serializing)]
     pub pair_worst_shrink_us: Option<SignedQuantileStats>,
-    /// vNext qualification evidence: worst per-key total target-to-receipt
-    /// hold shrink for each clean pair.
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub pair_worst_total_proxy_shrink_us: Option<SignedQuantileStats>,
     /// Component diagnostics only; these are never summed independently for
     /// qualification.
@@ -640,10 +803,13 @@ pub struct BucketStats {
     #[serde(default)]
     pub sendinput_shrink_us: Option<SignedQuantileStats>,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub delivery_shrink_us: Option<SignedQuantileStats>,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub down_receipt_us: Option<SignedQuantileStats>,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub up_receipt_us: Option<SignedQuantileStats>,
 }
 
@@ -679,10 +845,10 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 9;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 10;
 pub const CALIBRATION_SCHEMA_VERSION: u32 = 14;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
-pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
+pub const CALIBRATION_EVIDENCE_KIND: &str = "sender_completion_hold_shrink";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
 pub const CALIBRATION_MIN_MEASUREMENT_SECONDS: u64 = 1;
 pub const CALIBRATION_MIN_TOTAL_BUDGET_SECONDS: u64 =
@@ -718,9 +884,6 @@ pub struct CalibrationConfig {
     pub samples_per_cold_bucket: u32,
     /// Warm-up injections that are not included in any measured bucket.
     pub warmup_samples: u32,
-    /// Milliseconds to wait for Raw Input receipts before marking a packet as
-    /// timed out. Recommended: 200 ms.
-    pub receipt_timeout_ms: u32,
     /// Requested microseconds between hot samples. Actual QPC time is still
     /// required to admit a sample to the hot bucket.
     pub hot_gap_target_us: u64,
@@ -742,7 +905,6 @@ impl Default for CalibrationConfig {
             samples_per_hot_bucket: 500,
             samples_per_cold_bucket: 500,
             warmup_samples: 20,
-            receipt_timeout_ms: 200,
             hot_gap_target_us: 5_000,
             cold_idle_gap_us: 25_000,
             cold_threshold_us: SEND_COLD_THRESHOLD_US,
@@ -812,7 +974,7 @@ pub struct CalibrationOutput {
     /// Protocol-vNext pair matrix. The six required production cells live here.
     pub pair_buckets: HashMap<u8, HashMap<String, BucketStats>>,
     /// Bounded diagnostic evidence for rejected pairs in each required bucket.
-    pub anomalous_pairs: HashMap<u8, HashMap<String, Vec<PairSampleEvidence>>>,
+    pub anomalous_pairs: HashMap<u8, HashMap<String, Vec<SenderPairSampleEvidence>>>,
     /// Warm-up attempts, kept separate from measured evidence.
     pub warmup_attempted: u64,
     /// Measured attempts represented by the bucket map.
@@ -857,8 +1019,8 @@ pub struct CalibrationPairBucketOutput {
     pub warmup_pairs: u64,
     pub warmup_rejected: u64,
     pub pair_bucket: BucketStats,
-    pub worst_pairs: Vec<PairSampleEvidence>,
-    pub anomalous_pairs: Vec<PairSampleEvidence>,
+    pub worst_pairs: Vec<SenderPairSampleEvidence>,
+    pub anomalous_pairs: Vec<SenderPairSampleEvidence>,
     pub cleanup: CleanupOutcome,
 }
 
@@ -1534,6 +1696,7 @@ mod platform {
 
     struct PumpContext {
         shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
+        raw_input_enabled: bool,
         previous_raw_input_devices: Vec<RAWINPUTDEVICE>,
         // GetRawInputData requires DWORD-aligned output storage. `usize`
         // provides at least that alignment on every supported Windows target.
@@ -1717,6 +1880,9 @@ mod platform {
 
         match msg {
             WM_INPUT => {
+                if !ctx.raw_input_enabled {
+                    return complete_wm_input(hwnd, wparam, lparam);
+                }
                 // GetMessageTime returns the raw uint32 millisecond time at
                 // which this message was created/placed in the pump thread
                 // queue. Capture it before any handler-side locking. Preserve
@@ -2004,6 +2170,7 @@ mod platform {
                 }
 
                 if sealed
+                    && ctx.raw_input_enabled
                     && !unregister_and_restore_raw_input_devices(&ctx.previous_raw_input_devices)
                 {
                     let (lock, cvar) = ctx.shared.as_ref();
@@ -2101,18 +2268,23 @@ mod platform {
 
     // ── Window pump thread ────────────────────────────────────────────────────
 
-    fn pump_thread(shared: Arc<(Mutex<SharedCalibState>, Condvar)>) {
+    fn pump_thread(shared: Arc<(Mutex<SharedCalibState>, Condvar)>, raw_input_enabled: bool) {
         // RegisterRawInputDevices is process-global. Preserve every existing
         // registration and restore it before this calibration thread exits.
         // A missing snapshot is treated as a setup failure rather than
         // silently deleting another subsystem's registration.
-        let Some(previous_raw_input_devices) = snapshot_raw_input_devices() else {
-            let (lock, _cvar) = shared.as_ref();
-            if let Ok(mut g) = lock.lock() {
-                g.window_ready = true;
-            }
-            eprintln!("[calibration] GetRegisteredRawInputDevices failed");
-            return;
+        let previous_raw_input_devices = if raw_input_enabled {
+            let Some(previous) = snapshot_raw_input_devices() else {
+                let (lock, _cvar) = shared.as_ref();
+                if let Ok(mut g) = lock.lock() {
+                    g.window_ready = true;
+                }
+                eprintln!("[calibration] GetRegisteredRawInputDevices failed");
+                return;
+            };
+            previous
+        } else {
+            Vec::new()
         };
         // Register window class.
         let class_name: Vec<u16> = "SkyCalibWindow\0".encode_utf16().collect();
@@ -2146,7 +2318,7 @@ mod platform {
             }
         }
 
-        let window_name: Vec<u16> = "Sky Auto Player — Input Latency Calibration\0"
+        let window_name: Vec<u16> = "Sky Auto Player — Host Sender Hold Calibration\0"
             .encode_utf16()
             .collect();
         // SAFETY: top-level window for calibration foreground ownership.
@@ -2179,7 +2351,7 @@ mod platform {
 
         let static_class: Vec<u16> = "STATIC\0".encode_utf16().collect();
         let label_text: Vec<u16> =
-            "Input latency calibration is running...\n\nKeep this window focused until calibration completes.\nDo not press any keys."
+            "Host sender hold calibration is running...\n\nKeep this window focused until calibration completes.\nDo not press any keys."
                 .encode_utf16()
                 .collect();
         unsafe {
@@ -2200,7 +2372,9 @@ mod platform {
             ShowWindow(hwnd, SW_SHOW);
         }
 
-        // Register Raw Input for keyboard on this window.
+        // Register Raw Input only for the explicitly requested diagnostic
+        // observer. Publishable sender calibration leaves process-global Raw
+        // Input registration untouched.
         let rid = RAWINPUTDEVICE {
             usUsagePage: HID_USAGE_PAGE_GENERIC,
             usUsage: 0x06, // HID_USAGE_GENERIC_KEYBOARD
@@ -2208,10 +2382,11 @@ mod platform {
             hwndTarget: hwnd,
         };
         // SAFETY: rid is a valid RAWINPUTDEVICE and remains alive for the call.
-        let ok = unsafe {
-            RegisterRawInputDevices(&rid, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-        };
-        if ok == 0 {
+        let ok = !raw_input_enabled
+            || unsafe {
+                RegisterRawInputDevices(&rid, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32) != 0
+            };
+        if !ok {
             let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
             unsafe { DestroyWindow(hwnd) };
             let (lock, _cvar) = shared.as_ref();
@@ -2236,6 +2411,7 @@ mod platform {
         // Install the thread-local context pointer.
         let ctx = PumpContext {
             shared: Arc::clone(&shared),
+            raw_input_enabled,
             previous_raw_input_devices,
             input_buffer: std::cell::RefCell::new(Vec::with_capacity(4096)),
         };
@@ -2286,7 +2462,8 @@ mod platform {
             .lock()
             .map(|state| state.observer_lifecycle == ObserverLifecycle::Sealed)
             .unwrap_or(false);
-        if !already_restored
+        if raw_input_enabled
+            && !already_restored
             && !unregister_and_restore_raw_input_devices(&ctx.previous_raw_input_devices)
         {
             let (lock, cvar) = shared.as_ref();
@@ -2370,11 +2547,26 @@ mod platform {
 
     impl CalibrationSession {
         pub fn open() -> Result<Self, CalibrationError> {
-            Self::open_with_measurement_deadline(None)
+            Self::open_with_measurement_deadline_and_observer(None, false)
+        }
+
+        /// Open the optional Raw Input observer path. This is retained for
+        /// engineering diagnostics only; it is never used by publishable
+        /// sender calibration.
+        #[allow(dead_code)]
+        pub fn open_raw_input() -> Result<Self, CalibrationError> {
+            Self::open_with_measurement_deadline_and_observer(None, true)
         }
 
         fn open_with_measurement_deadline(
             measurement_deadline: Option<QpcTicks>,
+        ) -> Result<Self, CalibrationError> {
+            Self::open_with_measurement_deadline_and_observer(measurement_deadline, false)
+        }
+
+        fn open_with_measurement_deadline_and_observer(
+            measurement_deadline: Option<QpcTicks>,
+            raw_input_enabled: bool,
         ) -> Result<Self, CalibrationError> {
             let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
             let precision_waiter = HybridWaiter::production();
@@ -2415,7 +2607,7 @@ mod platform {
 
             let handle = std::thread::Builder::new()
                 .name("sky-calib-pump".into())
-                .spawn(move || pump_thread(shared_clone))
+                .spawn(move || pump_thread(shared_clone, raw_input_enabled))
                 .map_err(|_| CalibrationError::WindowThreadFailed)?;
 
             // Wait for the pump to signal window ready.
@@ -2472,12 +2664,14 @@ mod platform {
             }
 
             #[cfg(not(any(test, feature = "test-support")))]
-            if let Err(err) = session.correlation_self_test() {
-                // The probe is deliberately excluded from all statistics, but
-                // a failed probe must still clean up before the session is
-                // allowed to escape.
-                let _ = session.close();
-                return Err(err);
+            if raw_input_enabled {
+                if let Err(err) = session.correlation_self_test() {
+                    // The probe is deliberately excluded from all statistics, but
+                    // a failed probe must still clean up before the session is
+                    // allowed to escape.
+                    let _ = session.close();
+                    return Err(err);
+                }
             }
 
             Ok(session)
@@ -2817,6 +3011,117 @@ mod platform {
             }
         }
 
+        fn scan_codes_mask(scan_codes: &[u16]) -> Result<u16, CalibrationError> {
+            let mut mask = 0u16;
+            for &scan_code in scan_codes {
+                let index = PHYSICAL_INSTRUMENT_SCAN_CODES
+                    .iter()
+                    .position(|&candidate| candidate == scan_code)
+                    .ok_or(CalibrationError::InvalidScanCode { scan_code })?;
+                mask |= 1u16 << index;
+            }
+            Ok(mask)
+        }
+
+        /// Send one sender-only calibration packet through the same prepared
+        /// physical packet and target-aware `SendInput` primitive used by
+        /// playback. No Raw Input registration, receipt wait, or second QPC
+        /// sample is part of this path.
+        pub fn measure_sender_packet_at_target(
+            &mut self,
+            scan_codes: &[u16],
+            key_up: bool,
+            physical_target_qpc: QpcTicks,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            self.ensure_foreground_owned()?;
+            validate_packet_scan_codes(scan_codes)?;
+            let mask = Self::scan_codes_mask(scan_codes)?;
+            let packet = if key_up {
+                crate::input::PhysicalPacket::new(mask, 0)
+            } else {
+                crate::input::PhysicalPacket::new(0, mask)
+            };
+            let prepared = crate::input::PreparedPhysicalPacket::try_new(packet)
+                .map_err(|_| CalibrationError::PolyphonyTooLarge(scan_codes.len()))?;
+            self.wait_to_precision_boundary(physical_target_qpc)?;
+            let outcome = crate::input::send_prepared_physical_packet_once_at_target_with_cutoff(
+                &prepared,
+                self.qpc_clock,
+                physical_target_qpc,
+                None,
+            );
+            let evidence = outcome.evidence;
+            let started = evidence
+                .started_ticks
+                .ok_or(CalibrationError::ClockFailure)?;
+            let completed = evidence
+                .completed_ticks
+                .ok_or(CalibrationError::ClockFailure)?;
+            let expected = scan_codes.len() as u8;
+            if !matches!(
+                outcome.status,
+                crate::input::SendTransactionStatus::Complete
+            ) || evidence.first_inserted != expected
+            {
+                return Err(CalibrationError::PacketIntegrity {
+                    phase: "sender_packet",
+                    sequence_id: self.next_sequence,
+                    expected,
+                    received: evidence.first_inserted.min(expected),
+                    win32_error: evidence.last_win32_error,
+                });
+            }
+            self.next_sequence = self
+                .next_sequence
+                .checked_add(1)
+                .ok_or(CalibrationError::SequenceOverflow)?;
+            self.last_send_completed_ticks = Some(completed);
+            if key_up {
+                self.possibly_active_mask &= !mask;
+            } else {
+                self.possibly_active_mask |= mask;
+            }
+            Ok(CalibrationSample {
+                sequence_id: self.next_sequence.saturating_sub(1),
+                target_ticks: physical_target_qpc,
+                call_started_ticks: started,
+                call_completed_ticks: completed,
+                first_receipt_ticks: None,
+                last_receipt_ticks: None,
+                receipt_count: 0,
+                expected_receipt_count: 0,
+                win32_error: evidence.last_win32_error,
+                actual_idle_gap_ticks: None,
+                observed_class: None,
+                anomalies: SampleAnomalies::default(),
+                receipts: SmallVec::new(),
+            })
+        }
+
+        pub fn measure_classified_sender_packet(
+            &mut self,
+            scan_codes: &[u16],
+            key_up: bool,
+            expected_class: SampleClass,
+            cold_threshold: sky_dispatch_core::time::DurationTicks,
+            physical_target_qpc: QpcTicks,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let previous_completion = self
+                .last_send_completed_ticks
+                .ok_or(CalibrationError::ClockFailure)?;
+            let mut sample =
+                self.measure_sender_packet_at_target(scan_codes, key_up, physical_target_qpc)?;
+            let (observed_class, actual_idle_gap_ticks) = classify_idle_gap(
+                previous_completion,
+                sample.call_started_ticks,
+                cold_threshold,
+            )?;
+            sample.observed_class = Some(observed_class);
+            sample.actual_idle_gap_ticks = Some(actual_idle_gap_ticks);
+            sample.anomalies.class_mismatch = observed_class != expected_class;
+            Ok(sample)
+        }
+
         /// Inject one calibration packet and collect receipts.
         ///
         /// `scan_codes` must be a subset of `PHYSICAL_INSTRUMENT_SCAN_CODES`.
@@ -3049,6 +3354,7 @@ mod platform {
         /// Measure one packet and classify it from the immediately previous
         /// exact SendInput completion. A mismatch is retained in the
         /// requested bucket only as rejected evidence.
+        #[allow(dead_code)]
         pub fn measure_classified_packet(
             &mut self,
             scan_codes: &[u16],
@@ -3078,6 +3384,7 @@ mod platform {
             Ok(sample)
         }
 
+        #[allow(dead_code)]
         fn check_publishable_close_boundary(
             &self,
             before_pump_stop: bool,
@@ -3107,6 +3414,7 @@ mod platform {
         /// Ask the pump thread to own the final observer seal. The handler
         /// drains pending input, restores the registration, drains once more,
         /// marks the lifecycle `Sealed`, and only then posts WM_QUIT.
+        #[allow(dead_code)]
         fn seal_pump_thread(&mut self) -> Result<(), CalibrationError> {
             if self.hwnd == 0 {
                 return Err(CalibrationError::WindowThreadFailed);
@@ -3227,6 +3535,7 @@ mod platform {
         /// is stopped and Raw Input registration is restored, cleanup traffic
         /// cannot create an untagged measurement receipt or mutate correlation
         /// trust. Any boundary loss before or during the seal is terminal.
+        #[allow(dead_code)]
         fn close_publishable(&mut self) -> Result<CleanupOutcome, CalibrationError> {
             if let Err(error) = self.drain_pump_before_arm() {
                 let _ = self.emergency_close_in_place();
@@ -3253,6 +3562,17 @@ mod platform {
 
         pub fn close(mut self) -> CleanupOutcome {
             self.emergency_close_in_place()
+        }
+
+        /// Close the sender-only session without invoking the Raw Input seal
+        /// protocol. The window thread is stopped first; then the bounded
+        /// physical All-Up cleanup and verification run.
+        pub fn close_sender(mut self) -> CleanupOutcome {
+            self.stop_pump_thread();
+            let mut cleanup = self.cleanup_keyboard();
+            self.cleanup_done = true;
+            self.apply_session_cleanup_state(&mut cleanup);
+            cleanup
         }
     }
 
@@ -3517,6 +3837,7 @@ mod platform {
         })
     }
 
+    #[allow(dead_code)]
     fn aggregate_pairs(pairs: &[PairSample]) -> Result<BucketStats, CalibrationError> {
         let clean_pairs: Vec<&PairSample> = pairs.iter().filter(|pair| pair.is_clean()).collect();
         let legacy_pair_values: Vec<i64> = clean_pairs
@@ -3666,6 +3987,7 @@ mod platform {
             receipt_before_completion_count,
             down_call_duration_us: quantile_stats_u64(&down_calls)?,
             up_call_duration_us: quantile_stats_u64(&up_calls)?,
+            pair_sender_hold_shrink_us: None,
             pair_worst_shrink_us: legacy_pair_stats,
             pair_worst_total_proxy_shrink_us: total_pair_stats,
             scheduler_shrink_us: scheduler_stats,
@@ -3676,6 +3998,155 @@ mod platform {
         })
     }
 
+    fn sender_pair_packets(
+        down: CalibrationSample,
+        up: CalibrationSample,
+        clock: QpcClock,
+    ) -> Result<SenderPairSample, CalibrationError> {
+        let down_gap = down
+            .actual_idle_gap_ticks
+            .ok_or(CalibrationError::ClockFailure)?;
+        let up_gap = up
+            .actual_idle_gap_ticks
+            .ok_or(CalibrationError::ClockFailure)?;
+        let evidence = sender_pair_evidence_us(
+            clock,
+            sender_pair_evidence_ticks(
+                SenderTimingPoint {
+                    target_ticks: down.target_ticks,
+                    pre_call_ticks: down.call_started_ticks,
+                    completion_ticks: down.call_completed_ticks,
+                },
+                SenderTimingPoint {
+                    target_ticks: up.target_ticks,
+                    pre_call_ticks: up.call_started_ticks,
+                    completion_ticks: up.call_completed_ticks,
+                },
+            )?,
+        )?;
+        let class_mismatch = down.anomalies.class_mismatch || up.anomalies.class_mismatch;
+        Ok(SenderPairSample {
+            down,
+            up,
+            down_idle_gap_ticks: down_gap,
+            up_idle_gap_ticks: up_gap,
+            evidence,
+            class_mismatch,
+        })
+    }
+
+    fn sender_pair_sample_evidence(
+        pair: &SenderPairSample,
+    ) -> Result<SenderPairSampleEvidence, CalibrationError> {
+        Ok(SenderPairSampleEvidence {
+            clean: pair.is_clean(),
+            actual_down_gap_us: qpc_ticks_to_us(QpcTicks::from_raw(
+                pair.down_idle_gap_ticks.as_u64(),
+            ))
+            .map_err(|_| CalibrationError::ClockFailure)?,
+            actual_up_gap_us: qpc_ticks_to_us(QpcTicks::from_raw(pair.up_idle_gap_ticks.as_u64()))
+                .map_err(|_| CalibrationError::ClockFailure)?,
+            target_hold_us: pair.evidence.target_hold_us,
+            completion_hold_us: pair.evidence.completion_hold_us,
+            scheduler_down_late_us: pair.evidence.scheduler_down_late_us,
+            scheduler_up_late_us: pair.evidence.scheduler_up_late_us,
+            scheduler_shrink_us: pair.evidence.scheduler_shrink_us,
+            down_send_duration_us: pair.evidence.down_send_duration_us,
+            up_send_duration_us: pair.evidence.up_send_duration_us,
+            sendinput_shrink_us: pair.evidence.sendinput_shrink_us,
+            sender_hold_shrink_us: pair.evidence.sender_hold_shrink_us,
+            down_call_duration_us: pair.down.call_duration_us()?,
+            up_call_duration_us: pair.up.call_duration_us()?,
+            class_mismatch: pair.class_mismatch,
+        })
+    }
+
+    fn aggregate_sender_pairs(pairs: &[SenderPairSample]) -> Result<BucketStats, CalibrationError> {
+        let clean_pairs: Vec<&SenderPairSample> =
+            pairs.iter().filter(|pair| pair.is_clean()).collect();
+        let sender_values: Vec<i64> = clean_pairs
+            .iter()
+            .map(|pair| pair.evidence.sender_hold_shrink_us)
+            .collect();
+        let scheduler_values: Vec<i64> = clean_pairs
+            .iter()
+            .map(|pair| pair.evidence.scheduler_shrink_us)
+            .collect();
+        let sendinput_values: Vec<i64> = clean_pairs
+            .iter()
+            .map(|pair| pair.evidence.sendinput_shrink_us)
+            .collect();
+        let down_calls: Vec<u64> = clean_pairs
+            .iter()
+            .map(|pair| pair.down.call_duration_us())
+            .collect::<Result<_, _>>()?;
+        let up_calls: Vec<u64> = clean_pairs
+            .iter()
+            .map(|pair| pair.up.call_duration_us())
+            .collect::<Result<_, _>>()?;
+        let attempted = pairs.len() as u64;
+        let clean = clean_pairs.len() as u64;
+        let rejected = attempted.saturating_sub(clean);
+        let class_mismatch_count = pairs.iter().filter(|pair| !pair.is_clean()).count() as u64;
+        Ok(BucketStats {
+            attempted,
+            clean,
+            clean_sample_count: clean,
+            rejected,
+            partial_send: 0,
+            sample_count: attempted,
+            timeout_count: 0,
+            anomaly_count: rejected,
+            pairing_anomaly_count: 0,
+            duplicate_receipt_count: 0,
+            unexpected_scan_code_count: 0,
+            direction_mismatch_count: 0,
+            reordered_receipt_count: 0,
+            class_mismatch_count,
+            receipt_before_completion_count: 0,
+            down_call_duration_us: quantile_stats_u64(&down_calls)?,
+            up_call_duration_us: quantile_stats_u64(&up_calls)?,
+            pair_sender_hold_shrink_us: (!sender_values.is_empty())
+                .then(|| quantile_stats_i64(&sender_values))
+                .transpose()?,
+            pair_worst_shrink_us: None,
+            pair_worst_total_proxy_shrink_us: None,
+            scheduler_shrink_us: (!scheduler_values.is_empty())
+                .then(|| quantile_stats_i64(&scheduler_values))
+                .transpose()?,
+            sendinput_shrink_us: (!sendinput_values.is_empty())
+                .then(|| quantile_stats_i64(&sendinput_values))
+                .transpose()?,
+            delivery_shrink_us: None,
+            down_receipt_us: None,
+            up_receipt_us: None,
+        })
+    }
+
+    fn compact_sender_pairs(
+        pairs: &[SenderPairSample],
+        limit: usize,
+    ) -> Result<Vec<SenderPairSampleEvidence>, CalibrationError> {
+        let mut evidence = pairs
+            .iter()
+            .map(sender_pair_sample_evidence)
+            .collect::<Result<Vec<_>, _>>()?;
+        evidence.sort_by_key(|sample| std::cmp::Reverse(sample.sender_hold_shrink_us));
+        evidence.truncate(limit);
+        Ok(evidence)
+    }
+
+    fn anomalous_sender_pairs(
+        pairs: &[SenderPairSample],
+    ) -> Result<Vec<SenderPairSampleEvidence>, CalibrationError> {
+        pairs
+            .iter()
+            .filter(|pair| !pair.is_clean())
+            .map(sender_pair_sample_evidence)
+            .collect()
+    }
+
+    #[allow(dead_code)]
     fn compact_worst_pairs(
         pairs: &[PairSample],
         limit: usize,
@@ -3691,6 +4162,7 @@ mod platform {
         Ok(evidence)
     }
 
+    #[allow(dead_code)]
     fn anomalous_pair_evidence(
         pairs: &[PairSample],
     ) -> Result<Vec<PairSampleEvidence>, CalibrationError> {
@@ -3949,6 +4421,7 @@ mod platform {
         Ok((down, up))
     }
 
+    #[allow(dead_code)]
     fn run_balanced_pair(
         session: &mut CalibrationSession,
         scan_codes: &[u16],
@@ -3989,6 +4462,45 @@ mod platform {
         pair_packets(down, up, scan_codes, down_gap, up_gap)
     }
 
+    fn run_balanced_sender_pair(
+        session: &mut CalibrationSession,
+        scan_codes: &[u16],
+        class: SampleClass,
+        gap_us: u64,
+        cold_threshold_ticks: sky_dispatch_core::time::DurationTicks,
+    ) -> Result<SenderPairSample, CalibrationError> {
+        let previous_completion = session
+            .last_send_completed_ticks
+            .ok_or(CalibrationError::ClockFailure)?;
+        let gap_ticks = session
+            .qpc_clock
+            .duration_from_us(gap_us)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let down_target = previous_completion
+            .checked_add_duration(gap_ticks)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let down = session.measure_classified_sender_packet(
+            scan_codes,
+            false,
+            class,
+            cold_threshold_ticks,
+            down_target,
+        )?;
+        let up_target = down
+            .call_completed_ticks
+            .checked_add_duration(gap_ticks)
+            .map_err(|_| CalibrationError::ClockFailure)?;
+        let up = session.measure_classified_sender_packet(
+            scan_codes,
+            true,
+            class,
+            cold_threshold_ticks,
+            up_target,
+        )?;
+        let clock = session.qpc_clock;
+        sender_pair_packets(down, up, clock)
+    }
+
     pub fn run_calibration_pair_bucket(
         config: &CalibrationConfig,
         class: SampleClass,
@@ -4025,7 +4537,6 @@ mod platform {
             .unwrap_or_else(|| session.measurement_deadline(config.budget_seconds))?;
         session.set_measurement_deadline(measurement_deadline);
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..polyphony as usize];
-        let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
         let cold_threshold_ticks = session
             .qpc_clock
             .duration_from_us(config.cold_threshold_us)
@@ -4048,13 +4559,12 @@ mod platform {
                     cleanup,
                 ));
             }
-            let warmup = run_balanced_pair(
+            let warmup = run_balanced_sender_pair(
                 &mut session,
                 scan_codes,
                 class,
                 gap_us,
                 cold_threshold_ticks,
-                receipt_timeout,
             );
             match warmup {
                 Ok(pair) => {
@@ -4081,7 +4591,7 @@ mod platform {
             SampleClass::Cold => config.samples_per_cold_bucket,
         };
         let max_attempts = expected.saturating_mul(CALIBRATION_MAX_ATTEMPT_MULTIPLIER);
-        let mut pairs = Vec::with_capacity(expected as usize);
+        let mut pairs: Vec<SenderPairSample> = Vec::with_capacity(expected as usize);
         let mut clean_pairs = 0u32;
         let mut attempt_index = 0u32;
         while clean_pairs < expected && attempt_index < max_attempts {
@@ -4101,13 +4611,12 @@ mod platform {
                     cleanup,
                 ));
             }
-            match run_balanced_pair(
+            match run_balanced_sender_pair(
                 &mut session,
                 scan_codes,
                 class,
                 gap_us,
                 cold_threshold_ticks,
-                receipt_timeout,
             ) {
                 Ok(pair) => {
                     if pair.is_clean() {
@@ -4129,26 +4638,7 @@ mod platform {
             }
         }
 
-        let cleanup = match session.close_publishable() {
-            Ok(cleanup) => cleanup,
-            Err(source) => {
-                return Err(pair_bucket_failure(
-                    class,
-                    polyphony,
-                    attempt_index.max(expected),
-                    "close",
-                    source,
-                    CleanupOutcome {
-                        cleanup_attempted: true,
-                        cleanup_success: false,
-                        cleanup_stuck_keys: Vec::new(),
-                        cleanup_verification_inconclusive: true,
-                        raw_input_restore_failed: false,
-                        pump_thread_failed: false,
-                    },
-                ));
-            }
-        };
+        let cleanup = session.close_sender();
         if !cleanup.cleanup_success || cleanup.cleanup_verification_inconclusive {
             return Err(pair_bucket_failure(
                 class,
@@ -4167,7 +4657,7 @@ mod platform {
                 polyphony, class, clean_pairs, expected, attempt_index
             );
         }
-        let pair_bucket = aggregate_pairs(&pairs)?;
+        let pair_bucket = aggregate_sender_pairs(&pairs)?;
         Ok(CalibrationPairBucketOutput {
             version: CALIBRATION_SCHEMA_VERSION,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
@@ -4186,8 +4676,8 @@ mod platform {
             warmup_pairs: config.warmup_samples as u64,
             warmup_rejected,
             pair_bucket,
-            worst_pairs: compact_worst_pairs(&pairs, 16)?,
-            anomalous_pairs: anomalous_pair_evidence(&pairs)?,
+            worst_pairs: compact_sender_pairs(&pairs, 16)?,
+            anomalous_pairs: anomalous_sender_pairs(&pairs)?,
             cleanup,
         })
     }
@@ -4686,6 +5176,7 @@ mod platform {
             let shared = empty_shared_state();
             let ctx = PumpContext {
                 shared: Arc::clone(&shared),
+                raw_input_enabled: true,
                 previous_raw_input_devices: Vec::new(),
                 input_buffer: std::cell::RefCell::new(Vec::new()),
             };
@@ -4750,6 +5241,7 @@ mod platform {
             let shared = empty_shared_state();
             let ctx = PumpContext {
                 shared: Arc::clone(&shared),
+                raw_input_enabled: true,
                 previous_raw_input_devices: Vec::new(),
                 input_buffer: std::cell::RefCell::new(Vec::new()),
             };
@@ -5062,6 +5554,7 @@ mod platform {
             let shared = empty_shared_state();
             let ctx = PumpContext {
                 shared: Arc::clone(&shared),
+                raw_input_enabled: true,
                 previous_raw_input_devices: Vec::new(),
                 input_buffer: std::cell::RefCell::new(Vec::new()),
             };
@@ -5520,7 +6013,7 @@ mod tests {
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
         assert_eq!(CALIBRATION_SCHEMA_VERSION, 14);
-        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 9);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 10);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
         assert_eq!(CALIBRATION_MAX_ATTEMPT_MULTIPLIER, 2);
@@ -5608,6 +6101,102 @@ mod tests {
             pre_call_ticks: QpcTicks::from_raw(pre_call),
             completion_ticks: QpcTicks::from_raw(completion),
             receipt_ticks: QpcTicks::from_raw(receipt),
+        }
+    }
+
+    fn sender_point(target: u64, pre_call: u64, completion: u64) -> SenderTimingPoint {
+        SenderTimingPoint {
+            target_ticks: QpcTicks::from_raw(target),
+            pre_call_ticks: QpcTicks::from_raw(pre_call),
+            completion_ticks: QpcTicks::from_raw(completion),
+        }
+    }
+
+    #[test]
+    fn sender_pair_perfect_execution_has_zero_shrink() {
+        let evidence = sender_pair_evidence_ticks(
+            sender_point(100, 110, 120),
+            sender_point(1_100, 1_110, 1_120),
+        )
+        .unwrap();
+        assert_eq!(evidence.sender_hold_shrink_ticks, 0);
+        assert_eq!(evidence.scheduler_shrink_ticks, 0);
+        assert_eq!(evidence.sendinput_shrink_ticks, 0);
+    }
+
+    #[test]
+    fn sender_pair_down_send_is_slower_by_eight_hundred_ticks() {
+        let evidence = sender_pair_evidence_ticks(
+            sender_point(0, 10, 1_810),
+            sender_point(10_000, 10_010, 11_010),
+        )
+        .unwrap();
+        assert_eq!(evidence.sendinput_shrink_ticks, 800);
+        assert_eq!(evidence.sender_hold_shrink_ticks, 800);
+    }
+
+    #[test]
+    fn sender_pair_up_send_slower_is_negative_shrink() {
+        let evidence = sender_pair_evidence_ticks(
+            sender_point(0, 10, 1_010),
+            sender_point(10_000, 10_010, 12_010),
+        )
+        .unwrap();
+        assert_eq!(evidence.sendinput_shrink_ticks, -1_000);
+        assert_eq!(evidence.sender_hold_shrink_ticks, -1_000);
+    }
+
+    #[test]
+    fn sender_pair_down_scheduler_lateness_is_measured_once() {
+        let evidence = sender_pair_evidence_ticks(
+            sender_point(0, 210, 310),
+            sender_point(10_000, 10_010, 10_110),
+        )
+        .unwrap();
+        assert_eq!(evidence.scheduler_shrink_ticks, 200);
+        assert_eq!(evidence.sender_hold_shrink_ticks, 200);
+    }
+
+    #[test]
+    fn sender_pair_components_prove_the_raw_tick_identity() {
+        let evidence = sender_pair_evidence_ticks(
+            sender_point(0, 300, 1_800),
+            sender_point(10_000, 10_000, 10_800),
+        )
+        .unwrap();
+        assert_eq!(evidence.scheduler_shrink_ticks, 300);
+        assert_eq!(evidence.sendinput_shrink_ticks, 700);
+        assert_eq!(
+            evidence.target_hold_ticks - evidence.completion_hold_ticks,
+            evidence.scheduler_shrink_ticks + evidence.sendinput_shrink_ticks
+        );
+        assert_eq!(evidence.sender_hold_shrink_ticks, 1_000);
+    }
+
+    #[test]
+    fn sender_pair_rejects_checked_timestamp_underflow() {
+        let error = sender_pair_evidence_ticks(
+            sender_point(100, 99, 100),
+            sender_point(1_100, 1_101, 1_102),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CalibrationError::TimestampOrder {
+                field: "down pre_call before target"
+            }
+        ));
+    }
+
+    #[test]
+    fn sender_metric_is_one_value_per_packet_pair_for_all_polyphonies() {
+        for polyphony in [1usize, 5, 15] {
+            let evidence = sender_pair_evidence_ticks(
+                sender_point(0, polyphony as u64, 1_000 + polyphony as u64),
+                sender_point(10_000, 10_000 + polyphony as u64, 11_000 + polyphony as u64),
+            )
+            .unwrap();
+            assert_eq!(evidence.sender_hold_shrink_ticks, 0);
         }
     }
 
@@ -5703,14 +6292,18 @@ mod tests {
     #[test]
     fn calibration_precision_boundary_prepares_before_handoff_and_send() {
         let source = include_str!("calibration.rs");
-        let prepare = source
-            .find("PreparedTaggedCalibrationPacket::try_new")
+        let sender = source
+            .split("pub fn measure_sender_packet_at_target")
+            .nth(1)
+            .expect("sender calibration implementation");
+        let prepare = sender
+            .find("PreparedPhysicalPacket::try_new(packet)")
             .expect("prepared calibration payload");
-        let handoff = source
+        let handoff = sender
             .find("self.wait_to_precision_boundary(physical_target_qpc)")
             .expect("precision handoff");
-        let send = source
-            .find("prepared.send_at_target(self.qpc_clock, physical_target_qpc)")
+        let send = sender
+            .find("send_prepared_physical_packet_once_at_target_with_cutoff")
             .expect("fused calibration sender");
         assert!(prepare < handoff && handoff < send);
 
@@ -5721,6 +6314,22 @@ mod tests {
         assert!(wait_body.contains("CALIBRATION_PRECISION_HANDOFF_US"));
         assert!(wait_body.contains("DurationTicks::ZERO"));
         assert!(wait_body.contains("wait_until_ticks_with_metrics_typed"));
+    }
+
+    #[test]
+    fn publishable_sender_path_has_no_raw_input_receipt_wait() {
+        let source = include_str!("calibration.rs");
+        let sender_pair = source
+            .split("fn run_balanced_sender_pair")
+            .nth(1)
+            .expect("sender pair implementation")
+            .split("pub fn run_calibration_pair_bucket")
+            .next()
+            .expect("sender pair boundary");
+        assert!(sender_pair.contains("measure_classified_sender_packet"));
+        assert!(!sender_pair.contains("measure_classified_packet("));
+        assert!(!sender_pair.contains("receipt_timeout"));
+        assert!(source.contains("open_with_measurement_deadline_and_observer(None, false)"));
     }
 
     #[test]

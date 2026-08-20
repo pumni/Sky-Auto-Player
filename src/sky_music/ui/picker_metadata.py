@@ -1295,7 +1295,7 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
 def invalidate_policy_metadata() -> None:
     """Clear only the session/policy-dependent in-memory caches.
 
-    Call this after a completed native host input-delivery calibration so that
+    Call this after a completed native host sender hold-margin calibration so that
     subsequent picker renders recompute risk and recommended-hold data
     against the new device margin.  Raw song parse results and the
     policy-independent ``_raw_cache`` are intentionally preserved.

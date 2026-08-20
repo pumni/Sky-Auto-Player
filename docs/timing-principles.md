@@ -81,7 +81,72 @@ or late-grace-exceeding musical Down is recorded and committed as missed; the wo
 continues with the next authored boundary while required safety Ups are still
 released.
 
-## 2.1 Host delivery calibration
+## 2.1 Host sender hold-margin calibration (protocol 10)
+
+Production calibration qualifies only sender-side completion-hold shrink. It
+does not estimate game consumption, physical switch state, audio onset, Raw
+Input delivery, or `WM_INPUT` message-pump latency. Publishable calibration
+does not register, wait for, retry on, or qualify from Raw Input.
+
+For each balanced packet pair, all keys share one set of authoritative QPC
+boundaries. In raw QPC ticks:
+
+```text
+T_D = scheduled Down target       P_D = Down SendInput pre-call
+C_D = Down SendInput completion   T_U = scheduled Up target
+P_U = Up SendInput pre-call       C_U = Up SendInput completion
+
+target_hold = T_U - T_D
+completion_hold = C_U - C_D
+scheduler_shrink = (P_D - T_D) - (P_U - T_U)
+sendinput_shrink = (C_D - P_D) - (C_U - P_U)
+sender_hold_shrink = target_hold - completion_hold
+
+sender_hold_shrink = scheduler_shrink + sendinput_shrink
+```
+
+The identity is checked before converting to microseconds. All tick
+subtractions and conversions are checked; failure is terminal. The production
+metric is one signed `pair_sender_hold_shrink_us` per Down/Up packet pair, not
+a per-key worst value and not a sum of component quantiles. Polyphony remains
+important because 1-, 5-, and 15-key packets have different SendInput call
+durations.
+
+The required matrix is exactly `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`,
+and `15/cold`. Each bucket requires 100 clean pairs and permits at most 200
+attempts. Only hot/cold class mismatch is a retryable rejection. Down targets
+are anchored to the previous completion plus the requested gap; Up targets
+are anchored to the exact Down completion plus the requested gap. After `C_D`,
+the runner waits for `T_U` directly and sends Up without waiting for a receipt.
+
+For each bucket, qualification uses the signed p99 of the pair metric:
+
+```text
+global_positive_p99 = max(0, maximum required-bucket pair_sender_hold_shrink p99)
+candidate_margin_us = global_positive_p99 + 100
+
+candidate <= 2,000 µs -> VALID, applied = max(300 µs, candidate)
+candidate > 2,000 µs  -> OUT_OF_ENVELOPE, applied = none, playback = 500 µs
+```
+
+The correction is applied exactly once to the authored minimum hold. It does
+not change Note-On timestamps, physical Down targets, `down_late_grace_us`
+(`500 µs`), or runtime scheduling. Protocol 10, native schema 14, artifact
+schema 11, cache version 6, source formula version 5, and evidence kind
+`sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
+cache-v5 Raw Input evidence. A failed or invalid measurement preserves the
+previous compatible cache; an old cache falls back to 500 µs.
+
+Raw Input may exist in a separate engineering observer diagnostic. Its receipt
+timestamps, queue timestamps, and observer failures must never affect sender
+quantiles, clean-pair counts, retry decisions, candidate margin, or cache
+trust, and must never be written as production margin evidence.
+
+## 2.2 Historical protocol-9 Raw Input observer (non-normative)
+
+The remainder of this subsection records the retired observer protocol for
+forensics only. It is not a production qualification contract and must not be
+used to interpret or migrate a protocol-9 cache.
 
 Calibration is a separate native, app-owned Raw Input proxy. It measures a
 target-to-receipt total hold proxy, not game polling, rendering, audio, or

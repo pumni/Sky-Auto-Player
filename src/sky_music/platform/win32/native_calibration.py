@@ -1,9 +1,9 @@
-"""Process-isolated protocol-vNext input-delivery calibration adapter.
+"""Process-isolated sender-side host hold-margin calibration adapter.
 
-The native process owns the Raw Input window and emits signed paired evidence.
-This adapter validates the complete result before writing an artifact or the
-version-5 production cache. Diagnostic runs may be saved as reports, never as
-production cache.
+The native process owns the prepared SendInput sender and emits signed paired
+completion-hold evidence. This adapter validates the complete result before
+writing an artifact or the version-6 production cache. Raw Input diagnostics,
+if retained by a separate engineering mode, are never accepted here.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ from sky_music.infrastructure.calibration_loader import (
 )
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 14
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 9
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 10
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 10
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 11
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 PYTHON_PROCESS_EXIT_RESERVE_SECONDS = 1.0
@@ -76,7 +76,6 @@ MAX_DIAGNOSTIC_SAMPLES = 5_000
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
 QUICK_CALIBRATION_TIMEOUT_SECONDS = 120.0
 FULL_CALIBRATION_TIMEOUT_SECONDS = 120.0
-NATIVE_RECEIPT_TIMEOUT_MS = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +91,7 @@ class PublishedCalibrationResult:
     native_build_id: str
     pair_buckets: dict[str, PairBucketSummary] = dataclass_field(default_factory=dict)
     worst_bucket: str = ""
-    global_shrink_p99_us: int = 0
+    sender_hold_shrink_p99_us: int = 0
     guard_us: int = MARGIN_GUARD_US
     ceiling_us: int = MARGIN_CEILING_US
     effective_min_hold_us: int | None = None
@@ -314,17 +313,7 @@ def _validate_pair_bucket(
     if clean != clean_count or clean + rejected != attempted:
         raise NativeCalibrationError(f"{name} clean/rejected totals are inconsistent")
     counter_values: dict[str, int] = {}
-    for field in (
-        "timeout_count",
-        "anomaly_count",
-        "class_mismatch_count",
-        "partial_send",
-        "pairing_anomaly_count",
-        "duplicate_receipt_count",
-        "unexpected_scan_code_count",
-        "direction_mismatch_count",
-        "reordered_receipt_count",
-    ):
+    for field in ("timeout_count", "anomaly_count", "class_mismatch_count", "partial_send"):
         counter_values[field] = _int(bucket.get(field), f"{name}.{field}")
         if counter_values[field] > rejected:
             raise NativeCalibrationError(f"{name}.{field} exceeds rejected pairs")
@@ -333,14 +322,6 @@ def _validate_pair_bucket(
             raise NativeCalibrationError(f"{name}.{field} exceeds anomaly_count")
     if counter_values["anomaly_count"] != rejected:
         raise NativeCalibrationError(f"{name}.anomaly_count must equal rejected")
-    receipt_before_completion_count = _int(
-        bucket.get("receipt_before_completion_count"),
-        f"{name}.receipt_before_completion_count",
-    )
-    if receipt_before_completion_count > attempted * 30:
-        raise NativeCalibrationError(
-            f"{name}.receipt_before_completion_count exceeds the supported key bound"
-        )
     if clean < expected_attempts and require_quantiles:
         raise NativeCalibrationError(
             f"{name} has insufficient clean pairs: target={expected_attempts}, "
@@ -349,12 +330,7 @@ def _validate_pair_bucket(
             f"timeout_count={counter_values['timeout_count']}, "
             f"partial_send={counter_values['partial_send']}, "
             f"anomaly_count={counter_values['anomaly_count']}, "
-            f"pairing_anomaly_count={counter_values['pairing_anomaly_count']}, "
-            f"duplicate_receipt_count={counter_values['duplicate_receipt_count']}, "
-            f"unexpected_scan_code_count={counter_values['unexpected_scan_code_count']}, "
-            f"direction_mismatch_count={counter_values['direction_mismatch_count']}, "
-            f"reordered_receipt_count={counter_values['reordered_receipt_count']}, "
-            f"receipt_before_completion_count={receipt_before_completion_count}"
+            f"class_mismatch_count={counter_values['class_mismatch_count']}"
         )
     if require_quantiles and clean != expected_attempts:
         raise NativeCalibrationError(
@@ -362,15 +338,7 @@ def _validate_pair_bucket(
             f"target={expected_attempts}, clean={clean}"
         )
     if require_quantiles:
-        for field in (
-            "timeout_count",
-            "partial_send",
-            "pairing_anomaly_count",
-            "duplicate_receipt_count",
-            "unexpected_scan_code_count",
-            "direction_mismatch_count",
-            "reordered_receipt_count",
-        ):
+        for field in ("timeout_count", "partial_send"):
             if counter_values[field] != 0:
                 raise NativeCalibrationError(
                     f"{name}.{field} must be zero for publishable calibration"
@@ -379,11 +347,11 @@ def _validate_pair_bucket(
             raise NativeCalibrationError(
                 f"{name}.rejected must equal class_mismatch_count for publishable calibration"
             )
-    pair_quantiles = bucket.get("pair_worst_total_proxy_shrink_us")
+    pair_quantiles = bucket.get("pair_sender_hold_shrink_us")
     if pair_quantiles is None and not require_quantiles:
         return bucket
-    _validate_quantiles(pair_quantiles, f"{name}.pair_worst_total_proxy_shrink_us")
-    for field in ("scheduler_shrink_us", "sendinput_shrink_us", "delivery_shrink_us"):
+    _validate_quantiles(pair_quantiles, f"{name}.pair_sender_hold_shrink_us")
+    for field in ("scheduler_shrink_us", "sendinput_shrink_us"):
         _validate_quantiles(bucket.get(field), f"{name}.{field}")
     _validate_unsigned_quantiles(bucket.get("down_call_duration_us"), f"{name}.down_call_duration_us")
     _validate_unsigned_quantiles(bucket.get("up_call_duration_us"), f"{name}.up_call_duration_us")
@@ -396,7 +364,7 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
     if data.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
         raise NativeCalibrationError("unsupported native calibration measurement protocol")
     if data.get("evidence_kind") != CALIBRATION_EVIDENCE_KIND:
-        raise NativeCalibrationError("native calibration evidence kind is not the expected proxy")
+        raise NativeCalibrationError("native calibration evidence kind is not sender completion evidence")
     for name in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
         value = data.get(name)
         if not isinstance(value, str) or not value.strip() or value == "unknown":
@@ -466,7 +434,6 @@ def _validate_configuration(
         "samples_per_hot_bucket": expected_samples,
         "samples_per_cold_bucket": expected_samples,
         "warmup_samples": FULL_WARMUP_SAMPLES,
-        "receipt_timeout_ms": NATIVE_RECEIPT_TIMEOUT_MS,
         "hot_gap_target_us": HOT_GAP_TARGET_US,
         "cold_threshold_us": COLD_THRESHOLD_US,
         "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
@@ -676,7 +643,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v5(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v6(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -686,23 +653,23 @@ def _cache_v5(result: dict[str, Any]) -> dict[str, Any]:
             "attempted": bucket["attempted"],
             "clean_pair_count": bucket["clean"],
             "rejected": bucket["rejected"],
-            "pair_worst_total_proxy_shrink_us": bucket["pair_worst_total_proxy_shrink_us"],
+            "pair_sender_hold_shrink_us": bucket["pair_sender_hold_shrink_us"],
             "scheduler_shrink_us": bucket["scheduler_shrink_us"],
             "sendinput_shrink_us": bucket["sendinput_shrink_us"],
-            "delivery_shrink_us": bucket["delivery_shrink_us"],
-            "pair_worst_shrink_us": bucket.get("pair_worst_shrink_us"),
+            "down_call_duration_us": bucket["down_call_duration_us"],
+            "up_call_duration_us": bucket["up_call_duration_us"],
         }
     p99_values = {
-        key: max(0, int(bucket["pair_worst_total_proxy_shrink_us"]["p99"]))
+        key: max(0, int(bucket["pair_sender_hold_shrink_us"]["p99"]))
         for key, bucket in flattened.items()
     }
     global_p99 = max(p99_values.values())
     worst_bucket = max(REQUIRED_BUCKETS, key=lambda key: (p99_values[key], -REQUIRED_BUCKETS.index(key)))
     qualification_result = qualify_calibration_margin(global_p99)
     qualification = {
-        "basis": "max_required_bucket_p99_positive_pair_total_proxy_hold_shrink",
+        "basis": "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink",
         "worst_bucket": worst_bucket,
-        "global_shrink_p99_us": global_p99,
+        "sender_hold_shrink_p99_us": global_p99,
         "guard_us": MARGIN_GUARD_US,
         "floor_us": MARGIN_FLOOR_US,
         "ceiling_us": MARGIN_CEILING_US,
@@ -710,12 +677,12 @@ def _cache_v5(result: dict[str, Any]) -> dict[str, Any]:
         "applied_margin_us": qualification_result.applied_margin_us,
     }
     return {
-        "version": 5,
+        "version": 6,
         "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "source": "device_cache",
         "status": qualification_result.status.value,
         "evidence_kind": result["evidence_kind"],
-        "source_formula_version": 4,
+        "source_formula_version": 5,
         "native_calibration_version": result["version"],
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
@@ -1241,7 +1208,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v5(final)
+    cache = _cache_v6(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1292,7 +1259,7 @@ def run_native_calibration(
         samples=FULL_SAMPLE_COUNT,
     )
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v5(result)
+    cache = _cache_v6(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1312,7 +1279,7 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v5(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v6(result))
     return PublishedCalibrationResult(
         status=summary.status,
         margin_us=summary.margin_us,
@@ -1325,7 +1292,7 @@ def run_published_native_calibration(
         native_build_id=str(result["native_build_id"]),
         pair_buckets=summary.pair_buckets,
         worst_bucket=summary.worst_bucket,
-        global_shrink_p99_us=summary.global_shrink_p99_us,
+        sender_hold_shrink_p99_us=summary.sender_hold_shrink_p99_us,
         guard_us=summary.guard_us,
         ceiling_us=summary.ceiling_us,
         effective_min_hold_us=(

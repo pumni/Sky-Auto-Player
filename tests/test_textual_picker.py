@@ -928,7 +928,7 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
             800,
             800,
             17_467,
-            ("VALID", "Applied hold margin", "Note-On timestamps: unchanged"),
+            ("VALID", "Applied calibrated margin", "Note-On timestamps: unchanged"),
             ("OUT OF ENVELOPE",),
         ),
         (
@@ -987,11 +987,11 @@ def test_textual_picker_calibrate_latency_command(
             ),
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),
-            evidence_kind="injected_raw_input_delivery_proxy",
+                evidence_kind="sender_completion_hold_shrink",
             source_git_sha="0" * 40,
             native_build_id="0" * 40,
             worst_bucket="15/cold",
-            global_shrink_p99_us=(
+            sender_hold_shrink_p99_us=(
                 700 if status is CalibrationStatus.VALID else 12_088
             ),
             guard_us=100,

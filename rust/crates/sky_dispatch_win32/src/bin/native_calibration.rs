@@ -1,9 +1,8 @@
-//! Process-isolated Raw Input delivery-proxy calibration command.
+//! Process-isolated Rust/SendInput sender hold-margin calibration command.
 //!
 //! The player never invokes the calibration library in its own process. This
-//! command owns the Raw Input registration and exits after cleanup, so Windows
-//! restores the host process's registration state even if the calibration
-//! process terminates unexpectedly.
+//! command exits after cleanup and never registers Raw Input on the publishable
+//! sender path.
 
 use sky_dispatch_win32::calibration::{
     CALIBRATION_EVIDENCE_KIND, CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, CALIBRATION_SCHEMA_VERSION,

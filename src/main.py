@@ -252,7 +252,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     diag.add_argument(
         "--doctor-calibrate",
         action="store_true",
-        help="run input delivery latency calibration and save to .cache/input_latency.json",
+        help="run host sender hold-margin calibration and save to .cache/input_latency.json",
     )
     diag.add_argument(
         "--selftest-textual",

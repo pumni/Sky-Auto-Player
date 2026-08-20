@@ -13,15 +13,29 @@ effective_min_hold_us = requested_min_hold_us
 ```
 
 The default hold margin is `500 µs`; calibration may provide a validated
-margin.
-The validated host total-hold calibration uses only paired Down/Up target-to-receipt evidence from
-the six required `1/5/15 × hot/cold` buckets, with at least 100 clean pairs in
-each bucket. Its candidate is the global positive p99 direct total-proxy hold shrink plus
-`100 µs`. A candidate at or below `2,000 µs` is valid and applies
-`max(300 µs, candidate)`; a candidate above `2,000 µs` is out of the trusted
-correction envelope and applies no calibrated margin. Cache v1 or
-incomplete/dirty/legacy-host evidence falls back to the unchanged `500 µs` default, while
-completed out-of-envelope evidence is retained as unhealthy cache v4.
+sender-side completion-hold correction. Production calibration uses one pair
+metric per Down/Up SendInput packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`;
+Raw Input receipt timing is not part of qualification. It uses exactly the six
+`1/5/15 × hot/cold` buckets, at least 100 clean pairs per bucket, and at most
+200 attempts per bucket. Its candidate is the maximum positive p99 of
+`sender_hold_shrink` plus `100 µs`. A candidate at or below `2,000 µs` is
+valid and applies `max(300 µs, candidate)`; a candidate above `2,000 µs` is
+out of the trusted correction envelope and applies no calibrated margin.
+Protocol 9/cache v5 evidence is incompatible with protocol 10/cache v6 and
+falls back to the unchanged `500 µs` default. Completed out-of-envelope
+protocol-10 evidence is retained as unhealthy cache evidence.
+
+The sender evidence is computed in raw QPC ticks before conversion:
+
+```text
+sender_hold_shrink = (T_U - T_D) - (C_U - C_D)
+sender_hold_shrink = ((P_D - T_D) - (P_U - T_U))
+                    + ((C_D - P_D) - (C_U - P_U))
+```
+
+The identity is checked with checked arithmetic. It describes completion
+interval compression in the Rust/SendInput sender only; it is not a claim
+about game-observed timing.
 The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. PyO3 does not add another frame-relative floor;
 Rust only range-checks and validates this value in QPC ticks. It does not learn

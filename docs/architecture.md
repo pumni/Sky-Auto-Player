@@ -140,7 +140,44 @@ Progress is independent of that heartbeat. Rust publishes a transition-only
 playback clock anchor; supervisor-side snapshots take their own QPC sample and
 project elapsed time without worker or observer activity.
 
-## Preview, calibration, and failure policy
+## Sender calibration, preview, and failure policy
+
+The production calibration artifact is sender-centric. For each Down/Up
+packet pair it records scheduled target (`T`), SendInput pre-call (`P`), and
+SendInput completion (`C`) boundaries and proves, in raw QPC ticks:
+
+```text
+sender_hold_shrink = (T_U - T_D) - (C_U - C_D)
+sender_hold_shrink = ((P_D - T_D) - (P_U - T_U))
+                    + ((C_D - P_D) - (C_U - P_U))
+```
+
+There is exactly one authoritative sender value per packet pair; keys in a
+packet do not receive separate worst-case values. The six required buckets
+are `1/5/15 × hot/cold`, with 100 clean pairs and no more than 200 attempts in
+each bucket. Only class mismatch is retryable. Up is scheduled from exact Down
+completion plus the requested gap, with no Raw Input receipt wait between the
+two sends.
+
+Qualification is the maximum positive required-bucket p99 plus a `100 µs`
+guard, with a `300 µs` floor and `2,000 µs` ceiling. Above the ceiling the
+status is `OUT_OF_ENVELOPE` and playback uses the explicit `500 µs` fallback;
+the ceiling is never raised to force validity. Protocol 10/native schema 14,
+artifact schema 11, cache v6, source formula 5, and
+`sender_completion_hold_shrink` evidence are required. Older protocol-9,
+schema-13, cache-v5, or Raw Input evidence is rejected and never reinterpreted.
+The margin is materialized once in `effective_min_hold_us`; Note-On timestamps,
+physical targets, and `down_late_grace_us = 500 µs` remain unchanged.
+
+Raw Input and `WM_INPUT` may be collected only by a separate observer
+diagnostic. Receipt/queue timestamps and observer health cannot affect sender
+quantiles, bucket cleanliness, retries, qualification, cache trust, or the
+production cache.
+
+## Historical protocol-9 Raw Input calibration (non-normative)
+
+The following retired protocol description is retained only as historical
+forensics. It is not the current calibration contract.
 
 Preview never creates a production dispatch session or sends input. Calibration
 is a separate native process and its Raw Input result is a host delivery
