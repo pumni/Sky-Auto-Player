@@ -65,13 +65,16 @@ def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> 
         "sample_count": total,
         "timeout_count": 0,
         "anomaly_count": 0,
+        "pairing_anomaly_count": 0,
+        "duplicate_receipt_count": 0,
+        "unexpected_scan_code_count": 0,
+        "direction_mismatch_count": 0,
+        "reordered_receipt_count": 0,
         "class_mismatch_count": 0,
         "partial_send": 0,
-        "error_count": 0,
-        "call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
-        "first_receipt_us": _quantiles(),
-        "last_receipt_us": _quantiles(),
-        "intra_chord_spread_us": None,
+        "receipt_before_completion_count": 0,
+        "down_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
+        "up_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
         "pair_worst_shrink_us": _quantiles(p99),
         "pair_worst_total_proxy_shrink_us": _quantiles(p99),
         "scheduler_shrink_us": _quantiles(6),
@@ -98,8 +101,8 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 11,
-        "measurement_protocol_version": 6,
+        "version": 12,
+        "measurement_protocol_version": 7,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -136,8 +139,8 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 11,
-        "measurement_protocol_version": 6,
+        "version": 12,
+        "measurement_protocol_version": 7,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -148,6 +151,10 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         "scheduling_aids": _scheduling_aids(),
         "configuration": _configuration(polyphonies=[1, 5, 15]),
         "pair_buckets": pair_buckets,
+        "anomalous_pairs": {
+            str(polyphony): {class_name: [] for class_name in ("hot", "cold")}
+            for polyphony in (1, 5, 15)
+        },
         "measured_attempted": 600,
         "setup_attempted": 0,
         "setup_anomalous": 0,
@@ -172,8 +179,8 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 11
-    assert result["measurement_protocol_version"] == 6
+    assert result["version"] == 12
+    assert result["measurement_protocol_version"] == 7
 
 
 def test_native_result_requires_scheduling_aid_provenance() -> None:
@@ -193,7 +200,6 @@ def test_native_result_reports_insufficient_clean_pairs_before_null_quantiles() 
             "rejected": 100,
             "partial_send": 0,
             "sample_count": 100,
-            "error_count": 100,
             "pair_worst_total_proxy_shrink_us": None,
         }
     )
@@ -268,6 +274,40 @@ def test_native_pair_bucket_command_has_no_directional_kind(monkeypatch: pytest.
     assert "--kind" not in captured["command"]  # type: ignore[operator]
 
 
+def test_native_stdout_is_bounded_before_json_parsing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        native_calibration.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            "x" * (native_calibration.MAX_NATIVE_CALIBRATION_STDOUT_BYTES + 1),
+            "",
+        ),
+    )
+    with pytest.raises(native_calibration.NativeCalibrationError, match="stdout exceeds"):
+        native_calibration._execute_native_bucket(
+            tmp_path / "native.exe",
+            class_name="hot",
+            polyphony=5,
+            samples=100,
+            warmup_samples=4,
+            budget_seconds=120,
+            timeout_seconds=120.0,
+            progress=False,
+        )
+
+
+def test_native_result_rejects_unbounded_anomaly_evidence() -> None:
+    result = _native_result()
+    entries = cast(dict[str, object], result["anomalous_pairs"]["5"])  # type: ignore[index]
+    entries["hot"] = [{} for _ in range(65)]
+    with pytest.raises(native_calibration.NativeCalibrationError, match="bounded"):
+        native_calibration._validate_result(result)
+
+
 @pytest.mark.parametrize("attempted", [100, 101, 200])
 def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
     attempted: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -282,7 +322,6 @@ def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
             "clean": 100,
             "clean_sample_count": 100,
             "rejected": attempted - 100,
-            "error_count": attempted - 100,
         }
     )
 
@@ -319,7 +358,6 @@ def test_native_pair_bucket_rejects_attempts_above_bounded_retry_limit(
             "clean": 100,
             "clean_sample_count": 100,
             "rejected": 101,
-            "error_count": 101,
         }
     )
     monkeypatch.setattr(
@@ -428,6 +466,26 @@ def test_cache_requires_100_clean_pairs_per_cell() -> None:
     cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="clean pairs"):
         loader.parse_calibration_cache_summary(cache)
+
+
+@pytest.mark.parametrize(
+    ("attempted", "clean", "accepted"),
+    [(100, 100, True), (200, 100, True), (201, 100, False), (101, 101, False)],
+)
+def test_cache_enforces_protocol7_bounded_retry_invariant(
+    attempted: int, clean: int, accepted: bool
+) -> None:
+    cache = native_calibration._cache_v5(_native_result())
+    for bucket in cast(dict[str, dict[str, object]], cache["pair_buckets"]).values():
+        bucket["attempted"] = attempted
+        bucket["clean_pair_count"] = clean
+        bucket["rejected"] = attempted - clean
+    if accepted:
+        summary = loader.parse_calibration_cache_summary(cache)
+        assert summary.sample_count == 100
+    else:
+        with pytest.raises(ValueError):
+            loader.parse_calibration_cache_summary(cache)
 
 
 @pytest.mark.parametrize(
@@ -727,7 +785,7 @@ def test_finalizer_rejects_mixed_provenance_before_publication(tmp_path: Path) -
     assert cache.read_text(encoding="utf-8") == "old cache\n"
 
 
-@pytest.mark.parametrize("artifact_schema_version", [None, 7, 9])
+@pytest.mark.parametrize("artifact_schema_version", [None, 8, 10])
 def test_finalizer_rejects_wrong_artifact_schema_version(
     tmp_path: Path, artifact_schema_version: int | None
 ) -> None:

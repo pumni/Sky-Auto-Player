@@ -42,9 +42,9 @@ from sky_music.infrastructure.calibration_loader import (
     qualify_calibration_margin,
 )
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 11
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 6
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 8
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 12
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 7
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 9
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
@@ -96,6 +96,14 @@ class NativeCalibrationError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.failure_report = failure_report
+
+
+def _require_bounded_stdout(output: str, *, context: str) -> str:
+    if len(output.encode("utf-8")) > MAX_NATIVE_CALIBRATION_STDOUT_BYTES:
+        raise NativeCalibrationError(
+            f"{context} stdout exceeds the {MAX_NATIVE_CALIBRATION_STDOUT_BYTES}-byte limit"
+        )
+    return output
 
 
 def _require_mapping(value: object, name: str) -> dict[str, Any]:
@@ -234,11 +242,23 @@ def _validate_pair_bucket(
         "anomaly_count",
         "class_mismatch_count",
         "partial_send",
-        "error_count",
+        "pairing_anomaly_count",
+        "duplicate_receipt_count",
+        "unexpected_scan_code_count",
+        "direction_mismatch_count",
+        "reordered_receipt_count",
     ):
         counter_values[field] = _int(bucket.get(field), f"{name}.{field}")
         if counter_values[field] > rejected:
             raise NativeCalibrationError(f"{name}.{field} exceeds rejected pairs")
+    receipt_before_completion_count = _int(
+        bucket.get("receipt_before_completion_count"),
+        f"{name}.receipt_before_completion_count",
+    )
+    if receipt_before_completion_count > attempted * 30:
+        raise NativeCalibrationError(
+            f"{name}.receipt_before_completion_count exceeds the supported key bound"
+        )
     if clean < expected_attempts and require_quantiles:
         raise NativeCalibrationError(
             f"{name} has insufficient clean pairs: target={expected_attempts}, "
@@ -247,7 +267,12 @@ def _validate_pair_bucket(
             f"timeout_count={counter_values['timeout_count']}, "
             f"partial_send={counter_values['partial_send']}, "
             f"anomaly_count={counter_values['anomaly_count']}, "
-            f"error_count={counter_values['error_count']}"
+            f"pairing_anomaly_count={counter_values['pairing_anomaly_count']}, "
+            f"duplicate_receipt_count={counter_values['duplicate_receipt_count']}, "
+            f"unexpected_scan_code_count={counter_values['unexpected_scan_code_count']}, "
+            f"direction_mismatch_count={counter_values['direction_mismatch_count']}, "
+            f"reordered_receipt_count={counter_values['reordered_receipt_count']}, "
+            f"receipt_before_completion_count={receipt_before_completion_count}"
         )
     if require_quantiles and clean != expected_attempts:
         raise NativeCalibrationError(
@@ -310,6 +335,25 @@ def _validate_common_metadata(data: dict[str, Any]) -> None:
             raise NativeCalibrationError(f"native calibration cleanup field {field} failed")
 
 
+def _validate_bounded_anomalous_matrix(value: object, name: str) -> None:
+    matrix = _require_mapping(value, name)
+    expected_polyphonies = {str(polyphony) for polyphony in FULL_POLYPHONIES}
+    if set(matrix) != expected_polyphonies:
+        raise NativeCalibrationError(f"{name} polyphony matrix is incomplete")
+    for polyphony in FULL_POLYPHONIES:
+        classes = _require_mapping(matrix[str(polyphony)], f"{name}.{polyphony}")
+        if set(classes) != set(CALIBRATION_CLASSES):
+            raise NativeCalibrationError(f"{name}.{polyphony} class matrix is incomplete")
+        for class_name in CALIBRATION_CLASSES:
+            entries = classes[class_name]
+            if not isinstance(entries, list) or len(entries) > 64:
+                raise NativeCalibrationError(
+                    f"{name}.{polyphony}/{class_name} is not bounded"
+                )
+            for index, entry in enumerate(entries):
+                _require_mapping(entry, f"{name}.{polyphony}/{class_name}[{index}]")
+
+
 def _validate_configuration(
     data: dict[str, Any], *, expected_polyphonies: tuple[int, ...], expected_samples: int
 ) -> None:
@@ -359,6 +403,7 @@ def _validate_result(
             _validate_pair_bucket(classes[class_name], key, expected_samples)
     if actual_keys != set(REQUIRED_BUCKETS):
         raise NativeCalibrationError("native calibration pair matrix is incomplete")
+    _validate_bounded_anomalous_matrix(data.get("anomalous_pairs"), "anomalous_pairs")
     counts = {
         name: _int(data.get(name), name)
         for name in (
@@ -451,7 +496,7 @@ def _validate_pair_bucket_result(
     )
     if not isinstance(data.get("worst_pairs"), list) or len(data["worst_pairs"]) > 16:
         raise NativeCalibrationError("native pair evidence is not bounded")
-    if not isinstance(data.get("anomalous_pairs"), list):
+    if not isinstance(data.get("anomalous_pairs"), list) or len(data["anomalous_pairs"]) > 64:
         raise NativeCalibrationError("native pair anomaly evidence is invalid")
     return data
 
@@ -654,7 +699,7 @@ def _execute_native_bucket(
     except OSError as exc:
         report = _failure_report(class_name=class_name, polyphony=polyphony, detail=str(exc))
         raise NativeCalibrationError(str(exc), failure_report=report) from exc
-    output = completed.stdout or ""
+    output = _require_bounded_stdout(completed.stdout or "", context="native pair bucket")
     diagnostics = completed.stderr or ""
     if progress:
         for line in diagnostics.splitlines():
@@ -715,8 +760,9 @@ def _run_process(
         raise NativeCalibrationError(
             f"native calibration failed ({completed.returncode}): {completed.stderr[-2000:]}"
         )
+    output = _require_bounded_stdout(completed.stdout or "", context="native calibration")
     try:
-        payload = json.loads(completed.stdout)
+        payload = json.loads(output)
     except json.JSONDecodeError as exc:
         raise NativeCalibrationError("native calibration stdout was not valid JSON") from exc
     return _validate_result(payload, expected_budget_seconds=budget_seconds, expected_samples=samples)

@@ -55,15 +55,15 @@ _HOST_FINGERPRINT = {
 }
 _INTEGRATION_CACHE: dict = {
     "version": 5,
-    "artifact_schema_version": 8,
+    "artifact_schema_version": 9,
     "status": "valid",
     "source": "device_cache",
     "evidence_kind": "injected_raw_input_total_hold_proxy",
     "source_formula_version": 4,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
-    "native_calibration_version": 11,
-    "measurement_protocol_version": 6,
+    "native_calibration_version": 12,
+    "measurement_protocol_version": 7,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
     "dirty_worktree": False,

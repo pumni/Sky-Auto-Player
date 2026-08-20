@@ -156,11 +156,15 @@ crossing. Each direction has four authoritative QPC boundaries: absolute
 target, fused sender crossing, SendInput completion, and first receipt. For each key it computes direct signed
 total hold shrink `(up_target - down_target) - (up_receipt - down_receipt)`;
 scheduler, SendInput, and delivery shrink are diagnostics that must sum to that
-direct value. Only clean pairs enter the signed quantiles. At least 100 clean
-pairs are required in every production bucket. Native output schema 11 and
-artifact schema 8 record the acquired MMCSS label, PowerThrottling/HighQoS
-guard state, and actual waiter mode alongside host provenance. The cache is
-version 5 (native schema 11, measurement protocol 5); older evidence is
+direct value. Receipt delivery is signed: a Raw Input receipt may be observed
+before `SendInput` returns and remains valid evidence; only target/pre-call/
+completion chronology and cross-direction identity/order failures reject a pair.
+Only clean pairs enter the signed quantiles. At least 100 clean pairs are
+required in every production bucket. Native output schema 12 and artifact
+schema 9 record bounded anomaly evidence, the signed receipt-before-completion
+counter, the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
+actual waiter mode alongside host provenance. The cache is version 5 (native
+schema 12, measurement protocol 7); older evidence is
 incompatible and falls back rather than being reinterpreted. Qualification is:
 
 ```text

@@ -236,11 +236,17 @@ fn ordered_delta(
     Ok(i128::from(later.as_u64()) - i128::from(earlier.as_u64()))
 }
 
+fn signed_delta_ticks(later: QpcTicks, earlier: QpcTicks) -> i128 {
+    i128::from(later.as_u64()) - i128::from(earlier.as_u64())
+}
+
 /// Compute paired scheduler, SendInput, delivery, and direct total shrink.
 ///
-/// Each direction must have the monotonic target → pre-call → completion →
-/// receipt ordering. The direct total is checked against the decomposed sum so
-/// a future schema cannot silently publish inconsistent component evidence.
+/// Each direction must have the monotonic target → pre-call → completion
+/// ordering. Receipt delivery is signed: Raw Input may be observed by the
+/// pump thread before `SendInput` returns, so `R - C` is allowed to be
+/// negative. The direct total is checked against the decomposed sum so a
+/// future schema cannot silently publish inconsistent component evidence.
 pub fn paired_timing_shrink_ticks(
     down: PairedTimingPoint,
     up: PairedTimingPoint,
@@ -265,16 +271,8 @@ pub fn paired_timing_shrink_ticks(
         up.pre_call_ticks,
         "up completion before pre_call",
     )?;
-    let down_delivery = ordered_delta(
-        down.receipt_ticks,
-        down.completion_ticks,
-        "down receipt before completion",
-    )?;
-    let up_delivery = ordered_delta(
-        up.receipt_ticks,
-        up.completion_ticks,
-        "up receipt before completion",
-    )?;
+    let down_delivery = signed_delta_ticks(down.receipt_ticks, down.completion_ticks);
+    let up_delivery = signed_delta_ticks(up.receipt_ticks, up.completion_ticks);
     let target_hold = ordered_delta(
         up.target_ticks,
         down.target_ticks,
@@ -454,6 +452,7 @@ pub struct PairSample {
     pub pair_worst_delivery_shrink_us: Option<i64>,
     pub key_evidence: SmallVec<[KeyShrinkEvidence; 15]>,
     pub pairing_anomaly: bool,
+    pub receipt_before_completion_count: u64,
 }
 
 impl PairSample {
@@ -483,6 +482,7 @@ pub struct PairSampleEvidence {
     pub down_receipt_us: Option<SignedQuantileStats>,
     pub up_receipt_us: Option<SignedQuantileStats>,
     pub pairing_anomaly: bool,
+    pub receipt_before_completion_count: u64,
     pub down_anomalies: SampleAnomalies,
     pub up_anomalies: SampleAnomalies,
 }
@@ -587,17 +587,18 @@ pub struct BucketStats {
     pub rejected: u64,
     pub partial_send: u64,
     pub sample_count: u64,
-    pub error_count: u64,
     pub timeout_count: u64,
     pub anomaly_count: u64,
+    pub pairing_anomaly_count: u64,
+    pub duplicate_receipt_count: u64,
+    pub unexpected_scan_code_count: u64,
+    pub direction_mismatch_count: u64,
+    pub reordered_receipt_count: u64,
     pub class_mismatch_count: u64,
-    pub call_duration_us: QuantileStats,
-    /// Latency from `call_completed` to first Raw Input receipt.
-    pub first_receipt_us: Option<SignedQuantileStats>,
-    /// Latency from `call_completed` to last Raw Input receipt.
-    pub last_receipt_us: Option<SignedQuantileStats>,
-    /// Spread between first and last receipt (zero for polyphony-1 buckets).
-    pub intra_chord_spread_us: Option<QuantileStats>,
+    /// Count of per-key Raw Input timestamps observed before SendInput return.
+    pub receipt_before_completion_count: u64,
+    pub down_call_duration_us: QuantileStats,
+    pub up_call_duration_us: QuantileStats,
     /// Legacy delivery-only diagnostic retained for audit readers.
     #[serde(default)]
     pub pair_worst_shrink_us: Option<SignedQuantileStats>,
@@ -651,8 +652,8 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 6;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 11;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 7;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 12;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
@@ -665,6 +666,7 @@ pub const CALIBRATION_PRECISION_HANDOFF_US: u64 = 700;
 /// Bounded retry allowance used to collect the configured number of clean
 /// pairs without allowing a pathological host to run indefinitely.
 pub const CALIBRATION_MAX_ATTEMPT_MULTIPLIER: u32 = 2;
+pub const MAX_ANOMALOUS_PAIR_EVIDENCE: usize = 64;
 
 fn exact_sendinput_boundaries(
     result: &PlatformSendResult,
@@ -782,6 +784,8 @@ pub struct CalibrationOutput {
     pub configuration: CalibrationConfig,
     /// Protocol-vNext pair matrix. The six required production cells live here.
     pub pair_buckets: HashMap<u8, HashMap<String, BucketStats>>,
+    /// Bounded diagnostic evidence for rejected pairs in each required bucket.
+    pub anomalous_pairs: HashMap<u8, HashMap<String, Vec<PairSampleEvidence>>>,
     /// Warm-up attempts, kept separate from measured evidence.
     pub warmup_attempted: u64,
     /// Measured attempts represented by the bucket map.
@@ -1081,7 +1085,21 @@ mod platform {
 
     struct PumpContext {
         shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
-        input_buffer: std::cell::RefCell<Vec<u8>>,
+        // GetRawInputData requires DWORD-aligned output storage. `usize`
+        // provides at least that alignment on every supported Windows target.
+        input_buffer: std::cell::RefCell<Vec<usize>>,
+    }
+
+    fn complete_wm_input(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        // GET_RAWINPUT_CODE_WPARAM(wParam) is the low byte. Foreground raw
+        // input (RIM_INPUT == 0) must reach DefWindowProcW for system cleanup;
+        // sink input is fully handled by this observer.
+        if (wparam & 0xffusize) == 0 {
+            // SAFETY: the window procedure received these message parameters.
+            unsafe { DefWindowProcW(hwnd, WM_INPUT, wparam, lparam) }
+        } else {
+            0
+        }
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -1113,14 +1131,14 @@ mod platform {
                             guard.clock_failed = true;
                             cvar.notify_all();
                         }
-                        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                        return complete_wm_input(hwnd, wparam, lparam);
                     }
                 };
                 let hri = lparam as HRAWINPUT;
                 let mut size: u32 = 0;
                 // SAFETY: querying size with null buffer is the documented
                 // pattern for GetRawInputData.
-                unsafe {
+                let queried = unsafe {
                     GetRawInputData(
                         hri,
                         RID_INPUT,
@@ -1129,13 +1147,15 @@ mod platform {
                         std::mem::size_of::<RAWINPUTHEADER>() as u32,
                     )
                 };
-                if size == 0 || size > 4096 {
-                    // SAFETY: forward to default handler.
-                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                if queried == u32::MAX || size == 0 || size > 4096 {
+                    return complete_wm_input(hwnd, wparam, lparam);
                 }
                 let mut buf = ctx.input_buffer.borrow_mut();
-                buf.resize(size as usize, 0);
-                // SAFETY: buf has the capacity reported by the previous call.
+                let word_size = std::mem::size_of::<usize>();
+                let word_count = (size as usize).div_ceil(word_size);
+                buf.resize(word_count, 0);
+                // SAFETY: `buf` is DWORD-aligned and has enough byte storage
+                // for the size reported by the previous query.
                 let read = unsafe {
                     GetRawInputData(
                         hri,
@@ -1145,24 +1165,26 @@ mod platform {
                         std::mem::size_of::<RAWINPUTHEADER>() as u32,
                     )
                 };
-                if read == u32::MAX || read < std::mem::size_of::<RAWINPUTHEADER>() as u32 {
-                    // SAFETY: forward on parse failure.
-                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                if read == u32::MAX
+                    || read as usize > buf.len() * word_size
+                    || read < std::mem::size_of::<RAWINPUT>() as u32
+                {
+                    return complete_wm_input(hwnd, wparam, lparam);
                 }
-                // SAFETY: buf is at least sizeof(RAWINPUT) and was filled by
-                // GetRawInputData.
+                // SAFETY: `buf` is aligned, at least sizeof(RAWINPUT), and
+                // GetRawInputData reported that many initialized bytes.
                 let raw: &RAWINPUT = unsafe { &*(buf.as_ptr().cast()) };
                 let rtype = raw.header.dwType;
                 // RIM_TYPEKEYBOARD = 1
                 if rtype != 1 {
-                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                    return complete_wm_input(hwnd, wparam, lparam);
                 }
                 let keyboard = unsafe { &raw.data.keyboard };
                 let scan_code = keyboard.MakeCode;
                 let extra = keyboard.ExtraInformation as usize;
                 let Some(seq_id) = calibration_extra_info_sequence(extra) else {
                     // Not one of our injected packets — ignore.
-                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                    return complete_wm_input(hwnd, wparam, lparam);
                 };
 
                 // RI_KEY_BREAK is the documented Raw Input make/break bit.
@@ -1187,7 +1209,7 @@ mod platform {
                     }
                     // Receipts for stale sequence IDs are silently discarded.
                 }
-                0
+                complete_wm_input(hwnd, wparam, lparam)
             }
             WM_CLOSE | WM_DESTROY => {
                 let (lock, cvar) = ctx.shared.as_ref();
@@ -1376,7 +1398,15 @@ mod platform {
             // SAFETY: msg is a valid MSG out-parameter; filter is 0 so we
             // receive all messages for any window on this thread.
             let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
-            if r == 0 || r == -1 {
+            if r == -1 {
+                let (lock, cvar) = shared.as_ref();
+                if let Ok(mut guard) = lock.lock() {
+                    guard.pump_thread_failed = true;
+                    cvar.notify_all();
+                }
+                break;
+            }
+            if r == 0 {
                 break;
             }
             // SAFETY: msg is freshly filled by GetMessageW.
@@ -1571,7 +1601,7 @@ mod platform {
 
         #[cfg(not(any(test, feature = "test-support")))]
         fn correlation_self_test(&mut self) -> Result<(), CalibrationError> {
-            let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..1];
+            let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..5];
             let timeout = Duration::from_millis(200);
             let down = self
                 .measure_packet(scan_codes, false, timeout)
@@ -1852,8 +1882,6 @@ mod platform {
                 });
             }
 
-            let expected_receipts = (psr.inserted as usize).min(scan_codes.len()) as u8;
-
             // Wait for expected receipts.
             let receipt_deadline = std::time::Instant::now() + receipt_timeout;
             let (first, last, count, anomalies, receipts) = {
@@ -1865,8 +1893,7 @@ mod platform {
                         cvar.notify_all();
                         return Err(CalibrationError::ClockFailure);
                     }
-                    let n_received = guard.pending_receipts.len();
-                    if n_received >= expected_receipts as usize {
+                    if has_expected_receipts(&guard.pending_receipts, scan_codes, seq, key_up) {
                         break;
                     }
                     let receipt_remaining =
@@ -1912,7 +1939,7 @@ mod platform {
                 cvar.notify_all();
                 drop(guard);
 
-                analyse_receipts(&receipts, scan_codes, seq, expected_receipts, key_up)
+                analyse_receipts(&receipts, scan_codes, seq, key_up)
             };
 
             if key_up && psr.inserted == expected {
@@ -2025,11 +2052,26 @@ mod platform {
         }
     }
 
+    fn has_expected_receipts(
+        receipts: &[RawInputReceipt],
+        expected_scan_codes: &[u16],
+        expected_seq: u32,
+        expected_key_up: bool,
+    ) -> bool {
+        expected_scan_codes.iter().all(|scan_code| {
+            receipts.iter().any(|receipt| {
+                receipt.sequence_id == expected_seq
+                    && receipt.scan_code == *scan_code
+                    && receipt.key_up == expected_key_up
+                    && receipt.extended_flags == 0
+            })
+        })
+    }
+
     fn analyse_receipts(
         receipts: &[RawInputReceipt],
         expected_scan_codes: &[u16],
         expected_seq: u32,
-        receipt_count_for_completion: u8,
         expected_key_up: bool,
     ) -> (
         Option<QpcTicks>,
@@ -2045,7 +2087,9 @@ mod platform {
             anomalies.timeout = true;
             return (None, None, 0, anomalies, SmallVec::new());
         }
-        if count < receipt_count_for_completion {
+        let complete =
+            has_expected_receipts(receipts, expected_scan_codes, expected_seq, expected_key_up);
+        if !complete {
             anomalies.timeout = true;
         }
 
@@ -2069,7 +2113,11 @@ mod platform {
         // Detect duplicates: same scan code appearing more than once.
         for i in 0..receipts.len() {
             for j in (i + 1)..receipts.len() {
-                if receipts[i].scan_code == receipts[j].scan_code {
+                if receipts[i].scan_code == receipts[j].scan_code
+                    && receipts[i].sequence_id == receipts[j].sequence_id
+                    && receipts[i].key_up == receipts[j].key_up
+                    && receipts[i].extended_flags == receipts[j].extended_flags
+                {
                     anomalies.duplicate_receipt = true;
                     break;
                 }
@@ -2088,11 +2136,7 @@ mod platform {
         let first = receipts.iter().map(|r| r.arrived_ticks).min();
         let last = receipts.iter().map(|r| r.arrived_ticks).max();
 
-        let last = if count >= receipt_count_for_completion {
-            last
-        } else {
-            None
-        };
+        let last = if complete { last } else { None };
 
         (
             first,
@@ -2112,6 +2156,7 @@ mod platform {
     ) -> Result<PairSample, CalibrationError> {
         let mut key_evidence = SmallVec::<[KeyShrinkEvidence; 15]>::new();
         let mut pairing_anomaly = false;
+        let mut receipt_before_completion_count = 0u64;
         let mut worst_delivery: Option<i64> = None;
         let mut worst_total: Option<(i64, i64, i64, i64)> = None;
         let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
@@ -2137,6 +2182,12 @@ mod platform {
             let down_latency =
                 signed_delta_us(down_matches[0].arrived_ticks, down.call_completed_ticks)?;
             let up_latency = signed_delta_us(up_matches[0].arrived_ticks, up.call_completed_ticks)?;
+            if down_matches[0].arrived_ticks < down.call_completed_ticks {
+                receipt_before_completion_count = receipt_before_completion_count.saturating_add(1);
+            }
+            if up_matches[0].arrived_ticks < up.call_completed_ticks {
+                receipt_before_completion_count = receipt_before_completion_count.saturating_add(1);
+            }
             let shrink = down_latency
                 .checked_sub(up_latency)
                 .ok_or(CalibrationError::StatisticsOverflow)?;
@@ -2202,6 +2253,7 @@ mod platform {
             pair_worst_delivery_shrink_us: worst_total.map(|value| value.3),
             key_evidence,
             pairing_anomaly,
+            receipt_before_completion_count,
         })
     }
 
@@ -2233,6 +2285,7 @@ mod platform {
             down_receipt_us,
             up_receipt_us,
             pairing_anomaly: pair.pairing_anomaly,
+            receipt_before_completion_count: pair.receipt_before_completion_count,
             down_anomalies: pair.down.anomalies.clone(),
             up_anomalies: pair.up.anomalies.clone(),
         })
@@ -2280,6 +2333,10 @@ mod platform {
             .iter()
             .map(|pair| pair.down.call_duration_us())
             .collect::<Result<_, _>>()?;
+        let up_calls: Vec<u64> = clean_pairs
+            .iter()
+            .map(|pair| pair.up.call_duration_us())
+            .collect::<Result<_, _>>()?;
         let attempted = pairs.len() as u64;
         let clean = clean_pairs.len() as u64;
         let rejected = attempted.saturating_sub(clean);
@@ -2301,6 +2358,35 @@ mod platform {
             .iter()
             .filter(|pair| pair.down.anomalies.partial_send || pair.up.anomalies.partial_send)
             .count() as u64;
+        let pairing_anomaly_count = pairs.iter().filter(|pair| pair.pairing_anomaly).count() as u64;
+        let duplicate_receipt_count = pairs
+            .iter()
+            .filter(|pair| {
+                pair.down.anomalies.duplicate_receipt || pair.up.anomalies.duplicate_receipt
+            })
+            .count() as u64;
+        let unexpected_scan_code_count = pairs
+            .iter()
+            .filter(|pair| {
+                pair.down.anomalies.unexpected_scan_code || pair.up.anomalies.unexpected_scan_code
+            })
+            .count() as u64;
+        let direction_mismatch_count = pairs
+            .iter()
+            .filter(|pair| {
+                pair.down.anomalies.direction_mismatch || pair.up.anomalies.direction_mismatch
+            })
+            .count() as u64;
+        let reordered_receipt_count = pairs
+            .iter()
+            .filter(|pair| {
+                pair.down.anomalies.reordered_receipt || pair.up.anomalies.reordered_receipt
+            })
+            .count() as u64;
+        let receipt_before_completion_count = pairs
+            .iter()
+            .map(|pair| pair.receipt_before_completion_count)
+            .sum();
         let legacy_pair_stats = if legacy_pair_values.is_empty() {
             None
         } else {
@@ -2343,14 +2429,17 @@ mod platform {
             rejected,
             partial_send,
             sample_count: attempted,
-            error_count: rejected,
             timeout_count,
             anomaly_count,
+            pairing_anomaly_count,
+            duplicate_receipt_count,
+            unexpected_scan_code_count,
+            direction_mismatch_count,
+            reordered_receipt_count,
             class_mismatch_count,
-            call_duration_us: quantile_stats_u64(&down_calls)?,
-            first_receipt_us: down_stats.clone(),
-            last_receipt_us: up_stats.clone(),
-            intra_chord_spread_us: None,
+            receipt_before_completion_count,
+            down_call_duration_us: quantile_stats_u64(&down_calls)?,
+            up_call_duration_us: quantile_stats_u64(&up_calls)?,
             pair_worst_shrink_us: legacy_pair_stats,
             pair_worst_total_proxy_shrink_us: total_pair_stats,
             scheduler_shrink_us: scheduler_stats,
@@ -2379,11 +2468,13 @@ mod platform {
     fn anomalous_pair_evidence(
         pairs: &[PairSample],
     ) -> Result<Vec<PairSampleEvidence>, CalibrationError> {
-        pairs
+        let mut evidence = pairs
             .iter()
             .filter(|pair| !pair.is_clean())
             .map(pair_sample_evidence)
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        evidence.truncate(MAX_ANOMALOUS_PAIR_EVIDENCE);
+        Ok(evidence)
     }
 
     // ── Host fingerprint ──────────────────────────────────────────────────────
@@ -2854,6 +2945,7 @@ mod platform {
         let mut measured_anomalous = 0u64;
         let mut measured_timed_out = 0u64;
         let mut measured_class_mismatch = 0u64;
+        let mut anomalous_pairs = HashMap::new();
         let mut scheduling_aids: Option<SchedulingAidProvenance> = None;
         let mut cleanup = CleanupOutcome {
             cleanup_attempted: true,
@@ -2891,6 +2983,10 @@ mod platform {
                     .entry(polyphony)
                     .or_insert_with(HashMap::new)
                     .insert(format!("{class:?}").to_lowercase(), stats);
+                anomalous_pairs
+                    .entry(polyphony)
+                    .or_insert_with(HashMap::new)
+                    .insert(format!("{class:?}").to_lowercase(), bucket.anomalous_pairs);
             }
         }
         let total_attempted = warmup_attempted.saturating_add(measured_attempted);
@@ -2910,6 +3006,7 @@ mod platform {
                 .ok_or(CalibrationError::SchedulingAidProvenanceMismatch)?,
             configuration: config.clone(),
             pair_buckets,
+            anomalous_pairs,
             warmup_attempted,
             measured_attempted,
             setup_attempted: 0,
@@ -2960,7 +3057,7 @@ mod platform {
                 key_up: true,
                 extended_flags: 0,
             }];
-            let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, 1, false);
+            let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, false);
             assert!(anomalies.direction_mismatch);
             assert!(anomalies.any());
         }
@@ -2974,8 +3071,64 @@ mod platform {
                 key_up: false,
                 extended_flags: 0,
             }];
-            let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, 1, false);
+            let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, false);
             assert!(anomalies.unexpected_scan_code);
+        }
+
+        fn receipt(
+            scan_code: u16,
+            sequence_id: u32,
+            key_up: bool,
+            arrived: u64,
+        ) -> RawInputReceipt {
+            RawInputReceipt {
+                arrived_ticks: QpcTicks::from_raw(arrived),
+                scan_code,
+                sequence_id,
+                key_up,
+                extended_flags: 0,
+            }
+        }
+
+        #[test]
+        fn collector_completion_requires_each_unique_expected_receipt() {
+            let expected = [30, 31, 32, 33, 34];
+            let complete: Vec<RawInputReceipt> = expected
+                .iter()
+                .enumerate()
+                .map(|(index, scan)| receipt(*scan, 7, false, 100 + index as u64))
+                .collect();
+            assert!(has_expected_receipts(&complete, &expected, 7, false));
+
+            let mut duplicate = complete[..4].to_vec();
+            duplicate.push(receipt(30, 7, false, 200));
+            assert!(!has_expected_receipts(&duplicate, &expected, 7, false));
+
+            duplicate.push(receipt(34, 7, false, 201));
+            assert!(has_expected_receipts(&duplicate, &expected, 7, false));
+        }
+
+        #[test]
+        fn collector_completion_rejects_wrong_direction_scan_and_stale_sequence() {
+            let expected = [30, 31];
+            let wrong_direction = vec![receipt(30, 7, false, 100), receipt(31, 7, true, 101)];
+            assert!(!has_expected_receipts(
+                &wrong_direction,
+                &expected,
+                7,
+                false
+            ));
+
+            let unexpected_scan = vec![receipt(30, 7, false, 100), receipt(99, 7, false, 101)];
+            assert!(!has_expected_receipts(
+                &unexpected_scan,
+                &expected,
+                7,
+                false
+            ));
+
+            let stale_sequence = vec![receipt(30, 6, false, 100), receipt(31, 7, false, 101)];
+            assert!(!has_expected_receipts(&stale_sequence, &expected, 7, false));
         }
 
         #[test]
@@ -2989,7 +3142,7 @@ mod platform {
                         key_up: false,
                         extended_flags,
                     }];
-                let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, 1, false);
+                let (_, _, _, anomalies, _) = analyse_receipts(&receipts, &[30], 7, false);
                 assert!(anomalies.unexpected_scan_code);
                 assert!(anomalies.any());
             }
@@ -3301,8 +3454,8 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 11);
-        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 6);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 12);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 7);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
         assert_eq!(CALIBRATION_MAX_ATTEMPT_MULTIPLIER, 2);
@@ -3408,6 +3561,30 @@ mod tests {
     }
 
     #[test]
+    fn paired_total_shrink_allows_receipt_before_sendinput_completion() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 200, 300, 250),
+            timing_point(1_100, 1_200, 1_300, 1_600),
+        )
+        .unwrap();
+        assert_eq!(shrink.scheduler_shrink_ticks, 0);
+        assert_eq!(shrink.sendinput_shrink_ticks, 0);
+        assert_eq!(shrink.delivery_shrink_ticks, -350);
+        assert_eq!(shrink.total_proxy_shrink_ticks, -350);
+    }
+
+    #[test]
+    fn paired_total_shrink_allows_receipt_at_sendinput_completion() {
+        let shrink = paired_timing_shrink_ticks(
+            timing_point(100, 200, 300, 300),
+            timing_point(1_100, 1_200, 1_300, 1_600),
+        )
+        .unwrap();
+        assert_eq!(shrink.delivery_shrink_ticks, -300);
+        assert_eq!(shrink.total_proxy_shrink_ticks, -300);
+    }
+
+    #[test]
     fn calibration_precision_boundary_prepares_before_handoff_and_send() {
         let source = include_str!("calibration.rs");
         let prepare = source
@@ -3454,6 +3631,32 @@ mod tests {
                 field: "up completion before pre_call"
             }
         ));
+    }
+
+    #[test]
+    fn paired_timing_rejects_pre_call_before_target() {
+        let error = paired_timing_shrink_ticks(
+            timing_point(100, 99, 300, 300),
+            timing_point(1_100, 1_200, 1_300, 1_600),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CalibrationError::TimestampOrder {
+                field: "down pre_call before target"
+            }
+        ));
+    }
+
+    #[test]
+    fn raw_input_observer_keeps_win32_cleanup_alignment_and_error_contracts() {
+        let source = include_str!("calibration.rs");
+        assert!(source.contains("fn complete_wm_input"));
+        assert!(source.contains("DefWindowProcW(hwnd, WM_INPUT"));
+        assert!(source.contains("input_buffer: std::cell::RefCell<Vec<usize>>"));
+        assert!(source.contains("read < std::mem::size_of::<RAWINPUT>() as u32"));
+        assert!(source.contains("if r == -1"));
+        assert!(source.contains("guard.pump_thread_failed = true"));
     }
 
     #[test]

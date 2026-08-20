@@ -24,12 +24,12 @@ SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
 SUPPORTED_CACHE_VERSION: int = 5
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
-SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 11
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 6
+SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 12
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 7
 SOURCE_FORMULA_VERSION: int = 4
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
 HOST_FINGERPRINT_VERSION: int = 2
-CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 8
+CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 9
 CALIBRATION_EVIDENCE_KIND: str = "injected_raw_input_total_hold_proxy"
 MIN_CALIBRATION_SAMPLE_COUNT: int = 100
 MAX_SHRINK_US: int = 100_000
@@ -334,10 +334,21 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
         attempted = _int(bucket.get("attempted"), f"{key}.attempted", minimum=0)
         clean = _int(bucket.get("clean_pair_count"), f"{key}.clean_pair_count", minimum=0)
         rejected = _int(bucket.get("rejected"), f"{key}.rejected", minimum=0)
+        maximum_attempted = MIN_CALIBRATION_SAMPLE_COUNT * 2
+        if not MIN_CALIBRATION_SAMPLE_COUNT <= attempted <= maximum_attempted:
+            raise ValueError(
+                f"pair bucket {key} attempted count is outside the bounded retry range "
+                f"[{MIN_CALIBRATION_SAMPLE_COUNT}, {maximum_attempted}]"
+            )
         if clean < MIN_CALIBRATION_SAMPLE_COUNT:
             raise ValueError(
                 f"pair bucket {key} has only {clean} clean pairs; "
                 f"at least {MIN_CALIBRATION_SAMPLE_COUNT} are required"
+            )
+        if clean != MIN_CALIBRATION_SAMPLE_COUNT:
+            raise ValueError(
+                f"pair bucket {key} must contain exactly {MIN_CALIBRATION_SAMPLE_COUNT} "
+                f"clean pairs"
             )
         if clean > attempted or rejected != attempted - clean:
             raise ValueError(f"pair bucket {key} counts are inconsistent")

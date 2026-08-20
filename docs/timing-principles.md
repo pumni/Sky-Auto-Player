@@ -120,6 +120,13 @@ total_proxy_shrink = (T_U - T_D) - (R_U - R_D)
 total_proxy_shrink = scheduler_shrink + sendinput_shrink + delivery_shrink
 ```
 
+`R - C` is intentionally signed. The pump thread may observe a foreground
+`WM_INPUT` while the measurement thread is still inside `SendInput`, so
+`R < C` is valid and must not be converted into a pairing anomaly. The
+collector closes only after every expected `(sequence, scan code, direction)`
+identity has arrived; duplicates and unexpected receipts remain bounded
+diagnostic evidence rather than satisfying completion early.
+
 Each balanced pair anchors its Down target to the preceding packet's exact
 `SendInput` completion plus the requested class gap. After that Down completes,
 the Up target is derived from that exact Down completion plus the same gap.
