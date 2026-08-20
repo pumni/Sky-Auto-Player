@@ -168,7 +168,11 @@ completion chronology and cross-direction identity/order failures reject a pair.
 An incomplete or timed-out packet invalidates the correlation boundary and
 prevents the session from arming another packet; any stale-generation evidence
 found by the pump, during a barrier or normal dispatch, likewise prevents
-further packet arming. Only clean pairs enter the signed quantiles. At least
+further packet arming. An active receipt with an incompatible identity or
+direction, a duplicate, or a pending-receipt overflow is treated as the same
+stale-generation evidence; a scheduling class mismatch remains a rejected
+sample rather than an observer-boundary failure. Only clean pairs enter the
+signed quantiles. At least
 100 clean pairs are
 required in every production bucket. Native output schema 13 and artifact
 schema 10 record bounded anomaly evidence, the signed receipt-before-completion

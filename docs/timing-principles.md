@@ -108,7 +108,10 @@ messages with an input-range filter before the next active packet is armed, so
 missing tags cannot silently alias stale receipts. If a packet is incomplete or
 times out, the correlation boundary is lost and the session cannot arm another
 packet; finding stale-generation evidence during the drain or normal dispatch
-likewise prevents further packet arming. A clean
+likewise prevents further packet arming. An active receipt with an incompatible
+identity or direction, a duplicate, or a pending-receipt overflow is likewise
+boundary-losing evidence; a scheduling class mismatch remains a rejected
+sample. A clean
 pair computes signed per-key values:
 
 ```text

@@ -551,10 +551,9 @@ impl SampleAnomalies {
     }
 }
 
-/// Decide whether a receipt wait should continue, become a rejected timeout,
-/// or fail the measurement budget. Receipt timeout is deliberately distinct
-/// from the global QPC budget so the caller can still complete the balanced Up
-/// side of a pair.
+/// Decide whether a receipt wait should continue or yield to the caller.
+/// Receipt timeout is deliberately distinct from the global QPC budget; the
+/// caller records it as a correlation-boundary failure and closes the session.
 fn receipt_wait_duration(
     receipt_remaining: Duration,
     budget_remaining: Option<Duration>,
@@ -1229,6 +1228,58 @@ mod platform {
         invalidate_correlation_boundary(state);
     }
 
+    /// Reject a receipt that cannot be proven to belong to the active packet.
+    ///
+    /// With an optional Raw Input sequence tag, an identity or generation
+    /// mismatch is observer-integrity evidence, not merely a bad sample. The
+    /// session must stop before a later tagless receipt can alias the active
+    /// packet. Each applicable diagnostic counter is retained, but the
+    /// boundary is invalidated exactly once.
+    fn observe_incompatible_receipt(
+        state: &mut SharedCalibState,
+        receipt: RawInputReceipt,
+    ) -> bool {
+        let unexpected_identity = !state
+            .active_expected_scan_codes
+            .contains(&receipt.scan_code)
+            || receipt.extended_flags != 0;
+        if unexpected_identity {
+            state.pump_diagnostics.unexpected_identity =
+                state.pump_diagnostics.unexpected_identity.saturating_add(1);
+        }
+
+        let wrong_direction = state.active_expected_key_up != Some(receipt.key_up);
+        if wrong_direction {
+            state.pump_diagnostics.wrong_direction =
+                state.pump_diagnostics.wrong_direction.saturating_add(1);
+        }
+
+        let duplicate = state.pending_receipts.iter().any(|pending| {
+            pending.sequence_id == receipt.sequence_id
+                && pending.scan_code == receipt.scan_code
+                && pending.key_up == receipt.key_up
+                && pending.extended_flags == receipt.extended_flags
+        });
+        if duplicate {
+            state.pump_diagnostics.duplicate_receipt =
+                state.pump_diagnostics.duplicate_receipt.saturating_add(1);
+        }
+
+        let overflow = state.pending_receipts.len() >= MAX_PENDING_RECEIPTS;
+        if overflow {
+            state.pump_diagnostics.pending_receipt_overflow = state
+                .pump_diagnostics
+                .pending_receipt_overflow
+                .saturating_add(1);
+        }
+
+        let incompatible = unexpected_identity || wrong_direction || duplicate || overflow;
+        if incompatible {
+            observe_stale_correlation_evidence(state);
+        }
+        incompatible
+    }
+
     #[cfg(any(test, not(feature = "test-support")))]
     fn format_probe_failure_detail(
         direction: &str,
@@ -1636,33 +1687,8 @@ mod platform {
                                 // identity; never alias an extended key.
                                 extended_flags: parsed.flags as u8 & (0x0002 | 0x0004),
                             };
-                            if !guard
-                                .active_expected_scan_codes
-                                .contains(&receipt.scan_code)
-                                || receipt.extended_flags != 0
-                            {
-                                guard.pump_diagnostics.unexpected_identity =
-                                    guard.pump_diagnostics.unexpected_identity.saturating_add(1);
-                            }
-                            if guard.active_expected_key_up != Some(receipt.key_up) {
-                                guard.pump_diagnostics.wrong_direction =
-                                    guard.pump_diagnostics.wrong_direction.saturating_add(1);
-                            }
-                            let duplicate = guard.pending_receipts.iter().any(|pending| {
-                                pending.sequence_id == receipt.sequence_id
-                                    && pending.scan_code == receipt.scan_code
-                                    && pending.key_up == receipt.key_up
-                                    && pending.extended_flags == receipt.extended_flags
-                            });
-                            if duplicate {
-                                guard.pump_diagnostics.duplicate_receipt =
-                                    guard.pump_diagnostics.duplicate_receipt.saturating_add(1);
-                            }
-                            if guard.pending_receipts.len() >= MAX_PENDING_RECEIPTS {
-                                guard.pump_diagnostics.pending_receipt_overflow = guard
-                                    .pump_diagnostics
-                                    .pending_receipt_overflow
-                                    .saturating_add(1);
+                            if observe_incompatible_receipt(&mut guard, receipt) {
+                                cvar.notify_all();
                             } else {
                                 guard.pending_receipts.push(receipt);
                                 guard.pump_diagnostics.remember_accepted(receipt);
@@ -4014,6 +4040,16 @@ mod platform {
             ))
         }
 
+        fn active_shared_state() -> Arc<(Mutex<SharedCalibState>, Condvar)> {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            state.active_sequence = Some(7);
+            state.active_expected_scan_codes.push(30);
+            state.active_expected_key_up = Some(false);
+            drop(state);
+            shared
+        }
+
         #[test]
         fn posted_barrier_handler_rejects_pending_wm_input_before_completion() {
             let mut seed = MSG {
@@ -4121,6 +4157,78 @@ mod platform {
             invalidate_correlation_boundary(&mut state);
             state.pump_diagnostics = PumpDiagnostics::default();
             assert!(!can_arm_next_packet(&state));
+        }
+
+        #[test]
+        fn wrong_direction_invalidates_boundary() {
+            let shared = active_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            assert!(observe_incompatible_receipt(
+                &mut state,
+                receipt(30, 7, true, 100)
+            ));
+            assert_eq!(state.pump_diagnostics.wrong_direction, 1);
+            assert_eq!(state.pump_diagnostics.stale_sequence, 1);
+            assert!(state.correlation_boundary_lost);
+            assert!(state.pending_receipts.is_empty());
+        }
+
+        #[test]
+        fn unexpected_identity_invalidates_boundary() {
+            let shared = active_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            assert!(observe_incompatible_receipt(
+                &mut state,
+                receipt(31, 7, false, 100)
+            ));
+            assert_eq!(state.pump_diagnostics.unexpected_identity, 1);
+            assert!(state.correlation_boundary_lost);
+            assert!(state.pending_receipts.is_empty());
+        }
+
+        #[test]
+        fn duplicate_receipt_invalidates_boundary() {
+            let shared = active_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            let existing = receipt(30, 7, false, 100);
+            state.pending_receipts.push(existing);
+            assert!(observe_incompatible_receipt(&mut state, existing));
+            assert_eq!(state.pump_diagnostics.duplicate_receipt, 1);
+            assert!(state.correlation_boundary_lost);
+            assert_eq!(state.pending_receipts.len(), 1);
+        }
+
+        #[test]
+        fn pending_overflow_invalidates_boundary() {
+            let shared = active_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            state.pending_receipts.extend(
+                (0..MAX_PENDING_RECEIPTS)
+                    .map(|index| receipt(100 + index as u16, 7, false, 100 + index as u64)),
+            );
+            assert!(observe_incompatible_receipt(
+                &mut state,
+                receipt(30, 7, false, 1_000)
+            ));
+            assert_eq!(state.pump_diagnostics.pending_receipt_overflow, 1);
+            assert!(state.correlation_boundary_lost);
+            assert_eq!(state.pending_receipts.len(), MAX_PENDING_RECEIPTS);
+        }
+
+        #[test]
+        fn class_mismatch_does_not_invalidate_boundary() {
+            let shared = active_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            let receipt = receipt(30, 7, false, 100);
+            assert!(!observe_incompatible_receipt(&mut state, receipt));
+            state.pending_receipts.clear();
+            let anomalies = SampleAnomalies {
+                class_mismatch: true,
+                ..SampleAnomalies::default()
+            };
+            assert!(anomalies.class_mismatch);
+            assert!(!state.correlation_boundary_lost);
+            assert_eq!(state.active_sequence, Some(7));
         }
 
         #[test]
