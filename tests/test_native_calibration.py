@@ -565,7 +565,7 @@ def test_protocol8_cache_is_rejected_after_protocol9_semantics_bump() -> None:
     with pytest.raises(ValueError, match="measurement protocol"):
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
-    assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
+    assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
     assert resolution.resolved_margin_us == 500
 
 

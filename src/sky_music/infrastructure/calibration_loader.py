@@ -544,6 +544,7 @@ def load_calibration_resolution(
     if isinstance(data, dict) and (
         data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION)
         or data.get("measurement_protocol_version") == 4
+        or data.get("measurement_protocol_version") == 8
         or data.get("evidence_kind") == "injected_raw_input_delivery_proxy"
     ):
         return CalibrationLoadResult(

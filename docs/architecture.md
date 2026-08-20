@@ -196,6 +196,14 @@ margin never changes Note-On timestamps, `physical_target`, dispatch lead, or
 the independent fixed `down_late_grace_us` policy, which is `500 µs` in
 production.
 
+The five-key correlation self-test ends with a read-only physical All-Up
+verification; it does not inject an untagged cleanup packet while the exact-tag
+observer is active. Before a successful bucket is published, the final queue
+barrier and trust check seal the observer, the pump is stopped and its Raw
+Input registration is restored, and only then is physical All-Up cleanup sent.
+Any boundary loss during that seal takes the emergency cleanup path and makes
+the bucket non-publishable.
+
 Invalid provenance, incomplete buckets, anomalies, cleanup failure, or a
 failed startup Down/Up correlation self-test fail closed and preserve the
 previous cache. Small diagnostic runs may produce a report, but can never

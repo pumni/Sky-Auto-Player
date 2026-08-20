@@ -45,7 +45,10 @@ use serde::{Deserialize, Serialize};
 use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use smallvec::SmallVec;
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 // ─── Public error type ────────────────────────────────────────────────────────
@@ -1091,6 +1094,37 @@ fn can_arm_next_packet(state: &SharedCalibState) -> bool {
     state.active_sequence.is_none() && !state.correlation_boundary_lost
 }
 
+fn arm_packet_state(
+    state: &mut SharedCalibState,
+    sequence_id: u32,
+    scan_codes: &[u16],
+    key_up: bool,
+) -> Result<(), CalibrationError> {
+    if let Some(reason) = state.observer_failure {
+        return Err(CalibrationError::ObserverIntegrityFailure { reason });
+    }
+    if state.correlation_boundary_lost || !can_arm_next_packet(state) {
+        return Err(CalibrationError::CorrelationBoundaryLost);
+    }
+    if !state.pending_receipts.is_empty() {
+        invalidate_correlation_boundary(state);
+        return Err(CalibrationError::CorrelationBoundaryLost);
+    }
+
+    // The boundary check, diagnostic reset, and active-packet install share
+    // this one lock acquisition. A stale receipt arriving after the barrier
+    // but before this point therefore wins the race and prevents arming.
+    state.pump_diagnostics = PumpDiagnostics::default();
+    state.active_sequence = Some(sequence_id);
+    state.active_expected_scan_codes.clear();
+    state
+        .active_expected_scan_codes
+        .extend_from_slice(scan_codes);
+    state.active_expected_key_up = Some(key_up);
+    state.pending_receipts.clear();
+    Ok(())
+}
+
 #[cfg(any(test, feature = "test-support"))]
 type ForegroundProbe = Box<dyn Fn(isize) -> bool + Send + Sync>;
 
@@ -1230,8 +1264,12 @@ mod platform {
             Err(poisoned) => {
                 let mut state = poisoned.into_inner();
                 state.pump_thread_failed = true;
+                if state.observer_failure.is_none() {
+                    state.observer_failure = Some("state_lock_failed");
+                }
                 state.pump_diagnostics.state_lock_failed =
                     state.pump_diagnostics.state_lock_failed.saturating_add(1);
+                invalidate_correlation_boundary(&mut state);
                 cvar.notify_all();
             }
         }
@@ -1784,8 +1822,12 @@ mod platform {
             WM_CLOSE | WM_DESTROY => {
                 let (lock, cvar) = ctx.shared.as_ref();
                 if let Ok(mut guard) = lock.lock() {
+                    let unexpected_close = !guard.should_exit;
                     guard.window_closed = true;
                     guard.should_exit = true;
+                    if unexpected_close {
+                        invalidate_correlation_boundary(&mut guard);
+                    }
                     cvar.notify_all();
                 }
                 unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
@@ -1794,6 +1836,10 @@ mod platform {
             WM_CALIB_EXIT => {
                 // SAFETY: PostQuitMessage is safe to call from within a window
                 // procedure.
+                if let Ok(mut guard) = ctx.shared.0.lock() {
+                    guard.should_exit = true;
+                    ctx.shared.1.notify_all();
+                }
                 unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
                 0
             }
@@ -1993,6 +2039,10 @@ mod platform {
                 let (lock, cvar) = shared.as_ref();
                 if let Ok(mut guard) = lock.lock() {
                     guard.pump_thread_failed = true;
+                    if guard.observer_failure.is_none() {
+                        guard.observer_failure = Some("get_message_failed");
+                    }
+                    invalidate_correlation_boundary(&mut guard);
                     cvar.notify_all();
                 }
                 break;
@@ -2046,6 +2096,7 @@ mod platform {
         wait_interrupt: Arc<OwnedEvent>,
         abort_requested: Arc<AtomicBool>,
         next_barrier_generation: u64,
+        cleanup_done: bool,
     }
 
     fn stop_pump_on_startup_failure(
@@ -2189,6 +2240,7 @@ mod platform {
                 wait_interrupt,
                 abort_requested,
                 next_barrier_generation: 0,
+                cleanup_done: false,
             };
 
             if let Err(err) = session.acquire_foreground(Duration::from_secs(5)) {
@@ -2255,6 +2307,7 @@ mod platform {
             Ok(())
         }
 
+        #[cfg(not(any(test, feature = "test-support")))]
         fn reset_pump_diagnostics(&self) -> Result<(), CalibrationError> {
             let (lock, _cvar) = self.shared.as_ref();
             let mut state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
@@ -2288,30 +2341,7 @@ mod platform {
         ) -> Result<(), CalibrationError> {
             let (lock, _cvar) = self.shared.as_ref();
             let mut state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-            if let Some(reason) = state.observer_failure {
-                return Err(CalibrationError::ObserverIntegrityFailure { reason });
-            }
-            if state.correlation_boundary_lost || !can_arm_next_packet(&state) {
-                return Err(CalibrationError::CorrelationBoundaryLost);
-            }
-            if !state.pending_receipts.is_empty() {
-                invalidate_correlation_boundary(&mut state);
-                return Err(CalibrationError::CorrelationBoundaryLost);
-            }
-
-            // The boundary check, diagnostic reset, and active-packet install
-            // share this one lock acquisition. A stale receipt arriving after
-            // the barrier but before this point therefore wins the race and
-            // prevents arming rather than being erased by the reset.
-            state.pump_diagnostics = PumpDiagnostics::default();
-            state.active_sequence = Some(sequence_id);
-            state.active_expected_scan_codes.clear();
-            state
-                .active_expected_scan_codes
-                .extend_from_slice(scan_codes);
-            state.active_expected_key_up = Some(key_up);
-            state.pending_receipts.clear();
-            Ok(())
+            arm_packet_state(&mut state, sequence_id, scan_codes, key_up)
         }
 
         #[cfg(not(any(test, feature = "test-support")))]
@@ -2378,9 +2408,15 @@ mod platform {
                         })
                     }
                 }
-                WaitOutcome::Failed(failure) => Err(CalibrationError::PrecisionWaitFailed {
-                    detail: format!("{failure:?}"),
-                }),
+                WaitOutcome::Failed(failure) => {
+                    if self.abort_requested.load(Ordering::Acquire) {
+                        self.check_precision_handoff_trust()
+                    } else {
+                        Err(CalibrationError::PrecisionWaitFailed {
+                            detail: format!("{failure:?}"),
+                        })
+                    }
+                }
             }
         }
 
@@ -2531,9 +2567,20 @@ mod platform {
                 }
             }
 
+            let mut outcome = self.verify_physical_all_up();
+            outcome.cleanup_attempted = true;
+            outcome.cleanup_success &= cleanup_success;
+            outcome
+        }
+
+        /// Verify the physical instrument state without injecting another
+        /// packet. This is the only cleanup operation allowed after a
+        /// successful correlation self-test or after the observer has been
+        /// sealed for publishable close.
+        fn verify_physical_all_up(&mut self) -> CleanupOutcome {
             let mut stuck_keys = Vec::new();
             let mut verification_inconclusive = false;
-            for &scan_code in &attempted {
+            for &scan_code in &PHYSICAL_INSTRUMENT_SCAN_CODES {
                 match crate::input::is_scan_code_physically_down(scan_code, 0) {
                     Some(true) => stuck_keys.push(scan_code),
                     Some(false) => {}
@@ -2542,8 +2589,8 @@ mod platform {
             }
             self.possibly_active_mask = 0;
             CleanupOutcome {
-                cleanup_attempted: true,
-                cleanup_success: cleanup_success && stuck_keys.is_empty(),
+                cleanup_attempted: false,
+                cleanup_success: stuck_keys.is_empty() && !verification_inconclusive,
                 cleanup_stuck_keys: stuck_keys,
                 cleanup_verification_inconclusive: verification_inconclusive,
                 raw_input_restore_failed: false,
@@ -2824,10 +2871,36 @@ mod platform {
             Ok(sample)
         }
 
-        pub fn close(mut self) -> CleanupOutcome {
-            let mut cleanup = self.cleanup_keyboard();
+        fn check_publishable_close_boundary(
+            &self,
+            before_pump_stop: bool,
+        ) -> Result<(), CalibrationError> {
+            let (lock, _cvar) = self.shared.as_ref();
+            let state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            if let Some(reason) = state.observer_failure {
+                return Err(CalibrationError::ObserverIntegrityFailure { reason });
+            }
+            if state.correlation_boundary_lost
+                || state.active_sequence.is_some()
+                || !state.pending_receipts.is_empty()
+            {
+                return Err(CalibrationError::CorrelationBoundaryLost);
+            }
+            if state.pump_thread_failed
+                || (before_pump_stop && (state.window_closed || state.should_exit))
+            {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+            Ok(())
+        }
+
+        fn stop_pump_thread(&mut self) {
             // Signal the pump thread to exit.
             if self.hwnd != 0 {
+                if let Ok(mut state) = self.shared.0.lock() {
+                    state.should_exit = true;
+                    self.shared.1.notify_all();
+                }
                 // SAFETY: hwnd is a live message-only window on the pump thread.
                 unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
                 self.hwnd = 0;
@@ -2838,6 +2911,9 @@ mod platform {
             {
                 state.pump_thread_failed = true;
             }
+        }
+
+        fn apply_session_cleanup_state(&self, cleanup: &mut CleanupOutcome) {
             let restore_failed = self
                 .shared
                 .0
@@ -2853,13 +2929,52 @@ mod platform {
                 .unwrap_or(true);
             cleanup.cleanup_success &= !restore_failed;
             cleanup.cleanup_success &= !cleanup.pump_thread_failed;
+        }
+
+        fn emergency_close_in_place(&mut self) -> CleanupOutcome {
+            let mut cleanup = self.cleanup_keyboard();
+            self.cleanup_done = true;
+            self.stop_pump_thread();
+            self.apply_session_cleanup_state(&mut cleanup);
             cleanup
+        }
+
+        /// Seal the observer before the final physical cleanup. Once the pump
+        /// is stopped and Raw Input registration is restored, cleanup traffic
+        /// cannot create an untagged measurement receipt or mutate correlation
+        /// trust. Any boundary loss before or during the seal is terminal.
+        fn close_publishable(&mut self) -> Result<CleanupOutcome, CalibrationError> {
+            if let Err(error) = self.drain_pump_before_arm() {
+                let _ = self.emergency_close_in_place();
+                return Err(error);
+            }
+            if let Err(error) = self.check_publishable_close_boundary(true) {
+                let _ = self.emergency_close_in_place();
+                return Err(error);
+            }
+
+            self.stop_pump_thread();
+            let post_stop_error = self.check_publishable_close_boundary(false).err();
+            let mut cleanup = self.cleanup_keyboard();
+            self.cleanup_done = true;
+            self.apply_session_cleanup_state(&mut cleanup);
+            if let Some(error) = post_stop_error {
+                return Err(error);
+            }
+            Ok(cleanup)
+        }
+
+        pub fn close(mut self) -> CleanupOutcome {
+            self.emergency_close_in_place()
         }
     }
 
     impl Drop for CalibrationSession {
         fn drop(&mut self) {
-            let _ = self.cleanup_keyboard();
+            if !self.cleanup_done {
+                let _ = self.cleanup_keyboard();
+                self.cleanup_done = true;
+            }
             if let Ok(mut state) = self.shared.0.lock() {
                 state.should_exit = true;
                 self.shared.1.notify_all();
@@ -3721,7 +3836,26 @@ mod platform {
             }
         }
 
-        let cleanup = session.close();
+        let cleanup = match session.close_publishable() {
+            Ok(cleanup) => cleanup,
+            Err(source) => {
+                return Err(pair_bucket_failure(
+                    class,
+                    polyphony,
+                    attempt_index.max(expected),
+                    "close",
+                    source,
+                    CleanupOutcome {
+                        cleanup_attempted: true,
+                        cleanup_success: false,
+                        cleanup_stuck_keys: Vec::new(),
+                        cleanup_verification_inconclusive: true,
+                        raw_input_restore_failed: false,
+                        pump_thread_failed: false,
+                    },
+                ));
+            }
+        };
         if !cleanup.cleanup_success || cleanup.cleanup_verification_inconclusive {
             return Err(pair_bucket_failure(
                 class,
@@ -4174,6 +4308,8 @@ mod platform {
         }
 
         fn empty_shared_state() -> Arc<(Mutex<SharedCalibState>, Condvar)> {
+            let wait_interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("wait interrupt"));
+            let abort_requested = Arc::new(AtomicBool::new(false));
             Arc::new((
                 Mutex::new(SharedCalibState {
                     pending_receipts: SmallVec::new(),
@@ -4184,6 +4320,8 @@ mod platform {
                     barrier_completed_generation: 0,
                     correlation_boundary_lost: false,
                     observer_failure: None,
+                    wait_interrupt,
+                    abort_requested,
                     window_ready: false,
                     should_exit: false,
                     window_closed: false,
@@ -4319,6 +4457,21 @@ mod platform {
         }
 
         #[test]
+        fn boundary_lost_between_barrier_and_arm_stays_unarmed() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            invalidate_correlation_boundary(&mut state);
+            let result = arm_packet_state(&mut state, 7, &[30, 31], false);
+            assert!(matches!(
+                result,
+                Err(CalibrationError::CorrelationBoundaryLost)
+            ));
+            assert_eq!(state.active_sequence, None);
+            assert!(state.correlation_boundary_lost);
+            assert!(state.abort_requested.load(Ordering::Acquire));
+        }
+
+        #[test]
         fn missing_tag_is_terminal_observer_failure() {
             let shared = empty_shared_state();
             observe_observer_integrity_failure(&shared, "tag_decode_failed", |diagnostics| {
@@ -4341,6 +4494,33 @@ mod platform {
             assert!(state.correlation_boundary_lost);
             assert_eq!(state.observer_failure, Some("raw_read_failed"));
             assert_eq!(state.pump_diagnostics.raw_read_failed, 1);
+        }
+
+        #[test]
+        fn first_observer_failure_reason_is_stable() {
+            let shared = empty_shared_state();
+            observe_observer_integrity_failure(&shared, "raw_read_failed", |_| {});
+            observe_observer_integrity_failure(&shared, "tag_decode_failed", |_| {});
+            let state = shared.0.lock().expect("shared calibration state");
+            assert_eq!(state.observer_failure, Some("raw_read_failed"));
+        }
+
+        #[test]
+        fn observer_invalidation_interrupts_precision_wait() {
+            let shared = empty_shared_state();
+            let before = shared
+                .0
+                .lock()
+                .expect("shared calibration state")
+                .wait_interrupt
+                .signal_generation();
+            {
+                let mut state = shared.0.lock().expect("shared calibration state");
+                invalidate_correlation_boundary(&mut state);
+            }
+            let state = shared.0.lock().expect("shared calibration state");
+            assert!(state.abort_requested.load(Ordering::Acquire));
+            assert!(state.wait_interrupt.signal_generation() > before);
         }
 
         #[test]
