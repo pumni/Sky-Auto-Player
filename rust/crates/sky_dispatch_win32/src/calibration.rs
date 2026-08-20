@@ -61,6 +61,9 @@ pub enum CalibrationError {
     #[error("window thread panicked or could not start")]
     WindowThreadFailed,
 
+    #[error("calibration correlation boundary was lost; session cannot arm another packet")]
+    CorrelationBoundaryLost,
+
     #[error("sequence {sequence_id}: timeout waiting for {expected} receipts (got {received})")]
     ReceiptTimeout {
         sequence_id: u32,
@@ -1035,10 +1038,13 @@ struct SharedCalibState {
     active_expected_key_up: Option<bool>,
     pump_diagnostics: PumpDiagnostics,
     /// Message-queue barrier generations completed by the pump. A
-    /// barrier drains all earlier WM_INPUT messages while no packet is
-    /// active, preventing an untagged stale receipt from aliasing the
-    /// next packet.
+    /// barrier drains currently queued WM_INPUT messages while no packet is
+    /// active; a stale message or incomplete packet invalidates the boundary
+    /// instead of permitting another tagless packet.
     barrier_completed_generation: u64,
+    /// Set after an incomplete packet or stale receipt is observed. The
+    /// session must not arm another tagless packet after this point.
+    correlation_boundary_lost: bool,
     /// Set by the pump thread when the window is ready.
     window_ready: bool,
     /// Set to signal the pump thread to exit gracefully (checked on resume).
@@ -1056,6 +1062,15 @@ fn clear_active_packet(state: &mut SharedCalibState) {
     state.active_sequence = None;
     state.active_expected_scan_codes.clear();
     state.active_expected_key_up = None;
+}
+
+fn invalidate_correlation_boundary(state: &mut SharedCalibState) {
+    clear_active_packet(state);
+    state.correlation_boundary_lost = true;
+}
+
+fn can_arm_next_packet(state: &SharedCalibState) -> bool {
+    state.active_sequence.is_none() && !state.correlation_boundary_lost
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1119,8 +1134,8 @@ mod platform {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
         PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow,
-        ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_QUIT, WM_USER,
+        WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
@@ -1324,6 +1339,14 @@ mod platform {
         }
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PendingInputDrain {
+        Clean,
+        StaleInput,
+        Quit,
+        Failed,
+    }
+
     /// Remove every pending WM_INPUT message while no packet is active. A
     /// posted barrier alone is not sufficient: GetMessage prioritizes posted
     /// messages over input messages, so the barrier handler must explicitly
@@ -1331,14 +1354,14 @@ mod platform {
     fn drain_pending_wm_input(
         shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
         hwnd: HWND,
-    ) -> bool {
+    ) -> PendingInputDrain {
         let active = match shared.0.lock() {
             Ok(state) => state.active_sequence.is_some(),
             Err(poisoned) => {
                 let mut state = poisoned.into_inner();
                 state.pump_thread_failed = true;
                 shared.1.notify_all();
-                return false;
+                return PendingInputDrain::Failed;
             }
         };
         if active {
@@ -1346,9 +1369,10 @@ mod platform {
                 state.pump_thread_failed = true;
                 shared.1.notify_all();
             }
-            return false;
+            return PendingInputDrain::Failed;
         }
 
+        let mut stale_input_found = false;
         loop {
             let mut pending = MSG {
                 hwnd: std::ptr::null_mut(),
@@ -1372,6 +1396,38 @@ mod platform {
             if found == 0 {
                 break;
             }
+            // PeekMessageW retrieves WM_QUIT regardless of the range filter.
+            // Put it back and let the normal pump lifecycle consume it; never
+            // treat the shutdown record as a raw-input receipt.
+            if pending.message == WM_QUIT {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(
+                        pending.wParam as i32,
+                    );
+                }
+                match shared.0.lock() {
+                    Ok(mut state) => {
+                        state.window_closed = true;
+                        state.should_exit = true;
+                        shared.1.notify_all();
+                    }
+                    Err(poisoned) => {
+                        let mut state = poisoned.into_inner();
+                        state.pump_thread_failed = true;
+                        shared.1.notify_all();
+                        return PendingInputDrain::Failed;
+                    }
+                }
+                return PendingInputDrain::Quit;
+            }
+            if pending.message != WM_INPUT {
+                if let Ok(mut state) = shared.0.lock() {
+                    state.pump_thread_failed = true;
+                    shared.1.notify_all();
+                }
+                return PendingInputDrain::Failed;
+            }
+            stale_input_found = true;
             match shared.0.lock() {
                 Ok(mut state) => {
                     state.pump_diagnostics.wm_input_seen =
@@ -1385,14 +1441,18 @@ mod platform {
                     state.pump_diagnostics.state_lock_failed =
                         state.pump_diagnostics.state_lock_failed.saturating_add(1);
                     shared.1.notify_all();
-                    return false;
+                    return PendingInputDrain::Failed;
                 }
             }
             // Foreground WM_INPUT requires DefWindowProcW cleanup even when
             // the stale message is intentionally discarded.
             complete_wm_input(hwnd, pending.wParam, pending.lParam);
         }
-        true
+        if stale_input_found {
+            PendingInputDrain::StaleInput
+        } else {
+            PendingInputDrain::Clean
+        }
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -1637,25 +1697,40 @@ mod platform {
                 0
             }
             WM_CALIB_BARRIER => {
-                if !drain_pending_wm_input(&ctx.shared, hwnd) {
-                    return 0;
-                }
-                let (lock, cvar) = ctx.shared.as_ref();
-                match lock.lock() {
-                    Ok(mut guard) => {
-                        guard.barrier_completed_generation =
-                            guard.barrier_completed_generation.max(wparam as u64);
-                        cvar.notify_all();
+                match drain_pending_wm_input(&ctx.shared, hwnd) {
+                    PendingInputDrain::Clean => {
+                        let (lock, cvar) = ctx.shared.as_ref();
+                        match lock.lock() {
+                            Ok(mut guard) => {
+                                guard.barrier_completed_generation =
+                                    guard.barrier_completed_generation.max(wparam as u64);
+                                cvar.notify_all();
+                            }
+                            Err(poisoned) => {
+                                let mut guard = poisoned.into_inner();
+                                guard.pump_thread_failed = true;
+                                cvar.notify_all();
+                            }
+                        }
                     }
-                    Err(poisoned) => {
-                        let mut guard = poisoned.into_inner();
-                        guard.pump_thread_failed = true;
-                        cvar.notify_all();
+                    PendingInputDrain::StaleInput => {
+                        let (lock, cvar) = ctx.shared.as_ref();
+                        match lock.lock() {
+                            Ok(mut guard) => {
+                                invalidate_correlation_boundary(&mut guard);
+                                cvar.notify_all();
+                            }
+                            Err(poisoned) => {
+                                let mut guard = poisoned.into_inner();
+                                guard.pump_thread_failed = true;
+                                cvar.notify_all();
+                            }
+                        }
                     }
+                    PendingInputDrain::Quit | PendingInputDrain::Failed => {}
                 }
                 0
             }
-
             _ => {
                 // SAFETY: forwarding to the default handler is always safe.
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1954,6 +2029,7 @@ mod platform {
                 active_expected_key_up: None,
                 pump_diagnostics: PumpDiagnostics::default(),
                 barrier_completed_generation: 0,
+                correlation_boundary_lost: false,
                 window_ready: false,
                 should_exit: false,
                 window_closed: false,
@@ -2034,10 +2110,17 @@ mod platform {
             Ok(session)
         }
 
-        /// Drain all WM_INPUT messages already queued on the pump thread
-        /// before arming the next packet. This is the packet-boundary proof
-        /// needed when Raw Input does not preserve the optional injection tag.
+        /// Drain all WM_INPUT messages currently queued on the pump thread
+        /// before arming the next packet. A stale or incomplete boundary is
+        /// fail-closed because Raw Input does not preserve the optional tag.
         fn drain_pump_before_arm(&mut self) -> Result<(), CalibrationError> {
+            {
+                let (lock, _cvar) = self.shared.as_ref();
+                let guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+                if !can_arm_next_packet(&guard) {
+                    return Err(CalibrationError::CorrelationBoundaryLost);
+                }
+            }
             self.next_barrier_generation = self
                 .next_barrier_generation
                 .checked_add(1)
@@ -2057,8 +2140,12 @@ mod platform {
                     state.barrier_completed_generation < generation
                         && !state.pump_thread_failed
                         && !state.window_closed
+                        && !state.correlation_boundary_lost
                 })
                 .map_err(|_| CalibrationError::StateLockFailed)?;
+            if guard.correlation_boundary_lost {
+                return Err(CalibrationError::CorrelationBoundaryLost);
+            }
             if timeout.timed_out() || guard.pump_thread_failed || guard.window_closed {
                 return Err(CalibrationError::WindowThreadFailed);
             }
@@ -2375,7 +2462,7 @@ mod platform {
                 Err(error) => {
                     let (lock, cvar) = self.shared.as_ref();
                     let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-                    clear_active_packet(&mut guard);
+                    invalidate_correlation_boundary(&mut guard);
                     cvar.notify_all();
                     return Err(error);
                 }
@@ -2400,7 +2487,7 @@ mod platform {
             if partial_send {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-                clear_active_packet(&mut guard);
+                invalidate_correlation_boundary(&mut guard);
                 cvar.notify_all();
                 return Err(CalibrationError::PacketIntegrity {
                     phase: "partial_send",
@@ -2480,6 +2567,18 @@ mod platform {
 
                 analyse_receipts(&receipts, scan_codes, seq, key_up)
             };
+
+            if anomalies.timeout {
+                let (lock, cvar) = self.shared.as_ref();
+                let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+                invalidate_correlation_boundary(&mut guard);
+                cvar.notify_all();
+                return Err(CalibrationError::ReceiptTimeout {
+                    sequence_id: seq,
+                    expected,
+                    received: count,
+                });
+            }
 
             if key_up && psr.inserted == expected {
                 self.possibly_active_mask = 0;
@@ -3903,6 +4002,7 @@ mod platform {
                     active_expected_key_up: None,
                     pump_diagnostics: PumpDiagnostics::default(),
                     barrier_completed_generation: 0,
+                    correlation_boundary_lost: false,
                     window_ready: false,
                     should_exit: false,
                     window_closed: false,
@@ -3917,7 +4017,7 @@ mod platform {
         }
 
         #[test]
-        fn posted_barrier_handler_removes_pending_wm_input_before_completion() {
+        fn posted_barrier_handler_rejects_pending_wm_input_before_completion() {
             let mut seed = MSG {
                 hwnd: std::ptr::null_mut(),
                 message: 0,
@@ -3955,9 +4055,10 @@ mod platform {
             PUMP_STATE.with(|cell| cell.set(std::ptr::null()));
 
             let state = shared.0.lock().expect("shared calibration state");
-            assert_eq!(state.barrier_completed_generation, 9);
+            assert_eq!(state.barrier_completed_generation, 0);
             assert_eq!(state.pump_diagnostics.wm_input_seen, 1);
             assert_eq!(state.pump_diagnostics.stale_sequence, 1);
+            assert!(state.correlation_boundary_lost);
             assert!(!state.pump_thread_failed);
             drop(state);
 
@@ -3981,6 +4082,67 @@ mod platform {
                 )
             };
             assert_eq!(remaining, 0);
+        }
+
+        #[test]
+        fn timeout_boundary_state_forbids_next_packet_arm() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+            assert!(can_arm_next_packet(&state));
+            invalidate_correlation_boundary(&mut state);
+            assert!(!can_arm_next_packet(&state));
+            assert!(state.active_sequence.is_none());
+        }
+
+        #[test]
+        fn barrier_preserves_wm_quit_and_does_not_complete_generation() {
+            let mut seed = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `seed` is a valid message output record and creates the
+            // current test thread's message queue.
+            unsafe {
+                PeekMessageW(&mut seed, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+                windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(17);
+            }
+
+            let shared = empty_shared_state();
+            let ctx = PumpContext {
+                shared: Arc::clone(&shared),
+                input_buffer: std::cell::RefCell::new(Vec::new()),
+            };
+            PUMP_STATE.with(|cell| cell.set(&ctx));
+            // SAFETY: `ctx` remains alive while wnd_proc reads the thread-local
+            // pointer; the barrier must not reinterpret WM_QUIT as WM_INPUT.
+            unsafe { wnd_proc(std::ptr::null_mut(), WM_CALIB_BARRIER, 11, 0) };
+            PUMP_STATE.with(|cell| cell.set(std::ptr::null()));
+
+            let state = shared.0.lock().expect("shared calibration state");
+            assert_eq!(state.barrier_completed_generation, 0);
+            assert!(state.window_closed);
+            assert!(state.should_exit);
+            assert!(!state.correlation_boundary_lost);
+            drop(state);
+
+            let mut quit = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `quit` is a valid output record; consume the reposted
+            // quit so it cannot affect the test harness thread.
+            let found = unsafe { PeekMessageW(&mut quit, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+            assert_ne!(found, 0);
+            assert_eq!(quit.message, WM_QUIT);
+            assert_eq!(quit.wParam, 17);
         }
 
         #[test]
