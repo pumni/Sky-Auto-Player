@@ -102,8 +102,11 @@ construction or allocation is permitted after the handoff.
 
 The Raw Input timestamp is taken at entry to the `WM_INPUT` handler. Down and
 Up packets must both match their direction, exact scan code, and extended
-flags. The optional injection sequence tag is corroborating evidence only; the
-pump-thread barrier handler explicitly removes already-queued `WM_INPUT`
+flags. Publishable calibration requires the injection sequence tag to decode
+and match on every receipt; Windows does not document preservation of
+`KEYBDINPUT.dwExtraInfo` in `RAWKEYBOARD.ExtraInformation`, so a missing tag is
+terminal rather than silently correlated. The pump-thread barrier handler
+explicitly removes already-queued `WM_INPUT`
 messages with an input-range filter before the next active packet is armed, so
 missing tags cannot silently alias stale receipts. If a packet is incomplete or
 times out, the correlation boundary is lost and the session cannot arm another
@@ -111,7 +114,9 @@ packet; finding stale-generation evidence during the drain or normal dispatch
 likewise prevents further packet arming. An active receipt with an incompatible
 identity or direction, a duplicate, or a pending-receipt overflow is likewise
 boundary-losing evidence; a scheduling class mismatch remains a rejected
-sample. A clean
+sample and the only retryable measurement rejection. Parser/read failures,
+reordered receipts, and chronology violations terminate the observer/session;
+they are never converted into bounded retry noise. A clean
 pair computes signed per-key values:
 
 ```text

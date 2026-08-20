@@ -25,7 +25,7 @@ SUPPORTED_CACHE_VERSION: int = 5
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
 SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 13
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 8
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 9
 SOURCE_FORMULA_VERSION: int = 4
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
 HOST_FINGERPRINT_VERSION: int = 2
@@ -162,7 +162,7 @@ def _quantiles(value: object, name: str) -> SignedQuantiles:
         for field in ("min", "p50", "p90", "p95", "p99", "max", "mean")
     }
     ordered = [values[field] for field in ("min", "p50", "p90", "p95", "p99", "max")]
-    if ordered != sorted(ordered):
+    if ordered != sorted(ordered) or not values["min"] <= values["mean"] <= values["max"]:
         raise ValueError(f"{name} quantiles are not ordered")
     if any(abs(item) > MAX_SHRINK_US for item in ordered):
         raise ValueError(f"{name} exceeds the signed evidence bound")

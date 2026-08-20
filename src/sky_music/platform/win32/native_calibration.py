@@ -44,17 +44,26 @@ from sky_music.infrastructure.calibration_loader import (
 )
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 13
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 8
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 9
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 10
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
+PYTHON_PROCESS_EXIT_RESERVE_SECONDS = 1.0
+NATIVE_PROCESS_EXIT_RESERVE_SECONDS = 1.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
 MIN_NATIVE_MEASUREMENT_SECONDS = 1
 MIN_NATIVE_TOTAL_BUDGET_SECONDS = (
     NATIVE_CLEANUP_RESERVE_SECONDS + MIN_NATIVE_MEASUREMENT_SECONDS
 )
+MIN_SINGLE_PROCESS_TIMEOUT_SECONDS = (
+    PYTHON_PROCESS_EXIT_RESERVE_SECONDS
+    + NATIVE_PROCESS_EXIT_RESERVE_SECONDS
+    + MIN_NATIVE_TOTAL_BUDGET_SECONDS
+)
 MIN_FULL_CALIBRATION_TIMEOUT_SECONDS = (
-    PUBLICATION_RESERVE_SECONDS + MIN_NATIVE_TOTAL_BUDGET_SECONDS
+    PUBLICATION_RESERVE_SECONDS
+    + NATIVE_PROCESS_EXIT_RESERVE_SECONDS
+    + MIN_NATIVE_TOTAL_BUDGET_SECONDS
 )
 FULL_POLYPHONIES = (1, 5, 15)
 FULL_SAMPLE_COUNT = 100
@@ -164,19 +173,32 @@ def _finite_timeout(value: float | int | None, *, default: float) -> float:
         or float(actual) > MAX_CALIBRATION_BUDGET_SECONDS
     ):
         raise NativeCalibrationError("timeout_seconds must be a finite value in (0, 120]")
-    if float(actual) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+    if float(actual) < MIN_SINGLE_PROCESS_TIMEOUT_SECONDS:
         raise NativeCalibrationError(
-            f"timeout_seconds must provide at least {MIN_NATIVE_TOTAL_BUDGET_SECONDS}s"
+            f"timeout_seconds must provide at least {MIN_SINGLE_PROCESS_TIMEOUT_SECONDS}s"
         )
     return float(actual)
 
 
-def _native_child_budget(run_deadline: float, now: float) -> tuple[int, float]:
-    remaining = run_deadline - now - PUBLICATION_RESERVE_SECONDS
-    budget = math.floor(remaining)
+def _single_process_budget(timeout_seconds: float) -> tuple[int, float]:
+    child_timeout = timeout_seconds - PYTHON_PROCESS_EXIT_RESERVE_SECONDS
+    budget = math.floor(child_timeout - NATIVE_PROCESS_EXIT_RESERVE_SECONDS)
     if budget < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
-        raise NativeCalibrationError("global calibration budget cannot provide native cleanup reserve")
-    return min(MAX_CALIBRATION_BUDGET_SECONDS, budget), remaining
+        raise NativeCalibrationError(
+            "timeout hierarchy cannot provide native cleanup and process-exit reserves"
+        )
+    return min(MAX_CALIBRATION_BUDGET_SECONDS, budget), child_timeout
+
+
+def _native_child_budget(run_deadline: float, now: float) -> tuple[int, float]:
+    remaining = run_deadline - now
+    child_timeout = remaining - PUBLICATION_RESERVE_SECONDS
+    budget = math.floor(child_timeout - NATIVE_PROCESS_EXIT_RESERVE_SECONDS)
+    if budget < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+        raise NativeCalibrationError(
+            "global calibration budget cannot provide native cleanup and process-exit reserves"
+        )
+    return min(MAX_CALIBRATION_BUDGET_SECONDS, budget), child_timeout
 
 
 def _candidate_binaries() -> list[Path]:
@@ -216,7 +238,12 @@ def _validate_quantiles(value: object, name: str) -> dict[str, int]:
     fields = ("min", "p50", "p90", "p95", "p99", "max", "mean")
     values = {field: _int(raw.get(field), f"{name}.{field}", minimum=-100_000) for field in fields}
     ordered = [values[field] for field in fields[:-1]]
-    if ordered != sorted(ordered) or any(abs(item) > 100_000 for item in ordered):
+    if (
+        ordered != sorted(ordered)
+        or any(abs(item) > 100_000 for item in ordered)
+        or not values["min"] <= values["mean"] <= values["max"]
+        or abs(values["mean"]) > 100_000
+    ):
         raise NativeCalibrationError(f"{name} has invalid signed quantile ordering")
     return values
 
@@ -226,7 +253,11 @@ def _validate_unsigned_quantiles(value: object, name: str) -> dict[str, int]:
     fields = ("min", "p50", "p90", "p95", "p99", "max", "mean")
     values = {field: _int(raw.get(field), f"{name}.{field}") for field in fields}
     ordered = [values[field] for field in fields[:-1]]
-    if ordered != sorted(ordered) or any(item > 100_000 for item in ordered):
+    if (
+        ordered != sorted(ordered)
+        or any(item > 100_000 for item in ordered)
+        or not values["min"] <= values["mean"] <= values["max"]
+    ):
         raise NativeCalibrationError(f"{name} has invalid unsigned quantile ordering")
     return values
 
@@ -330,6 +361,24 @@ def _validate_pair_bucket(
             f"{name} has an unexpected clean pair count: "
             f"target={expected_attempts}, clean={clean}"
         )
+    if require_quantiles:
+        for field in (
+            "timeout_count",
+            "partial_send",
+            "pairing_anomaly_count",
+            "duplicate_receipt_count",
+            "unexpected_scan_code_count",
+            "direction_mismatch_count",
+            "reordered_receipt_count",
+        ):
+            if counter_values[field] != 0:
+                raise NativeCalibrationError(
+                    f"{name}.{field} must be zero for publishable calibration"
+                )
+        if counter_values["class_mismatch_count"] != rejected:
+            raise NativeCalibrationError(
+                f"{name}.rejected must equal class_mismatch_count for publishable calibration"
+            )
     pair_quantiles = bucket.get("pair_worst_total_proxy_shrink_us")
     if pair_quantiles is None and not require_quantiles:
         return bucket
@@ -827,7 +876,7 @@ def run_diagnostic_calibration(
     if not isinstance(samples, int) or isinstance(samples, bool) or not 1 <= samples <= MAX_DIAGNOSTIC_SAMPLES:
         raise NativeCalibrationError("diagnostic samples must be between 1 and 5000")
     timeout = _finite_timeout(timeout_seconds, default=QUICK_CALIBRATION_TIMEOUT_SECONDS)
-    budget = min(MAX_CALIBRATION_BUDGET_SECONDS, max(6, math.floor(timeout)))
+    budget, child_timeout = _single_process_budget(timeout)
     try:
         result = _execute_native_bucket(
             _find_binary(),
@@ -836,7 +885,7 @@ def run_diagnostic_calibration(
             samples=samples,
             warmup_samples=FULL_WARMUP_SAMPLES,
             budget_seconds=budget,
-            timeout_seconds=timeout,
+            timeout_seconds=child_timeout,
             progress=True,
             publishable=False,
         )
@@ -1235,8 +1284,13 @@ def run_native_calibration(
     if class_name is not None or polyphony is not None or samples is not None:
         raise NativeCalibrationError("quick mode does not accept a directional bucket selector")
     timeout = _finite_timeout(timeout_seconds, default=QUICK_CALIBRATION_TIMEOUT_SECONDS)
-    budget = min(MAX_CALIBRATION_BUDGET_SECONDS, max(6, math.floor(timeout)))
-    result = _run_process(_find_binary(), budget_seconds=budget, timeout_seconds=timeout, samples=FULL_SAMPLE_COUNT)
+    budget, child_timeout = _single_process_budget(timeout)
+    result = _run_process(
+        _find_binary(),
+        budget_seconds=budget,
+        timeout_seconds=child_timeout,
+        samples=FULL_SAMPLE_COUNT,
+    )
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
     cache = _cache_v5(result)
     # Validation happens before either write; an invalid run leaves an old

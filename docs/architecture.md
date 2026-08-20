@@ -148,11 +148,13 @@ diagnostic, not game-observed timing evidence.
 
 The publishable calibration contract is a balanced Down/Up pair for each of
 `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`, and `15/cold`. The native
-process carries an optional direction/sequence tag, records Raw Input at
+process carries a required direction/sequence tag for publishable evidence,
+records Raw Input at
 the `WM_INPUT` handler entry, and pairs receipts by exact scan-code,
-make/break direction, and extended-flag identity. The Raw Input tag is
-corroborating evidence only because Windows does not document preservation of
-`KEYBDINPUT.dwExtraInfo`; one active packet plus a pump-thread barrier handler
+make/break direction, and extended-flag identity. Windows does not document
+preservation of `KEYBDINPUT.dwExtraInfo` in `RAWKEYBOARD.ExtraInformation`, so
+a missing or mismatched tag is terminal rather than silently correlated. One
+active packet plus a pump-thread barrier handler
 that explicitly removes already-queued `WM_INPUT` messages with an input-range
 filter before publishing completion prevents stale receipts from aliasing the
 next packet. The tagged
@@ -178,7 +180,7 @@ required in every production bucket. Native output schema 13 and artifact
 schema 10 record bounded anomaly evidence, the signed receipt-before-completion
 counter, the acquired MMCSS label, PowerThrottling/HighQoS guard state, and
 actual waiter mode alongside host provenance. The cache is version 5 (native
-schema 13, measurement protocol 8); older evidence is
+schema 13, measurement protocol 9); older evidence is
 incompatible and falls back rather than being reinterpreted. Qualification is:
 
 ```text

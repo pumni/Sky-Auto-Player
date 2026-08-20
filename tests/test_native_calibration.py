@@ -102,7 +102,7 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
         "version": 13,
-        "measurement_protocol_version": 8,
+        "measurement_protocol_version": 9,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -140,7 +140,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
     }
     return {
         "version": 13,
-        "measurement_protocol_version": 8,
+        "measurement_protocol_version": 9,
         "evidence_kind": "injected_raw_input_total_hold_proxy",
         "source_git_sha": "test-sha",
         "native_build_id": "test-sha",
@@ -180,12 +180,16 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
     assert result["version"] == 13
-    assert result["measurement_protocol_version"] == 8
+    assert result["measurement_protocol_version"] == 9
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("version", 12), ("measurement_protocol_version", 7)],
+    [
+        ("version", 12),
+        ("measurement_protocol_version", 7),
+        ("measurement_protocol_version", 8),
+    ],
 )
 def test_previous_native_schema_or_protocol_is_rejected(
     field: str, value: int
@@ -247,6 +251,52 @@ def test_native_result_rejects_diagnostic_counter_above_anomaly_count(counter: s
     bucket[counter] = 2
     with pytest.raises(native_calibration.NativeCalibrationError, match="exceeds anomaly_count"):
         native_calibration._validate_result(result)
+
+
+@pytest.mark.parametrize(
+    "counter",
+    [
+        "timeout_count",
+        "partial_send",
+        "pairing_anomaly_count",
+        "duplicate_receipt_count",
+        "unexpected_scan_code_count",
+        "direction_mismatch_count",
+        "reordered_receipt_count",
+    ],
+)
+def test_publishable_bucket_allows_only_class_mismatch_rejections(counter: str) -> None:
+    bucket = _bucket(clean=100, attempted=101)
+    bucket["anomaly_count"] = 1
+    bucket["class_mismatch_count"] = 0
+    bucket[counter] = 1
+    with pytest.raises(native_calibration.NativeCalibrationError, match="publishable"):
+        native_calibration._validate_pair_bucket(bucket, "5/hot", 100)
+
+
+def test_publishable_bucket_accepts_bounded_class_mismatch_rejection() -> None:
+    bucket = _bucket(clean=100, attempted=101)
+    bucket["anomaly_count"] = 1
+    bucket["class_mismatch_count"] = 1
+    native_calibration._validate_pair_bucket(bucket, "5/hot", 100)
+
+
+def test_native_signed_and_unsigned_means_are_bounded_and_ordered() -> None:
+    signed = _quantiles()
+    signed["mean"] = 999_999
+    with pytest.raises(native_calibration.NativeCalibrationError, match="quantile"):
+        native_calibration._validate_quantiles(signed, "signed")
+
+    unsigned = {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 999_999}
+    with pytest.raises(native_calibration.NativeCalibrationError, match="quantile"):
+        native_calibration._validate_unsigned_quantiles(unsigned, "unsigned")
+
+
+def test_cache_signed_mean_must_lie_between_min_and_max() -> None:
+    cache = native_calibration._cache_v5(_native_result())
+    cache["pair_buckets"]["1/hot"]["pair_worst_total_proxy_shrink_us"]["mean"] = 999_999  # type: ignore[index]
+    with pytest.raises(ValueError, match="ordered"):
+        loader.parse_calibration_cache_summary(cache)
 
 
 def test_native_result_requires_unsigned_call_duration_quantiles() -> None:
@@ -366,12 +416,13 @@ def test_native_pair_bucket_accepts_bounded_extra_attempts_for_clean_target(
         {
             "attempted": attempted,
             "sample_count": attempted,
-                "clean": 100,
-                "clean_sample_count": 100,
-                "rejected": attempted - 100,
-                "anomaly_count": attempted - 100,
-            }
-        )
+            "clean": 100,
+            "clean_sample_count": 100,
+            "rejected": attempted - 100,
+            "anomaly_count": attempted - 100,
+            "class_mismatch_count": attempted - 100,
+        }
+    )
 
     monkeypatch.setattr(
         native_calibration.subprocess,
@@ -508,6 +559,16 @@ def test_previous_measurement_protocol_is_not_reinterpreted() -> None:
     assert resolution.resolved_margin_us == 500
 
 
+def test_protocol8_cache_is_rejected_after_protocol9_semantics_bump() -> None:
+    cache = native_calibration._cache_v5(_native_result())
+    cache["measurement_protocol_version"] = 8
+    with pytest.raises(ValueError, match="measurement protocol"):
+        loader.parse_calibration_cache_summary(cache)
+    resolution = loader.load_calibration_resolution(data=cache)
+    assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
+    assert resolution.resolved_margin_us == 500
+
+
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
     cache = native_calibration._cache_v5(_native_result())
     cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
@@ -520,7 +581,7 @@ def test_cache_requires_100_clean_pairs_per_cell() -> None:
     ("attempted", "clean", "accepted"),
     [(100, 100, True), (200, 100, True), (201, 100, False), (101, 101, False)],
 )
-def test_cache_enforces_protocol8_bounded_retry_invariant(
+def test_cache_enforces_protocol9_bounded_retry_invariant(
     attempted: int, clean: int, accepted: bool
 ) -> None:
     cache = native_calibration._cache_v5(_native_result())
@@ -765,6 +826,31 @@ def test_full_configuration_is_six_pair_buckets() -> None:
     assert native_calibration.full_orchestration_configuration(
         global_budget_seconds=45
     )["global_budget_seconds"] == 45.0
+
+
+def test_single_process_timeout_has_parent_and_native_exit_reserves() -> None:
+    budget, child_timeout = native_calibration._single_process_budget(120.0)
+    assert child_timeout == 119.0
+    assert 120.0 - child_timeout == native_calibration.PYTHON_PROCESS_EXIT_RESERVE_SECONDS
+    assert child_timeout - budget >= native_calibration.NATIVE_PROCESS_EXIT_RESERVE_SECONDS
+    assert budget - native_calibration.NATIVE_CLEANUP_RESERVE_SECONDS >= 1
+
+
+def test_full_child_budget_preserves_publication_and_exit_reserves() -> None:
+    budget, child_timeout = native_calibration._native_child_budget(120.0, 0.0)
+    assert 120.0 - child_timeout == native_calibration.PUBLICATION_RESERVE_SECONDS
+    assert child_timeout - budget >= native_calibration.NATIVE_PROCESS_EXIT_RESERVE_SECONDS
+    assert budget - native_calibration.NATIVE_CLEANUP_RESERVE_SECONDS >= 1
+
+
+def test_timeout_hierarchy_rejects_budget_without_all_reserves() -> None:
+    with pytest.raises(native_calibration.NativeCalibrationError, match="at least"):
+        native_calibration._finite_timeout(
+            native_calibration.MIN_SINGLE_PROCESS_TIMEOUT_SECONDS - 0.01,
+            default=120.0,
+        )
+    with pytest.raises(native_calibration.NativeCalibrationError, match="process-exit"):
+        native_calibration._native_child_budget(7.99, 0.0)
 
 
 def test_checkpoint_sha256_sidecar_is_plain_text_round_trip(tmp_path: Path) -> None:

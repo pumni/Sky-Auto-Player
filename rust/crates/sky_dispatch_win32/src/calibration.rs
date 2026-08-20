@@ -23,11 +23,12 @@
 //! calibration run.  Raw keyboard input is registered for that window using
 //! `RIDEV_INPUTSINK` so receipts arrive regardless of foreground focus.
 //!
-//! Each calibration packet carries an optional 8-bit marker plus 24-bit
-//! `sequence_id` in `dwExtraInfo`. Windows Raw Input does not document that
-//! this value preserves `KEYBDINPUT.dwExtraInfo`, so the tag is corroborating
-//! evidence only. Admission uses one active packet, an ordered message-queue
-//! barrier, and exact scan-code/direction/extended-flag identity.
+//! Each calibration packet carries an 8-bit marker plus 24-bit `sequence_id`
+//! in `dwExtraInfo`. Windows Raw Input does not document that this value
+//! preserves `KEYBDINPUT.dwExtraInfo`; therefore a missing or mismatched tag
+//! is terminal for publishable calibration rather than silently correlated by
+//! physical identity alone. Admission still uses one active packet, an ordered
+//! message-queue barrier, and exact scan-code/direction/extended-flag identity.
 //!
 //! The window message pump runs on a dedicated thread so it does not interfere
 //! with the calling thread's timing measurements.
@@ -64,6 +65,9 @@ pub enum CalibrationError {
     #[error("calibration correlation boundary was lost; session cannot arm another packet")]
     CorrelationBoundaryLost,
 
+    #[error("calibration observer integrity failed: {reason}")]
+    ObserverIntegrityFailure { reason: &'static str },
+
     #[error("sequence {sequence_id}: timeout waiting for {expected} receipts (got {received})")]
     ReceiptTimeout {
         sequence_id: u32,
@@ -94,6 +98,9 @@ pub enum CalibrationError {
 
     #[error("calibration timestamp arithmetic overflowed")]
     TimestampArithmeticOverflow,
+
+    #[error("calibration receipt pairing integrity failed for scan code {scan_code}")]
+    PairingIntegrity { scan_code: u16 },
 
     #[error("calibration precision wait failed: {detail}")]
     PrecisionWaitFailed { detail: String },
@@ -659,7 +666,7 @@ pub enum SampleClass {
     Cold,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 8;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 9;
 pub const CALIBRATION_SCHEMA_VERSION: u32 = 13;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "injected_raw_input_total_hold_proxy";
@@ -1039,11 +1046,14 @@ struct SharedCalibState {
     /// Message-queue barrier generations completed by the pump. A
     /// barrier drains currently queued WM_INPUT messages while no packet is
     /// active; a stale message or incomplete packet invalidates the boundary
-    /// instead of permitting another tagless packet.
+    /// instead of permitting another packet.
     barrier_completed_generation: u64,
     /// Set after an incomplete packet or stale receipt is observed. The
-    /// session must not arm another tagless packet after this point.
+    /// session must not arm another packet after this point.
     correlation_boundary_lost: bool,
+    /// Stable reason for an observer-integrity failure. Unlike packet-level
+    /// diagnostics, this survives per-packet diagnostic resets.
+    observer_failure: Option<&'static str>,
     /// Set by the pump thread when the window is ready.
     window_ready: bool,
     /// Set to signal the pump thread to exit gracefully (checked on resume).
@@ -1219,7 +1229,7 @@ mod platform {
     }
 
     fn tagged_sequence_matches_active(active_sequence: u32, tagged_sequence: Option<u32>) -> bool {
-        tagged_sequence.is_none_or(|tagged| tagged == active_sequence)
+        tagged_sequence == Some(active_sequence)
     }
 
     fn observe_stale_correlation_evidence(state: &mut SharedCalibState) {
@@ -1228,12 +1238,37 @@ mod platform {
         invalidate_correlation_boundary(state);
     }
 
+    fn observe_observer_integrity_failure(
+        shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
+        reason: &'static str,
+        update: impl FnOnce(&mut PumpDiagnostics),
+    ) {
+        let (lock, cvar) = shared.as_ref();
+        match lock.lock() {
+            Ok(mut state) => {
+                update(&mut state.pump_diagnostics);
+                state.observer_failure = Some(reason);
+                invalidate_correlation_boundary(&mut state);
+                cvar.notify_all();
+            }
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.pump_thread_failed = true;
+                state.observer_failure = Some("state_lock_failed");
+                state.pump_diagnostics.state_lock_failed =
+                    state.pump_diagnostics.state_lock_failed.saturating_add(1);
+                invalidate_correlation_boundary(&mut state);
+                cvar.notify_all();
+            }
+        }
+    }
+
     /// Reject a receipt that cannot be proven to belong to the active packet.
     ///
-    /// With an optional Raw Input sequence tag, an identity or generation
+    /// With a required Raw Input sequence tag, an identity or generation
     /// mismatch is observer-integrity evidence, not merely a bad sample. The
-    /// session must stop before a later tagless receipt can alias the active
-    /// packet. Each applicable diagnostic counter is retained, but the
+    /// session must stop before a later receipt can alias the active packet.
+    /// Each applicable diagnostic counter is retained, but the
     /// boundary is invalidated exactly once.
     fn observe_incompatible_receipt(
         state: &mut SharedCalibState,
@@ -1564,20 +1599,28 @@ mod platform {
                     )
                 };
                 if queried == u32::MAX {
-                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                        diagnostics.raw_size_query_failed =
-                            diagnostics.raw_size_query_failed.saturating_add(1);
-                    });
+                    observe_observer_integrity_failure(
+                        &ctx.shared,
+                        "raw_size_query_failed",
+                        |diagnostics| {
+                            diagnostics.raw_size_query_failed =
+                                diagnostics.raw_size_query_failed.saturating_add(1);
+                        },
+                    );
                     return complete_wm_input(hwnd, wparam, lparam);
                 }
                 if size == 0
                     || size > 4096
                     || (size as usize) < std::mem::size_of::<RAWINPUTHEADER>()
                 {
-                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                        diagnostics.raw_size_invalid =
-                            diagnostics.raw_size_invalid.saturating_add(1);
-                    });
+                    observe_observer_integrity_failure(
+                        &ctx.shared,
+                        "raw_size_invalid",
+                        |diagnostics| {
+                            diagnostics.raw_size_invalid =
+                                diagnostics.raw_size_invalid.saturating_add(1);
+                        },
+                    );
                     return complete_wm_input(hwnd, wparam, lparam);
                 }
                 let parsed = {
@@ -1619,47 +1662,68 @@ mod platform {
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                     Err(RawInputParseError::Misaligned) => {
-                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                            diagnostics.raw_alignment_failed =
-                                diagnostics.raw_alignment_failed.saturating_add(1);
-                        });
+                        observe_observer_integrity_failure(
+                            &ctx.shared,
+                            "raw_alignment_failed",
+                            |diagnostics| {
+                                diagnostics.raw_alignment_failed =
+                                    diagnostics.raw_alignment_failed.saturating_add(1);
+                            },
+                        );
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                     Err(RawInputParseError::InvalidHeaderSize) => {
-                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                            diagnostics.raw_size_invalid =
-                                diagnostics.raw_size_invalid.saturating_add(1);
-                        });
+                        observe_observer_integrity_failure(
+                            &ctx.shared,
+                            "raw_size_invalid",
+                            |diagnostics| {
+                                diagnostics.raw_size_invalid =
+                                    diagnostics.raw_size_invalid.saturating_add(1);
+                            },
+                        );
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                     Err(RawInputParseError::TruncatedHeader)
                     | Err(RawInputParseError::TruncatedKeyboardPayload) => {
-                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                            diagnostics.raw_payload_too_small =
-                                diagnostics.raw_payload_too_small.saturating_add(1);
-                        });
+                        observe_observer_integrity_failure(
+                            &ctx.shared,
+                            "raw_payload_too_small",
+                            |diagnostics| {
+                                diagnostics.raw_payload_too_small =
+                                    diagnostics.raw_payload_too_small.saturating_add(1);
+                            },
+                        );
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                     Err(RawInputParseError::BufferLengthInvalid) => {
-                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                            diagnostics.raw_read_failed =
-                                diagnostics.raw_read_failed.saturating_add(1);
-                        });
+                        observe_observer_integrity_failure(
+                            &ctx.shared,
+                            "raw_read_failed",
+                            |diagnostics| {
+                                diagnostics.raw_read_failed =
+                                    diagnostics.raw_read_failed.saturating_add(1);
+                            },
+                        );
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                 };
                 // `RAWKEYBOARD.ExtraInformation` has no documented contract
                 // that it preserves `KEYBDINPUT.dwExtraInfo` across
-                // SendInput. Treat the tag as optional corroboration rather
-                // than the admission key; the active packet and exact
-                // physical identity below are authoritative.
+                // SendInput. It is nevertheless required for publishable
+                // calibration: without it, identical tagless receipts cannot
+                // prove packet ownership and must fail closed.
                 let tagged_sequence = calibration_extra_info_sequence(parsed.extra_information);
-                if tagged_sequence.is_none() {
-                    record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                        diagnostics.tag_decode_failed =
-                            diagnostics.tag_decode_failed.saturating_add(1);
-                    });
-                }
+                let Some(tagged_sequence) = tagged_sequence else {
+                    observe_observer_integrity_failure(
+                        &ctx.shared,
+                        "tag_decode_failed",
+                        |diagnostics| {
+                            diagnostics.tag_decode_failed =
+                                diagnostics.tag_decode_failed.saturating_add(1);
+                        },
+                    );
+                    return complete_wm_input(hwnd, wparam, lparam);
+                };
 
                 // RI_KEY_BREAK is the documented Raw Input make/break bit.
                 // Keep the direction in the correlated receipt; scan-code and
@@ -1672,15 +1736,15 @@ mod platform {
                             cvar.notify_all();
                             return complete_wm_input(hwnd, wparam, lparam);
                         };
-                        if !tagged_sequence_matches_active(active_sequence, tagged_sequence) {
+                        if !tagged_sequence_matches_active(active_sequence, Some(tagged_sequence)) {
                             observe_stale_correlation_evidence(&mut guard);
                             cvar.notify_all();
                         } else {
                             let receipt = RawInputReceipt {
                                 arrived_ticks: arrived,
                                 scan_code: parsed.scan_code,
-                                // The active packet generation is authoritative
-                                // when the optional tag is absent.
+                                // The decoded tag was already matched against
+                                // the active packet generation.
                                 sequence_id: active_sequence,
                                 key_up: (parsed.flags & 0x0001) != 0,
                                 // RI_KEY_E0/RI_KEY_E1 are part of the physical
@@ -2049,6 +2113,7 @@ mod platform {
                 pump_diagnostics: PumpDiagnostics::default(),
                 barrier_completed_generation: 0,
                 correlation_boundary_lost: false,
+                observer_failure: None,
                 window_ready: false,
                 should_exit: false,
                 window_closed: false,
@@ -2131,7 +2196,8 @@ mod platform {
 
         /// Drain all WM_INPUT messages currently queued on the pump thread
         /// before arming the next packet. A stale or incomplete boundary is
-        /// fail-closed because Raw Input does not preserve the optional tag.
+        /// fail-closed because Raw Input does not document preservation of the
+        /// injection tag.
         fn drain_pump_before_arm(&mut self) -> Result<(), CalibrationError> {
             {
                 let (lock, _cvar) = self.shared.as_ref();
@@ -2435,12 +2501,14 @@ mod platform {
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
             self.ensure_foreground_owned()?;
-            self.reset_pump_diagnostics()?;
 
             let n = scan_codes.len();
             validate_packet_scan_codes(scan_codes)?;
 
             self.drain_pump_before_arm()?;
+            // Preserve diagnostics from the boundary check. Once the queue
+            // is proven clean, begin a fresh packet diagnostic window.
+            self.reset_pump_diagnostics()?;
 
             let seq = self.next_sequence;
             if seq == 0 {
@@ -2523,6 +2591,11 @@ mod platform {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 loop {
+                    if let Some(reason) = guard.observer_failure {
+                        clear_active_packet(&mut guard);
+                        cvar.notify_all();
+                        return Err(CalibrationError::ObserverIntegrityFailure { reason });
+                    }
                     if guard.correlation_boundary_lost {
                         clear_active_packet(&mut guard);
                         cvar.notify_all();
@@ -2601,6 +2674,13 @@ mod platform {
                     sequence_id: seq,
                     expected,
                     received: count,
+                });
+            }
+
+            if anomalies.reordered_receipt {
+                observe_observer_integrity_failure(&self.shared, "reordered_receipt", |_| {});
+                return Err(CalibrationError::ObserverIntegrityFailure {
+                    reason: "reordered_receipt",
                 });
             }
 
@@ -2817,7 +2897,6 @@ mod platform {
         up_idle_gap_ticks: sky_dispatch_core::time::DurationTicks,
     ) -> Result<PairSample, CalibrationError> {
         let mut key_evidence = SmallVec::<[KeyShrinkEvidence; 15]>::new();
-        let mut pairing_anomaly = false;
         let mut receipt_before_completion_count = 0u64;
         let mut worst_delivery: Option<i64> = None;
         let mut worst_total: Option<(i64, i64, i64, i64)> = None;
@@ -2837,8 +2916,7 @@ mod platform {
                 .filter(|receipt| receipt.scan_code == scan_code && receipt.key_up)
                 .collect();
             if down_matches.len() != 1 || up_matches.len() != 1 {
-                pairing_anomaly = true;
-                continue;
+                return Err(CalibrationError::PairingIntegrity { scan_code });
             }
 
             let down_latency =
@@ -2865,13 +2943,7 @@ mod platform {
                 completion_ticks: up.call_completed_ticks,
                 receipt_ticks: up_matches[0].arrived_ticks,
             };
-            let timing_ticks = match paired_timing_shrink_ticks(down_timing, up_timing) {
-                Ok(value) => value,
-                Err(_) => {
-                    pairing_anomaly = true;
-                    continue;
-                }
-            };
+            let timing_ticks = paired_timing_shrink_ticks(down_timing, up_timing)?;
             let timing_us = paired_timing_shrink_us(qpc_clock, timing_ticks)?;
             worst_delivery = Some(worst_delivery.map_or(shrink, |current| current.max(shrink)));
             let candidate = (
@@ -2914,7 +2986,7 @@ mod platform {
             pair_worst_sendinput_shrink_us: worst_total.map(|value| value.2),
             pair_worst_delivery_shrink_us: worst_total.map(|value| value.3),
             key_evidence,
-            pairing_anomaly,
+            pairing_anomaly: false,
             receipt_before_completion_count,
         })
     }
@@ -3845,9 +3917,9 @@ mod platform {
         }
 
         #[test]
-        fn optional_sequence_tag_cannot_admit_stale_packets() {
+        fn missing_sequence_tag_cannot_admit_publishable_packets() {
             assert!(tagged_sequence_matches_active(7, Some(7)));
-            assert!(tagged_sequence_matches_active(7, None));
+            assert!(!tagged_sequence_matches_active(7, None));
             assert!(!tagged_sequence_matches_active(7, Some(6)));
         }
 
@@ -4027,6 +4099,7 @@ mod platform {
                     pump_diagnostics: PumpDiagnostics::default(),
                     barrier_completed_generation: 0,
                     correlation_boundary_lost: false,
+                    observer_failure: None,
                     window_ready: false,
                     should_exit: false,
                     window_closed: false,
@@ -4155,8 +4228,35 @@ mod platform {
             let shared = empty_shared_state();
             let mut state = shared.0.lock().expect("shared calibration state");
             invalidate_correlation_boundary(&mut state);
+            state.observer_failure = Some("raw_read_failed");
             state.pump_diagnostics = PumpDiagnostics::default();
             assert!(!can_arm_next_packet(&state));
+            assert_eq!(state.observer_failure, Some("raw_read_failed"));
+        }
+
+        #[test]
+        fn missing_tag_is_terminal_observer_failure() {
+            let shared = empty_shared_state();
+            observe_observer_integrity_failure(&shared, "tag_decode_failed", |diagnostics| {
+                diagnostics.tag_decode_failed = 1;
+            });
+            let state = shared.0.lock().expect("shared calibration state");
+            assert!(state.correlation_boundary_lost);
+            assert_eq!(state.observer_failure, Some("tag_decode_failed"));
+            assert_eq!(state.pump_diagnostics.tag_decode_failed, 1);
+            assert!(!can_arm_next_packet(&state));
+        }
+
+        #[test]
+        fn raw_observer_failure_is_terminal_and_retains_reason() {
+            let shared = empty_shared_state();
+            observe_observer_integrity_failure(&shared, "raw_read_failed", |diagnostics| {
+                diagnostics.raw_read_failed = 1;
+            });
+            let state = shared.0.lock().expect("shared calibration state");
+            assert!(state.correlation_boundary_lost);
+            assert_eq!(state.observer_failure, Some("raw_read_failed"));
+            assert_eq!(state.pump_diagnostics.raw_read_failed, 1);
         }
 
         #[test]
@@ -4389,6 +4489,42 @@ mod platform {
             );
             assert!(pair.is_clean());
         }
+
+        #[test]
+        fn pair_packets_propagates_chronology_failure() {
+            let mut down = sample(smallvec::smallvec![RawInputReceipt {
+                arrived_ticks: QpcTicks::from_raw(400),
+                scan_code: 30,
+                sequence_id: 7,
+                key_up: false,
+                extended_flags: 0,
+            }]);
+            down.target_ticks = QpcTicks::from_raw(100);
+            down.call_started_ticks = QpcTicks::from_raw(200);
+            down.call_completed_ticks = QpcTicks::from_raw(300);
+
+            let mut up = sample(smallvec::smallvec![RawInputReceipt {
+                arrived_ticks: QpcTicks::from_raw(1_200),
+                scan_code: 30,
+                sequence_id: 7,
+                key_up: true,
+                extended_flags: 0,
+            }]);
+            up.target_ticks = QpcTicks::from_raw(1_000);
+            up.call_started_ticks = QpcTicks::from_raw(1_100);
+            up.call_completed_ticks = QpcTicks::from_raw(900);
+
+            assert!(matches!(
+                pair_packets(
+                    down,
+                    up,
+                    &[30],
+                    DurationTicks::from_raw(1),
+                    DurationTicks::from_raw(1),
+                ),
+                Err(CalibrationError::TimestampOrder { .. })
+            ));
+        }
     }
 } // mod platform
 
@@ -4606,7 +4742,7 @@ mod tests {
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
         assert_eq!(CALIBRATION_SCHEMA_VERSION, 13);
-        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 8);
+        assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 9);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
         assert_eq!(CALIBRATION_MAX_ATTEMPT_MULTIPLIER, 2);
