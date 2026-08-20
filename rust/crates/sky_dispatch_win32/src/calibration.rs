@@ -1285,15 +1285,15 @@ mod platform {
         invalidate_correlation_boundary(state);
     }
 
-    fn observe_observer_integrity_failure(
+    fn observe_observer_integrity_failure_with_state(
         shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
         reason: &'static str,
-        update: impl FnOnce(&mut PumpDiagnostics),
+        update: impl FnOnce(&mut SharedCalibState),
     ) {
         let (lock, cvar) = shared.as_ref();
         match lock.lock() {
             Ok(mut state) => {
-                update(&mut state.pump_diagnostics);
+                update(&mut state);
                 if state.observer_failure.is_none() {
                     state.observer_failure = Some(reason);
                 }
@@ -1312,6 +1312,23 @@ mod platform {
                 cvar.notify_all();
             }
         }
+    }
+
+    fn observe_observer_integrity_failure(
+        shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
+        reason: &'static str,
+        update: impl FnOnce(&mut PumpDiagnostics),
+    ) {
+        observe_observer_integrity_failure_with_state(shared, reason, |state| {
+            update(&mut state.pump_diagnostics);
+        });
+    }
+
+    fn observe_qpc_failure(shared: &Arc<(Mutex<SharedCalibState>, Condvar)>) {
+        observe_observer_integrity_failure_with_state(shared, "qpc_failed", |state| {
+            state.clock_failed = true;
+            state.pump_diagnostics.qpc_failed = state.pump_diagnostics.qpc_failed.saturating_add(1);
+        });
     }
 
     /// Reject a receipt that cannot be proven to belong to the active packet.
@@ -1625,14 +1642,7 @@ mod platform {
                 let arrived = match qpc_now_ticks_checked() {
                     Ok(ticks) => ticks,
                     Err(_) => {
-                        record_pump_diagnostic(&ctx.shared, |diagnostics| {
-                            diagnostics.qpc_failed = diagnostics.qpc_failed.saturating_add(1);
-                        });
-                        let (lock, cvar) = ctx.shared.as_ref();
-                        if let Ok(mut guard) = lock.lock() {
-                            guard.clock_failed = true;
-                            cvar.notify_all();
-                        }
+                        observe_qpc_failure(&ctx.shared);
                         return complete_wm_input(hwnd, wparam, lparam);
                     }
                 };
@@ -2645,18 +2655,6 @@ mod platform {
             // Prepare extra_info with sequence tag.
             let extra =
                 make_calibration_extra_info(seq).ok_or(CalibrationError::SequenceOverflow)?;
-
-            // Arm the active sequence BEFORE injecting so we cannot miss any
-            // receipt delivered before the mutex is acquired after SendInput.
-            {
-                let (lock, _cvar) = self.shared.as_ref();
-                let mut g = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
-                g.active_sequence = Some(seq);
-                g.active_expected_scan_codes.clear();
-                g.active_expected_scan_codes.extend_from_slice(scan_codes);
-                g.active_expected_key_up = Some(key_up);
-                g.pending_receipts.clear();
-            }
 
             // Materialize the tagged INPUT payload before entering the same
             // precision handoff used by production dispatch. Nothing after
@@ -4472,6 +4470,24 @@ mod platform {
         }
 
         #[test]
+        fn clean_boundary_can_arm_exactly_once() {
+            let shared = empty_shared_state();
+            let mut state = shared.0.lock().expect("shared calibration state");
+
+            arm_packet_state(&mut state, 7, &[30, 31], false).expect("first arm");
+            assert_eq!(state.active_sequence, Some(7));
+            assert_eq!(state.active_expected_key_up, Some(false));
+
+            let second = arm_packet_state(&mut state, 8, &[30, 31], true);
+            assert!(matches!(
+                second,
+                Err(CalibrationError::CorrelationBoundaryLost)
+            ));
+            assert_eq!(state.active_sequence, Some(7));
+            assert_eq!(state.active_expected_key_up, Some(false));
+        }
+
+        #[test]
         fn missing_tag_is_terminal_observer_failure() {
             let shared = empty_shared_state();
             observe_observer_integrity_failure(&shared, "tag_decode_failed", |diagnostics| {
@@ -4503,6 +4519,44 @@ mod platform {
             observe_observer_integrity_failure(&shared, "tag_decode_failed", |_| {});
             let state = shared.0.lock().expect("shared calibration state");
             assert_eq!(state.observer_failure, Some("raw_read_failed"));
+        }
+
+        #[test]
+        fn qpc_observer_failure_sets_abort() {
+            let shared = empty_shared_state();
+            observe_qpc_failure(&shared);
+            let state = shared.0.lock().expect("shared calibration state");
+            assert!(state.clock_failed);
+            assert!(state.correlation_boundary_lost);
+            assert!(state.abort_requested.load(Ordering::Acquire));
+            assert_eq!(state.observer_failure, Some("qpc_failed"));
+            assert_eq!(state.pump_diagnostics.qpc_failed, 1);
+        }
+
+        #[test]
+        fn qpc_observer_failure_signals_wait_interrupt() {
+            let shared = empty_shared_state();
+            let before = shared
+                .0
+                .lock()
+                .expect("shared calibration state")
+                .wait_interrupt
+                .signal_generation();
+
+            observe_qpc_failure(&shared);
+
+            let state = shared.0.lock().expect("shared calibration state");
+            assert!(state.wait_interrupt.signal_generation() > before);
+        }
+
+        #[test]
+        fn qpc_observer_failure_preserves_first_reason() {
+            let shared = empty_shared_state();
+            observe_qpc_failure(&shared);
+            observe_observer_integrity_failure(&shared, "tag_decode_failed", |_| {});
+            let state = shared.0.lock().expect("shared calibration state");
+            assert_eq!(state.observer_failure, Some("qpc_failed"));
+            assert_eq!(state.pump_diagnostics.qpc_failed, 1);
         }
 
         #[test]
