@@ -2,7 +2,7 @@
 
 The native process owns the prepared SendInput sender and emits signed paired
 completion-hold evidence. This adapter validates the complete result before
-writing an artifact or the version-6 production cache. Raw Input diagnostics,
+writing an artifact or the version-7 production cache. Raw Input diagnostics,
 if retained by a separate engineering mode, are never accepted here.
 """
 
@@ -43,7 +43,7 @@ from sky_music.infrastructure.calibration_loader import (
     qualify_calibration_margin,
 )
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 14
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 15
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 10
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 11
 MAX_CALIBRATION_BUDGET_SECONDS = 120
@@ -643,7 +643,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v6(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v7(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -653,6 +653,10 @@ def _cache_v6(result: dict[str, Any]) -> dict[str, Any]:
             "attempted": bucket["attempted"],
             "clean_pair_count": bucket["clean"],
             "rejected": bucket["rejected"],
+            "anomaly_count": bucket["anomaly_count"],
+            "class_mismatch_count": bucket["class_mismatch_count"],
+            "timeout_count": bucket["timeout_count"],
+            "partial_send": bucket["partial_send"],
             "pair_sender_hold_shrink_us": bucket["pair_sender_hold_shrink_us"],
             "scheduler_shrink_us": bucket["scheduler_shrink_us"],
             "sendinput_shrink_us": bucket["sendinput_shrink_us"],
@@ -677,7 +681,7 @@ def _cache_v6(result: dict[str, Any]) -> dict[str, Any]:
         "applied_margin_us": qualification_result.applied_margin_us,
     }
     return {
-        "version": 6,
+        "version": 7,
         "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "source": "device_cache",
         "status": qualification_result.status.value,
@@ -709,7 +713,7 @@ def _failure_report(*, class_name: str, polyphony: int, detail: str) -> dict[str
         "cleanup_success": False,
         "cleanup_stuck_keys": [],
         "cleanup_verification_inconclusive": True,
-        "raw_input_restore_failed": True,
+        "raw_input_restore_failed": False,
         "pump_thread_failed": False,
     }
 
@@ -1208,7 +1212,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v6(final)
+    cache = _cache_v7(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1259,7 +1263,7 @@ def run_native_calibration(
         samples=FULL_SAMPLE_COUNT,
     )
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v6(result)
+    cache = _cache_v7(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1279,7 +1283,7 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v6(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v7(result))
     return PublishedCalibrationResult(
         status=summary.status,
         margin_us=summary.margin_us,

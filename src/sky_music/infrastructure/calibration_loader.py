@@ -21,11 +21,11 @@ SOURCE_DEFAULT_500: str = "default_500"
 SOURCE_OUT_OF_ENVELOPE_DEFAULT_500: str = "out_of_envelope_default_500"
 SOURCE_INVALID_CACHE_DEFAULT_500: str = "invalid_cache_default_500"
 SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
-SUPPORTED_CACHE_VERSION: int = 6
+SUPPORTED_CACHE_VERSION: int = 7
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
-SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 14
-COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset({14})
+SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 15
+COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset({15})
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 10
 SOURCE_FORMULA_VERSION: int = 5
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
@@ -112,6 +112,10 @@ class PairBucketSummary:
     attempted: int
     clean_pair_count: int
     rejected: int
+    anomaly_count: int
+    class_mismatch_count: int
+    timeout_count: int
+    partial_send: int
     pair_sender_hold_shrink_us: SignedQuantiles
     scheduler_shrink_us: SignedQuantiles
     sendinput_shrink_us: SignedQuantiles
@@ -167,6 +171,26 @@ def _quantiles(value: object, name: str) -> SignedQuantiles:
     if any(abs(item) > MAX_SHRINK_US for item in ordered):
         raise ValueError(f"{name} exceeds the signed evidence bound")
     return SignedQuantiles(**values)
+
+
+def _unsigned_quantiles(value: object, name: str) -> SignedQuantiles:
+    """Parse non-negative call-duration quantiles without signed coercion."""
+
+    parsed = _quantiles(value, name)
+    if any(
+        field_value < 0
+        for field_value in (
+            parsed.min,
+            parsed.p50,
+            parsed.p90,
+            parsed.p95,
+            parsed.p99,
+            parsed.max,
+            parsed.mean,
+        )
+    ):
+        raise ValueError(f"{name} must contain unsigned quantiles")
+    return parsed
 
 
 def _legacy_v2_selected_margin(global_p99: int) -> int:
@@ -352,10 +376,28 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
             )
         if clean > attempted or rejected != attempted - clean:
             raise ValueError(f"pair bucket {key} counts are inconsistent")
+        anomaly_count = _int(bucket.get("anomaly_count"), f"{key}.anomaly_count", minimum=0)
+        class_mismatch_count = _int(
+            bucket.get("class_mismatch_count"), f"{key}.class_mismatch_count", minimum=0
+        )
+        timeout_count = _int(bucket.get("timeout_count"), f"{key}.timeout_count", minimum=0)
+        partial_send = _int(bucket.get("partial_send"), f"{key}.partial_send", minimum=0)
+        if anomaly_count != rejected:
+            raise ValueError(f"pair bucket {key}.anomaly_count must equal rejected")
+        if class_mismatch_count != rejected:
+            raise ValueError(f"pair bucket {key}.class_mismatch_count must equal rejected")
+        if timeout_count != 0:
+            raise ValueError(f"pair bucket {key}.timeout_count must be zero")
+        if partial_send != 0:
+            raise ValueError(f"pair bucket {key}.partial_send must be zero")
         pair_buckets[key] = PairBucketSummary(
             attempted=attempted,
             clean_pair_count=clean,
             rejected=rejected,
+            anomaly_count=anomaly_count,
+            class_mismatch_count=class_mismatch_count,
+            timeout_count=timeout_count,
+            partial_send=partial_send,
             pair_sender_hold_shrink_us=_quantiles(
                 bucket.get("pair_sender_hold_shrink_us"),
                 f"{key}.pair_sender_hold_shrink_us",
@@ -366,10 +408,10 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
             sendinput_shrink_us=_quantiles(
                 bucket.get("sendinput_shrink_us"), f"{key}.sendinput_shrink_us"
             ),
-            down_call_duration_us=_quantiles(
+            down_call_duration_us=_unsigned_quantiles(
                 bucket.get("down_call_duration_us"), f"{key}.down_call_duration_us"
             ),
-            up_call_duration_us=_quantiles(
+            up_call_duration_us=_unsigned_quantiles(
                 bucket.get("up_call_duration_us"), f"{key}.up_call_duration_us"
             ),
         )
@@ -437,7 +479,7 @@ def _summary(
     )
 
 
-def _parse_v6(data: dict[str, object]) -> CalibrationCacheSummary:
+def _parse_v7(data: dict[str, object]) -> CalibrationCacheSummary:
     if data.get("source_formula_version") != SOURCE_FORMULA_VERSION:
         raise ValueError("unsupported sender calibration source formula")
     _validate_provenance(data, require_extended=True)
@@ -466,7 +508,7 @@ def _parse_v6(data: dict[str, object]) -> CalibrationCacheSummary:
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid calibration cache status") from exc
     if status not in (CalibrationStatus.VALID, CalibrationStatus.OUT_OF_ENVELOPE):
-        raise ValueError("v6 cache has a non-publishable status")
+        raise ValueError("v7 cache has a non-publishable status")
     if status is not qualification.status:
         raise ValueError("qualification status is inconsistent")
 
@@ -513,7 +555,7 @@ def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
         raise ValueError("unsupported measurement protocol")
     if data.get("source") != SOURCE_DEVICE_CACHE:
         raise ValueError("invalid calibration source")
-    return _parse_v6(data)
+    return _parse_v7(data)
 
 
 def load_calibration_resolution(
@@ -540,7 +582,7 @@ def load_calibration_resolution(
                 summary=None,
             )
     if isinstance(data, dict) and (
-        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION, 5)
+        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION, 5, 6)
         or data.get("measurement_protocol_version") == 4
         or data.get("measurement_protocol_version") == 8
         or data.get("measurement_protocol_version") == 9

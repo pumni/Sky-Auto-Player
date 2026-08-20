@@ -54,7 +54,7 @@ _HOST_FINGERPRINT = {
     "sampled_at_us": 123,
 }
 _INTEGRATION_CACHE: dict = {
-    "version": 6,
+    "version": 7,
     "artifact_schema_version": 11,
     "status": "valid",
     "source": "device_cache",
@@ -62,7 +62,7 @@ _INTEGRATION_CACHE: dict = {
     "source_formula_version": 5,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
-    "native_calibration_version": 14,
+    "native_calibration_version": 15,
     "measurement_protocol_version": 10,
     "source_git_sha": "test-sha",
     "native_build_id": "test-sha",
@@ -80,6 +80,10 @@ _INTEGRATION_CACHE: dict = {
             "attempted": 100,
             "clean_pair_count": 100,
             "rejected": 0,
+            "anomaly_count": 0,
+            "class_mismatch_count": 0,
+            "timeout_count": 0,
+            "partial_send": 0,
             "pair_sender_hold_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
             "scheduler_shrink_us": _signed_stats(6),
             "sendinput_shrink_us": _signed_stats(6),

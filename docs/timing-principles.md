@@ -131,11 +131,18 @@ candidate > 2,000 µs  -> OUT_OF_ENVELOPE, applied = none, playback = 500 µs
 
 The correction is applied exactly once to the authored minimum hold. It does
 not change Note-On timestamps, physical Down targets, `down_late_grace_us`
-(`500 µs`), or runtime scheduling. Protocol 10, native schema 14, artifact
-schema 11, cache version 6, source formula version 5, and evidence kind
+(`500 µs`), or runtime scheduling. Protocol 10, native schema 15, artifact
+schema 11, cache version 7, source formula version 5, and evidence kind
 `sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
-cache-v5 Raw Input evidence. A failed or invalid measurement preserves the
+cache-v5/v6 Raw Input evidence. A failed or invalid measurement preserves the
 previous compatible cache; an old cache falls back to 500 µs.
+
+Before warm-up, sender calibration performs a sender-only preflight: it proves
+physical All-Up, sends one prepared full All-Up packet through the production
+SendInput primitive, records that packet's real completion as the first
+completion anchor, and proves All-Up again. This setup packet is not a warm-up
+sample and cannot enter any quantile. The preflight does not register, wait
+for, or inspect Raw Input.
 
 Raw Input may exist in a separate engineering observer diagnostic. Its receipt
 timestamps, queue timestamps, and observer failures must never affect sender

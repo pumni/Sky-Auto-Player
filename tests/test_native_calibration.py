@@ -64,8 +64,8 @@ def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> 
         "rejected": rejected,
         "sample_count": total,
         "timeout_count": 0,
-        "anomaly_count": 0,
-        "class_mismatch_count": 0,
+        "anomaly_count": rejected,
+        "class_mismatch_count": rejected,
         "partial_send": 0,
         "down_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
         "up_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
@@ -90,7 +90,7 @@ def _configuration(*, polyphonies: list[int], samples: int = 100, budget: int = 
 
 def _pair_bucket_result(*, polyphony: int, class_name: str, samples: int = 100) -> dict[str, object]:
     return {
-        "version": 14,
+        "version": 15,
         "measurement_protocol_version": 10,
         "evidence_kind": "sender_completion_hold_shrink",
         "source_git_sha": "test-sha",
@@ -128,7 +128,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
         for polyphony in (1, 5, 15)
     }
     return {
-        "version": 14,
+        "version": 15,
         "measurement_protocol_version": 10,
         "evidence_kind": "sender_completion_hold_shrink",
         "source_git_sha": "test-sha",
@@ -168,7 +168,7 @@ def _native_result(*, p99_by_key: dict[str, int] | None = None) -> dict[str, obj
 
 def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     result = native_calibration._validate_result(_native_result())
-    assert result["version"] == 14
+    assert result["version"] == 15
     assert result["measurement_protocol_version"] == 10
 
 
@@ -177,6 +177,7 @@ def test_protocol_vnext_native_result_accepts_signed_pair_matrix() -> None:
     [
         ("version", 12),
         ("version", 13),
+        ("version", 14),
         ("measurement_protocol_version", 7),
         ("measurement_protocol_version", 8),
     ],
@@ -273,14 +274,14 @@ def test_native_signed_and_unsigned_means_are_bounded_and_ordered() -> None:
 
 
 def test_cache_signed_mean_must_lie_between_min_and_max() -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["pair_buckets"]["1/hot"]["pair_sender_hold_shrink_us"]["mean"] = 999_999  # type: ignore[index]
     with pytest.raises(ValueError, match="ordered"):
         loader.parse_calibration_cache_summary(cache)
 
 
 def test_cache_rejects_native_schema_13_under_protocol_10() -> None:
-    current_cache = native_calibration._cache_v6(_native_result())
+    current_cache = native_calibration._cache_v7(_native_result())
     previous_cache = json.loads(json.dumps(current_cache))
     previous_cache["native_calibration_version"] = 13
 
@@ -290,7 +291,7 @@ def test_cache_rejects_native_schema_13_under_protocol_10() -> None:
 
 
 def test_cache_rejects_native_schema_before_diagnostic_compatibility_floor() -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["native_calibration_version"] = 12
     with pytest.raises(ValueError, match="native calibration schema"):
         loader.parse_calibration_cache_summary(cache)
@@ -322,7 +323,7 @@ def test_publishable_calibration_rejects_degraded_scheduling_aids(
     with pytest.raises(native_calibration.NativeCalibrationError, match="publishable"):
         native_calibration._validate_result(result)
 
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cast(dict[str, object], cache["scheduling_aids"])[field] = value
     with pytest.raises(ValueError, match="publishable"):
         loader.parse_calibration_cache_summary(cache)
@@ -528,16 +529,56 @@ def test_directional_execution_is_rejected() -> None:
         )
 
 
-def test_cache_v6_uses_max_positive_sender_p99_and_preserves_signed_values() -> None:
+def test_cache_v7_uses_max_positive_sender_p99_and_preserves_signed_values() -> None:
     result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
-    cache = native_calibration._cache_v6(result)
+    cache = native_calibration._cache_v7(result)
     summary = loader.parse_calibration_cache_summary(cache)
-    assert cache["version"] == 6
+    assert cache["version"] == 7
     assert summary.sender_hold_shrink_p99_us == 42
     assert summary.worst_bucket == "15/cold"
     assert summary.margin_us == 300
     assert summary.candidate_margin_us == 142
     assert summary.pair_buckets["5/hot"].pair_sender_hold_shrink_us.p99 == -8
+
+
+def test_cache_v7_persists_and_validates_retry_integrity_counters() -> None:
+    result = _native_result()
+    bucket = cast(dict[str, object], result["pair_buckets"]["1"]["hot"])  # type: ignore[index]
+    bucket["attempted"] = 101
+    bucket["clean"] = 100
+    bucket["clean_sample_count"] = 100
+    bucket["rejected"] = 1
+    bucket["sample_count"] = 101
+    bucket["anomaly_count"] = 1
+    bucket["class_mismatch_count"] = 1
+    cache = native_calibration._cache_v7(result)
+    persisted = cast(dict[str, object], cache["pair_buckets"]["1/hot"])  # type: ignore[index]
+    assert persisted["anomaly_count"] == 1
+    assert persisted["class_mismatch_count"] == 1
+    assert persisted["timeout_count"] == 0
+    assert persisted["partial_send"] == 0
+
+    loader.parse_calibration_cache_summary(cache)
+    for field, value in (
+        ("anomaly_count", 0),
+        ("class_mismatch_count", 0),
+        ("timeout_count", 1),
+        ("partial_send", 1),
+    ):
+        tampered = json.loads(json.dumps(cache))
+        cast(dict[str, object], tampered["pair_buckets"]["1/hot"])[field] = value  # type: ignore[index]
+        with pytest.raises(ValueError, match=field):
+            loader.parse_calibration_cache_summary(tampered)
+
+
+def test_cache_v6_shape_is_incompatible_after_retry_counter_migration() -> None:
+    cache = native_calibration._cache_v7(_native_result())
+    cache["version"] = 6
+    with pytest.raises(ValueError):
+        loader.parse_calibration_cache_summary(cache)
+    resolution = loader.load_calibration_resolution(data=cache)
+    assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
+    assert resolution.resolved_margin_us == 500
 
 
 def test_cache_v1_is_rejected_and_falls_back() -> None:
@@ -547,7 +588,7 @@ def test_cache_v1_is_rejected_and_falls_back() -> None:
 
 
 def test_previous_measurement_protocol_is_not_reinterpreted() -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["measurement_protocol_version"] = 5
     with pytest.raises(ValueError, match="measurement protocol"):
         loader.parse_calibration_cache_summary(cache)
@@ -557,7 +598,7 @@ def test_previous_measurement_protocol_is_not_reinterpreted() -> None:
 
 
 def test_protocol9_cache_is_rejected_after_protocol10_semantics_bump() -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["measurement_protocol_version"] = 9
     with pytest.raises(ValueError, match="measurement protocol"):
         loader.parse_calibration_cache_summary(cache)
@@ -567,7 +608,7 @@ def test_protocol9_cache_is_rejected_after_protocol10_semantics_bump() -> None:
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["pair_buckets"]["1/hot"]["clean_pair_count"] = 99  # type: ignore[index]
     cache["pair_buckets"]["1/hot"]["rejected"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="clean pairs"):
@@ -581,11 +622,13 @@ def test_cache_requires_100_clean_pairs_per_cell() -> None:
 def test_cache_enforces_protocol10_bounded_retry_invariant(
     attempted: int, clean: int, accepted: bool
 ) -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     for bucket in cast(dict[str, dict[str, object]], cache["pair_buckets"]).values():
         bucket["attempted"] = attempted
         bucket["clean_pair_count"] = clean
         bucket["rejected"] = attempted - clean
+        bucket["anomaly_count"] = attempted - clean
+        bucket["class_mismatch_count"] = attempted - clean
     if accepted:
         summary = loader.parse_calibration_cache_summary(cache)
         assert summary.sample_count == 100
@@ -629,7 +672,7 @@ def test_raw_input_diagnostic_delay_cannot_change_sender_qualification() -> None
                     "wm_input_queue_delay_us": receipt_delay_us,
                 }
         summary = loader.parse_calibration_cache_summary(
-            native_calibration._cache_v6(result)
+            native_calibration._cache_v7(result)
         )
         assert summary.sender_hold_shrink_p99_us == 780
         assert summary.candidate_margin_us == 880
@@ -645,7 +688,7 @@ def test_sender_qualification_does_not_sum_component_quantiles() -> None:
             bucket["scheduler_shrink_us"] = _quantiles(10_000)
             bucket["sendinput_shrink_us"] = _quantiles(10_000)
     summary = loader.parse_calibration_cache_summary(
-        native_calibration._cache_v6(result)
+        native_calibration._cache_v7(result)
     )
     assert summary.sender_hold_shrink_p99_us == 100
     assert summary.candidate_margin_us == 200
@@ -658,7 +701,7 @@ def test_old_raw_input_evidence_and_cache_v5_are_incompatible() -> None:
     with pytest.raises(native_calibration.NativeCalibrationError):
         native_calibration._validate_result(result)
 
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cache["version"] = 5
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(cache)
@@ -671,7 +714,7 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     result = _native_result(
         p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
     )
-    cache = native_calibration._cache_v6(result)
+    cache = native_calibration._cache_v7(result)
     summary = loader.parse_calibration_cache_summary(cache)
 
     assert summary.margin_us is None
@@ -689,14 +732,14 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     ],
 )
 def test_v4_rejects_tampered_qualification(field: str, value: object) -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     cast(dict[str, object], cache["qualification"])[field] = value
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(cache)
 
 
 def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
-    cache = native_calibration._cache_v6(
+    cache = native_calibration._cache_v7(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
         )
@@ -707,7 +750,7 @@ def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
 
 
 def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
-    out_cache = native_calibration._cache_v6(
+    out_cache = native_calibration._cache_v7(
         _native_result(
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12_088)
         )
@@ -716,7 +759,7 @@ def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(out_cache)
 
-    valid_cache = native_calibration._cache_v6(_native_result())
+    valid_cache = native_calibration._cache_v7(_native_result())
     cast(dict[str, object], valid_cache["qualification"])["applied_margin_us"] = None
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(valid_cache)
@@ -726,7 +769,7 @@ def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
 def test_legacy_cache_is_rejected_without_reinterpreting_vnext(
     legacy_version: int,
 ) -> None:
-    legacy = native_calibration._cache_v6(_native_result())
+    legacy = native_calibration._cache_v7(_native_result())
     legacy["version"] = legacy_version
     legacy["source_formula_version"] = 3
     with pytest.raises(ValueError, match=r"legacy|unsupported"):
@@ -748,7 +791,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     assert corrupt.resolved_margin_us == 500
     assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_DEFAULT_500
 
-    valid_cache = native_calibration._cache_v6(
+    valid_cache = native_calibration._cache_v7(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
     )
     valid = loader.load_calibration_resolution(data=valid_cache)
@@ -756,7 +799,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     assert valid.resolved_margin_us == 800
     assert valid.margin_source == loader.SOURCE_DEVICE_CACHE
 
-    out_cache = native_calibration._cache_v6(
+    out_cache = native_calibration._cache_v7(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088))
     )
     out = loader.load_calibration_resolution(data=out_cache)
@@ -768,7 +811,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
 def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     current = _host_fingerprint()
     monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: current)
     cache["host_fingerprint"]["sampled_at_us"] = 999_999  # type: ignore[index]
@@ -797,7 +840,7 @@ def test_each_required_host_identity_field_mismatch_is_incompatible(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
 ) -> None:
-    cache = native_calibration._cache_v6(_native_result())
+    cache = native_calibration._cache_v7(_native_result())
     current = _host_fingerprint()
     changed = dict(current)
     value = changed[field]
@@ -827,7 +870,7 @@ def test_diagnostic_run_writes_report_but_never_production_cache(
         class_name="hot", polyphony=1, samples=5, output_path=report
     )
     assert result["acceptance_eligible"] is False
-    assert result["version"] == 14
+    assert result["version"] == 15
     assert result["measurement_protocol_version"] == 10
     assert result["artifact_schema_version"] == 11
     assert report.is_file()

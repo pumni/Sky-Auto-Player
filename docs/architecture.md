@@ -162,12 +162,19 @@ two sends.
 Qualification is the maximum positive required-bucket p99 plus a `100 µs`
 guard, with a `300 µs` floor and `2,000 µs` ceiling. Above the ceiling the
 status is `OUT_OF_ENVELOPE` and playback uses the explicit `500 µs` fallback;
-the ceiling is never raised to force validity. Protocol 10/native schema 14,
-artifact schema 11, cache v6, source formula 5, and
+the ceiling is never raised to force validity. Protocol 10/native schema 15,
+artifact schema 11, cache v7, source formula 5, and
 `sender_completion_hold_shrink` evidence are required. Older protocol-9,
-schema-13, cache-v5, or Raw Input evidence is rejected and never reinterpreted.
+schema-13, cache-v5/v6, or Raw Input evidence is rejected and never reinterpreted.
 The margin is materialized once in `effective_min_hold_us`; Note-On timestamps,
 physical targets, and `down_late_grace_us = 500 µs` remain unchanged.
+
+Each sender session first proves physical All-Up, sends one prepared full
+All-Up priming packet, and proves All-Up again. The real completion of that
+priming packet anchors the first Down target; it is setup evidence only and is
+excluded from warm-up and production quantiles. This preflight is sender-only
+and does not require a Raw Input observer. Sender close performs physical
+All-Up cleanup before a bounded pump-thread shutdown.
 
 Raw Input and `WM_INPUT` may be collected only by a separate observer
 diagnostic. Receipt/queue timestamps and observer health cannot affect sender

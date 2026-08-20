@@ -21,7 +21,7 @@ Raw Input receipt timing is not part of qualification. It uses exactly the six
 `sender_hold_shrink` plus `100 µs`. A candidate at or below `2,000 µs` is
 valid and applies `max(300 µs, candidate)`; a candidate above `2,000 µs` is
 out of the trusted correction envelope and applies no calibrated margin.
-Protocol 9/cache v5 evidence is incompatible with protocol 10/cache v6 and
+Protocol 9/cache v5/v6 evidence is incompatible with protocol 10/cache v7 and
 falls back to the unchanged `500 µs` default. Completed out-of-envelope
 protocol-10 evidence is retained as unhealthy cache evidence.
 

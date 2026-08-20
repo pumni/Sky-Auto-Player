@@ -846,7 +846,10 @@ pub enum SampleClass {
 }
 
 pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 10;
-pub const CALIBRATION_SCHEMA_VERSION: u32 = 14;
+// Schema 14 was consumed by the protocol-9 GetMessageTime diagnostic shape.
+// Protocol 10 has a different serialized pair contract and therefore owns a
+// new native schema number rather than reusing that diagnostic version.
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 15;
 pub const HOST_FINGERPRINT_VERSION: u32 = 2;
 pub const CALIBRATION_EVIDENCE_KIND: &str = "sender_completion_hold_shrink";
 pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
@@ -860,6 +863,8 @@ pub const CALIBRATION_PRECISION_HANDOFF_US: u64 = 700;
 /// pairs without allowing a pathological host to run indefinitely.
 pub const CALIBRATION_MAX_ATTEMPT_MULTIPLIER: u32 = 2;
 pub const MAX_ANOMALOUS_PAIR_EVIDENCE: usize = 64;
+pub const CALIBRATION_PUMP_SHUTDOWN_TIMEOUT_MS: u64 = 250;
+pub const CALIBRATION_PUMP_SHUTDOWN_POLL_MS: u64 = 5;
 
 fn exact_sendinput_boundaries(
     result: &PlatformSendResult,
@@ -2503,12 +2508,56 @@ mod platform {
             state.should_exit = true;
             shared.1.notify_all();
         }
-        if hwnd != 0 {
+        let post_failed = if hwnd != 0 {
             // SAFETY: the HWND was published by the pump thread and remains
             // valid until that thread processes the exit message.
-            unsafe { PostMessageW(hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
+            unsafe { PostMessageW(hwnd as HWND, WM_CALIB_EXIT, 0, 0) == 0 }
+        } else {
+            false
+        };
+        if post_failed && let Ok(mut state) = shared.0.lock() {
+            state.pump_thread_failed = true;
+            shared.1.notify_all();
         }
-        let _ = handle.join();
+        join_pump_thread_bounded(shared, handle);
+    }
+
+    /// Join the calibration pump only while it is known to be making bounded
+    /// shutdown progress. Dropping an unfinished handle detaches the thread;
+    /// the caller has already performed physical All-Up cleanup before using
+    /// this helper on a sender session, so an unresponsive message pump cannot
+    /// delay the safety action or keep the caller blocked indefinitely.
+    fn join_pump_thread_bounded(
+        shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
+        handle: std::thread::JoinHandle<()>,
+    ) {
+        let deadline =
+            std::time::Instant::now() + Duration::from_millis(CALIBRATION_PUMP_SHUTDOWN_TIMEOUT_MS);
+        let mut handle = Some(handle);
+        while let Some(candidate) = handle.as_ref() {
+            if candidate.is_finished() {
+                let finished = handle.take().expect("join handle is present");
+                if finished.join().is_err()
+                    && let Ok(mut state) = shared.0.lock()
+                {
+                    state.pump_thread_failed = true;
+                    shared.1.notify_all();
+                }
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                if let Ok(mut state) = shared.0.lock() {
+                    state.pump_thread_failed = true;
+                    shared.1.notify_all();
+                }
+                // Dropping a JoinHandle detaches the still-running pump. The
+                // bounded cleanup contract is preferable to an unbounded join
+                // after the physical keyboard has already been released.
+                drop(handle.take());
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(CALIBRATION_PUMP_SHUTDOWN_POLL_MS));
+        }
     }
 
     fn measurement_deadline_from_clock(
@@ -2987,9 +3036,8 @@ mod platform {
         }
 
         /// Verify the physical instrument state without injecting another
-        /// packet. This is the only cleanup operation allowed after a
-        /// successful correlation self-test or after the observer has been
-        /// sealed for publishable close.
+        /// packet. This read-only proof is used by sender preflight and final
+        /// cleanup; the diagnostic observer's seal has its own boundary rules.
         fn verify_physical_all_up(&mut self) -> CleanupOutcome {
             let mut stuck_keys = Vec::new();
             let mut verification_inconclusive = false;
@@ -3009,6 +3057,50 @@ mod platform {
                 raw_input_restore_failed: false,
                 pump_thread_failed: false,
             }
+        }
+
+        /// Establish the sender-only starting invariant for protocol 10.
+        ///
+        /// The first measured pair is completion-anchored, so the session
+        /// needs a real prior `SendInput` completion rather than a synthetic
+        /// QPC timestamp. We prove physical All-Up before the setup packet,
+        /// send one prepared full All-Up packet through the production sender,
+        /// and prove All-Up again afterwards. The setup packet is deliberately
+        /// not returned to or included in any warm-up/measurement quantile.
+        pub fn sender_preflight(&mut self) -> Result<(), CalibrationError> {
+            self.ensure_foreground_owned()?;
+            let before = self.verify_physical_all_up();
+            if !before.cleanup_success
+                || before.cleanup_verification_inconclusive
+                || !before.cleanup_stuck_keys.is_empty()
+            {
+                return Err(CalibrationError::CleanupFailed {
+                    stuck_keys: before.cleanup_stuck_keys,
+                });
+            }
+
+            let lead = self
+                .qpc_clock
+                .duration_from_us(CALIBRATION_PRECISION_HANDOFF_US)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let target = self
+                .qpc_clock
+                .now()
+                .map_err(|_| CalibrationError::ClockFailure)?
+                .checked_add_duration(lead)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            self.measure_sender_packet_at_target(&PHYSICAL_INSTRUMENT_SCAN_CODES, true, target)?;
+
+            let after = self.verify_physical_all_up();
+            if !after.cleanup_success
+                || after.cleanup_verification_inconclusive
+                || !after.cleanup_stuck_keys.is_empty()
+            {
+                return Err(CalibrationError::CleanupFailed {
+                    stuck_keys: after.cleanup_stuck_keys,
+                });
+            }
+            Ok(())
         }
 
         fn scan_codes_mask(scan_codes: &[u16]) -> Result<u16, CalibrationError> {
@@ -3488,20 +3580,25 @@ mod platform {
 
         fn stop_pump_thread(&mut self) {
             // Signal the pump thread to exit.
-            if self.hwnd != 0 {
-                if let Ok(mut state) = self.shared.0.lock() {
-                    state.should_exit = true;
-                    self.shared.1.notify_all();
-                }
+            if let Ok(mut state) = self.shared.0.lock() {
+                state.should_exit = true;
+                self.shared.1.notify_all();
+            }
+            let post_failed = if self.hwnd != 0 {
                 // SAFETY: hwnd is a live message-only window on the pump thread.
-                unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
+                unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) == 0 }
+            } else {
+                false
+            };
+            if post_failed && let Ok(mut state) = self.shared.0.lock() {
+                state.pump_thread_failed = true;
+                self.shared.1.notify_all();
+            }
+            if self.hwnd != 0 {
                 self.hwnd = 0;
             }
-            if let Some(h) = self.pump_thread.take()
-                && h.join().is_err()
-                && let Ok(mut state) = self.shared.0.lock()
-            {
-                state.pump_thread_failed = true;
+            if let Some(handle) = self.pump_thread.take() {
+                join_pump_thread_bounded(&self.shared, handle);
             }
         }
 
@@ -3565,12 +3662,13 @@ mod platform {
         }
 
         /// Close the sender-only session without invoking the Raw Input seal
-        /// protocol. The window thread is stopped first; then the bounded
-        /// physical All-Up cleanup and verification run.
+        /// protocol. Physical All-Up cleanup and verification run before the
+        /// bounded pump shutdown, so a stuck message thread cannot delay the
+        /// safety action.
         pub fn close_sender(mut self) -> CleanupOutcome {
-            self.stop_pump_thread();
             let mut cleanup = self.cleanup_keyboard();
             self.cleanup_done = true;
+            self.stop_pump_thread();
             self.apply_session_cleanup_state(&mut cleanup);
             cleanup
         }
@@ -3582,21 +3680,7 @@ mod platform {
                 let _ = self.cleanup_keyboard();
                 self.cleanup_done = true;
             }
-            if let Ok(mut state) = self.shared.0.lock() {
-                state.should_exit = true;
-                self.shared.1.notify_all();
-            }
-            if self.hwnd != 0 {
-                unsafe {
-                    PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0);
-                }
-            }
-            if let Some(h) = self.pump_thread.take()
-                && h.join().is_err()
-                && let Ok(mut state) = self.shared.0.lock()
-            {
-                state.pump_thread_failed = true;
-            }
+            self.stop_pump_thread();
         }
     }
 
@@ -4142,6 +4226,7 @@ mod platform {
         pairs
             .iter()
             .filter(|pair| !pair.is_clean())
+            .take(MAX_ANOMALOUS_PAIR_EVIDENCE)
             .map(sender_pair_sample_evidence)
             .collect()
     }
@@ -4545,6 +4630,18 @@ mod platform {
             SampleClass::Hot => config.hot_gap_target_us,
             SampleClass::Cold => config.cold_idle_gap_us,
         };
+
+        if let Err(source) = session.sender_preflight() {
+            let cleanup = session.close();
+            return Err(pair_bucket_failure(
+                class,
+                polyphony,
+                0,
+                "preflight",
+                source,
+                cleanup,
+            ));
+        }
 
         let mut warmup_rejected = 0u64;
         for warmup_index in 0..config.warmup_samples {
@@ -4959,6 +5056,35 @@ mod platform {
                 anomalies: SampleAnomalies::default(),
                 receipts,
             }
+        }
+
+        #[test]
+        fn anomalous_sender_evidence_is_bounded_without_changing_retry_budget() {
+            let clock = QpcClock::initialize().expect("QPC clock");
+            let pairs = (0..(MAX_ANOMALOUS_PAIR_EVIDENCE + 1))
+                .map(|index| {
+                    let base = 100_u64 + index as u64 * 1_000;
+                    let mut down = sample(SmallVec::new());
+                    down.target_ticks = QpcTicks::from_raw(base);
+                    down.call_started_ticks = QpcTicks::from_raw(base + 10);
+                    down.call_completed_ticks = QpcTicks::from_raw(base + 20);
+                    down.actual_idle_gap_ticks = Some(DurationTicks::from_raw(1));
+                    down.anomalies.class_mismatch = true;
+
+                    let mut up = sample(SmallVec::new());
+                    up.target_ticks = QpcTicks::from_raw(base + 100);
+                    up.call_started_ticks = QpcTicks::from_raw(base + 110);
+                    up.call_completed_ticks = QpcTicks::from_raw(base + 120);
+                    up.actual_idle_gap_ticks = Some(DurationTicks::from_raw(1));
+
+                    sender_pair_packets(down, up, clock).expect("sender pair evidence")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(pairs.len(), MAX_ANOMALOUS_PAIR_EVIDENCE + 1);
+            assert_eq!(
+                anomalous_sender_pairs(&pairs).unwrap().len(),
+                MAX_ANOMALOUS_PAIR_EVIDENCE
+            );
         }
 
         #[test]
@@ -6012,7 +6138,7 @@ mod tests {
     #[test]
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
-        assert_eq!(CALIBRATION_SCHEMA_VERSION, 14);
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 15);
         assert_eq!(MEASUREMENT_PROTOCOL_VERSION, 10);
         assert_eq!(HOST_FINGERPRINT_VERSION, 2);
         assert_eq!(CALIBRATION_PRECISION_HANDOFF_US, 700);
@@ -6330,6 +6456,44 @@ mod tests {
         assert!(!sender_pair.contains("measure_classified_packet("));
         assert!(!sender_pair.contains("receipt_timeout"));
         assert!(source.contains("open_with_measurement_deadline_and_observer(None, false)"));
+    }
+
+    #[test]
+    fn sender_first_pair_has_a_real_preflight_anchor() {
+        let source = include_str!("calibration.rs");
+        let bucket = source
+            .split("fn run_calibration_pair_bucket_with_deadline")
+            .nth(1)
+            .expect("sender bucket implementation");
+        let preflight = bucket
+            .find("session.sender_preflight()")
+            .expect("sender preflight");
+        let warmup = bucket.find("let mut warmup_rejected").expect("warmup loop");
+        assert!(preflight < warmup);
+        assert!(source.contains("pub fn sender_preflight"));
+        assert!(source.contains("let before = self.verify_physical_all_up()"));
+        assert!(source.contains("let after = self.verify_physical_all_up()"));
+        assert!(source.contains("&PHYSICAL_INSTRUMENT_SCAN_CODES, true"));
+        assert!(source.contains(".take(MAX_ANOMALOUS_PAIR_EVIDENCE)"));
+    }
+
+    #[test]
+    fn sender_close_releases_physical_keys_before_bounded_pump_shutdown() {
+        let source = include_str!("calibration.rs");
+        let close = source
+            .split("pub fn close_sender")
+            .nth(1)
+            .expect("sender close implementation");
+        let cleanup = close
+            .find("self.cleanup_keyboard()")
+            .expect("physical cleanup");
+        let stop = close
+            .find("self.stop_pump_thread()")
+            .expect("pump shutdown");
+        assert!(cleanup < stop);
+        assert!(source.contains("CALIBRATION_PUMP_SHUTDOWN_TIMEOUT_MS"));
+        assert!(source.contains("join_pump_thread_bounded"));
+        assert!(source.contains("PostMessageW(hwnd as HWND, WM_CALIB_EXIT, 0, 0) == 0"));
     }
 
     #[test]
