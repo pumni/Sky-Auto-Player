@@ -39,11 +39,13 @@
 //! returns [`CalibrationError::PlatformUnsupported`].
 
 use crate::clock::{DurationTicks, QpcClock, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
+use crate::event::OwnedEvent;
 use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, PlatformSendResult};
 use serde::{Deserialize, Serialize};
 use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 
 // ─── Public error type ────────────────────────────────────────────────────────
@@ -1054,6 +1056,11 @@ struct SharedCalibState {
     /// Stable reason for an observer-integrity failure. Unlike packet-level
     /// diagnostics, this survives per-packet diagnostic resets.
     observer_failure: Option<&'static str>,
+    /// Interrupt source shared with the precision waiter. Observer failures
+    /// must stop a packet before the final sender handoff.
+    wait_interrupt: Arc<OwnedEvent>,
+    /// Lock-free handoff guard; it is never cleared during a session.
+    abort_requested: Arc<AtomicBool>,
     /// Set by the pump thread when the window is ready.
     window_ready: bool,
     /// Set to signal the pump thread to exit gracefully (checked on resume).
@@ -1076,6 +1083,8 @@ fn clear_active_packet(state: &mut SharedCalibState) {
 fn invalidate_correlation_boundary(state: &mut SharedCalibState) {
     clear_active_packet(state);
     state.correlation_boundary_lost = true;
+    state.abort_requested.store(true, Ordering::Release);
+    let _ = state.wait_interrupt.signal();
 }
 
 fn can_arm_next_packet(state: &SharedCalibState) -> bool {
@@ -1247,14 +1256,18 @@ mod platform {
         match lock.lock() {
             Ok(mut state) => {
                 update(&mut state.pump_diagnostics);
-                state.observer_failure = Some(reason);
+                if state.observer_failure.is_none() {
+                    state.observer_failure = Some(reason);
+                }
                 invalidate_correlation_boundary(&mut state);
                 cvar.notify_all();
             }
             Err(poisoned) => {
                 let mut state = poisoned.into_inner();
                 state.pump_thread_failed = true;
-                state.observer_failure = Some("state_lock_failed");
+                if state.observer_failure.is_none() {
+                    state.observer_failure = Some("state_lock_failed");
+                }
                 state.pump_diagnostics.state_lock_failed =
                     state.pump_diagnostics.state_lock_failed.saturating_add(1);
                 invalidate_correlation_boundary(&mut state);
@@ -2030,7 +2043,8 @@ mod platform {
         last_send_completed_ticks: Option<QpcTicks>,
         measurement_deadline: Option<QpcTicks>,
         precision_waiter: HybridWaiter,
-        wait_interrupt: OwnedEvent,
+        wait_interrupt: Arc<OwnedEvent>,
+        abort_requested: Arc<AtomicBool>,
         next_barrier_generation: u64,
     }
 
@@ -2100,11 +2114,12 @@ mod platform {
                     detail: format!("{failure:?}"),
                 });
             }
-            let wait_interrupt = OwnedEvent::new_auto_reset().ok_or_else(|| {
+            let wait_interrupt = Arc::new(OwnedEvent::new_auto_reset().ok_or_else(|| {
                 CalibrationError::PrecisionWaitFailed {
                     detail: "could not create calibration wait interrupt".to_string(),
                 }
-            })?;
+            })?);
+            let abort_requested = Arc::new(AtomicBool::new(false));
             let initial = SharedCalibState {
                 pending_receipts: SmallVec::new(),
                 active_sequence: None,
@@ -2114,6 +2129,8 @@ mod platform {
                 barrier_completed_generation: 0,
                 correlation_boundary_lost: false,
                 observer_failure: None,
+                wait_interrupt: Arc::clone(&wait_interrupt),
+                abort_requested: Arc::clone(&abort_requested),
                 window_ready: false,
                 should_exit: false,
                 window_closed: false,
@@ -2170,6 +2187,7 @@ mod platform {
                 measurement_deadline,
                 precision_waiter,
                 wait_interrupt,
+                abort_requested,
                 next_barrier_generation: 0,
             };
 
@@ -2244,6 +2262,58 @@ mod platform {
             Ok(())
         }
 
+        fn check_precision_handoff_trust(&self) -> Result<(), CalibrationError> {
+            if !self.abort_requested.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let (lock, _cvar) = self.shared.as_ref();
+            let state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            if let Some(reason) = state.observer_failure {
+                return Err(CalibrationError::ObserverIntegrityFailure { reason });
+            }
+            if state.correlation_boundary_lost {
+                return Err(CalibrationError::CorrelationBoundaryLost);
+            }
+            if state.pump_thread_failed {
+                return Err(CalibrationError::WindowThreadFailed);
+            }
+            Ok(())
+        }
+
+        fn arm_packet_after_boundary(
+            &self,
+            sequence_id: u32,
+            scan_codes: &[u16],
+            key_up: bool,
+        ) -> Result<(), CalibrationError> {
+            let (lock, _cvar) = self.shared.as_ref();
+            let mut state = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            if let Some(reason) = state.observer_failure {
+                return Err(CalibrationError::ObserverIntegrityFailure { reason });
+            }
+            if state.correlation_boundary_lost || !can_arm_next_packet(&state) {
+                return Err(CalibrationError::CorrelationBoundaryLost);
+            }
+            if !state.pending_receipts.is_empty() {
+                invalidate_correlation_boundary(&mut state);
+                return Err(CalibrationError::CorrelationBoundaryLost);
+            }
+
+            // The boundary check, diagnostic reset, and active-packet install
+            // share this one lock acquisition. A stale receipt arriving after
+            // the barrier but before this point therefore wins the race and
+            // prevents arming rather than being erased by the reset.
+            state.pump_diagnostics = PumpDiagnostics::default();
+            state.active_sequence = Some(sequence_id);
+            state.active_expected_scan_codes.clear();
+            state
+                .active_expected_scan_codes
+                .extend_from_slice(scan_codes);
+            state.active_expected_key_up = Some(key_up);
+            state.pending_receipts.clear();
+            Ok(())
+        }
+
         #[cfg(not(any(test, feature = "test-support")))]
         fn probe_failure_detail(
             &self,
@@ -2281,6 +2351,7 @@ mod platform {
             physical_target_qpc: QpcTicks,
         ) -> Result<(), CalibrationError> {
             self.ensure_budget()?;
+            self.check_precision_handoff_trust()?;
             let handoff_ticks = self
                 .qpc_clock
                 .duration_from_us(CALIBRATION_PRECISION_HANDOFF_US)
@@ -2297,10 +2368,16 @@ mod platform {
                 &self.wait_interrupt,
             );
             match result.outcome {
-                WaitOutcome::Deadline => Ok(()),
-                WaitOutcome::Interrupted => Err(CalibrationError::PrecisionWaitFailed {
-                    detail: "calibration wait was interrupted".to_string(),
-                }),
+                WaitOutcome::Deadline => self.check_precision_handoff_trust(),
+                WaitOutcome::Interrupted => {
+                    if self.abort_requested.load(Ordering::Acquire) {
+                        self.check_precision_handoff_trust()
+                    } else {
+                        Err(CalibrationError::PrecisionWaitFailed {
+                            detail: "calibration wait was interrupted".to_string(),
+                        })
+                    }
+                }
                 WaitOutcome::Failed(failure) => Err(CalibrationError::PrecisionWaitFailed {
                     detail: format!("{failure:?}"),
                 }),
@@ -2344,7 +2421,10 @@ mod platform {
                     detail: "probe did not produce a completion anchor".to_string(),
                 });
             }
-            let cleanup = self.cleanup_keyboard();
+            // Down followed by Up already establishes the probe's balanced
+            // physical state. Do not inject an untagged All-Up packet while
+            // the exact-tag observer is still active; verify the state only.
+            let cleanup = self.verify_physical_all_up();
             if !cleanup.cleanup_success
                 || cleanup.cleanup_verification_inconclusive
                 || !cleanup.cleanup_stuck_keys.is_empty()
@@ -2506,15 +2586,12 @@ mod platform {
             validate_packet_scan_codes(scan_codes)?;
 
             self.drain_pump_before_arm()?;
-            // Preserve diagnostics from the boundary check. Once the queue
-            // is proven clean, begin a fresh packet diagnostic window.
-            self.reset_pump_diagnostics()?;
 
             let seq = self.next_sequence;
             if seq == 0 {
                 return Err(CalibrationError::SequenceOverflow);
             }
-            self.next_sequence = seq
+            let next_sequence = seq
                 .checked_add(1)
                 .ok_or(CalibrationError::SequenceOverflow)?;
 
@@ -2540,7 +2617,14 @@ mod platform {
             let prepared =
                 crate::input::PreparedTaggedCalibrationPacket::try_new(scan_codes, key_up, extra)
                     .ok_or(CalibrationError::PolyphonyTooLarge(n))?;
+            self.arm_packet_after_boundary(seq, scan_codes, key_up)?;
+            self.next_sequence = next_sequence;
             self.wait_to_precision_boundary(physical_target_qpc)?;
+            // Observer failure can race with the final wait deadline. The
+            // lock-free abort flag is checked immediately before handoff so
+            // no untrusted packet is sent after the observer has invalidated
+            // the session.
+            self.check_precision_handoff_trust()?;
             // The shared sender owns the final QPC crossing, authoritative P,
             // one SendInput call, and completion C.
             let psr = prepared.send_at_target(self.qpc_clock, physical_target_qpc);
