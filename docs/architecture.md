@@ -152,8 +152,10 @@ process carries an optional direction/sequence tag, records Raw Input at
 the `WM_INPUT` handler entry, and pairs receipts by exact scan-code,
 make/break direction, and extended-flag identity. The Raw Input tag is
 corroborating evidence only because Windows does not document preservation of
-`KEYBDINPUT.dwExtraInfo`; one active packet plus a message-queue barrier
-prevents stale receipts from aliasing the next packet. The tagged
+`KEYBDINPUT.dwExtraInfo`; one active packet plus a pump-thread barrier handler
+that explicitly removes already-queued `WM_INPUT` messages with an input-range
+filter before publishing completion prevents stale receipts from aliasing the
+next packet. The tagged
 calibration INPUT array is prepared before the `T - 700 µs` precision handoff;
 the wait layer uses zero spin and the shared fused sender owns the final target
 crossing. Each direction has four authoritative QPC boundaries: absolute

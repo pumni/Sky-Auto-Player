@@ -1118,9 +1118,9 @@ mod platform {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
-        PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage,
-        WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW,
-        WS_VISIBLE,
+        PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow,
+        ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
@@ -1166,7 +1166,7 @@ mod platform {
         let required_size = keyboard_offset
             .checked_add(keyboard_size)
             .ok_or(RawInputParseError::TruncatedKeyboardPayload)?;
-        if data.len() < required_size {
+        if (header.dwSize as usize) < required_size || data.len() < required_size {
             return Err(RawInputParseError::TruncatedKeyboardPayload);
         }
         let keyboard_ptr = unsafe { data.as_ptr().add(keyboard_offset) };
@@ -1322,6 +1322,77 @@ mod platform {
         } else {
             0
         }
+    }
+
+    /// Remove every pending WM_INPUT message while no packet is active. A
+    /// posted barrier alone is not sufficient: GetMessage prioritizes posted
+    /// messages over input messages, so the barrier handler must explicitly
+    /// select and remove the input range before publishing completion.
+    fn drain_pending_wm_input(
+        shared: &Arc<(Mutex<SharedCalibState>, Condvar)>,
+        hwnd: HWND,
+    ) -> bool {
+        let active = match shared.0.lock() {
+            Ok(state) => state.active_sequence.is_some(),
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.pump_thread_failed = true;
+                shared.1.notify_all();
+                return false;
+            }
+        };
+        if active {
+            if let Ok(mut state) = shared.0.lock() {
+                state.pump_thread_failed = true;
+                shared.1.notify_all();
+            }
+            return false;
+        }
+
+        loop {
+            let mut pending = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `pending` is a valid output record and the filter
+            // removes only WM_INPUT from this pump thread's queue.
+            let found = unsafe {
+                PeekMessageW(
+                    &mut pending,
+                    std::ptr::null_mut(),
+                    WM_INPUT,
+                    WM_INPUT,
+                    PM_REMOVE,
+                )
+            };
+            if found == 0 {
+                break;
+            }
+            match shared.0.lock() {
+                Ok(mut state) => {
+                    state.pump_diagnostics.wm_input_seen =
+                        state.pump_diagnostics.wm_input_seen.saturating_add(1);
+                    state.pump_diagnostics.stale_sequence =
+                        state.pump_diagnostics.stale_sequence.saturating_add(1);
+                }
+                Err(poisoned) => {
+                    let mut state = poisoned.into_inner();
+                    state.pump_thread_failed = true;
+                    state.pump_diagnostics.state_lock_failed =
+                        state.pump_diagnostics.state_lock_failed.saturating_add(1);
+                    shared.1.notify_all();
+                    return false;
+                }
+            }
+            // Foreground WM_INPUT requires DefWindowProcW cleanup even when
+            // the stale message is intentionally discarded.
+            complete_wm_input(hwnd, pending.wParam, pending.lParam);
+        }
+        true
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -1566,6 +1637,9 @@ mod platform {
                 0
             }
             WM_CALIB_BARRIER => {
+                if !drain_pending_wm_input(&ctx.shared, hwnd) {
+                    return 0;
+                }
                 let (lock, cvar) = ctx.shared.as_ref();
                 match lock.lock() {
                     Ok(mut guard) => {
@@ -3513,6 +3587,7 @@ mod platform {
     #[cfg(test)]
     mod pair_tests {
         use super::*;
+        use windows_sys::Win32::UI::WindowsAndMessaging::PM_NOREMOVE;
 
         fn raw_keyboard_fixture(
             raw_type: u32,
@@ -3577,6 +3652,14 @@ mod platform {
             assert_eq!(
                 parse_raw_keyboard_input(raw_bytes(&storage), bytes_read),
                 Err(RawInputParseError::InvalidHeaderSize)
+            );
+
+            let (mut storage, bytes_read) = raw_keyboard_fixture(RIM_TYPEKEYBOARD, 0, 0);
+            let raw = unsafe { &mut *storage.as_mut_ptr().cast::<RAWINPUT>() };
+            raw.header.dwSize = std::mem::offset_of!(RAWINPUT, data) as u32;
+            assert_eq!(
+                parse_raw_keyboard_input(raw_bytes(&storage), bytes_read),
+                Err(RawInputParseError::TruncatedKeyboardPayload)
             );
         }
 
@@ -3809,6 +3892,95 @@ mod platform {
                 Err(CalibrationError::DuplicateScanCode { scan_code: 0x15 })
             ));
             assert!(validate_packet_scan_codes(&[0x15, 0x16]).is_ok());
+        }
+
+        fn empty_shared_state() -> Arc<(Mutex<SharedCalibState>, Condvar)> {
+            Arc::new((
+                Mutex::new(SharedCalibState {
+                    pending_receipts: SmallVec::new(),
+                    active_sequence: None,
+                    active_expected_scan_codes: SmallVec::new(),
+                    active_expected_key_up: None,
+                    pump_diagnostics: PumpDiagnostics::default(),
+                    barrier_completed_generation: 0,
+                    window_ready: false,
+                    should_exit: false,
+                    window_closed: false,
+                    foreground_lost: false,
+                    hwnd: 0,
+                    clock_failed: false,
+                    raw_input_restore_failed: false,
+                    pump_thread_failed: false,
+                }),
+                Condvar::new(),
+            ))
+        }
+
+        #[test]
+        fn posted_barrier_handler_removes_pending_wm_input_before_completion() {
+            let mut seed = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `seed` is a valid message output record. This creates a
+            // queue for the current test thread before PostThreadMessageW.
+            unsafe {
+                PeekMessageW(&mut seed, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+            }
+            // SAFETY: the current thread owns the queue and the posted
+            // message is a sink-style WM_INPUT used only for queue testing.
+            let posted = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                    windows_sys::Win32::System::Threading::GetCurrentThreadId(),
+                    WM_INPUT,
+                    1,
+                    0,
+                )
+            };
+            assert_ne!(posted, 0);
+
+            let shared = empty_shared_state();
+            let ctx = PumpContext {
+                shared: Arc::clone(&shared),
+                input_buffer: std::cell::RefCell::new(Vec::new()),
+            };
+            PUMP_STATE.with(|cell| cell.set(&ctx));
+            // SAFETY: `ctx` remains alive while wnd_proc reads the thread-local
+            // pointer, and the sink-style message has no raw handle to read.
+            unsafe { wnd_proc(std::ptr::null_mut(), WM_CALIB_BARRIER, 9, 0) };
+            PUMP_STATE.with(|cell| cell.set(std::ptr::null()));
+
+            let state = shared.0.lock().expect("shared calibration state");
+            assert_eq!(state.barrier_completed_generation, 9);
+            assert_eq!(state.pump_diagnostics.wm_input_seen, 1);
+            assert_eq!(state.pump_diagnostics.stale_sequence, 1);
+            assert!(!state.pump_thread_failed);
+            drop(state);
+
+            let mut leftover = MSG {
+                hwnd: std::ptr::null_mut(),
+                message: 0,
+                wParam: 0,
+                lParam: 0,
+                time: 0,
+                pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+            };
+            // SAFETY: `leftover` is a valid output record and the filter only
+            // checks whether the barrier left a WM_INPUT queued.
+            let remaining = unsafe {
+                PeekMessageW(
+                    &mut leftover,
+                    std::ptr::null_mut(),
+                    WM_INPUT,
+                    WM_INPUT,
+                    PM_NOREMOVE,
+                )
+            };
+            assert_eq!(remaining, 0);
         }
 
         #[test]
