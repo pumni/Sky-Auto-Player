@@ -55,6 +55,12 @@ def test_native_package_paths_pin_rust_compiler_explicitly() -> None:
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in ci_workflow
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in release_workflow
     assert "uv run --env-file .env python -m build_app" in release_workflow
+    assert (
+        "- name: Native updater security E2E\n"
+        "        env:\n"
+        "          RUSTUP_TOOLCHAIN: 1.98.0\n"
+        "        run: cargo test"
+    ) in ci_workflow
 
 
 def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path: Path) -> None:

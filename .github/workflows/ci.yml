@@ -236,6 +236,8 @@ jobs:
             --release-dir "dist\Sky-Auto-Player-v$version" --version $version
 
       - name: Native updater security E2E
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features --locked
 
 
