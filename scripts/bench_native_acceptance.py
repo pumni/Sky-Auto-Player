@@ -1004,6 +1004,15 @@ def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
     return hwnd
 
 
+def _arm_acceptance_session(session: Any, *, backend: str) -> None:
+    """Use the public production arm API; ``start`` is test-support-only."""
+
+    if backend == "sendinput":
+        session.arm(0)
+    else:
+        session.start()
+
+
 def _run_dispatch(
     actions: list[tuple[int, str, int, list[int], str]],
     polyphony: int,
@@ -1043,7 +1052,7 @@ def _run_dispatch(
     diagnostics: dict[str, Any] | None = None
     try:
         started_ns = time.perf_counter_ns()
-        session.start()
+        _arm_acceptance_session(session, backend=backend)
         startup_deadline = time.perf_counter() + min(timeout_ms / 1_000, 60.0)
         while not bool(dict(session.snapshot()).get("startup_ready")):
             # The native worker has a bounded supervisor lease.  Acceptance

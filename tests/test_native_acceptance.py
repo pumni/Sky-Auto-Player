@@ -76,6 +76,22 @@ def test_sendinput_qualification_rejects_test_support_wheel(
         )
 
 
+def test_real_acceptance_arms_production_session_without_test_support_start_alias() -> None:
+    class FakeProductionSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def arm(self, pre_roll_us: int) -> None:
+            self.calls.append(("arm", pre_roll_us))
+
+        def start(self) -> None:
+            raise AssertionError("production acceptance must not use start")
+
+    session = FakeProductionSession()
+    ACCEPTANCE._arm_acceptance_session(session, backend="sendinput")
+    assert session.calls == [("arm", 0)]
+
+
 def test_mock_backend_defaults_preserve_latency_model() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",
