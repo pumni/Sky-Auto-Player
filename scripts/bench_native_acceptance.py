@@ -158,11 +158,22 @@ def _actions(
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     boundary_hold_us = max(hold_us, cycle_us)
     actions: list[tuple[int, str, int, list[int], str]] = []
+    boundary_scan_codes = [
+        int(SKY_15_SCAN_CODES[offset]) for offset in range(polyphony)
+    ]
     for index in range(count):
-        scan_codes = [
-            int(SKY_15_SCAN_CODES[(index * polyphony + offset) % len(SKY_15_SCAN_CODES)])
-            for offset in range(polyphony)
-        ]
+        scan_codes = (
+            boundary_scan_codes
+            if scenario in {"mixed", "coalesced"}
+            else [
+                int(
+                    SKY_15_SCAN_CODES[
+                        (index * polyphony + offset) % len(SKY_15_SCAN_CODES)
+                    ]
+                )
+                for offset in range(polyphony)
+            ]
+        )
         at_us = start_delay_us + index * cycle_us
         if scenario in {"mixed", "coalesced"}:
             # Keep the warmup/measurement seam out of a coalesced record.  A
