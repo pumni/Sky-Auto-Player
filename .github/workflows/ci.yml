@@ -141,7 +141,7 @@ jobs:
           run-runtime-audit: "true"
 
       - name: Rust — install pinned stable toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
+        run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
       - name: Rust — verify pinned stable toolchain
         env:

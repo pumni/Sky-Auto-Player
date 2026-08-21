@@ -50,7 +50,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.97.1
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
+          rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
           $version = (rustc --version)
           if ($version -notmatch '^rustc 1\.97\.1\s') {
             throw "Expected stable Rust 1.97.1 from rust/rust-toolchain.toml, got: $version"

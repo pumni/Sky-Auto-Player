@@ -403,6 +403,27 @@ def test_mixed_and_coalesced_positive_actions_use_disjoint_masks() -> None:
             assert set(up[3]).isdisjoint(down[3])
 
 
+def test_mixed_and_coalesced_reject_polyphony_one() -> None:
+    for scenario in ("mixed", "coalesced"):
+        with pytest.raises(ValueError, match="polyphony >= 2"):
+            ACCEPTANCE._actions(1, 1, scenario=scenario)
+
+
+def test_native_packet_size_counts_report_actual_packets() -> None:
+    records = [
+        SimpleNamespace(kind="down", native_polyphony=7),
+        SimpleNamespace(kind="up", native_polyphony=7),
+        SimpleNamespace(kind="down", native_polyphony=8),
+        SimpleNamespace(kind="up", native_polyphony=8),
+        SimpleNamespace(kind="down", native_polyphony=7),
+    ]
+
+    assert ACCEPTANCE._native_packet_size_counts(records) == {
+        "down": {"7": 2, "8": 1},
+        "up": {"7": 1, "8": 1},
+    }
+
+
 def test_same_key_zero_gap_negative_fixture_is_representative() -> None:
     actions = ACCEPTANCE._same_key_zero_gap_actions()
     assert actions[1][2] == actions[2][2]

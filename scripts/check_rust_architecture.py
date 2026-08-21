@@ -41,6 +41,8 @@ CANONICAL_DISPATCH_FILES = {
     "observer.rs",
     "recovery.rs",
     "timing.rs",
+    "hold_forensics.rs",
+    "observer_wake.rs",
 }
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
 
