@@ -1359,14 +1359,16 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
     }
 
     let pause_generation = session.pause_with_timing_token().expect("pause request");
+    let mut pause_timing = None;
     let pause_deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let snapshot = session.snapshot_lite();
-        let pause_acknowledged = session
-            .pause_timing_result(pause_generation)
-            .expect("pause timing result")
-            .is_some();
-        if snapshot.is_paused && pause_acknowledged {
+        if pause_timing.is_none() {
+            pause_timing = session
+                .pause_timing_result(pause_generation)
+                .expect("pause timing result");
+        }
+        if snapshot.is_paused && pause_timing.is_some() {
             break;
         }
         assert!(
