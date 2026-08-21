@@ -3,7 +3,7 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
 pub(crate) const DEFAULT_ADMISSION_GUARD_US: u64 = 2_000;
-pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 700;
+pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 
 pub(crate) fn validate_timing_constants() -> Result<(), String> {
@@ -209,7 +209,13 @@ pub(crate) struct PriorityOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::DispatchProfile;
+    use super::{DEFAULT_SPIN_THRESHOLD_US, DispatchProfile};
+
+    #[test]
+    fn production_wait_policy_uses_fixed_spin_threshold() {
+        assert_eq!(DEFAULT_SPIN_THRESHOLD_US, 1_000);
+        assert!(super::validate_timing_constants().is_ok());
+    }
 
     #[test]
     fn production_profile_has_no_deferred_observer() {
