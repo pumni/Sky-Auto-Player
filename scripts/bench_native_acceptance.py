@@ -164,7 +164,7 @@ def _actions(
         # Each group has one clean Down, one Up+Down mixed boundary, and one
         # final Up.  A full cooldown separates groups so repeated groups do
         # not manufacture an ownership conflict unrelated to the profile.
-        group_span_us = cycle_us * 3
+        group_span_us = max(cycle_us * 5, 100_000)
         for group in range(count):
             base_index = group * 4
             at_us = start_delay_us + group * group_span_us
