@@ -156,16 +156,47 @@ def _actions(
         raise ValueError("warmup_cycles must be non-negative")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
-    boundary_hold_us = max(hold_us, cycle_us)
     actions: list[tuple[int, str, int, list[int], str]] = []
     boundary_scan_codes = [
         int(SKY_15_SCAN_CODES[offset]) for offset in range(polyphony)
     ]
-    for index in range(count):
-        scan_codes = (
-            boundary_scan_codes
-            if scenario in {"mixed", "coalesced"}
-            else [
+    if scenario in {"mixed", "coalesced"}:
+        # Each group has one clean Down, one Up+Down mixed boundary, and one
+        # final Up.  A full cooldown separates groups so repeated groups do
+        # not manufacture an ownership conflict unrelated to the profile.
+        group_span_us = cycle_us * 3
+        for group in range(count):
+            base_index = group * 4
+            at_us = start_delay_us + group * group_span_us
+            actions.extend(
+                (
+                    (base_index, "down", at_us, boundary_scan_codes, f"{scenario}-down"),
+                    (
+                        base_index + 1,
+                        "up",
+                        at_us + cycle_us,
+                        boundary_scan_codes,
+                        f"{scenario}-up",
+                    ),
+                    (
+                        base_index + 2,
+                        "down",
+                        at_us + cycle_us,
+                        boundary_scan_codes,
+                        f"{scenario}-retrigger-down",
+                    ),
+                    (
+                        base_index + 3,
+                        "up",
+                        at_us + cycle_us * 2,
+                        boundary_scan_codes,
+                        f"{scenario}-release",
+                    ),
+                )
+            )
+    else:
+        for index in range(count):
+            scan_codes = [
                 int(
                     SKY_15_SCAN_CODES[
                         (index * polyphony + offset) % len(SKY_15_SCAN_CODES)
@@ -173,32 +204,18 @@ def _actions(
                 )
                 for offset in range(polyphony)
             ]
-        )
-        at_us = start_delay_us + index * cycle_us
-        if scenario in {"mixed", "coalesced"}:
-            # Keep the warmup/measurement seam out of a coalesced record.  A
-            # transition record containing one warmup Up and one measured Down
-            # cannot be assigned to either statistics window cleanly.
-            hold_us_for_action = (
-                hold_us if index == warmup_cycles - 1 else boundary_hold_us
+            at_us = start_delay_us + index * cycle_us
+            actions.extend(
+                (
+                    (index * 2, "down", at_us, scan_codes, "bench-down"),
+                    (index * 2 + 1, "up", at_us + hold_us, scan_codes, "bench-up"),
+                )
             )
-            reason_prefix = scenario
-        else:
-            hold_us_for_action = hold_us
-            reason_prefix = "bench"
-        actions.append(
-            (index * 2, "down", at_us, scan_codes, f"{reason_prefix}-down")
-        )
-        actions.append(
-            (
-                index * 2 + 1,
-                "up",
-                at_us + hold_us_for_action,
-                scan_codes,
-                f"{reason_prefix}-up",
-            )
-        )
     return actions
+
+
+def _actions_per_polyphony(*, actions: int, scenario: str) -> int:
+    return actions * (4 if scenario in {"mixed", "coalesced"} else 2)
 
 
 def _percentile(values: list[int], fraction: float) -> int:
@@ -1016,7 +1033,10 @@ def _run_dispatch(
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
-        warmup_action_count = warmup_cycles * 2
+        warmup_action_count = _actions_per_polyphony(
+            actions=warmup_cycles,
+            scenario=scenario,
+        )
         warmup_record_count = sum(
             1
             for _, _, consumed in _expected_record_layout(actions, scenario)
@@ -2131,7 +2151,10 @@ def main() -> int:
             "label": args.label,
             "backend": args.backend,
             "native_build_flavor": benchmark_config["native_build_flavor"],
-            "actions_per_polyphony": args.actions * 2,
+            "actions_per_polyphony": _actions_per_polyphony(
+                actions=args.actions,
+                scenario=args.scenario,
+            ),
             "polyphony": polyphonies,
             "dispatch_repeats": dispatch_repeats,
             "command_samples": command_samples,
@@ -2293,7 +2316,10 @@ def main() -> int:
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "backend": args.backend,
         "native_build_flavor": benchmark_config["native_build_flavor"],
-        "actions_per_polyphony": args.actions * 2,
+        "actions_per_polyphony": _actions_per_polyphony(
+            actions=args.actions,
+            scenario=args.scenario,
+        ),
         "polyphony": polyphonies,
         "dispatch_repeats": dispatch_repeats,
         "command_samples": command_samples,
