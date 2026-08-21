@@ -165,9 +165,19 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    let release_gap_ticks = match qpc_clock.duration_from_us(config.timing.min_release_gap_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("release-gap conversion failed: {error:?}"),
+            );
+        }
+    };
     core.runtime
         .production_forensics
-        .set_frame_policies(frame_ticks, frame_ticks);
+        .set_frame_policies(frame_ticks, release_gap_ticks);
     let down_late_grace_ticks = match qpc_clock.duration_from_us(config.timing.down_late_grace_us) {
         Ok(ticks) => ticks,
         Err(error) => {

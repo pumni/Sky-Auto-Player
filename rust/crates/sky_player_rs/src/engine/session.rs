@@ -87,7 +87,7 @@ impl NativeDispatchSession {
         // after the worker has started.
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
-        let min_release_gap_us = 1_000_000u64.div_ceil(u64::from(options.timing.game_fps));
+        let min_release_gap_us = options.timing.min_release_gap_us;
         validate_native_schedule_timing_with_release_gap(
             &options.schedule,
             options.timing.min_hold_us,

@@ -62,6 +62,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for StrictU64 {
 struct NativeSessionConfigPy {
     game_fps: u16,
     min_hold_us: u64,
+    min_release_gap_us: u64,
     down_late_grace_us: u64,
     require_focus: bool,
     focus_restore_grace_us: u64,
@@ -75,6 +76,7 @@ impl Default for NativeSessionConfigPy {
         Self {
             game_fps: 60,
             min_hold_us: 50_000,
+            min_release_gap_us: 1_000_000u64.div_ceil(60),
             down_late_grace_us: 500,
             require_focus: false,
             focus_restore_grace_us: 100_000,
@@ -96,7 +98,8 @@ impl NativeSessionConfigPy {
         focus_restore_grace_us = StrictU64(100000),
         target_hwnd = StrictU64(0),
         telemetry = false,
-        profile = "production"
+        profile = "production",
+        min_release_gap_us = None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -108,6 +111,7 @@ impl NativeSessionConfigPy {
         target_hwnd: StrictU64,
         telemetry: bool,
         profile: &str,
+        min_release_gap_us: Option<StrictU64>,
     ) -> PyResult<Self> {
         let target_hwnd = isize::try_from(target_hwnd.0)
             .map_err(|_| PyValueError::new_err("target_hwnd is outside the platform range"))?;
@@ -138,9 +142,17 @@ impl NativeSessionConfigPy {
         if !(15..=240).contains(&game_fps) {
             return Err(PyValueError::new_err("game_fps must be in 15..=240"));
         }
+        let frame_us = 1_000_000u64.div_ceil(u64::from(game_fps));
+        let min_release_gap_us = min_release_gap_us.map(|value| value.0).unwrap_or(frame_us);
+        if min_release_gap_us < frame_us || min_release_gap_us > 60_000_000 {
+            return Err(PyValueError::new_err(format!(
+                "min_release_gap_us must be in {frame_us}..=60000000"
+            )));
+        }
         Ok(Self {
             game_fps,
             min_hold_us: min_hold_us.0,
+            min_release_gap_us,
             down_late_grace_us: down_late_grace_us.0,
             require_focus,
             focus_restore_grace_us: focus_restore_grace_us.0,
@@ -158,6 +170,11 @@ impl NativeSessionConfigPy {
     #[getter]
     fn min_hold_us(&self) -> u64 {
         self.min_hold_us
+    }
+
+    #[getter]
+    fn min_release_gap_us(&self) -> u64 {
+        self.min_release_gap_us
     }
 
     #[getter]
@@ -223,6 +240,8 @@ mod tests {
 
     #[test]
     fn production_session_config_defaults_to_five_hundred_us_grace() {
-        assert_eq!(NativeSessionConfigPy::default().down_late_grace_us, 500);
+        let config = NativeSessionConfigPy::default();
+        assert_eq!(config.down_late_grace_us, 500);
+        assert_eq!(config.min_release_gap_us, 16_667);
     }
 }

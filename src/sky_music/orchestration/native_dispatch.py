@@ -13,6 +13,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
+from sky_music.domain.hold_timing import frame_duration_us
 from sky_music.domain.scheduler_types import KeyAction
 from sky_music.orchestration.native_models import (
     LIVE_NATIVE_STATUSES,
@@ -118,6 +119,7 @@ class RustDispatchRuntime:
         "_last_hwnd",
         "_manual_paused",
         "_min_hold_us",
+        "_min_release_gap_us",
         "_pre_roll_us",
         "_renderer",
         "_require_focus",
@@ -135,6 +137,7 @@ class RustDispatchRuntime:
         song_name: str,
         game_fps: int,
         min_hold_us: int,
+        min_release_gap_us: int,
         down_late_grace_us: int,
         require_focus: bool,
         focus_guard: Any,
@@ -154,6 +157,16 @@ class RustDispatchRuntime:
             raise ValueError("down_late_grace_us must be a non-negative integer")
         if down_late_grace_us > min_hold_us:
             raise ValueError("down_late_grace_us must not exceed min_hold_us")
+        if type(game_fps) is not int or not 15 <= game_fps <= 240:
+            raise ValueError("game_fps must be in 15..=240")
+        if type(min_release_gap_us) is not int:
+            raise ValueError("min_release_gap_us must be an integer")
+        frame_us = frame_duration_us(game_fps)
+        if not frame_us <= min_release_gap_us <= 60_000_000:
+            raise ValueError(
+                "min_release_gap_us must be in "
+                f"{frame_us}..=60000000"
+            )
 
         native_actions = (
             (
@@ -171,6 +184,7 @@ class RustDispatchRuntime:
             config=session_config_type(
                 game_fps=int(game_fps),
                 min_hold_us=min_hold_us,
+                min_release_gap_us=min_release_gap_us,
                 down_late_grace_us=down_late_grace_us,
                 require_focus=require_focus,
                 focus_restore_grace_us=focus_restore_grace_us,
@@ -181,6 +195,7 @@ class RustDispatchRuntime:
         )
         self._song_name = song_name
         self._min_hold_us = min_hold_us
+        self._min_release_gap_us = min_release_gap_us
         if type(pre_roll_us) is not int or pre_roll_us < 0:
             raise ValueError("pre_roll_us must be a non-negative integer")
         self._pre_roll_us = pre_roll_us

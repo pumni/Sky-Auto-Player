@@ -534,13 +534,20 @@ def _run_rust_selftest() -> int:
         runtime_contract = True
         import sky_player_rs  # type: ignore[import-not-found]
 
+        from sky_music.domain.scheduler_types import FrameTimingPolicy
         from sky_music.orchestration.native_admission import EXPECTED_NATIVE_ABI
         from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
+
+        frame_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
+        if frame_policy.min_release_gap_us is None:
+            raise RuntimeError("FrameTimingPolicy did not materialize min_release_gap_us")
 
         session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             [],
             config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
                 game_fps=60,
+                min_hold_us=int(frame_policy.min_hold_us),
+                min_release_gap_us=int(frame_policy.min_release_gap_us),
                 require_focus=False,
                 telemetry=False,
                 profile="production",

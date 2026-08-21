@@ -17,6 +17,7 @@ struct EffectiveSessionConfig {
     game_fps: u16,
     requested_min_hold_us: u64,
     effective_min_hold_us: u64,
+    min_release_gap_us: u64,
     down_late_grace_us: u64,
     require_focus: bool,
     focus_restore_grace_us: u64,
@@ -30,6 +31,7 @@ impl EffectiveSessionConfig {
         dict.set_item("game_fps", self.game_fps)?;
         dict.set_item("requested_min_hold_us", self.requested_min_hold_us)?;
         dict.set_item("effective_min_hold_us", self.effective_min_hold_us)?;
+        dict.set_item("min_release_gap_us", self.min_release_gap_us)?;
         dict.set_item("down_late_grace_us", self.down_late_grace_us)?;
         dict.set_item("require_focus", self.require_focus)?;
         dict.set_item("focus_restore_grace_us", self.focus_restore_grace_us)?;
@@ -48,6 +50,7 @@ impl NativeDispatchSessionPy {
         let parsed_profile = config.profile;
         let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
+        let min_release_gap_us = config.min_release_gap_us;
         let down_late_grace_us = config.down_late_grace_us;
         // Python materializes the authored hold (frame duration plus the
         // calibrated static margin). Rust receives that value verbatim and
@@ -75,7 +78,6 @@ impl NativeDispatchSessionPy {
             ));
         }
         let schedule = parse_schedule(py_actions)?;
-        let min_release_gap_us = 1_000_000u64.div_ceil(u64::from(game_fps));
         validate_schedule_timing(&schedule, effective_min_hold_us, min_release_gap_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
@@ -84,6 +86,7 @@ impl NativeDispatchSessionPy {
             timing: TimingOptions {
                 game_fps,
                 min_hold_us: effective_min_hold_us,
+                min_release_gap_us,
                 down_late_grace_us,
                 strict_timing,
                 strict_down_completion_late_us,
@@ -124,6 +127,7 @@ impl NativeDispatchSessionPy {
                 game_fps,
                 requested_min_hold_us: min_hold_us,
                 effective_min_hold_us,
+                min_release_gap_us,
                 down_late_grace_us,
                 require_focus,
                 focus_restore_grace_us,
@@ -635,14 +639,15 @@ impl TestDispatchSessionPy {
         game_fps = StrictU64(60),
         mock_latency_base_us = StrictU64(80),
         mock_latency_per_key_us = StrictU64(40),
-         telemetry_capacity = StrictU64(1024),
-         dispatch_lead_us = StrictU64(0),
+        telemetry_capacity = StrictU64(1024),
+        dispatch_lead_us = StrictU64(0),
         rt_priority_mode = "off",
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = true,
         enable_dispatch_cost_lead = true,
-        fault_mode = "none"
+        fault_mode = "none",
+        min_release_gap_us = None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -660,6 +665,7 @@ impl TestDispatchSessionPy {
         enable_adaptive_spin: bool,
         enable_dispatch_cost_lead: bool,
         fault_mode: &str,
+        min_release_gap_us: Option<StrictU64>,
     ) -> PyResult<Self> {
         let _ = (enable_adaptive_spin, enable_dispatch_cost_lead);
         let min_hold_us = min_hold_us.0;
@@ -667,6 +673,13 @@ impl TestDispatchSessionPy {
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
         if !(15..=240).contains(&game_fps) {
             return Err(PyValueError::new_err("game_fps must be in 15..=240"));
+        }
+        let frame_us = 1_000_000u64.div_ceil(u64::from(game_fps));
+        let min_release_gap_us = min_release_gap_us.map(|value| value.0).unwrap_or(frame_us);
+        if min_release_gap_us < frame_us || min_release_gap_us > 60_000_000 {
+            return Err(PyValueError::new_err(format!(
+                "min_release_gap_us must be in {frame_us}..=60000000"
+            )));
         }
         let mock_latency_base_us = mock_latency_base_us.0;
         let mock_latency_per_key_us = mock_latency_per_key_us.0;
@@ -717,7 +730,6 @@ impl TestDispatchSessionPy {
         let effective_min_hold_us = min_hold_us;
         let (schedule, _allowed_scan_codes) =
             parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
-        let min_release_gap_us = 1_000_000u64.div_ceil(60);
         validate_schedule_timing(&schedule, effective_min_hold_us, min_release_gap_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
@@ -728,8 +740,9 @@ impl TestDispatchSessionPy {
             },
             profile: DispatchProfile::MockTest,
             timing: TimingOptions {
-                game_fps: 60,
+                game_fps,
                 min_hold_us: effective_min_hold_us,
+                min_release_gap_us,
                 down_late_grace_us: 0,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
@@ -747,7 +760,7 @@ impl TestDispatchSessionPy {
                 #[cfg(any(test, feature = "test-support"))]
                 // Test-support sessions use a fixed, test-only precision
                 // margin so correctness fixtures do not become host-wake
-                // latency probes. Production keeps its locked 700 us value.
+                // latency probes. Production keeps its locked 1000 us value.
                 test_spin_threshold_us: Some(20_000),
             },
             telemetry: TelemetryOptions {

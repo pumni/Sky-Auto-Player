@@ -401,7 +401,7 @@ fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
     let mut forensics = ProductionHoldForensics::default();
     forensics.set_frame_policies(
         DurationTicks::from_raw(16_667),
-        DurationTicks::from_raw(16_667),
+        DurationTicks::from_raw(17_467),
     );
     let mut metrics = WorkerMetricsLocal::default();
     observe_production(
@@ -425,18 +425,18 @@ fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
     observe_production(
         &mut forensics,
         PhysicalPacket::new(0, 1),
-        35_000,
-        35_100,
-        35_150,
+        35_500,
+        35_617,
+        35_667,
         SendTransactionStatus::Complete,
         &mut metrics,
     );
     observe_production(
         &mut forensics,
         PhysicalPacket::new(1, 0),
-        52_000,
-        52_100,
-        52_150,
+        52_500,
+        52_617,
+        52_667,
         SendTransactionStatus::Complete,
         &mut metrics,
     );
@@ -445,8 +445,8 @@ fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
     assert_eq!(metrics.production_hold_pair_samples, 2);
     assert_eq!(metrics.production_release_gap_samples, 1);
     // Release-gap forensic evidence is measured at the actual Down pre-call
-    // boundary: 35_100 - 18_150, not the authored target 35_000 - 18_150.
-    assert_eq!(metrics.production_min_release_gap_ticks, 16_950);
+    // boundary: 35_617 - 18_150, not the authored target 35_500 - 18_150.
+    assert_eq!(metrics.production_min_release_gap_ticks, 17_467);
     assert_eq!(metrics.production_forensics_anomaly_count, 0);
 }
 

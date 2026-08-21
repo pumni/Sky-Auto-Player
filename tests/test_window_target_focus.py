@@ -71,6 +71,7 @@ def _make_engine(
     return PlaybackEngine(
         song=song,
         actions=actions,
+        min_release_gap_us=16_667,
         require_focus=require_focus,
         dry_run=dry_run,
         pre_roll_us=pre_roll_us,

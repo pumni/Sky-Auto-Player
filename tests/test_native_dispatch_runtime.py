@@ -267,6 +267,7 @@ def test_runtime_forwards_explicit_down_late_grace_to_native_session(monkeypatch
         song_name="test",
         game_fps=60,
         min_hold_us=17_467,
+        min_release_gap_us=17_467,
         down_late_grace_us=500,
         require_focus=False,
         focus_guard=SimpleNamespace(),
@@ -276,6 +277,7 @@ def test_runtime_forwards_explicit_down_late_grace_to_native_session(monkeypatch
     )
 
     assert captured["down_late_grace_us"] == 500
+    assert captured["min_release_gap_us"] == 17_467
 
 
 def test_playback_engine_keeps_hold_margin_and_down_late_grace_independent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,6 +307,7 @@ def test_playback_engine_keeps_hold_margin_and_down_late_grace_independent(monke
             ),
         ),
         require_focus=False,
+        min_release_gap_us=16_667,
         min_hold_us=17_467,
         min_hold_margin_us=1_800,
         down_late_grace_us=500,
@@ -312,6 +315,7 @@ def test_playback_engine_keeps_hold_margin_and_down_late_grace_independent(monke
 
     assert engine._play_native() == engine_module.PLAYBACK_FINISHED
     assert captured["down_late_grace_us"] == 500
+    assert captured["min_release_gap_us"] == 16_667
     assert captured["down_late_grace_us"] != engine.min_hold_margin_us
 
 

@@ -139,6 +139,7 @@ impl Default for WorkerConfig {
             timing: TimingOptions {
                 game_fps: 60,
                 min_hold_us: 10_000,
+                min_release_gap_us: 16_667,
                 // Production's public default is 500 us. Test-support
                 // sessions supply their own explicit timing policy.
                 down_late_grace_us: 500,
@@ -172,6 +173,7 @@ impl Default for WorkerConfig {
 pub(crate) struct TimingOptions {
     pub(crate) game_fps: u16,
     pub(crate) min_hold_us: u64,
+    pub(crate) min_release_gap_us: u64,
     pub(crate) down_late_grace_us: u64,
     pub(crate) strict_timing: bool,
     pub(crate) strict_down_completion_late_us: u64,
