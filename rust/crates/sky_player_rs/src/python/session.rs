@@ -112,6 +112,8 @@ impl NativeDispatchSessionPy {
             startup_ordering_hook: None,
             #[cfg(any(test, feature = "test-support"))]
             restore_race_hook: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_lifecycle_context: None,
         })
         .map_err(PyRuntimeError::new_err)?;
         session.set_target_hwnd(config.target_hwnd);
@@ -759,6 +761,8 @@ impl TestDispatchSessionPy {
             startup_ordering_hook: None,
             #[cfg(any(test, feature = "test-support"))]
             restore_race_hook: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_lifecycle_context: None,
         })
         .map_err(PyRuntimeError::new_err)?;
         Ok(Self {

@@ -21,6 +21,30 @@ def _load_build_module() -> ModuleType:
 BUILD = _load_build_module()
 
 
+def test_wheel_build_reads_exact_toolchain_and_checks_compiler_metadata() -> None:
+    rust_dir = Path(__file__).parents[1] / "rust"
+    assert BUILD.pinned_rust_toolchain(rust_dir) == "1.98.0"
+    BUILD.verify_build_info(
+        {
+            "rustc_version": "rustc 1.98.0 (test)",
+            "native_abi": "cp314t-win_amd64",
+            "native_build_commit": "commit",
+        },
+        expected_commit="commit",
+        expected_rustc_prefix="rustc 1.98.0 ",
+    )
+    with pytest.raises(RuntimeError, match="wrong compiler"):
+        BUILD.verify_build_info(
+            {
+                "rustc_version": "rustc 1.97.1 (wrong-toolchain)",
+                "native_abi": "cp314t-win_amd64",
+                "native_build_commit": "commit",
+            },
+            expected_commit="commit",
+            expected_rustc_prefix="rustc 1.98.0 ",
+        )
+
+
 def test_build_commit_requires_clean_matching_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
     monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")

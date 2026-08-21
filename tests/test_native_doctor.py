@@ -11,7 +11,7 @@ APP_COMMIT = "a" * 40
 def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
     info = {
         "rust_core_version": "0.1.0",
-        "rustc_version": "rustc 1.97.1",
+        "rustc_version": "rustc 1.98.0",
         "pyo3_version": "0.29.0",
         "native_abi": "cp314t-win_amd64",
         "schema_version": 4,
@@ -34,7 +34,7 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["required"] is True
-    assert "rustc 1.97.1" in result["msg"]
+    assert "rustc 1.98.0" in result["msg"]
     assert "cp314t-win_amd64" in result["msg"]
     assert result["mode"] == "source development"
     assert result["commit_match"] is None
@@ -43,7 +43,7 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
 
 def test_native_doctor_reports_frozen_release_contract(monkeypatch) -> None:
     info = {
-        "rustc_version": "rustc 1.97.1",
+        "rustc_version": "rustc 1.98.0",
         "native_abi": "cp314t-win_amd64",
         "schema_version": 4,
         "native_schema_version": 4,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -443,6 +445,49 @@ def test_test_support_native_rejects_same_key_zero_gap_before_start() -> None:
     )
 
 
+@pytest.mark.windows
+def test_test_support_worker_wait_path_exits_cleanly_in_child_process() -> None:
+    if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        pytest.skip("requires the test-support native wheel")
+
+    child_code = """
+import sky_player_rs
+
+scan_code = sky_player_rs.instrument_scan_codes()[0]
+actions = [
+    (0, "down", 100_000, [scan_code], "worker-down"),
+    (1, "up", 200_000, [scan_code], "worker-up"),
+]
+session = sky_player_rs.TestDispatchSession(
+    actions,
+    [scan_code],
+    min_hold_us=100,
+    game_fps=60,
+    mock_latency_base_us=0,
+    mock_latency_per_key_us=0,
+    enable_waitable_timer=True,
+    enable_event_wait=True,
+)
+session.start()
+assert session.join(timeout_ms=5000) is True
+snapshot = dict(session.snapshot())
+assert snapshot["is_finished"] is True, snapshot
+info = sky_player_rs.build_info()
+assert info["rustc_version"].startswith("rustc 1.98.0 "), info
+"""
+    child_env = os.environ.copy()
+    child_env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", child_code],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=child_env,
+        check=False,
+    )
+    assert result.returncode == 0, f"child stdout={result.stdout}\nchild stderr={result.stderr}"
+
+
 def test_production_correctness_counters_are_acceptance_gates() -> None:
     snapshot = {
         "production_completion_hold_below_frame_count": 1,
@@ -727,9 +772,9 @@ def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> No
     assert workflow.index(manual_branch) < workflow.index(path_diff)
     assert "fetch-depth: 0" in workflow
     assert "cargo fmt --manifest-path rust/Cargo.toml --all -- --check" in workflow
-    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features" in workflow
-    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings" in workflow
-    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features" in workflow
+    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked" in workflow
+    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings" in workflow
+    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked" in workflow
     assert "scripts/build_rust_wheel.py --test-support" in workflow
     assert "uv run pytest -m \"not slow\"" in workflow
     assert "baseline_sha:" not in workflow

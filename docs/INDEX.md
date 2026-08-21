@@ -21,6 +21,7 @@ These files represent the current system state and contracts:
 * [hold-frame-model.md](hold-frame-model.md) — Explicit hold-frame choices, FPS selection, and materialization formulas.
 * [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
 * [distribution-and-update.md](distribution-and-update.md) — Canonical unsigned portable distribution, user-triggered native update flow with manual fallback, exact manifest/SHA/provenance contract, and release assets (tracks the `pyproject.toml` `[project].version`).
+* [rust-toolchain-policy.md](rust-toolchain-policy.md) — Current Rust compiler pin, MSRV, edition, target, lockfile, upgrade, branch-freeze, and qualification policy.
 * [releases/v3.0.0-acceptance.md](releases/v3.0.0-acceptance.md) — Exact-SHA acceptance evidence for the v3.0.0 release candidate.
 
 ---

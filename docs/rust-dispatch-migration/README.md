@@ -1,10 +1,16 @@
 # Sky Auto Player — Rust Dispatch Migration Guide
 
+> **Trạng thái:** tài liệu và các template trong thư mục này là hồ sơ migration
+> lịch sử. Các phiên bản Rust bên dưới là snapshot tại thời điểm viết, không
+> phải hợp đồng build hiện tại. Hãy dùng
+> [`docs/rust-toolchain-policy.md`](../rust-toolchain-policy.md) và workflow
+> đang chạy trong `.github/workflows/` cho toolchain hiện hành.
+
 **Mục tiêu:** chuyển toàn bộ lõi phát nhạc thời gian thực và gửi phím sang Rust, giữ nguyên UI/Textual và luồng ứng dụng Python hiện tại thông qua PyO3.
 
 - Baseline mã nguồn đã phân tích: `main@45fa3c83b1642fb6c91caa2c13b3ce7d1a6cad52`
 - Ngày rà soát: `2026-07-30`
-- Rust toolchain mục tiêu: **Rust 1.97.1**, edition 2024
+- Rust toolchain lịch sử tại thời điểm viết: **Rust 1.97.1**, edition 2024
 - PyO3 mục tiêu: **0.29.0**
 - Maturin mục tiêu: **1.13.3**
 - Windows bindings: **windows-sys 0.61.2**

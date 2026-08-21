@@ -82,6 +82,9 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) restore_race_hook: Option<RestoreRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) timer_lifecycle_context:
+        Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,
 }
 
 #[cfg(any(test, feature = "test-support"))]

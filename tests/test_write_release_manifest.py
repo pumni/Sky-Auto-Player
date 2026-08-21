@@ -71,6 +71,18 @@ def test_get_git_head_rejects_dirty_release_checkout(monkeypatch: pytest.MonkeyP
     assert build_app.get_git_head(require_clean=False) == "abc123-dirty"
 
 
+def test_native_build_commands_use_pinned_toolchain_and_locked_dependencies() -> None:
+    import build_app
+
+    assert build_app.get_pinned_rust_toolchain() == "1.98.0"
+    assert build_app.native_build_environment()["RUSTUP_TOOLCHAIN"] == "1.98.0"
+    for command in (
+        build_app.cargo_release_build_command(Path("calibration/Cargo.toml"), "native_calibration"),
+        build_app.cargo_release_build_command(Path("updater/Cargo.toml"), "sky_updater"),
+    ):
+        assert command[-1] == "--locked"
+
+
 def test_verify_native_build_info_requires_matching_release_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,6 +91,7 @@ def test_verify_native_build_info_requires_matching_release_metadata(
     expected_commit = "a" * 40
     native_info = {
         "native_build_commit": expected_commit,
+        "rustc_version": "rustc 1.98.0 (test)",
         "native_abi": build_app.EXPECTED_NATIVE_ABI,
         "schema_version": build_app.RUST_DISPATCH_SCHEMA_VERSION,
         "native_schema_version": build_app.RUST_DISPATCH_SCHEMA_VERSION,
@@ -92,4 +105,9 @@ def test_verify_native_build_info_requires_matching_release_metadata(
 
     native_info["native_build_commit"] = "b" * 40
     with pytest.raises(RuntimeError, match="native_build_commit"):
+        build_app.verify_native_build_info(expected_commit)
+
+    native_info["native_build_commit"] = expected_commit
+    native_info["rustc_version"] = "rustc 1.97.1 (wrong-toolchain)"
+    with pytest.raises(RuntimeError, match="rustc_version"):
         build_app.verify_native_build_info(expected_commit)

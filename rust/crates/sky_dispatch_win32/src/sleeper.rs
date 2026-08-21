@@ -76,3 +76,36 @@ pub fn measure_spin_overhead_us() -> Result<u64, QpcError> {
 
     Ok((total_overhead_us / ITERATIONS as u64).max(1))
 }
+
+#[cfg(all(test, feature = "test-support", windows))]
+mod tests {
+    use super::THREAD_TIMER;
+    use crate::timer::test_support;
+
+    #[test]
+    fn thread_local_timer_is_dropped_after_repeated_worker_thread_exit() {
+        const ITERATIONS: usize = 16;
+        let counters = test_support::new_counters();
+
+        for _ in 0..ITERATIONS {
+            let counters_for_thread = std::sync::Arc::clone(&counters);
+            std::thread::spawn(move || {
+                test_support::with_context(&counters_for_thread, || {
+                    THREAD_TIMER.with(|timer| {
+                        assert!(
+                            timer.is_some(),
+                            "high-resolution waitable timer creation failed"
+                        );
+                    });
+                });
+            })
+            .join()
+            .expect("timer worker thread must exit without panic");
+        }
+
+        let counts = test_support::snapshot(&counters);
+        assert_eq!(counts.created, ITERATIONS);
+        assert_eq!(counts.dropped, ITERATIONS);
+        assert_eq!(counts.live, 0);
+    }
+}
