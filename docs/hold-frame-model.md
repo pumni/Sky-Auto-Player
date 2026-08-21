@@ -4,6 +4,13 @@ Sky Auto Player accepts exactly three explicit hold selections: `1.0`,
 `1.25`, and `1.5` frames. The default is `1.0` at the user-selected game
 FPS. FPS is never detected, inferred, or changed from runtime observations.
 
+Timing evidence has four boundaries: the authored target, sender pre-call QPC,
+SendInput completion QPC, and game observation. This application can verify
+the first three sender-side boundaries only; completion evidence does not prove
+that the game sampled the transition. `require_focus=true` is a safety profile
+with a final foreground-verification cost, so the two focus modes are not
+promised identical latency.
+
 For a selected ratio and FPS, Python first materializes the requested hold:
 
 ```text
@@ -14,6 +21,8 @@ transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
 effective_min_hold_us = (
     frame_base_hold_us + down_late_grace_us + transport_margin_us
 )
+sender_headroom_us = down_late_grace_us + transport_margin_us
+min_release_gap_us = frame_us + sender_headroom_us
 ```
 
 The independent Down late-discovery grace is `500 µs`. The default and every
@@ -32,6 +41,11 @@ keeps the evidence unhealthy, and falls back to the `300 µs` transport floor.
 Protocol 9/cache v5/v6/v7 evidence is incompatible with protocol 10/cache v8
 and falls back to the explicit transport floor.
 
+The release gap reserves the same static sender headroom as the hold floor:
+one base game frame plus `down_late_grace_us + transport_margin_us`. It is an
+authored schedule value, not a runtime delay or a guarantee that the game
+sampled Up before the next Down.
+
 The sender evidence is computed in raw QPC ticks before conversion:
 
 ```text
@@ -43,10 +57,11 @@ sender_hold_shrink = ((P_D - T_D) - (P_U - T_U))
 The identity is checked with checked arithmetic. It describes completion
 interval compression in the Rust/SendInput sender only; it is not a claim
 about game-observed timing.
-The native worker receives only the materialized `effective_min_hold_us` and
-uses it as a fixed duration. PyO3 does not add another frame-relative floor;
-Rust only range-checks and validates this value in QPC ticks. It does not learn
-or subtract SendInput cost. `FrameTimingPolicy.min_hold_margin_us` is the
+The native worker receives the materialized `effective_min_hold_us` and
+`min_release_gap_us` values and uses them as fixed durations. PyO3 does not add
+another frame-relative floor; Rust only range-checks and validates these values
+in QPC ticks. It does not learn or subtract SendInput cost.
+`FrameTimingPolicy.min_hold_margin_us` is the
 compatibility aggregate of the fixed Down grace and transport margin; the
 explicit policy fields retain the frame-base, grace, transport, and release-gap
 components. `min_hold_margin_source` records transport provenance.
@@ -64,11 +79,16 @@ the first QPC tick beyond it is a missed Down. Up-only releases remain exempt.
 
 At 60 FPS with the default margin:
 
-| Hold | Requested | Effective |
-|---:|---:|---:|
-| 1.0 frame | 16,667 µs | 17,467 µs |
-| 1.25 frames | 20,834 µs | 21,634 µs |
-| 1.5 frames | 25,001 µs | 25,801 µs |
+| Hold | Requested | Effective hold | Release gap |
+|---:|---:|---:|---:|
+| 1.0 frame | 16,667 µs | 17,467 µs | 17,467 µs |
+| 1.25 frames | 20,834 µs | 21,634 µs | 17,467 µs |
+| 1.5 frames | 25,001 µs | 25,801 µs | 17,467 µs |
+
+At 60 FPS with the default 1.0-frame selection, the exact same-key minimum
+cycle is `17,467 + 17,467 = 34,934 µs` (about 28.63 repeated presses per
+second per key). This is a deliberate sender-side reliability tradeoff; it is
+not a claim about game frame registration.
 
 ## Authored minimum-hold validation
 
@@ -81,17 +101,18 @@ authored_up >= authored_down + effective_min_hold_us
 
 The static margin is materialized once while building the authored schedule.
 The native boundary validates this interval in checked QPC ticks before the
-worker starts. It also requires at least one frame period between a same-key
-Up and the next same-key Down. An invalid schedule is rejected; the runtime
-never delays or replaces authored targets to repair it.
+worker starts. It also requires `min_release_gap_us` between a same-key Up and
+the next same-key Down. An invalid schedule is rejected; the runtime never
+delays or replaces authored targets to repair it.
 
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
 The native-boundary validator performs this check before the worker can send
 anything, including exact same-timestamp retriggers and timestamp overflow
-cases. It also requires the next same-key Down to be at least one frame period
-after the previous same-key Up. Equal release-gap boundaries are valid;
+cases. It also requires the next same-key Down to meet the materialized
+`min_release_gap_us` after the previous same-key Up. Equal release-gap
+boundaries are valid;
 same-timestamp same-key overlaps are rejected, while disjoint masks may still
 coalesce. Runtime never delays, retries, or rewrites these authored targets.
 Completion is evidence for sender-side telemetry and ownership accounting

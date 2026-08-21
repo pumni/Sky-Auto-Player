@@ -240,19 +240,23 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 down_late_grace_us = policy.down_late_grace_us
 transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
 effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
+sender_headroom_us = down_late_grace_us + transport_margin_us
+min_release_gap_us = frame_us + sender_headroom_us
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
 
 ```text
 authored_up >= authored_down + effective_min_hold
-next_same_key_down - previous_same_key_up >= one_frame_period
+next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
 The static components are materialized once into the authored schedule. The
 `FrameTimingPolicy.min_hold_margin_us` compatibility field contains the
 Down-grace-plus-transport aggregate; explicit fields retain the frame base,
-grace, transport margin, release gap, and transport provenance.
+grace, transport margin, release gap, and transport provenance. The release
+gap reserves one frame plus the same bounded sender headroom; it is sender-side
+visibility policy, not evidence that the game sampled the Up transition.
 An invalid
 interval fails native admission before any musical SendInput. The worker never
 combines Down completion with the authored hold to create a second floor, never
@@ -274,7 +278,7 @@ while Up-only safety releases remain exempt.
 
 The worker uses a high-resolution waitable timer and event interruption to the
 `T - 2,000 µs` admission boundary with zero waiter spin. The final authored
-precision stage has a bounded QPC spin fixed at `700 µs` in production. A timer guard may wake early;
+precision stage has a bounded QPC spin fixed at `1,000 µs` in production. A timer guard may wake early;
 the final QPC deadline gate
 decides whether to wait again or enter the physical path. A wake that is only
 for lease, command, focus, pause, or interrupt replans and cannot dispatch the
