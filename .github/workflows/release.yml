@@ -3,9 +3,15 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and publish
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -31,6 +37,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
@@ -67,7 +74,11 @@ jobs:
       - name: Assert tag version equals pyproject.toml
         id: verlock
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.release_tag }}"
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
           if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
           $tagVer = $Matches[1]
           $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
@@ -88,6 +99,7 @@ jobs:
           $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
           Write-Host "is_prerelease: $isPre"
           "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+          "tag=$tag"              | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
           # `Add-Content` (not `Set-Content -Append`) — `Set-Content` has no
           # `-Append` parameter in PowerShell 7; the previous form failed the
           # v2.4.0 release run (29657111725) at this step.
@@ -158,6 +170,7 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          tag_name: ${{ steps.verlock.outputs.tag }}
           files: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
