@@ -52,6 +52,13 @@ copy/stack/division policy applies only to due dispatch and missed-Down
 recovery. Planner materialization remains a report-only optimization objective
 before the precision wait; the optimizer may inline planner helpers.
 
+The `rt_handoff_bench` JSON separates structural/counter success from timing
+acceptance. A deadline miss, non-dispatch, early dispatch, failure reason, or
+observation gap makes the scenario and aggregate `acceptance_clean=false`; the
+aggregate is `statistics_eligible` only when every scenario is clean and has at
+least 10,000 iterations. A host-preemption event is therefore retained for
+paired baseline comparison instead of being silently reported as green.
+
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
 source metadata from that same packet view; deferred Up ownership may perform

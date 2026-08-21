@@ -932,7 +932,31 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         iterations(),
         "scenario did not account for every benchmark attempt"
     );
+    let mut acceptance_failure_reasons = Vec::new();
+    if samples.deadline_missed_count != 0 {
+        acceptance_failure_reasons.push("deadline_missed_before_send");
+    }
+    if samples.non_dispatches != 0 {
+        acceptance_failure_reasons.push("non_dispatches");
+    }
+    if samples.early_dispatch_count != 0 {
+        acceptance_failure_reasons.push("early_dispatch");
+    }
+    if !samples.failure_reasons.is_empty() {
+        acceptance_failure_reasons.push("failure_reasons");
+    }
+    if samples.observation_gaps != 0 {
+        acceptance_failure_reasons.push("observation_gaps");
+    }
+    if samples.dispatch_start_error_us.len() != samples.observation_count {
+        acceptance_failure_reasons.push("missing_start_error_samples");
+    }
+    let acceptance_clean = acceptance_failure_reasons.is_empty();
+    let statistics_eligible = acceptance_clean && iterations() >= 10_000;
     json!({
+        "acceptance_clean": acceptance_clean,
+        "acceptance_failure_reasons": acceptance_failure_reasons,
+        "statistics_eligible": statistics_eligible,
         "controller": "dispatch_start_error",
         "preparation": {
             "plan_build_us": unsigned_summary(samples.plan_build_us),
@@ -984,6 +1008,21 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "observation_count": samples.observation_count,
         "observation_gaps": samples.observation_gaps,
         "observation_queue": "bounded_nonblocking_on",
+    })
+}
+
+fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
+    mode_reports.values().all(|mode| {
+        mode.get("scenarios")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|scenarios| {
+                scenarios.values().all(|scenario| {
+                    scenario
+                        .get("acceptance_clean")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                })
+            })
     })
 }
 
@@ -1141,8 +1180,12 @@ fn main() {
         );
     }
     let observation_enqueue_ab = observation_enqueue_ab();
+    let acceptance_clean = all_scenarios_clean(&mode_reports);
+    let statistics_eligible = acceptance_clean && iterations() >= 10_000;
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
+        "acceptance_clean": acceptance_clean,
+        "statistics_eligible": statistics_eligible,
         "production_timing_policy": true,
         "benchmark_scope": benchmark_scope.name(),
         "benchmark_mode": benchmark_mode.name(),
