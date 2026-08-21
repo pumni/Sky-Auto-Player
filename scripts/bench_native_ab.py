@@ -136,6 +136,8 @@ def _benchmark_command(
             str(args.command_samples),
             "--polyphony",
             args.polyphony,
+            "--scenario",
+            getattr(args, "scenario", "paired"),
             "--game-fps",
             str(args.game_fps),
             "--lead-mode",
@@ -146,6 +148,8 @@ def _benchmark_command(
             args.gap_profile,
             "--warmup-cycles",
             str(args.warmup_cycles),
+            "--start-delay-us",
+            str(getattr(args, "start_delay_us", 0)),
             "--rt-priority-mode",
             args.rt_priority_mode,
             "--budget-seconds",
@@ -162,6 +166,9 @@ def _benchmark_command(
         command.append("--skip-command-samples")
     if args.allow_real_input:
         command.append("--allow-real-input")
+    require_focus = getattr(args, "require_focus", None)
+    if require_focus is not None:
+        command.append("--require-focus" if require_focus else "--no-require-focus")
     if baseline is not None:
         command.extend(["--baseline", str(baseline)])
     return command
@@ -176,6 +183,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-samples", type=int, required=True)
     parser.add_argument("--polyphony", default="1,2,3,5,8,15")
     parser.add_argument(
+        "--scenario",
+        choices=("paired", "mixed", "coalesced"),
+        default="paired",
+        help="authored action profile used by both A/B legs",
+    )
+    parser.add_argument(
         "--backend",
         choices=("mock", "sendinput"),
         default="mock",
@@ -186,11 +199,23 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="required with --backend sendinput; use only on an isolated Windows host",
     )
+    parser.add_argument(
+        "--require-focus",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="require the configured target window to remain focused",
+    )
     parser.add_argument("--game-fps", type=int, default=60)
     parser.add_argument("--lead-mode", choices=("fixed", "adaptive"), required=True)
     parser.add_argument("--fixed-lead-us", type=int, default=0)
     parser.add_argument("--gap-profile", choices=("hot", "cold"), required=True)
     parser.add_argument("--warmup-cycles", type=int, required=True)
+    parser.add_argument(
+        "--start-delay-us",
+        type=int,
+        default=0,
+        help="delay the first authored action after arm (default: 0)",
+    )
     parser.add_argument("--rt-priority-mode", default="off")
     parser.add_argument(
         "--budget-seconds",
@@ -246,14 +271,20 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "dispatch_repeats": args.dispatch_repeats,
         "command_samples": args.command_samples,
         "polyphony": args.polyphony,
+        "scenario": getattr(args, "scenario", "paired"),
         "backend": args.backend,
         "allow_real_input": args.allow_real_input,
         "game_fps": args.game_fps,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
+        "start_delay_us": getattr(args, "start_delay_us", 0),
         "native_profile": "strict_timing_diagnostic" if real_backend else "mock_test",
         "native_build_flavor": "production" if real_backend else "test_support",
-        "require_focus": real_backend,
+        "require_focus": (
+            getattr(args, "require_focus", None)
+            if getattr(args, "require_focus", None) is not None
+            else real_backend
+        ),
         "materialized_min_hold_us": materialized_hold_us,
         "budget_seconds": args.budget_seconds,
     }
@@ -326,6 +357,8 @@ def main() -> int:
         raise SystemExit("--fixed-lead-us must be 0 in adaptive mode")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
+    if getattr(args, "start_delay_us", 0) < 0:
+        raise SystemExit("--start-delay-us must be non-negative")
 
     baseline_sha = _full_sha(args.baseline_ref, cwd=ROOT)
     candidate_sha = _full_sha(args.candidate_ref, cwd=ROOT)

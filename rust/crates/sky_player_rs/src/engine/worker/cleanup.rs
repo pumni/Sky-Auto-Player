@@ -255,7 +255,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             / local_metrics.playback_wall_time_us as u128)
             as u64;
     }
-    try_publish_metrics(&local_metrics, metrics, end_us, true);
+    try_publish_metrics(&local_metrics, metrics, qpc_clock, end_us, true);
     metrics.is_paused.store(false, Ordering::Relaxed);
     let telemetry = match Arc::try_unwrap(telemetry) {
         Ok(telemetry) => telemetry.into_inner(),
@@ -267,7 +267,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();
     local_metrics.power_throttling_disabled = false;
-    try_publish_metrics(&local_metrics, metrics, end_us, true);
+    try_publish_metrics(&local_metrics, metrics, qpc_clock, end_us, true);
     match (worker_result, cleanup_result) {
         (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}

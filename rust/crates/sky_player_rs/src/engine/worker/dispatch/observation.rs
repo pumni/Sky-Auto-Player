@@ -58,6 +58,17 @@ pub struct DownTraceObservation {
     pub effective_deadline_ticks: TimelineTicks,
 }
 
+/// Raw QPC boundaries for the two-stage dispatch handoff.  The admission wake
+/// is optional because a dispatch may be intentionally admitted at or after
+/// its guard boundary; a precision wake exists only when the precision waiter
+/// actually ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrecisionHandoffEvidence {
+    pub admission_wake_qpc: Option<QpcTicks>,
+    pub precision_wake_qpc: QpcTicks,
+    pub final_proof_qpc: QpcTicks,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct DownObservation {
     pub epoch_qpc: QpcTicks,
@@ -69,6 +80,9 @@ pub struct DownObservation {
     pub dispatch_ready_qpc: Option<QpcTicks>,
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
+    /// Retained as raw handoff evidence for diagnostics and test-support inspection.
+    #[allow(dead_code)]
+    pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_packet: PhysicalPacket,
     pub confirmed_mask: u16,
     pub skipped_mask: u16,
@@ -234,6 +248,9 @@ pub struct UpObservation {
     pub dispatch_ready_qpc: Option<QpcTicks>,
     pub pre_call_to_completion_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
+    /// Retained as raw handoff evidence for diagnostics and test-support inspection.
+    #[allow(dead_code)]
+    pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_mask: u16,
     pub confirmed_mask: u16,
     pub skipped_mask: u16,

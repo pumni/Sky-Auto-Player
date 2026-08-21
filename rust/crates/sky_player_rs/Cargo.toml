@@ -22,7 +22,7 @@ sky_dispatch_core = { path = "../sky_dispatch_core" }
 sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
 pyo3 = { version = "=0.29.0", features = ["extension-module"] }
 thiserror = "2"
-smallvec = { version = "1", features = ["serde"] }
+smallvec = { version = "1", features = ["serde", "union"] }
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }

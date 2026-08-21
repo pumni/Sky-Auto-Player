@@ -13,9 +13,10 @@ use super::super::{
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
     BlockedUnfocusedObservation, DispatchObservation, DownObservation, DownTraceObservation,
-    OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation, UpObservation, down_effective_ticks,
-    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
-    record_release_telemetry, up_dispatch_evidence, up_transport_counts,
+    OBSERVATION_QUEUE_CAPACITY, PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation,
+    down_effective_ticks, down_observer_evidence, record_down_recovery_metrics,
+    record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
+    up_transport_counts,
 };
 use super::timing::{DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
@@ -82,6 +83,14 @@ pub(crate) fn publisher_down_send_outcome(
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
     let wake_qpc = take_deadline_wake_qpc(runtime, final_proof_qpc);
+    let precision_handoff =
+        timing_proof
+            .precision_wake_qpc
+            .map(|precision_wake_qpc| PrecisionHandoffEvidence {
+                admission_wake_qpc: wake_qpc,
+                precision_wake_qpc,
+                final_proof_qpc,
+            });
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
             Ok(ticks) => Some(ticks),
@@ -106,6 +115,7 @@ pub(crate) fn publisher_down_send_outcome(
             sendinput_completion_qpc,
             dispatch_ready_qpc,
             wake_qpc,
+            precision_handoff,
             requested_packet,
             confirmed_mask: result_confirmed_mask,
             skipped_mask: result_skipped_mask,
@@ -639,7 +649,7 @@ pub(crate) fn drain_down_send_outcome(
         &mut health.core_post_send_window,
         local_metrics,
     );
-    try_publish_metrics(local_metrics, metrics, now_us, force_publish);
+    try_publish_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
@@ -784,6 +794,7 @@ pub(crate) fn drain_up_send_outcome(
     try_publish_metrics(
         local_metrics,
         metrics,
+        qpc_clock,
         now_us,
         !is_clean_dispatch_observation(up_dispatch_evidence(observation))
             || observation.trace.recovery_required,
@@ -883,7 +894,7 @@ pub(crate) fn drain_one_observer(
             | DispatchObservation::StaleMetadata(_)
             | DispatchObservation::BlockedUnfocused(_)
     ) {
-        try_publish_metrics(local_metrics, metrics, now_us, false);
+        try_publish_metrics(local_metrics, metrics, qpc_clock, now_us, false);
     }
     Ok(Some(drain_us))
 }

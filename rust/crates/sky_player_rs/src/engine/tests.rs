@@ -1866,12 +1866,13 @@ fn cpu_metrics_sampling_is_due_only_at_the_interval_boundary() {
 fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
     let shared = SharedMetrics::default();
     let local = WorkerMetricsLocal::default();
-    try_publish_metrics(&local, &shared, 0, false);
-    try_publish_metrics(&local, &shared, 49_999, false);
+    let qpc_clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
+    try_publish_metrics(&local, &shared, qpc_clock, 0, false);
+    try_publish_metrics(&local, &shared, qpc_clock, 49_999, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
-    try_publish_metrics(&local, &shared, 50_000, false);
+    try_publish_metrics(&local, &shared, qpc_clock, 50_000, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
-    try_publish_metrics(&local, &shared, 50_001, true);
+    try_publish_metrics(&local, &shared, qpc_clock, 50_001, true);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 2);
 }
 
@@ -3546,7 +3547,15 @@ fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let plan = harness.plan_current_dispatch();
     let prepared_counts = harness.preparation_counts();
-    assert_eq!(prepared_counts, (1, 1, 1, 1));
+    assert_eq!(prepared_counts.packet_header_reads, 1);
+    assert_eq!(prepared_counts.up_intent_visits, 0);
+    assert_eq!(prepared_counts.down_intent_visits, 1);
+    assert_eq!(prepared_counts.registry_lookups, 1);
+    assert_eq!(prepared_counts.view_packet_calls, 1);
+    assert_eq!(prepared_counts.commit_freeze_calls, 1);
+    assert_eq!(prepared_counts.conflict_calls, 1);
+    assert_eq!(prepared_counts.input_build_calls, 1);
+    assert_eq!(prepared_counts.preflight_calls, 1);
 
     let forced_preflight_failure = Arc::new(AtomicBool::new(false));
     harness.set_force_preflight_failure(Arc::clone(&forced_preflight_failure));

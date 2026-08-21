@@ -10,21 +10,22 @@
 
 use serde_json::json;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, qpc_frequency_checked};
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
     PhysicalPacket, PreparedPhysicalPacket, SendTransactionOutcome, SendTransactionStatus,
 };
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WaitResult, WakeErrorStats};
+use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, ProductionDispatchTestHarness,
+    DispatchObservation, DispatchPath, DispatchStep, NextDispatchPlan, OBSERVATION_QUEUE_CAPACITY,
+    PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
+    ProductionDispatchTestHarness,
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;
 
-const DEFAULT_ITERATIONS: usize = 2_000;
+const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
 const WAKE_PROBE_SAMPLES: usize = 32;
@@ -135,10 +136,25 @@ impl BenchmarkMode {
 
 #[derive(Default)]
 struct Samples {
-    wake_to_admission_us: Vec<u64>,
-    final_spin_us: Vec<u64>,
+    plan_build_us: Vec<u64>,
+    packet_header_reads_per_plan: Vec<u64>,
+    expected_up_intents_per_plan: Vec<u64>,
+    expected_down_intents_per_plan: Vec<u64>,
+    up_intent_visits_per_plan: Vec<u64>,
+    down_intent_visits_per_plan: Vec<u64>,
+    secondary_batch_visits_per_plan: Vec<u64>,
+    secondary_batch_visit_bounds_per_plan: Vec<u64>,
+    intent_visits_per_plan: Vec<u64>,
+    registry_lookups_per_plan: Vec<u64>,
+    view_packet_calls_per_plan: Vec<u64>,
+    commit_freeze_calls_per_plan: Vec<u64>,
+    admission_wake_to_precision_wake_us: Vec<i64>,
+    precision_wake_error_us: Vec<i64>,
+    precision_wake_to_final_proof_us: Vec<i64>,
+    final_proof_to_pre_call_us: Vec<i64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
+    completion_to_rt_ready_us: Vec<i64>,
     target_to_completion_us: Vec<i64>,
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
@@ -193,7 +209,8 @@ fn observer_ab_iterations() -> usize {
 
 fn representative_observation() -> DispatchObservation {
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0);
-    let plan = harness.plan_current_dispatch_projected();
+    let mut plan = NextDispatchPlan::default();
+    harness.plan_current_dispatch_projected_into(&mut plan);
     let step = harness.dispatch_authored_with_plan(&plan);
     assert!(
         matches!(step, DispatchStep::Dispatched),
@@ -211,6 +228,42 @@ fn nanos_summary(mut values: Vec<u64>) -> serde_json::Value {
         "p99": quantile(&mut values, 99, 100),
         "p99_9": quantile(&mut values, 999, 1000),
         "max": values.iter().copied().max(),
+        "samples": values.len(),
+    })
+}
+
+fn unsigned_summary(mut values: Vec<u64>) -> serde_json::Value {
+    let min = values.iter().copied().min();
+    let max = values.iter().copied().max();
+    let p50 = quantile(&mut values, 50, 100);
+    let p95 = quantile(&mut values, 95, 100);
+    let p99 = quantile(&mut values, 99, 100);
+    let p99_9 = quantile(&mut values, 999, 1000);
+    json!({
+        "min": min,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "p99_9": p99_9,
+        "max": max,
+        "samples": values.len(),
+    })
+}
+
+fn signed_summary(mut values: Vec<i64>) -> serde_json::Value {
+    let min = values.iter().copied().min();
+    let max = values.iter().copied().max();
+    let p50 = quantile(&mut values, 50, 100);
+    let p95 = quantile(&mut values, 95, 100);
+    let p99 = quantile(&mut values, 99, 100);
+    let p99_9 = quantile(&mut values, 999, 1000);
+    json!({
+        "min": min,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "p99_9": p99_9,
+        "max": max,
         "samples": values.len(),
     })
 }
@@ -327,29 +380,78 @@ fn signed_timeline_us(clock: QpcClock, end: TimelineTicks, start: TimelineTicks)
     if negative { -value } else { value }
 }
 
-fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait: WaitResult) {
+#[allow(clippy::too_many_arguments)]
+fn record_precision_handoff(
+    samples: &mut Samples,
+    handoff: Option<PrecisionHandoffEvidence>,
+    physical_target_qpc: QpcTicks,
+    precision_threshold_us: u64,
+    pre_call_qpc: QpcTicks,
+    sendinput_completion_qpc: QpcTicks,
+    dispatch_ready_qpc: Option<QpcTicks>,
+    qpc_clock: QpcClock,
+) {
+    let Some(handoff) = handoff else {
+        return;
+    };
+    if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
+        samples
+            .admission_wake_to_precision_wake_us
+            .push(signed_qpc_us(
+                qpc_clock,
+                handoff.precision_wake_qpc,
+                admission_wake_qpc,
+            ));
+    }
+    let precision_threshold_ticks = qpc_clock
+        .duration_from_us(precision_threshold_us)
+        .expect("precision threshold conversion");
+    let precision_target_qpc = QpcTicks::from_raw(
+        physical_target_qpc
+            .as_u64()
+            .saturating_sub(precision_threshold_ticks.as_u64()),
+    );
+    samples.precision_wake_error_us.push(signed_qpc_us(
+        qpc_clock,
+        handoff.precision_wake_qpc,
+        precision_target_qpc,
+    ));
+    samples.precision_wake_to_final_proof_us.push(signed_qpc_us(
+        qpc_clock,
+        handoff.final_proof_qpc,
+        handoff.precision_wake_qpc,
+    ));
+    samples.final_proof_to_pre_call_us.push(signed_qpc_us(
+        qpc_clock,
+        pre_call_qpc,
+        handoff.final_proof_qpc,
+    ));
+    if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
+        samples.completion_to_rt_ready_us.push(signed_qpc_us(
+            qpc_clock,
+            dispatch_ready_qpc,
+            sendinput_completion_qpc,
+        ));
+    }
+}
+
+fn add_observation(
+    samples: &mut Samples,
+    observation: DispatchObservation,
+    precision_threshold_us: u64,
+) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
     match observation {
         DispatchObservation::Down(value) => {
-            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
-                value
-                    .final_proof_qpc
-                    .checked_duration_since(wake)
-                    .ok()
-                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
-            }).unwrap_or_else(|| {
-                panic!(
-                    "missing Down wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
-                    value.wake_qpc,
-                    value.final_proof_qpc,
-                    value.sendinput_completion_qpc
-                )
-            });
-            samples.wake_to_admission_us.push(wake_to_proof_us);
-            samples.final_spin_us.push(
-                qpc_clock
-                    .duration_to_us(wait.spin_ticks)
-                    .expect("spin duration"),
+            record_precision_handoff(
+                samples,
+                value.precision_handoff,
+                value.physical_target_qpc,
+                precision_threshold_us,
+                value.pre_call_qpc,
+                value.sendinput_completion_qpc,
+                value.dispatch_ready_qpc,
+                qpc_clock,
             );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
@@ -386,25 +488,15 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
             ));
         }
         DispatchObservation::Up(value) => {
-            let wake_to_proof_us = value.wake_qpc.and_then(|wake| {
-                value
-                    .final_proof_qpc
-                    .checked_duration_since(wake)
-                    .ok()
-                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
-            }).unwrap_or_else(|| {
-                panic!(
-                    "missing Up wake sample: wake={:?}, final_proof={:?}, sendinput_completion={:?}",
-                    value.wake_qpc,
-                    value.final_proof_qpc,
-                    value.sendinput_completion_qpc
-                )
-            });
-            samples.wake_to_admission_us.push(wake_to_proof_us);
-            samples.final_spin_us.push(
-                qpc_clock
-                    .duration_to_us(wait.spin_ticks)
-                    .expect("spin duration"),
+            record_precision_handoff(
+                samples,
+                value.precision_handoff,
+                value.physical_target_qpc,
+                precision_threshold_us,
+                value.pre_call_qpc,
+                value.sendinput_completion_qpc,
+                value.dispatch_ready_qpc,
+                qpc_clock,
             );
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
@@ -442,10 +534,78 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation, wait
     }
 }
 
-fn plan_projected(
-    harness: &mut ProductionDispatchTestHarness,
-) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
-    harness.plan_current_dispatch_projected()
+fn plan_projected(harness: &mut ProductionDispatchTestHarness, plan: &mut NextDispatchPlan) {
+    harness.plan_current_dispatch_projected_into(plan);
+}
+
+fn record_preparation_sample(samples: &mut Samples, counts: PreparationCounts, elapsed_ns: u64) {
+    assert_eq!(
+        counts.packet_header_reads, 1,
+        "authored preparation must acquire one packet header"
+    );
+    assert_eq!(
+        counts.view_packet_calls, 1,
+        "authored preparation must build one packet view"
+    );
+    assert_eq!(
+        counts.up_intent_visits, counts.expected_up_intents,
+        "Up operation visits must match the packet cardinality captured at acquisition"
+    );
+    assert_eq!(
+        counts.down_intent_visits, counts.expected_down_intents,
+        "Down operation visits must match the packet cardinality captured at acquisition"
+    );
+    assert!(
+        counts.secondary_batch_visits <= counts.secondary_batch_visit_bound,
+        "deferred source resolution exceeded its bounded batch range"
+    );
+    assert_eq!(
+        counts.commit_freeze_calls, 1,
+        "authored preparation must freeze one commit token"
+    );
+    assert_eq!(
+        counts.registry_lookups,
+        counts
+            .up_intent_visits
+            .saturating_add(counts.down_intent_visits),
+        "registry lookup evidence must match actual intent operations"
+    );
+    samples.plan_build_us.push(elapsed_ns / 1_000);
+    samples
+        .packet_header_reads_per_plan
+        .push(counts.packet_header_reads);
+    samples
+        .expected_up_intents_per_plan
+        .push(counts.expected_up_intents);
+    samples
+        .expected_down_intents_per_plan
+        .push(counts.expected_down_intents);
+    samples
+        .up_intent_visits_per_plan
+        .push(counts.up_intent_visits);
+    samples
+        .down_intent_visits_per_plan
+        .push(counts.down_intent_visits);
+    samples
+        .secondary_batch_visits_per_plan
+        .push(counts.secondary_batch_visits);
+    samples
+        .secondary_batch_visit_bounds_per_plan
+        .push(counts.secondary_batch_visit_bound);
+    samples.intent_visits_per_plan.push(
+        counts
+            .up_intent_visits
+            .saturating_add(counts.down_intent_visits),
+    );
+    samples
+        .registry_lookups_per_plan
+        .push(counts.registry_lookups);
+    samples
+        .view_packet_calls_per_plan
+        .push(counts.view_packet_calls);
+    samples
+        .commit_freeze_calls_per_plan
+        .push(counts.commit_freeze_calls);
 }
 
 fn wait_and_dispatch_or_record(
@@ -453,8 +613,8 @@ fn wait_and_dispatch_or_record(
     plan: &sky_player_rs::engine::dispatch_primitives::NextDispatchPlan,
     benchmark_mode: BenchmarkMode,
     samples: &mut Samples,
-) -> Result<Option<WaitResult>, String> {
-    let (step, wait) = match benchmark_mode {
+) -> Result<Option<()>, String> {
+    let step = match benchmark_mode {
         BenchmarkMode::RealWait => {
             let step = match harness.wait_and_dispatch_current_plan(plan) {
                 Ok(step) => step,
@@ -463,44 +623,32 @@ fn wait_and_dispatch_or_record(
                     return Ok(None);
                 }
             };
-            let wait = harness
+            harness
                 .last_wait_result()
                 .ok_or_else(|| "real benchmark dispatch did not record wait result".to_string())?;
-            (step, wait)
+            step
         }
         BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
-            let target = harness
-                .physical_target_qpc_for_test(plan)
-                .ok_or_else(|| "synthetic benchmark plan has no physical target".to_string())?;
-            let step = harness.dispatch_at_phase_a_benchmark_boundary_for_test(
+            if harness.physical_target_qpc_for_test(plan).is_none() {
+                return Err("synthetic benchmark plan has no physical target".to_string());
+            }
+            harness.dispatch_at_phase_a_benchmark_boundary_for_test(
                 plan,
                 SYNTHETIC_TRANSPORT_COMPLETION_US,
-            );
-            let wait = WaitResult {
-                outcome: WaitOutcome::Deadline,
-                wake_qpc: Some(target),
-                spin_ticks: DurationTicks::ZERO,
-            };
-            (step, wait)
+            )
         }
         BenchmarkMode::PhaseASenderOnly => {
             return Err("phase_a_sender_only does not use coordinator dispatch".to_string());
         }
         BenchmarkMode::PhaseAProductionBoundary => {
-            let target = harness.physical_target_qpc_for_test(plan).ok_or_else(|| {
-                "production-boundary benchmark plan has no physical target".to_string()
-            })?;
-            let step = harness.dispatch_at_phase_a_production_boundary_for_test(plan);
-            let wait = WaitResult {
-                outcome: WaitOutcome::Deadline,
-                wake_qpc: Some(target),
-                spin_ticks: DurationTicks::ZERO,
-            };
-            (step, wait)
+            if harness.physical_target_qpc_for_test(plan).is_none() {
+                return Err("production-boundary benchmark plan has no physical target".to_string());
+            }
+            harness.dispatch_at_phase_a_production_boundary_for_test(plan)
         }
     };
     if matches!(step, DispatchStep::Dispatched) {
-        Ok(Some(wait))
+        Ok(Some(()))
     } else {
         samples.record_step_failure(&step);
         Ok(None)
@@ -510,13 +658,13 @@ fn wait_and_dispatch_or_record(
 fn drain_observations(
     harness: &mut ProductionDispatchTestHarness,
     samples: &mut Samples,
-    wait: WaitResult,
+    precision_threshold_us: u64,
 ) {
     let mut count = 0;
     while let Some(observation) = harness.pop_observation() {
         count += 1;
         samples.observation_count += 1;
-        add_observation(samples, observation, wait);
+        add_observation(samples, observation, precision_threshold_us);
     }
     if count != 1 {
         samples.observation_gaps += 1;
@@ -532,6 +680,7 @@ fn run_down(
     for _ in 0..iterations() {
         let mut harness =
             ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
+        harness.enable_dispatch_ready_timing_for_benchmark();
         let alignment_margin_us =
             if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
                 0
@@ -544,14 +693,21 @@ fn run_down(
             mode.event_wait_enabled,
             mode.effective_spin_threshold_us,
         )?;
-        let plan = plan_projected(&mut harness);
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
+        let plan_started = Instant::now();
+        plan_projected(&mut harness, &mut plan);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -573,6 +729,7 @@ fn run_up(
                 continue;
             }
         };
+        harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -589,14 +746,21 @@ fn run_up(
             }),
             "authored benchmark setup did not leave the requested physical UpOnly packet"
         );
-        let plan = plan_projected(&mut harness);
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
+        let plan_started = Instant::now();
+        plan_projected(&mut harness, &mut plan);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -618,6 +782,7 @@ fn run_mixed(
                 continue;
             }
         };
+        harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_wait_policy(
             mode.waitable_timer_enabled,
             mode.event_wait_enabled,
@@ -627,14 +792,21 @@ fn run_mixed(
         if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
-        let plan = plan_projected(&mut harness);
-        let wait =
-            match wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)? {
-                Some(wait) => wait,
-                None => continue,
-            };
+        harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
+        let plan_started = Instant::now();
+        plan_projected(&mut harness, &mut plan);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            continue;
+        }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, wait);
+        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
     }
     Ok(samples)
 }
@@ -659,14 +831,6 @@ fn add_sender_only_sample(
     };
     samples.physical_dispatches += 1;
     samples.observation_count += 1;
-    samples.wake_to_admission_us.push(
-        started
-            .checked_duration_since(target)
-            .ok()
-            .and_then(|ticks| clock.duration_to_us(ticks).ok())
-            .unwrap_or(0),
-    );
-    samples.final_spin_us.push(0);
     samples
         .dispatch_start_error_us
         .push(signed_qpc_us(clock, started, target));
@@ -759,11 +923,6 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
 
 fn summarize(mut samples: Samples) -> serde_json::Value {
     assert_eq!(
-        samples.wake_to_admission_us.len(),
-        samples.observation_count,
-        "every collected observation must have one raw wake-to-send sample"
-    );
-    assert_eq!(
         samples.dispatch_start_error_us.len(),
         samples.observation_count,
         "every collected observation must have one start-error sample"
@@ -773,33 +932,63 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         iterations(),
         "scenario did not account for every benchmark attempt"
     );
+    let mut acceptance_failure_reasons = Vec::new();
+    if samples.deadline_missed_count != 0 {
+        acceptance_failure_reasons.push("deadline_missed_before_send");
+    }
+    if samples.non_dispatches != 0 {
+        acceptance_failure_reasons.push("non_dispatches");
+    }
+    if samples.early_dispatch_count != 0 {
+        acceptance_failure_reasons.push("early_dispatch");
+    }
+    if !samples.failure_reasons.is_empty() {
+        acceptance_failure_reasons.push("failure_reasons");
+    }
+    if samples.observation_gaps != 0 {
+        acceptance_failure_reasons.push("observation_gaps");
+    }
+    if samples.dispatch_start_error_us.len() != samples.observation_count {
+        acceptance_failure_reasons.push("missing_start_error_samples");
+    }
+    let acceptance_clean = acceptance_failure_reasons.is_empty();
+    let statistics_eligible = acceptance_clean && iterations() >= 10_000;
     json!({
+        "acceptance_clean": acceptance_clean,
+        "acceptance_failure_reasons": acceptance_failure_reasons,
+        "statistics_eligible": statistics_eligible,
         "controller": "dispatch_start_error",
-            "wake_to_final_proof_us": {
-            "p50": quantile(&mut samples.wake_to_admission_us, 50, 100),
-            "p95": quantile(&mut samples.wake_to_admission_us, 95, 100),
-            "p99": quantile(&mut samples.wake_to_admission_us, 99, 100),
-            "p99_9": quantile(&mut samples.wake_to_admission_us, 999, 1000),
-            "max": samples.wake_to_admission_us.iter().copied().max(),
-            "samples": samples.wake_to_admission_us.len(),
+        "preparation": {
+            "plan_build_us": unsigned_summary(samples.plan_build_us),
+            "packet_header_reads_per_plan": unsigned_summary(samples.packet_header_reads_per_plan),
+            "expected_up_intents_per_plan": unsigned_summary(
+                samples.expected_up_intents_per_plan,
+            ),
+            "expected_down_intents_per_plan": unsigned_summary(
+                samples.expected_down_intents_per_plan,
+            ),
+            "up_intent_visits_per_plan": unsigned_summary(samples.up_intent_visits_per_plan),
+            "down_intent_visits_per_plan": unsigned_summary(samples.down_intent_visits_per_plan),
+            "secondary_batch_visits_per_plan": unsigned_summary(
+                samples.secondary_batch_visits_per_plan,
+            ),
+            "secondary_batch_visit_bounds_per_plan": unsigned_summary(
+                samples.secondary_batch_visit_bounds_per_plan,
+            ),
+            "intent_visits_per_plan": unsigned_summary(samples.intent_visits_per_plan),
+            "registry_lookups_per_plan": unsigned_summary(samples.registry_lookups_per_plan),
+            "view_packet_calls_per_plan": unsigned_summary(samples.view_packet_calls_per_plan),
+            "commit_freeze_calls_per_plan": unsigned_summary(samples.commit_freeze_calls_per_plan),
         },
-        "final_spin_us": {
-            "p50": quantile(&mut samples.final_spin_us, 50, 100),
-            "p95": quantile(&mut samples.final_spin_us, 95, 100),
-            "p99": quantile(&mut samples.final_spin_us, 99, 100),
-            "p99_9": quantile(&mut samples.final_spin_us, 999, 1000),
-            "max": samples.final_spin_us.iter().copied().max(),
-            "samples": samples.final_spin_us.len(),
-        },
-        "dispatch_start_error_us": {
-            "min": samples.dispatch_start_error_us.iter().copied().min(),
-            "p50": quantile(&mut samples.dispatch_start_error_us, 50, 100),
-            "p95": quantile(&mut samples.dispatch_start_error_us, 95, 100),
-            "p99": quantile(&mut samples.dispatch_start_error_us, 99, 100),
-            "p99_9": quantile(&mut samples.dispatch_start_error_us, 999, 1000),
-            "max": samples.dispatch_start_error_us.iter().copied().max(),
-            "samples": samples.dispatch_start_error_us.len(),
-        },
+        "admission_wake_to_precision_wake_us": signed_summary(
+            samples.admission_wake_to_precision_wake_us,
+        ),
+        "precision_wake_error_us": signed_summary(samples.precision_wake_error_us),
+        "precision_wake_to_final_proof_us": signed_summary(
+            samples.precision_wake_to_final_proof_us,
+        ),
+        "final_proof_to_pre_call_us": signed_summary(samples.final_proof_to_pre_call_us),
+        "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
         "completion_error_us_diagnostic": {
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
@@ -808,23 +997,9 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "max_abs": samples.completion_error_us.iter().map(|value| value.unsigned_abs()).max(),
             "samples": samples.completion_error_us.len(),
         },
-        "pre_call_to_completion_us": {
-            "min": samples.pre_call_to_completion_us.iter().copied().min(),
-            "p50": quantile(&mut samples.pre_call_to_completion_us, 50, 100),
-            "p95": quantile(&mut samples.pre_call_to_completion_us, 95, 100),
-            "p99": quantile(&mut samples.pre_call_to_completion_us, 99, 100),
-            "p99_9": quantile(&mut samples.pre_call_to_completion_us, 999, 1000),
-            "max": samples.pre_call_to_completion_us.iter().copied().max(),
-            "samples": samples.pre_call_to_completion_us.len(),
-        },
-        "target_to_completion_us": {
-            "p50": quantile(&mut samples.target_to_completion_us, 50, 100),
-            "p95": quantile(&mut samples.target_to_completion_us, 95, 100),
-            "p99": quantile(&mut samples.target_to_completion_us, 99, 100),
-            "p99_9": quantile(&mut samples.target_to_completion_us, 999, 1000),
-            "max": samples.target_to_completion_us.iter().copied().max(),
-            "samples": samples.target_to_completion_us.len(),
-        },
+        "pre_call_to_completion_us": unsigned_summary(samples.pre_call_to_completion_us),
+        "completion_to_rt_ready_us": signed_summary(samples.completion_to_rt_ready_us),
+        "target_to_completion_us": signed_summary(samples.target_to_completion_us),
         "physical_dispatches": samples.physical_dispatches,
         "early_dispatch_count": samples.early_dispatch_count,
         "non_dispatches": samples.non_dispatches,
@@ -833,6 +1008,21 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "observation_count": samples.observation_count,
         "observation_gaps": samples.observation_gaps,
         "observation_queue": "bounded_nonblocking_on",
+    })
+}
+
+fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
+    mode_reports.values().all(|mode| {
+        mode.get("scenarios")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|scenarios| {
+                scenarios.values().all(|scenario| {
+                    scenario
+                        .get("acceptance_clean")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                })
+            })
     })
 }
 
@@ -990,8 +1180,12 @@ fn main() {
         );
     }
     let observation_enqueue_ab = observation_enqueue_ab();
+    let acceptance_clean = all_scenarios_clean(&mode_reports);
+    let statistics_eligible = acceptance_clean && iterations() >= 10_000;
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
+        "acceptance_clean": acceptance_clean,
+        "statistics_eligible": statistics_eligible,
         "production_timing_policy": true,
         "benchmark_scope": benchmark_scope.name(),
         "benchmark_mode": benchmark_mode.name(),

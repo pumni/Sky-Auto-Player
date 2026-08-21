@@ -43,17 +43,17 @@ pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
     pub use super::test_support::ProductionDispatchTestHarness;
-    pub use super::worker::NextDispatchPlan;
     pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observation::{
         DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-        UpObservation, UpTraceObservation,
+        PrecisionHandoffEvidence, UpObservation, UpTraceObservation,
     };
     pub use super::worker::dispatch::observer::PendingObservationQueue;
     pub use super::worker::dispatch::timing::{
         DispatchObservationEvidence, is_clean_dispatch_observation,
     };
     pub use super::worker::health::DispatchPath;
+    pub use super::worker::{NextDispatchPlan, PreparationCounts};
 
     /// Production timing policy constants shared by diagnostic benchmarks.
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;

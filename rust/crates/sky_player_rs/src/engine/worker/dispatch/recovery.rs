@@ -1,6 +1,6 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
-use super::{AuthoredBatchView, DispatchStep, PhysicalCommit};
+use super::{AuthoredBatchView, DispatchStep, PhysicalCommit, RecoveryDescriptor};
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_win32::input::TrackedKeyState;
 
@@ -33,17 +33,33 @@ pub(super) fn recover_missed_down_boundary(
     let (started_qpc, _completed_qpc) = if up_mask == 0 {
         (observed_qpc, observed_qpc)
     } else {
-        let Some(prepared_up_packet) = view.prepared_up_recovery_packet.as_ref() else {
-            return DispatchStep::TerminateStatic("missing_prepared_up_recovery_packet");
+        let RecoveryDescriptor::UpPrefix {
+            up_len,
+            up_mask: descriptor_up_mask,
+        } = view.recovery
+        else {
+            return DispatchStep::TerminateStatic("missing_prepared_up_recovery_descriptor");
+        };
+        if descriptor_up_mask != up_mask || up_len != up_mask.count_ones() as u8 {
+            return DispatchStep::TerminateStatic("invalid_prepared_up_recovery_descriptor");
+        }
+        let Some(prepared_up_packet) = view.prepared_packet.up_recovery_view() else {
+            return DispatchStep::TerminateStatic("missing_prepared_up_recovery_view");
+        };
+        if prepared_up_packet.packet() != sky_dispatch_win32::input::PhysicalPacket::new(up_mask, 0)
+            || prepared_up_packet.packet().event_count() != up_len
+        {
+            return DispatchStep::TerminateStatic("invalid_prepared_up_recovery_view");
         };
         #[cfg(any(test, feature = "test-support"))]
-        let result = backend.send_prepared_physical_packet_with_start_and_cutoff(
+        let result = backend.send_prepared_physical_packet_view_with_start_and_cutoff(
             prepared_up_packet,
             observed_qpc,
             None,
         );
         #[cfg(not(any(test, feature = "test-support")))]
-        let result = backend.send_prepared_physical_packet_with_cutoff(prepared_up_packet, None);
+        let result =
+            backend.send_prepared_physical_packet_view_with_cutoff(prepared_up_packet, None);
         if backend.timing_error.take().is_some() {
             return DispatchStep::TerminateStatic("QPC failure during missed Down Up recovery");
         }

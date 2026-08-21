@@ -92,8 +92,10 @@ def _workload_config(config: dict[str, Any]) -> dict[str, Any]:
         "game_fps",
         "actions",
         "polyphony",
+        "scenario",
         "gap_profile",
         "warmup_cycles",
+        "start_delay_us",
         "native_profile",
         "native_build_flavor",
         "require_focus",
@@ -245,11 +247,12 @@ def _install_patches(native_build_commit: str) -> None:
             game_fps=game_fps,
             gap_profile=gap_profile,
         )
-        target_hwnd = acceptance._real_input_target_hwnd()
+        require_focus = bool(kwargs.get("require_focus", True))
+        target_hwnd = acceptance._real_input_target_hwnd(require_focus=require_focus)
         config = sky_player_rs.SessionConfig(
             game_fps=game_fps,
             min_hold_us=materialized_min_hold_us,
-            require_focus=True,
+            require_focus=require_focus,
             target_hwnd=target_hwnd,
             telemetry=True,
             profile="strict_timing_diagnostic",

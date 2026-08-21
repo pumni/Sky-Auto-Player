@@ -6,6 +6,8 @@ use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
 use crate::clock::{QpcClock, QpcTicks};
+#[cfg(windows)]
+use std::mem::MaybeUninit;
 
 pub const MAX_PACKET_EVENTS: usize = 30;
 
@@ -17,7 +19,19 @@ pub struct PreparedPhysicalPacket {
     packet: PhysicalPacket,
     length: u8,
     #[cfg(windows)]
-    inputs: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX_PACKET_EVENTS],
+    inputs:
+        [MaybeUninit<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>; MAX_PACKET_EVENTS],
+}
+
+/// Borrowed view over an already materialized physical packet.
+///
+/// The view never owns or rebuilds Win32 `INPUT` values. It is used for the
+/// canonical Up prefix of a Mixed packet during missed-Down recovery.
+#[derive(Clone, Copy)]
+pub struct PreparedPacketView<'a> {
+    packet: PhysicalPacket,
+    #[cfg(windows)]
+    inputs: &'a [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT],
 }
 
 impl std::fmt::Debug for PreparedPhysicalPacket {
@@ -58,6 +72,74 @@ impl PreparedPhysicalPacket {
     #[inline]
     pub fn event_count(&self) -> u8 {
         self.length
+    }
+
+    pub(crate) fn as_view(&self) -> PreparedPacketView<'_> {
+        #[cfg(windows)]
+        {
+            PreparedPacketView {
+                packet: self.packet,
+                inputs: self.initialized_inputs(),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            PreparedPacketView {
+                packet: self.packet,
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn initialized_inputs(&self) -> &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT] {
+        let length = usize::from(self.length);
+        // SAFETY: `try_new` sets `length` only from `build_inputs`, which
+        // writes every element in the prefix. The length is bounded by the
+        // fixed array capacity, so no uninitialized element is exposed.
+        unsafe { std::slice::from_raw_parts(self.inputs.as_ptr().cast(), length) }
+    }
+
+    /// Borrow the canonical Up prefix for Mixed missed-Down recovery.
+    ///
+    /// The constructor guarantees that all Up events precede all Down
+    /// events. The length check keeps this seam fail-closed if that invariant
+    /// ever changes.
+    pub fn up_recovery_view(&self) -> Option<PreparedPacketView<'_>> {
+        let up_mask = self.packet.up_mask;
+        let down_mask = self.packet.down_mask;
+        if up_mask == 0 || down_mask == 0 {
+            return None;
+        }
+        let up_len = usize::from(up_mask.count_ones() as u8);
+        let expected_len = up_len.saturating_add(down_mask.count_ones() as usize);
+        if usize::from(self.length) != expected_len {
+            return None;
+        }
+        #[cfg(windows)]
+        {
+            Some(PreparedPacketView {
+                packet: PhysicalPacket::new(up_mask, 0),
+                inputs: self.initialized_inputs().get(..up_len)?,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            Some(PreparedPacketView {
+                packet: PhysicalPacket::new(up_mask, 0),
+            })
+        }
+    }
+}
+
+impl<'a> PreparedPacketView<'a> {
+    #[inline]
+    pub fn packet(self) -> PhysicalPacket {
+        self.packet
+    }
+
+    #[inline]
+    fn event_count(self) -> u8 {
+        self.packet.event_count()
     }
 }
 
@@ -217,18 +299,19 @@ fn valid_packet(packet: PhysicalPacket) -> bool {
 fn build_inputs(
     packet: PhysicalPacket,
 ) -> (
-    [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX_PACKET_EVENTS],
+    [MaybeUninit<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>; MAX_PACKET_EVENTS],
     usize,
 ) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT;
 
-    let mut inputs: [INPUT; MAX_PACKET_EVENTS] = unsafe { std::mem::zeroed() };
+    let mut inputs: [MaybeUninit<INPUT>; MAX_PACKET_EVENTS] =
+        [const { MaybeUninit::uninit() }; MAX_PACKET_EVENTS];
     let mut length = 0usize;
     let mut append_mask = |mut mask: u16, templates: &[INPUT; MAX_SCAN_CODE]| {
         while mask != 0 {
             let slot = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            inputs[length] = templates[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize];
+            inputs[length].write(templates[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize]);
             length += 1;
         }
     };
@@ -373,6 +456,20 @@ fn send_once_prepared(
     supplied_started_ticks: Option<QpcTicks>,
     latest_allowed_down_qpc: Option<QpcTicks>,
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
+    send_once_prepared_view(
+        prepared.as_view(),
+        clock,
+        supplied_started_ticks,
+        latest_allowed_down_qpc,
+    )
+}
+
+fn send_once_prepared_view(
+    prepared: PreparedPacketView<'_>,
+    clock: QpcClock,
+    supplied_started_ticks: Option<QpcTicks>,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> Result<PlatformSendResult, PreparedSendFailure> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::GetLastError;
@@ -475,12 +572,12 @@ fn run_send_attempt(
 }
 
 fn run_prepared_send_attempt(
-    prepared: &PreparedPhysicalPacket,
+    prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
     latest_allowed_down_qpc: Option<QpcTicks>,
 ) -> PacketSendAttempt {
-    match send_once_prepared(
+    match send_once_prepared_view(
         prepared,
         clock,
         supplied_started_ticks,
@@ -696,7 +793,7 @@ fn send_physical_packet_once_impl(
 /// support may provide a controlled timestamp without changing production
 /// behavior.
 fn send_prepared_physical_packet_once_impl(
-    prepared: &PreparedPhysicalPacket,
+    prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     started_ticks: Option<QpcTicks>,
     latest_allowed_down_qpc: Option<QpcTicks>,
@@ -929,6 +1026,16 @@ pub fn send_prepared_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(prepared.as_view(), clock, Some(started_ticks), None)
+}
+
+/// One trusted borrowed prepared-packet attempt using a caller-supplied start
+/// boundary and no Down cutoff.
+pub fn send_prepared_physical_packet_view_once_with_start(
+    prepared: PreparedPacketView<'_>,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+) -> SendTransactionOutcome {
     send_prepared_physical_packet_once_impl(prepared, clock, Some(started_ticks), None)
 }
 
@@ -938,6 +1045,22 @@ pub fn send_prepared_physical_packet_once_with_start(
 /// evidence, before the Win32 syscall.
 pub fn send_prepared_physical_packet_once_with_start_and_cutoff(
     prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    started_ticks: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(
+        prepared.as_view(),
+        clock,
+        Some(started_ticks),
+        latest_allowed_down_qpc,
+    )
+}
+
+/// One trusted borrowed prepared-packet attempt using a caller-supplied start
+/// boundary and the same optional Down cutoff as the owned API.
+pub fn send_prepared_physical_packet_view_once_with_start_and_cutoff(
+    prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     started_ticks: QpcTicks,
     latest_allowed_down_qpc: Option<QpcTicks>,
@@ -956,6 +1079,14 @@ pub fn send_prepared_physical_packet_once(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(prepared.as_view(), clock, None, None)
+}
+
+/// One trusted borrowed prepared-packet attempt with no Down cutoff.
+pub fn send_prepared_physical_packet_view_once(
+    prepared: PreparedPacketView<'_>,
+    clock: QpcClock,
+) -> SendTransactionOutcome {
     send_prepared_physical_packet_once_impl(prepared, clock, None, None)
 }
 
@@ -964,6 +1095,20 @@ pub fn send_prepared_physical_packet_once(
 /// cutoff before `SendInput`.
 pub fn send_prepared_physical_packet_once_with_cutoff(
     prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_once_impl(
+        prepared.as_view(),
+        clock,
+        None,
+        latest_allowed_down_qpc,
+    )
+}
+
+/// One trusted borrowed prepared-packet attempt with an optional Down cutoff.
+pub fn send_prepared_physical_packet_view_once_with_cutoff(
+    prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     latest_allowed_down_qpc: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
@@ -976,6 +1121,22 @@ pub fn send_prepared_physical_packet_once_with_cutoff(
 /// authoritative pre-call timestamp.
 pub fn send_prepared_physical_packet_once_at_target_with_cutoff(
     prepared: &PreparedPhysicalPacket,
+    clock: QpcClock,
+    physical_target_qpc: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    send_prepared_physical_packet_view_once_at_target_with_cutoff(
+        prepared.as_view(),
+        clock,
+        physical_target_qpc,
+        latest_allowed_down_qpc,
+    )
+}
+
+/// One trusted borrowed prepared-packet attempt whose target-crossing QPC
+/// sample is taken immediately before `SendInput`.
+pub fn send_prepared_physical_packet_view_once_at_target_with_cutoff(
+    prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
     latest_allowed_down_qpc: Option<QpcTicks>,
@@ -1089,7 +1250,7 @@ mod tests {
 
     #[test]
     fn tagged_calibration_payload_is_materialized_before_sender_handoff() {
-        let source = include_str!("packet.rs");
+        let source = include_str!("packet.rs").replace("\r\n", "\n");
         let production = source
             .split("#[cfg(test)]")
             .next()
@@ -1328,6 +1489,50 @@ mod tests {
     }
 
     #[test]
+    fn mixed_prepared_packet_exposes_only_its_up_prefix() {
+        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b101, 0b11000))
+            .expect("mixed packet prepares");
+        let recovery = prepared
+            .up_recovery_view()
+            .expect("mixed packet has Up prefix");
+
+        assert_eq!(recovery.packet(), PhysicalPacket::new(0b101, 0));
+        assert_eq!(recovery.packet().event_count(), 2);
+        assert_eq!(prepared.event_count(), 4);
+        #[cfg(windows)]
+        assert_eq!(prepared.initialized_inputs().len(), 4);
+    }
+
+    #[test]
+    fn full_capacity_mixed_recovery_view_contains_fifteen_up_events() {
+        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(
+            FULL_INSTRUMENT_MASK,
+            FULL_INSTRUMENT_MASK,
+        ))
+        .expect("full mixed packet prepares");
+        let recovery = prepared.up_recovery_view().expect("full mixed Up prefix");
+
+        assert_eq!(
+            recovery.packet(),
+            PhysicalPacket::new(FULL_INSTRUMENT_MASK, 0)
+        );
+        assert_eq!(recovery.packet().event_count(), 15);
+        #[cfg(windows)]
+        assert_eq!(prepared.initialized_inputs().len(), MAX_PACKET_EVENTS);
+    }
+
+    #[test]
+    fn non_mixed_prepared_packets_have_no_recovery_view() {
+        let up_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b11, 0))
+            .expect("Up-only packet prepares");
+        let down_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b11))
+            .expect("Down-only packet prepares");
+
+        assert!(up_only.up_recovery_view().is_none());
+        assert!(down_only.up_recovery_view().is_none());
+    }
+
+    #[test]
     fn invalid_mask_fails_before_any_send() {
         let clock = QpcClock::initialize().expect("QPC available for test");
         let outcome = send_physical_packet_once_with_clock(
@@ -1347,10 +1552,12 @@ mod tests {
         let (inputs, len) = build_inputs(PhysicalPacket::new(0b1, 0b10));
         assert_eq!(len, 2);
         unsafe {
-            assert_eq!(inputs[0].Anonymous.ki.wScan, 0x15);
-            assert_ne!(inputs[0].Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
-            assert_eq!(inputs[1].Anonymous.ki.wScan, 0x16);
-            assert_eq!(inputs[1].Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
+            let first = inputs[0].assume_init_ref();
+            let second = inputs[1].assume_init_ref();
+            assert_eq!(first.Anonymous.ki.wScan, 0x15);
+            assert_ne!(first.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
+            assert_eq!(second.Anonymous.ki.wScan, 0x16);
+            assert_eq!(second.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
         }
     }
 

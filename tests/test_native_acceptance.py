@@ -49,6 +49,7 @@ def test_real_backend_requires_explicit_physical_probe_target(
 
     monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0x1234")
     assert ACCEPTANCE._real_input_target_hwnd() == 0x1234
+    assert ACCEPTANCE._real_input_target_hwnd(require_focus=False) == 0x1234
 
     monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0")
     with pytest.raises(RuntimeError, match="positive integer"):
@@ -73,6 +74,22 @@ def test_sendinput_qualification_rejects_test_support_wheel(
             adaptive_spin=False,
             rt_priority_mode="off",
         )
+
+
+def test_real_acceptance_arms_production_session_without_test_support_start_alias() -> None:
+    class FakeProductionSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def arm(self, pre_roll_us: int) -> None:
+            self.calls.append(("arm", pre_roll_us))
+
+        def start(self) -> None:
+            raise AssertionError("production acceptance must not use start")
+
+    session = FakeProductionSession()
+    ACCEPTANCE._arm_acceptance_session(session, backend="sendinput")
+    assert session.calls == [("arm", 0)]
 
 
 def test_mock_backend_defaults_preserve_latency_model() -> None:
@@ -204,9 +221,11 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
         "polyphony": [1, 2, 3, 5, 8, 15],
         "lead_mode": "fixed",
         "fixed_lead_us": 0,
-        "gap_profile": "hot",
-        "warmup_cycles": 8,
-        "native_profile": "mock_test",
+            "gap_profile": "hot",
+            "warmup_cycles": 8,
+            "start_delay_us": 0,
+            "scenario": "paired",
+            "native_profile": "mock_test",
         "native_build_flavor": "test_support",
         "require_focus": False,
         "materialized_min_hold_us": 17_167,
@@ -436,6 +455,16 @@ def test_hot_and_cold_action_spacing() -> None:
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
+
+
+def test_start_delay_shifts_authored_actions_without_changing_spacing() -> None:
+    baseline = ACCEPTANCE._actions(2, 1, gap_profile="hot")
+    delayed = ACCEPTANCE._actions(2, 1, gap_profile="hot", start_delay_us=100_000)
+    assert [action[2] for action in delayed] == [
+        action[2] + 100_000 for action in baseline
+    ]
+    with pytest.raises(ValueError, match="start_delay_us"):
+        ACCEPTANCE._actions(1, 1, start_delay_us=-1)
 
 
 def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
@@ -775,3 +804,25 @@ def test_partial_repetition_set_is_invalid_and_not_statistics_eligible() -> None
         "failed_runs": 1,
         "run_validity": "invalid",
     }
+
+
+def test_acceptance_failure_reasons_classify_deadline_miss_without_hiding_it() -> None:
+    report = {
+        "run_validity": "complete",
+        "failed_dispatch_suites": 0,
+        "failed_command_samples": 0,
+        "deadline_missed_before_send_count": 1,
+        "non_dispatch_count": 0,
+        "observer_dropped_records": 0,
+        "correctness": {"chord_integrity_lost": 0},
+        "wake_error_us": {"absolute": {"p99": 20}},
+        "pre_call_lateness_us": {
+            "early_count": 0,
+            "late_over_2ms_count": 0,
+            "late": {"p99": 10, "p999": 10},
+        },
+    }
+
+    assert ACCEPTANCE._acceptance_failure_reasons(report) == [
+        "deadline_missed_before_send"
+    ]

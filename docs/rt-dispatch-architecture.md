@@ -30,6 +30,10 @@ reorder, retry, or commit physical input. Diagnostic shutdown signals the
 consumer, joins it, merges its local metrics, and then publishes the final
 report.
 
+Playback pause ownership is a closed typed set (`Manual` and `Focus`) backed by
+a bitmask. The clock retains the first opener as typed attribution, so pause
+overlap bookkeeping has no hash table or reason-string allocation.
+
 ## 2. Immutable plan
 
 One outer worker epoch builds one typed plan from the coordinator. The plan is
@@ -39,6 +43,71 @@ target. Observer health budgets are not physical-plan inputs. The plan is
 reused by waiting, due selection, and physical dispatch. Commands,
 focus/pause transitions, target changes, lease-only wakes, and interrupts
 invalidate it and cause a replan.
+
+The planner writes this product into the caller-owned plan slot instead of
+returning the large physical enum through the `Result` ABI. The release
+assembly report in `scripts/audit_dispatch_assembly.ps1` covers the planner,
+physical-plan construction, and the dispatch-loop caller, while its hard
+copy/stack/division policy applies only to due dispatch and missed-Down
+recovery. Planner materialization remains a report-only optimization objective
+before the precision wait; the optimizer may inline planner helpers.
+
+The `rt_handoff_bench` JSON separates structural/counter success from timing
+acceptance. A deadline miss, non-dispatch, early dispatch, failure reason, or
+observation gap makes the scenario and aggregate `acceptance_clean=false`; the
+aggregate is `statistics_eligible` only when every scenario is clean and has at
+least 10,000 iterations. A host-preemption event is therefore retained for
+paired baseline comparison instead of being silently reported as green.
+The native acceptance harness fingerprints a controlled `start_delay_us` so
+paired legs do not put their first authored event at worker startup. Its
+`paired`, `mixed`, and `coalesced` profiles respectively exercise separated
+Down/Up pairs or adjacent Up/Down boundaries; `--require-focus` and
+`--no-require-focus` are explicit matrix dimensions. These profiles only make
+the harness capable of the requested matrix. Real `SendInput` runs still
+require an isolated project-owned target HWND and explicit operator approval;
+they must never use an arbitrary foreground window.
+
+The controlled sink is `scripts/native_acceptance_sink.py`. On the isolated
+Windows host, start it with `uv run --env-file .env python
+scripts/native_acceptance_sink.py --ready-file .benchmarks/sink.json`, copy its
+printed `hwnd` into `SKY_NATIVE_TARGET_HWND`, and keep that project-owned
+window as the intended foreground target for the explicit
+`--backend sendinput --allow-real-input` command. The harness now requires
+that HWND for both focus modes: `--require-focus` verifies it stays focused;
+`--no-require-focus` disables that timing guard for the matrix but does not
+authorize an unspecified foreground window. The sink records ordinary window
+key events only and never emits input.
+
+If the free-threaded Python distribution does not include Tcl/Tk, use the
+equivalent WinForms sink with `pwsh -NoProfile -File
+scripts/native_acceptance_sink.ps1 -ReadyFile .benchmarks/sink.json -EventLog
+.benchmarks/sink-events.json`. The two sinks have the same receive-only
+contract.
+
+Authored logical preparation validates and consumes the selected packet's
+compact intents in one primary pass, freezing the commit proof and the batch
+source metadata from that same packet view; deferred Up ownership may perform
+the bounded source-batch resolution required to identify its original action.
+That resolution is part of preparation evidence and never occurs after the
+frozen product is handed to the player layer. Pending-release merging remains
+a separate bounded mask operation. Physical
+packet storage initializes only its `0..len` prefix. Borrowed packet views expose
+that initialized prefix and never expose the unused fixed-capacity tail; Mixed
+missed-Down recovery reuses the primary packet's canonical Up prefix instead of
+materializing a second payload.
+
+The authored commit token stores immediate and deferred Up identities in one
+bounded vector. `immediate_up_mask` and `deferred_up_mask` classify those
+entries during the single bounded commit pass, while only deferred entries
+use the source-action identity needed by the pending-release table. The
+active-generation ledger stores ownership identity, scan code, slot, source
+action, and the authored hold floor; dispatch start/completion timestamps remain
+transport observations rather than per-key hot-state fields.
+
+Test-support preparation counters are emitted at the coordinator operations
+that acquire the packet view, visit each intent, perform registry lookups,
+resolve deferred source batches, and construct the frozen commit. They are not
+derived afterward from slice lengths.
 
 Production planning has no adaptive dispatch-cost estimator and no lead
 subtraction. Authored timestamps are used as authored. Release deadlines
@@ -215,8 +284,9 @@ authoritative and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
-the dispatch path does not take a redundant QPC sample or reconstruct the
-physical target from wake time.
+the precision wait result likewise preserves its raw deadline wake QPC for
+diagnostic handoff evidence. Neither path takes a redundant QPC sample or
+reconstructs the physical target from wake time.
 
 MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
 TimeCritical is not the default and priority setup failure is reported rather
@@ -247,8 +317,9 @@ An unobserved overdue Down is a recoverable Production deadline miss after the
 first successful musical Down: the Down portion is omitted, the frozen
 coordinator frame is committed as missed, and playback advances to the next
 authored target without rebasing or changing timestamps. A Mixed frame sends
-only its required Up subset through one fixed recovery packet; a failed or
-uncertain safety Up remains terminal. Up-only safety releases are exempt from
+only its required Up subset through one borrowed view of the prepared primary
+packet's canonical Up prefix; no second recovery payload is materialized. A
+failed or uncertain safety Up remains terminal. Up-only safety releases are exempt from
 the musical backlog rule and are sent even when late. Strict-timing diagnostic
 mode may retain terminal behavior for qualification. In every mode, missed
 Downs are never retried or emitted as a catch-up burst.

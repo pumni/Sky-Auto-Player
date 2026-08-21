@@ -17,6 +17,7 @@ use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::TRACE_KIND_MIXED;
+use sky_dispatch_core::clock::PauseReason;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
@@ -239,6 +240,7 @@ fn commit_down_send_outcome(
 pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
+        precision_wake_qpc: Option<QpcTicks>,
         final_proof_qpc: QpcTicks,
     },
     Guarded {
@@ -295,7 +297,7 @@ fn admit_authored_down(
                 "focus suspension failed: {error}"
             )));
         }
-        if let Err(error) = clock_state.enter_pause("focus", now_ticks) {
+        if let Err(error) = clock_state.enter_pause(PauseReason::Focus, now_ticks) {
             return Err(DispatchStep::Terminate(format!(
                 "playback clock failure: {error}"
             )));
@@ -432,33 +434,47 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    if !missed_down_boundary {
+    let precision_wake_qpc = if missed_down_boundary {
+        None
+    } else {
         #[cfg(any(test, feature = "test-support"))]
-        if !test_direct_boundary
-            && let Err(step) = wait_to_precision_boundary(
-                qpc_clock,
-                waiter,
-                interrupt,
-                physical_target_qpc,
-                timing,
-                local_metrics,
-            )
         {
-            return match step {
-                DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
-                other => Err(other),
-            };
+            if test_direct_boundary {
+                None
+            } else {
+                match wait_to_precision_boundary(
+                    qpc_clock,
+                    waiter,
+                    interrupt,
+                    physical_target_qpc,
+                    timing,
+                    local_metrics,
+                ) {
+                    Ok(result) => Some(result.wake_qpc),
+                    Err(step) => {
+                        return match step {
+                            DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
+                            other => Err(other),
+                        };
+                    }
+                }
+            }
         }
         #[cfg(not(any(test, feature = "test-support")))]
-        wait_to_precision_boundary(
-            qpc_clock,
-            waiter,
-            interrupt,
-            physical_target_qpc,
-            timing,
-            local_metrics,
-        )?;
-    }
+        {
+            Some(
+                wait_to_precision_boundary(
+                    qpc_clock,
+                    waiter,
+                    interrupt,
+                    physical_target_qpc,
+                    timing,
+                    local_metrics,
+                )?
+                .wake_qpc,
+            )
+        }
+    };
 
     let control_signals = FinalControlSignals {
         quit_requested,
@@ -538,6 +554,7 @@ fn finalize_authored_down_admission(
     }
     Ok(AdmissionOutcome::Allowed {
         trace_kind,
+        precision_wake_qpc,
         final_proof_qpc,
     })
 }
@@ -562,7 +579,7 @@ pub(crate) fn handle_final_focus_loss(
     suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
         .map_err(|error| DispatchStep::Terminate(format!("focus suspension failed: {error}")))?;
     clock_state
-        .enter_pause("focus", focus_ticks)
+        .enter_pause(PauseReason::Focus, focus_ticks)
         .map_err(|error| {
             DispatchStep::Terminate(format!(
                 "playback clock failure after final focus check: {error}"
@@ -602,6 +619,7 @@ fn record_down_send_outcome(
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         trace_kind,
+        precision_wake_qpc,
         final_proof_qpc,
     } = admission
     else {
@@ -637,9 +655,9 @@ fn record_down_send_outcome(
     );
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
-            qpc_clock,
             physical_target_qpc,
             started_qpc,
+            timing,
             local_metrics,
         )
     {
@@ -715,6 +733,7 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
+        *precision_wake_qpc,
         *final_proof_qpc,
         trace_kind,
         result_success,
@@ -744,6 +763,7 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    precision_wake_qpc: Option<QpcTicks>,
     final_proof_qpc: QpcTicks,
     trace_kind: u8,
     result_success: bool,
@@ -765,6 +785,7 @@ fn finalize_down_send_outcome(
         runtime,
         qpc_clock,
         physical_target_qpc,
+        precision_wake_qpc,
         final_proof_qpc,
         coordinator,
         health,

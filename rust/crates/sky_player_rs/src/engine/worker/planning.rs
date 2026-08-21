@@ -8,10 +8,7 @@ use super::DispatchPreparationProbe;
 use super::admission::TargetStamp;
 use super::dispatch::{
     AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit,
-    timing::{
-        prepare_authored_frame_view, prepare_authored_frame_view_with_pending,
-        prepare_pending_release_view,
-    },
+    timing::{prepare_authored_frame_view_from_prepared, prepare_pending_release_view},
 };
 use super::health::DispatchPath;
 #[cfg(any(test, feature = "test-support"))]
@@ -184,11 +181,16 @@ pub(crate) fn plan_next_dispatch(
     _timing: &TimingOptions,
     preparation_probe: &DispatchPreparationProbe,
 ) -> Result<NextDispatchPlan, PlanningError> {
-    plan_next_dispatch_projected(PlanningInput {
-        coordinator,
-        epoch_qpc,
-        preparation_probe,
-    })
+    let mut plan = NextDispatchPlan::default();
+    plan_next_dispatch_projected(
+        PlanningInput {
+            coordinator,
+            epoch_qpc,
+            preparation_probe,
+        },
+        &mut plan,
+    )?;
+    Ok(plan)
 }
 
 pub(crate) struct PlanningInput<'a> {
@@ -197,17 +199,29 @@ pub(crate) struct PlanningInput<'a> {
     pub(crate) preparation_probe: &'a DispatchPreparationProbe,
 }
 
+/// Write the epoch product into the caller-owned slot so the approximately
+/// 1.9 KiB physical plan is not returned through the `Result` ABI. The
+/// optimizer is free to inline this helper; assembly acceptance audits the
+/// shipping caller after optimization rather than forcing a standalone body.
 pub(crate) fn plan_next_dispatch_projected(
     input: PlanningInput<'_>,
-) -> Result<NextDispatchPlan, PlanningError> {
+    plan: &mut NextDispatchPlan,
+) -> Result<(), PlanningError> {
+    *plan = NextDispatchPlan::NoWork;
     let PlanningInput {
         coordinator,
         epoch_qpc,
         preparation_probe,
     } = input;
-    let authored_frame = coordinator.prepare_current_authored_frame()?;
+    let authored_packet = coordinator.prepare_current_authored_packet()?;
+    #[cfg(feature = "test-support")]
+    if let Some(prepared) = authored_packet.as_ref() {
+        preparation_probe.record_authored_preparation(prepared.preparation_evidence);
+    }
     let pending_target = coordinator.earliest_pending_release_ticks();
-    let authored_target = authored_frame.map(|frame| frame.authored_ticks);
+    let authored_target = authored_packet
+        .as_ref()
+        .map(|prepared| prepared.frame.authored_ticks);
 
     let select_pending = match (pending_target, authored_target) {
         (Some(pending), Some(authored)) => pending < authored,
@@ -223,10 +237,10 @@ pub(crate) fn plan_next_dispatch_projected(
             target,
             preparation_probe,
         ))?;
-        return physical_plan_from_view(view, epoch_qpc);
+        return physical_plan_from_view(view, epoch_qpc, plan);
     }
 
-    let Some(frame) = authored_frame else {
+    let Some(authored_packet) = authored_packet else {
         if let Some(target) = pending_target {
             let release_mask = coordinator.pending_release_mask_due_at(target);
             let view = planning_view(prepare_pending_release_view(
@@ -235,11 +249,12 @@ pub(crate) fn plan_next_dispatch_projected(
                 target,
                 preparation_probe,
             ))?;
-            return physical_plan_from_view(view, epoch_qpc);
+            return physical_plan_from_view(view, epoch_qpc, plan);
         }
-        return Ok(NextDispatchPlan::NoWork);
+        return Ok(());
     };
 
+    let frame = authored_packet.frame;
     let coalesced_pending_mask = match pending_target {
         Some(target) if target == frame.authored_ticks => {
             coordinator.pending_release_mask_due_at(target)
@@ -248,35 +263,28 @@ pub(crate) fn plan_next_dispatch_projected(
     };
     let authored_is_physical = frame.immediate_up_mask != 0 || frame.down_mask != 0;
     if !authored_is_physical && coalesced_pending_mask == 0 {
-        let commit = coordinator.prepare_authored_commit(frame)?;
+        let commit = authored_packet.commit;
         let physical_target_qpc = epoch_qpc
             .checked_add_duration(DurationTicks::from_raw(frame.authored_ticks.as_u64()))
             .map_err(|error| {
                 PlanningError::Prepared(format!("metadata target arithmetic failure: {error}"))
             })?;
-        return Ok(NextDispatchPlan::Metadata(MetadataBoundaryPlan {
+        *plan = NextDispatchPlan::Metadata(MetadataBoundaryPlan {
             commit,
             deadline_ticks: frame.authored_ticks,
             physical_target_qpc,
-        }));
+        });
+        return Ok(());
     }
 
-    let authored_view = if coalesced_pending_mask == 0 {
-        planning_view(prepare_authored_frame_view(
-            coordinator,
-            frame,
-            preparation_probe,
-        ))?
-    } else {
-        planning_view(prepare_authored_frame_view_with_pending(
-            coordinator,
-            frame,
-            coalesced_pending_mask,
-            frame.authored_ticks,
-            preparation_probe,
-        ))?
-    };
-    physical_plan_from_view(authored_view, epoch_qpc)
+    let authored_view = planning_view(prepare_authored_frame_view_from_prepared(
+        coordinator,
+        authored_packet,
+        coalesced_pending_mask,
+        frame.authored_ticks,
+        preparation_probe,
+    ))?;
+    physical_plan_from_view(authored_view, epoch_qpc, plan)
 }
 
 fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningError> {
@@ -296,7 +304,8 @@ fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningE
 fn physical_plan_from_view(
     authored_view: AuthoredBatchView,
     epoch_qpc: QpcTicks,
-) -> Result<NextDispatchPlan, PlanningError> {
+    plan: &mut NextDispatchPlan,
+) -> Result<(), PlanningError> {
     let deadline_ticks = authored_view.prepared_batch.effective_scheduled_ticks;
     let physical_target_qpc = epoch_qpc
         .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
@@ -312,12 +321,74 @@ fn physical_plan_from_view(
     } else {
         TargetProof::NotRequired
     };
-    let plan = NextDispatchPlan::Physical(PhysicalDispatchPlan {
+    *plan = NextDispatchPlan::Physical(PhysicalDispatchPlan {
         authored,
         physical_target_qpc,
         authored_view,
         target_proof,
     });
-    debug_assert!(plan_structure_is_valid(&plan));
-    Ok(plan)
+    debug_assert!(plan_structure_is_valid(plan));
+    Ok(())
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{AuthoredBatchView, NextDispatchPlan, PhysicalDispatchPlan};
+    use sky_dispatch_core::clock::PlaybackClockState;
+    use sky_dispatch_core::coordinator::{ActiveGeneration, PreparedAuthoredCommit};
+    use sky_dispatch_win32::input::PreparedPhysicalPacket;
+    use std::collections::HashSet;
+    use std::mem::size_of;
+
+    #[allow(dead_code)]
+    struct LegacyPlaybackClockLayout {
+        start_perf: sky_dispatch_core::time::QpcTicks,
+        pause_time: sky_dispatch_core::time::DurationTicks,
+        pause_reasons: HashSet<String>,
+        pause_interval_started: Option<sky_dispatch_core::time::QpcTicks>,
+        pause_open_reason: Option<String>,
+        epoch: sky_dispatch_core::time::QpcTicks,
+    }
+
+    #[test]
+    fn report_hot_dispatch_layout() {
+        println!(
+            "layout target_os_windows={} target_arch_x86_64={} target_pointer_width_64={}",
+            cfg!(target_os = "windows"),
+            cfg!(target_arch = "x86_64"),
+            cfg!(target_pointer_width = "64"),
+        );
+        println!(
+            "size_of::<PreparedPhysicalPacket>()={}",
+            size_of::<PreparedPhysicalPacket>()
+        );
+        println!(
+            "size_of::<PreparedAuthoredCommit>()={}",
+            size_of::<PreparedAuthoredCommit>()
+        );
+        println!(
+            "size_of::<AuthoredBatchView>()={}",
+            size_of::<AuthoredBatchView>()
+        );
+        println!(
+            "size_of::<PhysicalDispatchPlan>()={}",
+            size_of::<PhysicalDispatchPlan>()
+        );
+        println!(
+            "size_of::<NextDispatchPlan>()={}",
+            size_of::<NextDispatchPlan>()
+        );
+        println!(
+            "size_of::<ActiveGeneration>()={}",
+            size_of::<ActiveGeneration>()
+        );
+        println!(
+            "size_of::<PlaybackClockState>()={}",
+            size_of::<PlaybackClockState>()
+        );
+        println!(
+            "size_of::<LegacyPlaybackClockLayout>()={}",
+            size_of::<LegacyPlaybackClockLayout>()
+        );
+    }
 }

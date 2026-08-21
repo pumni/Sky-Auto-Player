@@ -6,6 +6,12 @@ use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
 use std::sync::atomic::AtomicU64;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrecisionWaitResult {
+    pub(crate) wake_qpc: QpcTicks,
+    pub(crate) spin_ticks: DurationTicks,
+}
+
 pub(crate) fn wait_to_precision_boundary(
     qpc_clock: QpcClock,
     waiter: &HybridWaiter,
@@ -13,7 +19,7 @@ pub(crate) fn wait_to_precision_boundary(
     physical_target_qpc: QpcTicks,
     timing: &WorkerTimingState,
     local_metrics: &mut WorkerMetricsLocal,
-) -> Result<(), super::DispatchStep> {
+) -> Result<PrecisionWaitResult, super::DispatchStep> {
     let spin_target_qpc = QpcTicks::from_raw(
         physical_target_qpc
             .as_u64()
@@ -26,7 +32,17 @@ pub(crate) fn wait_to_precision_boundary(
         interrupt,
     );
     match wait_result.outcome {
-        WaitOutcome::Deadline => Ok(()),
+        WaitOutcome::Deadline => {
+            let Some(wake_qpc) = wait_result.wake_qpc else {
+                return Err(super::DispatchStep::TerminateStatic(
+                    "precision_wait_missing_wake_qpc",
+                ));
+            };
+            Ok(PrecisionWaitResult {
+                wake_qpc,
+                spin_ticks: wait_result.spin_ticks,
+            })
+        }
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);

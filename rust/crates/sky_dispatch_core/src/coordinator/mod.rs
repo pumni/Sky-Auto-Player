@@ -201,9 +201,6 @@ pub struct ActiveGeneration {
     pub scan_code: u16,
     pub key_slot: KeySlot,
     pub source_action_index: u32,
-    pub scheduled_down_ticks: TimelineTicks,
-    pub down_dispatch_started_ticks: TimelineTicks,
-    pub down_dispatch_completed_ticks: TimelineTicks,
     pub release_not_before_ticks: TimelineTicks,
 }
 
@@ -239,11 +236,42 @@ pub struct PreparedAuthoredFrame {
     pub stale_up_count: u8,
 }
 
-/// Frozen authored commit evidence.  The worker builds this while preparing
-/// the immutable dispatch plan; the post-SendInput path applies it directly to
-/// the bounded generation ledger without rediscovering schedule ranges.
+/// Test-support evidence emitted by the coordinator's authored preparation
+/// operation. These counters are populated at the operation sites themselves;
+/// they are not inferred later from slice lengths.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuthoredPreparationEvidence {
+    pub packet_header_reads: u64,
+    pub expected_up_intents: u64,
+    pub expected_down_intents: u64,
+    pub up_intent_visits: u64,
+    pub down_intent_visits: u64,
+    pub registry_lookups: u64,
+    pub secondary_batch_visits: u64,
+    pub secondary_batch_visit_bound: u64,
+    pub view_packet_calls: u64,
+    pub commit_freeze_calls: u64,
+}
+
+/// One allocation-free logical preparation product. The coordinator builds
+/// the frame classification, validated packet view, frozen commit token, and
+/// source metadata from one authoritative packet traversal before the timed
+/// wait.
+#[derive(Debug, Clone)]
+pub struct PreparedAuthoredPacket<'a> {
+    pub frame: PreparedAuthoredFrame,
+    pub packet: PacketView<'a>,
+    pub commit: PreparedAuthoredCommit,
+    pub batch_source_action_index: u32,
+    #[cfg(feature = "test-support")]
+    pub preparation_evidence: AuthoredPreparationEvidence,
+}
+
+/// One prepared authored Up intent. Immediate and deferred releases share one
+/// bounded vector; the frame masks classify each entry at commit time.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedDeferredReleaseIntent {
+pub struct PreparedUpIntent {
     pub intent: CompactIntent,
     pub source_action_index: u32,
 }
@@ -257,8 +285,7 @@ pub struct PreparedDownIntent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedAuthoredCommit {
     pub frame: PreparedAuthoredFrame,
-    pub immediate_up_intents: SmallVec<[CompactIntent; MAX_KEYS]>,
-    pub deferred_up_intents: SmallVec<[PreparedDeferredReleaseIntent; MAX_KEYS]>,
+    pub up_intents: SmallVec<[PreparedUpIntent; MAX_KEYS]>,
     pub down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]>,
     pub down_source_action_index: Option<u32>,
 }

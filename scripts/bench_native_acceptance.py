@@ -140,25 +140,82 @@ def _actions(
     *,
     gap_profile: str = "hot",
     game_fps: int = 60,
+    start_delay_us: int = 0,
+    scenario: str = "paired",
+    warmup_cycles: int = 0,
 ) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
+    if start_delay_us < 0:
+        raise ValueError("start_delay_us must be non-negative")
+    if warmup_cycles < 0:
+        raise ValueError("warmup_cycles must be non-negative")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
-    for index in range(count):
-        scan_codes = [
-            int(SKY_15_SCAN_CODES[(index * polyphony + offset) % len(SKY_15_SCAN_CODES)])
-            for offset in range(polyphony)
-        ]
-        at_us = index * cycle_us
-        actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
-        actions.append(
-            (index * 2 + 1, "up", at_us + hold_us, scan_codes, "bench-up")
-        )
+    boundary_scan_codes = [
+        int(SKY_15_SCAN_CODES[offset]) for offset in range(polyphony)
+    ]
+    if scenario in {"mixed", "coalesced"}:
+        # Each group has one clean Down, one Up+Down mixed boundary, and one
+        # final Up.  A full cooldown separates groups so repeated groups do
+        # not manufacture an ownership conflict unrelated to the profile.
+        group_span_us = max(cycle_us * 5, 100_000)
+        for group in range(count):
+            base_index = group * 4
+            at_us = start_delay_us + group * group_span_us
+            actions.extend(
+                (
+                    (base_index, "down", at_us, boundary_scan_codes, f"{scenario}-down"),
+                    (
+                        base_index + 1,
+                        "up",
+                        at_us + cycle_us,
+                        boundary_scan_codes,
+                        f"{scenario}-up",
+                    ),
+                    (
+                        base_index + 2,
+                        "down",
+                        at_us + cycle_us,
+                        boundary_scan_codes,
+                        f"{scenario}-retrigger-down",
+                    ),
+                    (
+                        base_index + 3,
+                        "up",
+                        at_us + cycle_us * 2,
+                        boundary_scan_codes,
+                        f"{scenario}-release",
+                    ),
+                )
+            )
+    else:
+        for index in range(count):
+            scan_codes = [
+                int(
+                    SKY_15_SCAN_CODES[
+                        (index * polyphony + offset) % len(SKY_15_SCAN_CODES)
+                    ]
+                )
+                for offset in range(polyphony)
+            ]
+            at_us = start_delay_us + index * cycle_us
+            actions.extend(
+                (
+                    (index * 2, "down", at_us, scan_codes, "bench-down"),
+                    (index * 2 + 1, "up", at_us + hold_us, scan_codes, "bench-up"),
+                )
+            )
     return actions
+
+
+def _actions_per_polyphony(*, actions: int, scenario: str) -> int:
+    return actions * (4 if scenario in {"mixed", "coalesced"} else 2)
 
 
 def _percentile(values: list[int], fraction: float) -> int:
@@ -199,6 +256,9 @@ def _benchmark_config(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
 ) -> dict[str, Any]:
+    require_focus = getattr(args, "require_focus", None)
+    if require_focus is None:
+        require_focus = args.backend == "sendinput"
     if args.backend == "sendinput":
         # DispatchSession owns these production settings; the legacy CLI
         # knobs are not passed through to the real backend.
@@ -224,6 +284,8 @@ def _benchmark_config(
         "mock_per_key_latency_us": mock_per_key_latency_us,
         "actions": args.actions,
         "polyphony": polyphonies,
+        "start_delay_us": getattr(args, "start_delay_us", 0),
+        "scenario": getattr(args, "scenario", "paired"),
         "lead_mode": effective_lead_mode,
         "fixed_lead_us": effective_fixed_lead_us,
         "gap_profile": args.gap_profile,
@@ -232,7 +294,7 @@ def _benchmark_config(
         "native_build_flavor": (
             "production" if args.backend == "sendinput" else "test_support"
         ),
-        "require_focus": args.backend == "sendinput",
+        "require_focus": require_focus,
         "materialized_min_hold_us": _materialized_hold_us(
             game_fps=args.game_fps,
             gap_profile=args.gap_profile,
@@ -298,12 +360,48 @@ def _run_validity_summary(
     }
 
 
+def _expected_record_layout(
+    actions: list[tuple[int, str, int, list[int], str]],
+    scenario: str,
+) -> list[tuple[int, str, set[int]]]:
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
+    combined_boundaries = scenario in {"mixed", "coalesced"}
+    if combined_boundaries and (len(actions) < 2 or len(actions) % 2 != 0):
+        raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
+    layout: list[tuple[int, str, set[int]]] = []
+    for position, action in enumerate(actions):
+        index, kind, scheduled_us, *_ = action
+        if (
+            combined_boundaries
+            and kind == "up"
+            and position + 1 < len(actions)
+            and actions[position + 1][1] == "down"
+            and actions[position + 1][2] == scheduled_us
+        ):
+            continue
+        record_kind = str(kind)
+        consumed = {int(index)}
+        if (
+            combined_boundaries
+            and kind == "down"
+            and position > 0
+            and actions[position - 1][1] == "up"
+            and actions[position - 1][2] == scheduled_us
+        ):
+            record_kind = "mixed"
+            consumed.add(int(actions[position - 1][0]))
+        layout.append((int(index), record_kind, consumed))
+    return layout
+
+
 def _validate_telemetry_integrity(
     *,
     actions: list[tuple[int, str, int, list[int], str]],
     telemetry: dict[str, Any],
     records: list[TelemetryRecord],
     polyphony: int,
+    scenario: str = "paired",
     snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prove that the compact native trace is a complete authored action set.
@@ -313,8 +411,11 @@ def _validate_telemetry_integrity(
     index and kind mapping before a repetition is eligible for statistics.
     """
 
-    expected_indices = [int(action[0]) for action in actions]
-    expected_kinds = {int(action[0]): str(action[1]) for action in actions}
+    authored_indices = [int(action[0]) for action in actions]
+    layout = _expected_record_layout(actions, scenario)
+    expected_indices = [index for index, _, _ in layout]
+    expected_kinds = {index: kind for index, kind, _ in layout}
+    expected_authored_indices = set(authored_indices)
     expected_counts = collections.Counter(expected_indices)
     expected_duplicate_indices = sorted(
         index for index, count in expected_counts.items() if count > 1
@@ -336,6 +437,16 @@ def _validate_telemetry_integrity(
         if record.event_index in expected_kinds
         and record.kind != expected_kinds[record.event_index]
     ]
+    consumed_authored_indices: set[int] = set()
+    combined_boundaries = scenario in {"mixed", "coalesced"}
+    for record in records:
+        if combined_boundaries and record.kind == "mixed":
+            consumed_authored_indices.update((record.event_index - 1, record.event_index))
+        else:
+            consumed_authored_indices.add(record.event_index)
+    unconsumed_authored_indices = sorted(
+        expected_authored_indices - consumed_authored_indices
+    )
     diagnostics: dict[str, Any] = {
         "polyphony": polyphony,
         "snapshot_status": None if snapshot is None else snapshot.get("status"),
@@ -349,6 +460,7 @@ def _validate_telemetry_integrity(
         ),
         "authored_action_count": len(actions),
         "trace_expected_count": len(actions),
+        "expected_record_count": len(expected_indices),
         "trace_actual_count": len(records),
         "last_trace_source_index": actual_indices[-1] if actual_indices else None,
         "expected_count": len(actions),
@@ -358,6 +470,8 @@ def _validate_telemetry_integrity(
         "dropped": telemetry.get("dropped"),
         "truncated": telemetry.get("truncated"),
         "expected_indices": expected_indices,
+        "expected_authored_indices": authored_indices,
+        "unconsumed_authored_indices": unconsumed_authored_indices,
         "expected_duplicate_indices": expected_duplicate_indices,
         "actual_indices": actual_indices,
         "missing_indices": missing_indices,
@@ -366,16 +480,17 @@ def _validate_telemetry_integrity(
         "kind_mismatches": kind_mismatches,
     }
     valid = (
-        diagnostics["attempted"] == len(actions)
-        and diagnostics["accepted"] == len(actions)
+        diagnostics["attempted"] == len(expected_indices)
+        and diagnostics["accepted"] == len(expected_indices)
         and diagnostics["dropped"] == 0
         and diagnostics["truncated"] is False
-        and len(records) == len(actions)
+        and len(records) == len(expected_indices)
         and not expected_duplicate_indices
         and not missing_indices
         and not duplicate_indices
         and not unexpected_indices
         and not kind_mismatches
+        and not unconsumed_authored_indices
     )
     if not valid:
         raise TelemetryIntegrityError(diagnostics)
@@ -404,6 +519,7 @@ def _correctness_counters(
         len(diagnostics.get(name, []))
         for name in (
             "missing_indices",
+            "unconsumed_authored_indices",
             "duplicate_indices",
             "unexpected_indices",
             "kind_mismatches",
@@ -443,6 +559,67 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
         for name in names
     }
+
+
+def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
+    """Classify a report without hiding a timing or delivery failure in JSON."""
+
+    reasons: list[str] = []
+    if report.get("run_validity") != "complete":
+        reasons.append("incomplete_run_set")
+    if report.get("failed_dispatch_suites", 0) or report.get("failed_command_samples", 0):
+        reasons.append("failed_run")
+    if report.get("deadline_missed_before_send_count", 0):
+        reasons.append("deadline_missed_before_send")
+    if report.get("non_dispatch_count", 0):
+        reasons.append("non_dispatch")
+    if report.get("observer_dropped_records", 0):
+        reasons.append("observer_dropped_records")
+
+    correctness = report.get("correctness")
+    if isinstance(correctness, dict):
+        for name, value in correctness.items():
+            if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+                reasons.append(f"correctness:{name}")
+
+    for name in (
+        "failed_release_count",
+        "chord_split_events",
+        "chords_rejected",
+        "authored_keys_rejected",
+        "sendinput_partial_events",
+        "sendinput_zero_progress_failures",
+    ):
+        value = report.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+            reasons.append(name)
+
+    config = report.get("benchmark_config")
+    fixed_hot_60 = (
+        isinstance(config, dict)
+        and config.get("game_fps") == 60
+        and config.get("gap_profile") == "hot"
+        and config.get("lead_mode") == "fixed"
+    )
+    wake = report.get("wake_error_us")
+    if fixed_hot_60 and isinstance(wake, dict):
+        absolute = wake.get("absolute")
+        if isinstance(absolute, dict) and absolute.get("p99", 0) > ABSOLUTE_WAKE_P99_LIMIT_US:
+            reasons.append("wake_p99_slo")
+
+    pre_call = report.get("pre_call_lateness_us")
+    if isinstance(pre_call, dict):
+        if pre_call.get("early_count", 0) != 0:
+            reasons.append("early_physical_send")
+        if pre_call.get("late_over_2ms_count", 0) != 0:
+            reasons.append("pre_call_over_2ms")
+        late = pre_call.get("late")
+        if isinstance(late, dict):
+            if late.get("p99", 0) > ABSOLUTE_PRE_CALL_P99_LIMIT_US:
+                reasons.append("pre_call_p99_slo")
+            if late.get("p999", 0) > ABSOLUTE_PRE_CALL_P999_LIMIT_US:
+                reasons.append("pre_call_p999_slo")
+    return reasons
 
 
 def _failed_run_artifact_path(output: Path | None, run_index: int) -> Path:
@@ -757,6 +934,7 @@ def _new_session(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
     gap_profile: str = "hot",
+    require_focus: bool = False,
     fault_mode: str = "none",
 ) -> Any:
     import sky_player_rs
@@ -802,7 +980,7 @@ def _new_session(
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=game_fps,
             min_hold_us=materialized_min_hold_us,
-            require_focus=True,
+            require_focus=require_focus,
             target_hwnd=target_hwnd,
             telemetry=True,
             profile="strict_timing_diagnostic",
@@ -810,11 +988,12 @@ def _new_session(
     )
 
 
-def _real_input_target_hwnd() -> int:
+def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
+    del require_focus
     raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
     if raw is None or not raw.strip():
         raise RuntimeError(
-            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated host"
+            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated test sink"
         )
     try:
         hwnd = int(raw, 0)
@@ -823,6 +1002,15 @@ def _real_input_target_hwnd() -> int:
     if hwnd <= 0 or hwnd > (1 << 63) - 1:
         raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer in the platform handle range")
     return hwnd
+
+
+def _arm_acceptance_session(session: Any, *, backend: str) -> None:
+    """Use the public production arm API; ``start`` is test-support-only."""
+
+    if backend == "sendinput":
+        session.arm(0)
+    else:
+        session.start()
 
 
 def _run_dispatch(
@@ -838,6 +1026,8 @@ def _run_dispatch(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
     gap_profile: str = "hot",
+    require_focus: bool = False,
+    scenario: str = "paired",
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
@@ -854,6 +1044,7 @@ def _run_dispatch(
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
         gap_profile=gap_profile,
+        require_focus=require_focus,
         fault_mode=fault_mode,
     )
     snapshot: dict[str, Any] | None = None
@@ -861,7 +1052,7 @@ def _run_dispatch(
     diagnostics: dict[str, Any] | None = None
     try:
         started_ns = time.perf_counter_ns()
-        session.start()
+        _arm_acceptance_session(session, backend=backend)
         startup_deadline = time.perf_counter() + min(timeout_ms / 1_000, 60.0)
         while not bool(dict(session.snapshot()).get("startup_ready")):
             # The native worker has a bounded supervisor lease.  Acceptance
@@ -907,10 +1098,19 @@ def _run_dispatch(
             telemetry=telemetry,
             records=records,
             polyphony=polyphony,
+            scenario=scenario,
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
-        warmup_record_count = warmup_cycles * 2
+        warmup_action_count = _actions_per_polyphony(
+            actions=warmup_cycles,
+            scenario=scenario,
+        )
+        warmup_record_count = sum(
+            1
+            for _, _, consumed in _expected_record_layout(actions, scenario)
+            if consumed and max(consumed) < warmup_action_count
+        )
         if warmup_record_count < 0 or warmup_record_count >= len(records):
             raise RuntimeError("warmup cycles must leave measurement records")
         measurement_records = records[warmup_record_count:]
@@ -985,6 +1185,8 @@ def _run_dispatch(
             "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
             "lead_by_polyphony": lead_by_polyphony,
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
+            "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+            "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
                 snapshot.get("startup_latency_us"), "startup_latency_us"
@@ -1031,6 +1233,7 @@ def _measure_command_interrupt(
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
+    require_focus: bool = False,
 ) -> dict[str, int]:
     # Put the first Down in a controlled future slot, then measure the pause
     # command after that first musical commit.  Pre-roll Pause now cancels the
@@ -1051,6 +1254,7 @@ def _measure_command_interrupt(
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
+        require_focus=require_focus,
     )
     # Test-only epoch choice made before worker arm; the frozen authored
     # timestamps remain unchanged and production callers do not use this path.
@@ -1185,6 +1389,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup-cycles", type=int, default=8)
     parser.add_argument(
+        "--start-delay-us",
+        type=int,
+        default=0,
+        help="delay the first authored action after arm (default: 0)",
+    )
+    parser.add_argument(
         "--continue-after-failure",
         action="store_true",
         help="run remaining repetitions for diagnostics, but still exit non-zero",
@@ -1203,6 +1413,12 @@ def _parse_args() -> argparse.Namespace:
         help="comma-separated chord sizes to exercise (default: 1,2,3,5,8,15)",
     )
     parser.add_argument(
+        "--scenario",
+        choices=("paired", "mixed", "coalesced"),
+        default="paired",
+        help="authored action profile; mixed/coalesced share adjacent Up/Down boundaries",
+    )
+    parser.add_argument(
         "--backend",
         choices=("mock", "sendinput"),
         default="mock",
@@ -1212,6 +1428,12 @@ def _parse_args() -> argparse.Namespace:
         "--allow-real-input",
         action="store_true",
         help="required with --backend sendinput; keys may reach the foreground window",
+    )
+    parser.add_argument(
+        "--require-focus",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="require the configured target window to remain focused (sendinput default: true)",
     )
     parser.add_argument(
         "--mock-base-latency-us",
@@ -1556,6 +1778,8 @@ def _assert_baseline_compatible(
         "fixed_lead_us",
         "gap_profile",
         "warmup_cycles",
+        "start_delay_us",
+        "scenario",
         "native_profile",
         "native_build_flavor",
         "require_focus",
@@ -1772,6 +1996,8 @@ def main() -> int:
     args = _parse_args()
     if os.name != "nt":
         raise SystemExit("this acceptance benchmark requires Windows")
+    if args.start_delay_us < 0:
+        raise SystemExit("--start-delay-us must be non-negative")
     dispatch_repeats, command_samples = _resolve_repeat_counts(args)
     lead_mode, fixed_lead_us = _resolve_lead_config(args)
     if args.actions <= 0:
@@ -1839,6 +2065,9 @@ def main() -> int:
             current_polyphony,
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
+            start_delay_us=args.start_delay_us,
+            scenario=args.scenario,
+            warmup_cycles=args.warmup_cycles,
         )
         try:
             for polyphony in polyphonies:
@@ -1848,6 +2077,9 @@ def main() -> int:
                     polyphony,
                     gap_profile=args.gap_profile,
                     game_fps=args.game_fps,
+                    start_delay_us=args.start_delay_us,
+                    scenario=args.scenario,
+                    warmup_cycles=args.warmup_cycles,
                 )
                 run = _run_dispatch(
                     current_actions,
@@ -1861,6 +2093,8 @@ def main() -> int:
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
                     gap_profile=args.gap_profile,
+                    require_focus=benchmark_config["require_focus"],
+                    scenario=args.scenario,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                     native_build_commit=expected_native_commit,
@@ -1930,7 +2164,14 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_actions = _actions(1, 1, gap_profile=args.gap_profile, game_fps=args.game_fps)
+    command_actions = _actions(
+        1,
+        1,
+        gap_profile=args.gap_profile,
+        game_fps=args.game_fps,
+        start_delay_us=args.start_delay_us,
+        scenario=args.scenario,
+    )
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -1943,6 +2184,7 @@ def main() -> int:
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
+                    require_focus=benchmark_config["require_focus"],
                 )
             )
         except Exception as exc:
@@ -1980,7 +2222,10 @@ def main() -> int:
             "label": args.label,
             "backend": args.backend,
             "native_build_flavor": benchmark_config["native_build_flavor"],
-            "actions_per_polyphony": args.actions * 2,
+            "actions_per_polyphony": _actions_per_polyphony(
+                actions=args.actions,
+                scenario=args.scenario,
+            ),
             "polyphony": polyphonies,
             "dispatch_repeats": dispatch_repeats,
             "command_samples": command_samples,
@@ -1996,6 +2241,8 @@ def main() -> int:
             "failed_command_samples": len(command_failures),
             "unattempted_dispatch_suites": dispatch_repeats - len(suite_results),
             "statistics_eligible": False,
+            "acceptance_clean": False,
+            "acceptance_failure_reasons": ["failed_run"],
             "excluded_runs": 0,
             "failures": failures + command_failures,
             "mock_latency_model": {
@@ -2034,6 +2281,8 @@ def main() -> int:
             polyphony,
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
+            start_delay_us=args.start_delay_us,
+            scenario=args.scenario,
         )
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {
@@ -2140,7 +2389,10 @@ def main() -> int:
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "backend": args.backend,
         "native_build_flavor": benchmark_config["native_build_flavor"],
-        "actions_per_polyphony": args.actions * 2,
+        "actions_per_polyphony": _actions_per_polyphony(
+            actions=args.actions,
+            scenario=args.scenario,
+        ),
         "polyphony": polyphonies,
         "dispatch_repeats": dispatch_repeats,
         "command_samples": command_samples,
@@ -2157,9 +2409,7 @@ def main() -> int:
         "requested_command_samples": command_samples,
         "successful_command_samples": len(command_runs),
         "failed_command_samples": 0,
-        "statistics_eligible": _qualification_boundary_gate(
-            backend=args.backend, measured_boundaries=physical_boundaries
-        ),
+        "statistics_eligible": False,
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
@@ -2204,6 +2454,19 @@ def main() -> int:
             dispatch_runs, "sender_completion_error_us"
         ),
         "correctness": _aggregate_correctness(dispatch_runs),
+        "deadline_missed_before_send_count": sum(
+            run["missed_down_boundaries"] for run in dispatch_runs
+        ),
+        "non_dispatch_count": sum(
+            sum(
+                int(run["generation_status_counts"].get(name, 0))
+                for name in ("dropped_conflict", "dropped_expired", "dropped_backend")
+            )
+            for run in dispatch_runs
+        ),
+        "observer_dropped_records": sum(
+            run["observer_dropped_records"] for run in dispatch_runs
+        ),
         "guards": {
             "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
             "rt_priority_mode": benchmark_config["rt_priority_mode"],
@@ -2301,21 +2564,26 @@ def main() -> int:
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
-    if not report["statistics_eligible"]:
-        encoded = json.dumps(report, indent=2)
-        print(encoded)
-        if args.output is not None:
-            args.output.write_text(encoded + "\n", encoding="utf-8")
+    acceptance_failure_reasons = _acceptance_failure_reasons(report)
+    report["acceptance_clean"] = not acceptance_failure_reasons
+    report["acceptance_failure_reasons"] = acceptance_failure_reasons
+    report["statistics_eligible"] = (
+        report["acceptance_clean"]
+        and _qualification_boundary_gate(
+            backend=args.backend, measured_boundaries=physical_boundaries
+        )
+    )
+    encoded = json.dumps(report, indent=2)
+    print(encoded)
+    if args.output is not None:
+        args.output.write_text(encoded + "\n", encoding="utf-8")
+    if not report["acceptance_clean"] or not report["statistics_eligible"]:
         return 1
     _assert_report_correctness(report)
     _assert_absolute_wake_slo(report)
     _assert_absolute_pre_call_slo(report)
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
-    encoded = json.dumps(report, indent=2)
-    print(encoded)
-    if args.output is not None:
-        args.output.write_text(encoded + "\n", encoding="utf-8")
     return 0
 
 

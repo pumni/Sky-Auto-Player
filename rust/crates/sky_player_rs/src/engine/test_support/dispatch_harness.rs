@@ -5,7 +5,7 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
-use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, WorkerConfig};
+use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, DispatchProfile, WorkerConfig};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
@@ -15,10 +15,10 @@ use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, dispatch_authored_packet,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, NextDispatchPlan, TargetStamp, WaitBoundary,
-    WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals, WaitTiming,
-    WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
-    dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
+    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals,
+    WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
+    WorkerTimingState, dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
     preflight_prepared_plan, wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -692,6 +692,12 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    /// Enable the test-only observer profile so timing benchmarks can report
+    /// the post-SendInput ready boundary without changing production policy.
+    pub fn enable_dispatch_ready_timing_for_benchmark(&mut self) {
+        self.config.profile = DispatchProfile::MockTest;
+    }
+
     pub fn last_wait_result(&self) -> Option<WaitResult> {
         self.last_wait_result
     }
@@ -969,27 +975,41 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
+        let mut plan = NextDispatchPlan::default();
+        self.plan_current_dispatch_projected_into(&mut plan);
+        plan
+    }
+
+    /// Build the projected plan directly into caller-owned storage so the
+    /// benchmark uses the same ABI shape as the production worker.
+    pub fn plan_current_dispatch_projected_into(&mut self, plan: &mut NextDispatchPlan) {
         self.align_epoch_to_selected_boundary_before_planning();
-        let mut plan = plan_next_dispatch_projected(crate::engine::worker::PlanningInput {
-            coordinator: &self.resources.coordinator,
-            epoch_qpc: self.resources.playback.epoch,
-            preparation_probe: &self.runtime.preparation_probe,
-        })
+        plan_next_dispatch_projected(
+            crate::engine::worker::PlanningInput {
+                coordinator: &self.resources.coordinator,
+                epoch_qpc: self.resources.playback.epoch,
+                preparation_probe: &self.runtime.preparation_probe,
+            },
+            plan,
+        )
         .expect("projected dispatch plan");
         preflight_prepared_plan(
-            &mut plan,
+            plan,
             &mut self.resources.backend,
             &mut self.runtime,
             &self.target_hwnd,
             &self.target_generation,
         )
         .expect("preflight prepared projected plan");
-        self.refresh_physical_target_for_test(&mut plan);
-        plan
+        self.refresh_physical_target_for_test(plan);
     }
 
-    pub fn preparation_counts(&self) -> (u64, u64, u64, u64) {
+    pub fn preparation_counts(&self) -> PreparationCounts {
         self.runtime.preparation_probe.counts()
+    }
+
+    pub fn reset_preparation_counts_for_test(&mut self) {
+        self.runtime.preparation_probe.reset();
     }
 
     pub fn set_force_preflight_failure(&mut self, flag: Arc<AtomicBool>) {

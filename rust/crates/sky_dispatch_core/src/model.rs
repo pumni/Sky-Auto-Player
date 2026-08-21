@@ -196,6 +196,21 @@ impl RuntimeSchedule {
         index: usize,
         effective_ticks: TimelineTicks,
     ) -> Result<PacketView<'_>, RuntimeScheduleError> {
+        let view = self.view_packet_ticks_unvalidated_registry(index, effective_ticks)?;
+        view.validate_registry()?;
+        Ok(view)
+    }
+
+    /// Borrow a packet after range validation but before key-registry
+    /// validation.  The authored coordinator's one-pass preparation uses this
+    /// seam so it can validate each compact intent and consume it exactly once
+    /// while building its frozen logical product.  Other callers should use
+    /// [`RuntimeSchedule::view_packet_ticks`].
+    pub fn view_packet_ticks_unvalidated_registry(
+        &self,
+        index: usize,
+        effective_ticks: TimelineTicks,
+    ) -> Result<PacketView<'_>, RuntimeScheduleError> {
         let header = self
             .packets
             .get(index)
@@ -216,17 +231,6 @@ impl RuntimeSchedule {
             .intents
             .get(down_start..down_end)
             .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
-        for compact in up_intents.iter().chain(down_intents) {
-            if self
-                .key_registry
-                .scan_code_for(compact.key_slot())
-                .is_none()
-            {
-                return Err(RuntimeScheduleError::InvalidKeySlot {
-                    slot: compact.key_slot(),
-                });
-            }
-        }
         Ok(PacketView {
             packet_index: index,
             header,
@@ -365,6 +369,18 @@ pub struct PacketView<'a> {
 }
 
 impl PacketView<'_> {
+    /// Validate every compact intent against the fixed key registry.
+    pub fn validate_registry(&self) -> Result<(), RuntimeScheduleError> {
+        for compact in self.up_intents.iter().chain(self.down_intents) {
+            if self.registry.scan_code_for(compact.key_slot()).is_none() {
+                return Err(RuntimeScheduleError::InvalidKeySlot {
+                    slot: compact.key_slot(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     #[inline]
     pub fn packet_id(&self) -> PacketId {
         self.header.packet_id
