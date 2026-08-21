@@ -78,6 +78,12 @@ that HWND for both focus modes: `--require-focus` verifies it stays focused;
 authorize an unspecified foreground window. The sink records ordinary window
 key events only and never emits input.
 
+If the free-threaded Python distribution does not include Tcl/Tk, use the
+equivalent WinForms sink with `pwsh -NoProfile -File
+scripts/native_acceptance_sink.ps1 -ReadyFile .benchmarks/sink.json -EventLog
+.benchmarks/sink-events.json`. The two sinks have the same receive-only
+contract.
+
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
 source metadata from that same packet view; deferred Up ownership may perform
