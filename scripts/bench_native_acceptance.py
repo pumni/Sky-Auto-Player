@@ -351,22 +351,34 @@ def _validate_telemetry_integrity(
     if scenario not in {"paired", "mixed", "coalesced"}:
         raise ValueError("scenario must be paired, mixed, or coalesced")
     authored_indices = [int(action[0]) for action in actions]
-    authored_kinds = {int(action[0]): str(action[1]) for action in actions}
     combined_boundaries = scenario in {"mixed", "coalesced"}
-    if combined_boundaries:
-        if len(actions) < 2 or len(actions) % 2 != 0:
-            raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
-        expected_indices = [authored_indices[0], *authored_indices[2::2], authored_indices[-1]]
-        expected_kinds = {
-            authored_indices[0]: "down",
-            **dict.fromkeys(authored_indices[2::2], "mixed"),
-            authored_indices[-1]: "up",
-        }
-        expected_authored_indices = set(authored_indices)
-    else:
-        expected_indices = authored_indices
-        expected_kinds = authored_kinds
-        expected_authored_indices = set(authored_indices)
+    if combined_boundaries and (len(actions) < 2 or len(actions) % 2 != 0):
+        raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
+    expected_indices: list[int] = []
+    expected_kinds: dict[int, str] = {}
+    for position, action in enumerate(actions):
+        index, kind, scheduled_us, *_ = action
+        if (
+            combined_boundaries
+            and kind == "up"
+            and position + 1 < len(actions)
+            and actions[position + 1][1] == "down"
+            and actions[position + 1][2] == scheduled_us
+        ):
+            continue
+        record_kind = str(kind)
+        if (
+            combined_boundaries
+            and kind == "down"
+            and position > 0
+            and actions[position - 1][1] == "up"
+            and actions[position - 1][2] == scheduled_us
+        ):
+            record_kind = "mixed"
+        event_index = int(index)
+        expected_indices.append(event_index)
+        expected_kinds[event_index] = record_kind
+    expected_authored_indices = set(authored_indices)
     expected_counts = collections.Counter(expected_indices)
     expected_duplicate_indices = sorted(
         index for index, count in expected_counts.items() if count > 1
