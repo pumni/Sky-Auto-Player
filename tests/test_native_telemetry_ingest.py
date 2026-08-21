@@ -79,16 +79,19 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.skipped_scan_codes == ()
 
 
-def test_native_trace_materializer_accepts_full_mixed_physical_cardinality() -> None:
-    output = _compact_output(requested_count=2, sent_count=2)
+@pytest.mark.parametrize("polyphony", [2, 30])
+def test_native_trace_materializer_accepts_full_mixed_physical_cardinality(
+    polyphony: int,
+) -> None:
+    output = _compact_output(requested_count=polyphony, sent_count=polyphony)
     output["records"][0]["kind"] = 2
-    output["records"][0]["polyphony"] = 2
+    output["records"][0]["polyphony"] = polyphony
 
     record = materialize_native_trace(output)[0]
 
     assert record.kind == "mixed"
-    assert record.native_polyphony == 2
-    assert record.native_requested_count == 2
+    assert record.native_polyphony == polyphony
+    assert record.native_requested_count == polyphony
 
 
 def test_native_trace_materializer_preserves_zero_relative_send_start() -> None:

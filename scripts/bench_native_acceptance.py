@@ -561,6 +561,60 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
+    """Classify a report without hiding a timing or delivery failure in JSON."""
+
+    reasons: list[str] = []
+    if report.get("run_validity") != "complete":
+        reasons.append("incomplete_run_set")
+    if report.get("failed_dispatch_suites", 0) or report.get("failed_command_samples", 0):
+        reasons.append("failed_run")
+    if report.get("deadline_missed_before_send_count", 0):
+        reasons.append("deadline_missed_before_send")
+    if report.get("non_dispatch_count", 0):
+        reasons.append("non_dispatch")
+    if report.get("observer_dropped_records", 0):
+        reasons.append("observer_dropped_records")
+
+    correctness = report.get("correctness")
+    if isinstance(correctness, dict):
+        for name, value in correctness.items():
+            if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+                reasons.append(f"correctness:{name}")
+
+    for name in (
+        "failed_release_count",
+        "chord_split_events",
+        "chords_rejected",
+        "authored_keys_rejected",
+        "sendinput_partial_events",
+        "sendinput_zero_progress_failures",
+    ):
+        value = report.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+            reasons.append(name)
+
+    wake = report.get("wake_error_us")
+    if isinstance(wake, dict):
+        absolute = wake.get("absolute")
+        if isinstance(absolute, dict) and absolute.get("p99", 0) > ABSOLUTE_WAKE_P99_LIMIT_US:
+            reasons.append("wake_p99_slo")
+
+    pre_call = report.get("pre_call_lateness_us")
+    if isinstance(pre_call, dict):
+        if pre_call.get("early_count", 0) != 0:
+            reasons.append("early_physical_send")
+        if pre_call.get("late_over_2ms_count", 0) != 0:
+            reasons.append("pre_call_over_2ms")
+        late = pre_call.get("late")
+        if isinstance(late, dict):
+            if late.get("p99", 0) > ABSOLUTE_PRE_CALL_P99_LIMIT_US:
+                reasons.append("pre_call_p99_slo")
+            if late.get("p999", 0) > ABSOLUTE_PRE_CALL_P999_LIMIT_US:
+                reasons.append("pre_call_p999_slo")
+    return reasons
+
+
 def _failed_run_artifact_path(output: Path | None, run_index: int) -> Path:
     """Choose a unique diagnostic path without overwriting an earlier failure."""
 
@@ -913,7 +967,7 @@ def _new_session(
             "SendInput qualification requires a production native wheel; "
             "test-support is not a valid physical timing path"
         )
-    target_hwnd = _real_input_target_hwnd(require_focus=require_focus)
+    target_hwnd = _real_input_target_hwnd()
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
@@ -928,12 +982,11 @@ def _new_session(
 
 
 def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
-    if not require_focus:
-        return 0
+    del require_focus
     raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
     if raw is None or not raw.strip():
         raise RuntimeError(
-            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated host"
+            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated test sink"
         )
     try:
         hwnd = int(raw, 0)
@@ -1116,6 +1169,8 @@ def _run_dispatch(
             "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
             "lead_by_polyphony": lead_by_polyphony,
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
+            "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+            "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
                 snapshot.get("startup_latency_us"), "startup_latency_us"
@@ -2170,6 +2225,8 @@ def main() -> int:
             "failed_command_samples": len(command_failures),
             "unattempted_dispatch_suites": dispatch_repeats - len(suite_results),
             "statistics_eligible": False,
+            "acceptance_clean": False,
+            "acceptance_failure_reasons": ["failed_run"],
             "excluded_runs": 0,
             "failures": failures + command_failures,
             "mock_latency_model": {
@@ -2336,9 +2393,7 @@ def main() -> int:
         "requested_command_samples": command_samples,
         "successful_command_samples": len(command_runs),
         "failed_command_samples": 0,
-        "statistics_eligible": _qualification_boundary_gate(
-            backend=args.backend, measured_boundaries=physical_boundaries
-        ),
+        "statistics_eligible": False,
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
@@ -2383,6 +2438,19 @@ def main() -> int:
             dispatch_runs, "sender_completion_error_us"
         ),
         "correctness": _aggregate_correctness(dispatch_runs),
+        "deadline_missed_before_send_count": sum(
+            run["missed_down_boundaries"] for run in dispatch_runs
+        ),
+        "non_dispatch_count": sum(
+            sum(
+                int(run["generation_status_counts"].get(name, 0))
+                for name in ("dropped_conflict", "dropped_expired", "dropped_backend")
+            )
+            for run in dispatch_runs
+        ),
+        "observer_dropped_records": sum(
+            run["observer_dropped_records"] for run in dispatch_runs
+        ),
         "guards": {
             "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
             "rt_priority_mode": benchmark_config["rt_priority_mode"],
@@ -2480,21 +2548,26 @@ def main() -> int:
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
-    if not report["statistics_eligible"]:
-        encoded = json.dumps(report, indent=2)
-        print(encoded)
-        if args.output is not None:
-            args.output.write_text(encoded + "\n", encoding="utf-8")
+    acceptance_failure_reasons = _acceptance_failure_reasons(report)
+    report["acceptance_clean"] = not acceptance_failure_reasons
+    report["acceptance_failure_reasons"] = acceptance_failure_reasons
+    report["statistics_eligible"] = (
+        report["acceptance_clean"]
+        and _qualification_boundary_gate(
+            backend=args.backend, measured_boundaries=physical_boundaries
+        )
+    )
+    encoded = json.dumps(report, indent=2)
+    print(encoded)
+    if args.output is not None:
+        args.output.write_text(encoded + "\n", encoding="utf-8")
+    if not report["acceptance_clean"] or not report["statistics_eligible"]:
         return 1
     _assert_report_correctness(report)
     _assert_absolute_wake_slo(report)
     _assert_absolute_pre_call_slo(report)
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
-    encoded = json.dumps(report, indent=2)
-    print(encoded)
-    if args.output is not None:
-        args.output.write_text(encoded + "\n", encoding="utf-8")
     return 0
 
 

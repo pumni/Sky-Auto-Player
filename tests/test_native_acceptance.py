@@ -49,6 +49,7 @@ def test_real_backend_requires_explicit_physical_probe_target(
 
     monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0x1234")
     assert ACCEPTANCE._real_input_target_hwnd() == 0x1234
+    assert ACCEPTANCE._real_input_target_hwnd(require_focus=False) == 0x1234
 
     monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0")
     with pytest.raises(RuntimeError, match="positive integer"):
@@ -787,3 +788,25 @@ def test_partial_repetition_set_is_invalid_and_not_statistics_eligible() -> None
         "failed_runs": 1,
         "run_validity": "invalid",
     }
+
+
+def test_acceptance_failure_reasons_classify_deadline_miss_without_hiding_it() -> None:
+    report = {
+        "run_validity": "complete",
+        "failed_dispatch_suites": 0,
+        "failed_command_samples": 0,
+        "deadline_missed_before_send_count": 1,
+        "non_dispatch_count": 0,
+        "observer_dropped_records": 0,
+        "correctness": {"chord_integrity_lost": 0},
+        "wake_error_us": {"absolute": {"p99": 20}},
+        "pre_call_lateness_us": {
+            "early_count": 0,
+            "late_over_2ms_count": 0,
+            "late": {"p99": 10, "p999": 10},
+        },
+    }
+
+    assert ACCEPTANCE._acceptance_failure_reasons(report) == [
+        "deadline_missed_before_send"
+    ]
