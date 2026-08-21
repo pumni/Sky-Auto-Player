@@ -134,6 +134,7 @@ impl Default for WorkerConfig {
             backend: BackendConfig::Production,
             profile: DispatchProfile::Production,
             timing: TimingOptions {
+                game_fps: 60,
                 min_hold_us: 10_000,
                 down_late_grace_us: 0,
                 strict_timing: false,
@@ -164,6 +165,7 @@ impl Default for WorkerConfig {
 }
 
 pub(crate) struct TimingOptions {
+    pub(crate) game_fps: u16,
     pub(crate) min_hold_us: u64,
     pub(crate) down_late_grace_us: u64,
     pub(crate) strict_timing: bool,

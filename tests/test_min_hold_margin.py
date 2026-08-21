@@ -7,9 +7,10 @@ from sky_music.domain.scheduler_types import FrameTimingPolicy
 def test_default_margin_applies_to_both_hold_outputs() -> None:
     policy = FrameTimingPolicy.from_hold_frames(1.0, 144)
 
-    assert policy.hold_us == policy.min_hold_us == 7_445
-    assert policy.min_hold_margin_us == 500
-    assert policy.min_hold_margin_source == "default_500"
+    assert policy.hold_us == policy.min_hold_us == 7_745
+    assert policy.min_hold_margin_us == 800
+    assert policy.transport_margin_us == 300
+    assert policy.min_hold_margin_source == "default_transport_300"
 
 
 def test_calibrated_margin_is_forwarded() -> None:
@@ -17,8 +18,9 @@ def test_calibrated_margin_is_forwarded() -> None:
         1.25, 60, margin_us=800, margin_source="device_cache"
     )
 
-    assert policy.hold_us == policy.min_hold_us == 21_634
-    assert policy.min_hold_margin_us == 800
+    assert policy.hold_us == policy.min_hold_us == 22_134
+    assert policy.min_hold_margin_us == 1_300
+    assert policy.transport_margin_us == 800
     assert policy.min_hold_margin_source == "device_cache"
 
 
@@ -33,7 +35,8 @@ def test_zero_margin_is_valid_for_one_frame() -> None:
 def test_calibrated_hold_margin_does_not_change_down_late_grace() -> None:
     policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=1_800)
 
-    assert policy.min_hold_margin_us == 1_800
+    assert policy.min_hold_margin_us == 2_300
+    assert policy.transport_margin_us == 1_800
     assert policy.down_late_grace_us == 500
 
 
@@ -45,8 +48,8 @@ def test_down_late_grace_is_a_floor_for_materialized_hold() -> None:
         1.0, 60, margin_us=300, down_late_grace_us=500
     )
 
-    assert a.min_hold_margin_us == 300
-    assert b.min_hold_margin_us == 500
+    assert a.min_hold_margin_us == 400
+    assert b.min_hold_margin_us == 800
     assert b.min_hold_us > a.min_hold_us
 
 

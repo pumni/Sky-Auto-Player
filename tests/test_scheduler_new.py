@@ -171,4 +171,4 @@ def test_timing_policy_construction_is_explicit_and_typed() -> None:
 
     assert resolved.hold_frames == 1.25
     assert resolved.fps == 60
-    assert resolved.hold_us == resolved.min_hold_us == 21_334
+    assert resolved.hold_us == resolved.min_hold_us == 21_634

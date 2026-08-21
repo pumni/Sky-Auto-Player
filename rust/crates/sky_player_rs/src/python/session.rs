@@ -75,12 +75,14 @@ impl NativeDispatchSessionPy {
             ));
         }
         let schedule = parse_schedule(py_actions)?;
-        validate_schedule_timing(&schedule, effective_min_hold_us)?;
+        let min_release_gap_us = 1_000_000u64.div_ceil(u64::from(game_fps));
+        validate_schedule_timing(&schedule, effective_min_hold_us, min_release_gap_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Production,
             profile: parsed_profile,
             timing: TimingOptions {
+                game_fps,
                 min_hold_us: effective_min_hold_us,
                 down_late_grace_us,
                 strict_timing,
@@ -309,6 +311,70 @@ impl NativeDispatchSessionPy {
             snap.same_call_retrigger_boundaries,
         )?;
         dict.set_item("same_call_retrigger_keys", snap.same_call_retrigger_keys)?;
+        dict.set_item(
+            "production_forensics_available",
+            snap.production_forensics_available,
+        )?;
+        dict.set_item(
+            "production_forensics_version",
+            snap.production_forensics_version,
+        )?;
+        dict.set_item(
+            "production_hold_pair_samples",
+            snap.production_hold_pair_samples,
+        )?;
+        dict.set_item(
+            "production_min_pre_call_hold_ticks",
+            snap.production_min_pre_call_hold_ticks,
+        )?;
+        dict.set_item(
+            "production_min_completion_hold_ticks",
+            snap.production_min_completion_hold_ticks,
+        )?;
+        dict.set_item(
+            "production_max_pre_call_shrink_ticks",
+            snap.production_max_pre_call_shrink_ticks,
+        )?;
+        dict.set_item(
+            "production_max_completion_shrink_ticks",
+            snap.production_max_completion_shrink_ticks,
+        )?;
+        dict.set_item(
+            "production_completion_hold_below_frame_count",
+            snap.production_completion_hold_below_frame_count,
+        )?;
+        dict.set_item(
+            "production_release_gap_samples",
+            snap.production_release_gap_samples,
+        )?;
+        dict.set_item(
+            "production_min_release_gap_ticks",
+            snap.production_min_release_gap_ticks,
+        )?;
+        dict.set_item(
+            "production_release_gap_below_policy_count",
+            snap.production_release_gap_below_policy_count,
+        )?;
+        dict.set_item(
+            "production_same_call_same_key_retrigger_count",
+            snap.production_same_call_same_key_retrigger_count,
+        )?;
+        dict.set_item(
+            "production_anchor_overwrite_count",
+            snap.production_anchor_overwrite_count,
+        )?;
+        dict.set_item(
+            "production_unmatched_up_count",
+            snap.production_unmatched_up_count,
+        )?;
+        dict.set_item(
+            "production_anomaly_ring_overwrite_count",
+            snap.production_anomaly_ring_overwrite_count,
+        )?;
+        dict.set_item(
+            "production_forensics_anomaly_count",
+            snap.production_forensics_anomaly_count,
+        )?;
         dict.set_item("last_missed_down_reason", snap.last_missed_down_reason)?;
         dict.set_item(
             "last_missed_down_source_action_index",
@@ -326,6 +392,30 @@ impl NativeDispatchSessionPy {
         dict.set_item(
             "deadline_authorization_reuses",
             snap.deadline_authorization_reuses,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_attempts",
+            snap.late_discovery_rescue_attempts,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_sent",
+            snap.late_discovery_rescue_sent,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_sender_cutoff_misses",
+            snap.late_discovery_rescue_sender_cutoff_misses,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_credit_exhausted",
+            snap.late_discovery_rescue_credit_exhausted,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_blocked_control",
+            snap.late_discovery_rescue_blocked_control,
+        )?;
+        dict.set_item(
+            "late_discovery_rescue_blocked_focus_or_target",
+            snap.late_discovery_rescue_blocked_focus_or_target,
         )?;
         dict.set_item("max_missed_lateness_ticks", snap.max_missed_lateness_ticks)?;
         dict.set_item("chord_integrity_lost", snap.chord_integrity_lost)?;
@@ -625,7 +715,8 @@ impl TestDispatchSessionPy {
         let effective_min_hold_us = min_hold_us;
         let (schedule, _allowed_scan_codes) =
             parse_schedule_with_allowlist(py_actions, allowed_scan_codes)?;
-        validate_schedule_timing(&schedule, effective_min_hold_us)?;
+        let min_release_gap_us = 1_000_000u64.div_ceil(60);
+        validate_schedule_timing(&schedule, effective_min_hold_us, min_release_gap_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
             backend: BackendConfig::Mock {
@@ -635,6 +726,7 @@ impl TestDispatchSessionPy {
             },
             profile: DispatchProfile::MockTest,
             timing: TimingOptions {
+                game_fps: 60,
                 min_hold_us: effective_min_hold_us,
                 down_late_grace_us: 0,
                 strict_timing: false,

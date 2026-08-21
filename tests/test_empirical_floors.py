@@ -10,7 +10,7 @@ def test_production_hold_is_frame_relative(fps: int, hold_frames: float) -> None
     policy = FrameTimingPolicy.from_hold_frames(hold_frames, fps)
 
     assert policy.hold_us == policy.min_hold_us
-    assert policy.hold_us == materialize_hold_us(hold_frames, fps, 500)
+    assert policy.hold_us == materialize_hold_us(hold_frames, fps, 800)
     assert policy.hold_us >= policy.frame_us
 
 
@@ -22,13 +22,11 @@ def test_zero_margin_one_frame_equals_one_frame() -> None:
     assert policy.hold_us == policy.min_hold_us == policy.frame_us == 16_667
 
 
-def test_negative_margin_is_clamped() -> None:
-    policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy(hold_frames=1.0, min_hold_margin_us=-500), fps=60  # type: ignore[arg-type]
-    )
-
-    assert policy.hold_us == policy.min_hold_us == 17_167
-    assert policy.min_hold_margin_us == 500
+def test_negative_margin_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        FrameTimingPolicy.from_timing_policy(
+            TimingPolicy(hold_frames=1.0, min_hold_margin_us=-500), fps=60  # type: ignore[arg-type]
+        )
 
 
 def test_frame_policy_requires_positive_fps() -> None:

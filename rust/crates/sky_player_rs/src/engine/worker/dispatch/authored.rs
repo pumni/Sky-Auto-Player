@@ -10,10 +10,12 @@ use super::super::{
     record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
     target_stamp_still_current, wait_to_precision_boundary,
 };
+use super::DownBoundaryAdmission;
 use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
 use super::observer::publisher_down_send_outcome;
 use super::recovery::{
-    DownMissReason, record_missed_down_classification, recover_missed_down_boundary,
+    DownMissReason, record_missed_down_classification, record_rescue_admission, record_rescue_send,
+    recover_missed_down_boundary,
 };
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
@@ -45,7 +47,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
-        missed_down_boundary,
+        down_admission,
         startup_target_selected,
         focus_loss_fault,
         interrupt,
@@ -93,7 +95,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
-        missed_down_boundary,
+        down_admission,
         startup_target_selected,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
@@ -107,7 +109,6 @@ pub(crate) fn dispatch_authored_packet(
         observer,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn commit_down_send_outcome(
     view: &AuthoredBatchView,
@@ -132,7 +133,7 @@ fn commit_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
-    missed_down_boundary: bool,
+    down_admission: DownBoundaryAdmission,
     _startup_target_selected: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
@@ -163,7 +164,7 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
-        missed_down_boundary,
+        down_admission,
         timing,
         has_conflicts,
         focus_loss_fault,
@@ -175,6 +176,7 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
+    record_rescue_admission(down_admission, &admission, local_metrics);
     let admission = match finalize_authored_down_admission(
         view,
         config,
@@ -196,7 +198,7 @@ fn commit_down_send_outcome(
         progress_clock,
         timing,
         physical_target_qpc,
-        missed_down_boundary,
+        down_admission,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         #[cfg(any(test, feature = "test-support"))]
@@ -207,7 +209,7 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
-    if missed_down_boundary {
+    if down_admission.is_missed() {
         return recover_missed_down_boundary(
             view,
             config,
@@ -236,6 +238,7 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        down_admission,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
@@ -257,10 +260,7 @@ pub(crate) enum AdmissionOutcome {
     TargetChanged,
     ControlRejected,
 }
-/// Pre-send admission gate: focus, preflight, Down late-grace cutoff, conflict
-/// detection, and final down-admission.  The unfocused path commits pause
-/// state and enqueues fixed observation evidence; the observer materializes
-/// telemetry and publication.  Does not call `SendInput`.
+/// Pre-send admission gate for focus, preflight, late-grace, conflict, and final Down authorization.
 #[allow(clippy::too_many_arguments)]
 fn admit_authored_down(
     view: &AuthoredBatchView,
@@ -281,7 +281,7 @@ fn admit_authored_down(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
-    missed_down_boundary: bool,
+    down_admission: DownBoundaryAdmission,
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
@@ -303,6 +303,9 @@ fn admit_authored_down(
                 "focus suspension failed: {error}"
             )));
         }
+        runtime
+            .production_forensics
+            .observe_lifecycle(ObserverLifecycle::ResetAll);
         super::observation::enqueue_lifecycle(observer, ObserverLifecycle::ResetAll, local_metrics);
         if let Err(error) = clock_state.enter_pause(PauseReason::Focus, now_ticks) {
             return Err(DispatchStep::Terminate(format!(
@@ -353,7 +356,7 @@ fn admit_authored_down(
     }
     if has_down_events
         && config.timing.strict_timing
-        && !missed_down_boundary
+        && !down_admission.is_missed()
         && effective_now_ticks
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.down_late_grace_ticks)
@@ -436,7 +439,7 @@ fn finalize_authored_down_admission(
     progress_clock: &SharedProgressClock,
     timing: &WorkerTimingState,
     physical_target_qpc: QpcTicks,
-    missed_down_boundary: bool,
+    down_admission: DownBoundaryAdmission,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
@@ -450,7 +453,7 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    let precision_wake_qpc = if missed_down_boundary {
+    let precision_wake_qpc = if down_admission.is_missed() || down_admission.is_late_rescue() {
         None
     } else {
         #[cfg(any(test, feature = "test-support"))]
@@ -491,7 +494,6 @@ fn finalize_authored_down_admission(
             )
         }
     };
-
     let control_signals = FinalControlSignals {
         quit_requested,
         skip_requested,
@@ -537,6 +539,9 @@ fn finalize_authored_down_admission(
                     progress_clock,
                 );
                 if result.is_ok() {
+                    runtime
+                        .production_forensics
+                        .observe_lifecycle(ObserverLifecycle::ResetAll);
                     super::observation::enqueue_lifecycle(
                         observer,
                         ObserverLifecycle::ResetAll,
@@ -554,10 +559,7 @@ fn finalize_authored_down_admission(
     }
     #[cfg(any(test, feature = "test-support"))]
     let final_proof_qpc = if test_direct_boundary {
-        // The test harness supplied the already-frozen target as a synthetic
-        // exact-boundary sample. It does not rebase the epoch or mutate the
-        // plan after arm; it only avoids host waiter jitter in correctness
-        // tests.
+        // Tests supply a frozen exact-boundary target to avoid waiter jitter.
         physical_target_qpc
     } else {
         qpc_clock.now().map_err(|error| {
@@ -612,7 +614,6 @@ pub(crate) fn handle_final_focus_loss(
     runtime.focus_restore_started_ticks = None;
     Ok(AdmissionOutcome::FocusLost)
 }
-
 fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
     match view.prepared_batch.packet_kind {
         sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
@@ -620,7 +621,6 @@ fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
         sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn record_down_send_outcome(
     view: &AuthoredBatchView,
@@ -636,6 +636,7 @@ fn record_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     _now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    down_admission: DownBoundaryAdmission,
     admission: &AdmissionOutcome,
     #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
@@ -705,6 +706,7 @@ fn record_down_send_outcome(
         sky_dispatch_win32::input::SendTransactionStatus::DeadlineMissedBeforeSend
     ) && view.packet_masks.down_mask != 0
     {
+        record_rescue_send(local_metrics, down_admission, true);
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
                 "DeadlineMissedBeforeSend missing authoritative start boundary",
@@ -746,6 +748,7 @@ fn record_down_send_outcome(
             view.batch_source_action_index
         ));
     }
+    record_rescue_send(local_metrics, down_admission, false);
     let trace_kind = *trace_kind;
     finalize_down_send_outcome(
         view,
@@ -775,7 +778,6 @@ fn record_down_send_outcome(
         observer,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn finalize_down_send_outcome(
     view: &AuthoredBatchView,
@@ -855,7 +857,6 @@ fn finalize_down_send_outcome(
         &timing_proof,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_slo_terminal_step(
     result_chord_integrity_lost: bool,
@@ -894,7 +895,6 @@ pub(super) fn resolve_slo_terminal_step(
     }
     DispatchStep::Dispatched
 }
-
 #[cfg(test)]
 #[path = "authored_tests.rs"]
 mod tests;

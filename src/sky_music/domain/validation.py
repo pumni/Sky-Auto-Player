@@ -31,6 +31,7 @@ class ScheduleInvariantViolation:
         "unsorted_timeline",
         "unpaired_up",
         "insufficient_hold",
+        "same_key_release_gap",
         "excessive_polyphony",
     ]
     message: str
@@ -72,9 +73,14 @@ def validate_key_actions(
             "pass the same policy used to build the schedule."
         )
 
+    min_release_gap_us = policy.min_release_gap_us
+    if min_release_gap_us is None:
+        raise ValueError("FrameTimingPolicy must materialize min_release_gap_us")
+
     violations = []
     active_keys = set()
     active_downs = {}  # scan_code -> (at_us, action_idx)
+    last_ups: dict[int, int] = {}
 
     prev_at_us = -1
     for idx, action in enumerate(actions):
@@ -115,6 +121,23 @@ def validate_key_actions(
         # 4. Duplicate down & hold duration validation checks
         if action.kind == "down":
             for sc in action.scan_codes:
+                if sc in last_ups:
+                    release_gap = action.at_us - last_ups[sc]
+                    if release_gap < int(min_release_gap_us):
+                        violations.append(
+                            ScheduleInvariantViolation(
+                                code="same_key_release_gap",
+                                message=(
+                                    f"Scan code {sc} was released at {last_ups[sc]}us and "
+                                    f"re-pressed at {action.at_us}us; release gap "
+                                    f"{release_gap}us is below one frame "
+                                    f"({int(min_release_gap_us)}us)"
+                                ),
+                                at_us=action.at_us,
+                                scan_code=sc,
+                                severity="fatal",
+                            )
+                        )
                 if sc in active_keys:
                     severity = (
                         "fatal"
@@ -181,6 +204,7 @@ def validate_key_actions(
 
                     active_keys.discard(sc)
                     active_downs.pop(sc, None)
+                    last_ups[sc] = action.at_us
 
     # 5. Stuck keys at the end of the song
     if active_keys:

@@ -1,5 +1,5 @@
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
-use super::dispatch::PhysicalBoundaryStamp;
+use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
@@ -203,23 +203,46 @@ pub(crate) fn dispatch_due_from_plan(
         // comes from the nonblocking observation that precedes the waiter.
         runtime.observe_future_down_boundary(boundary_stamp);
     }
-    let missed_down_boundary = boundary.is_some_and(|boundary| {
-        physical_target_qpc <= now_ticks
-            && runtime.down_boundary_state.awaiting_future()
-            && !runtime.authorize_down_boundary(boundary)
-            && runtime.musical_physical_commit_started
-    });
-    if boundary.is_some_and(|boundary| {
-        physical_target_qpc <= now_ticks && runtime.authorize_down_boundary(boundary)
-    }) {
-        local_metrics.deadline_authorization_reuses = local_metrics
-            .deadline_authorization_reuses
-            .saturating_add(1);
-        if physical_target_qpc < now_ticks {
-            local_metrics.late_authorized_boundaries =
-                local_metrics.late_authorized_boundaries.saturating_add(1);
+    let down_admission = boundary.map_or(DownBoundaryAdmission::Normal, |boundary| {
+        if physical_target_qpc > now_ticks {
+            return DownBoundaryAdmission::Normal;
         }
-    }
+        if runtime.authorize_down_boundary(boundary) {
+            local_metrics.deadline_authorization_reuses = local_metrics
+                .deadline_authorization_reuses
+                .saturating_add(1);
+            if physical_target_qpc < now_ticks {
+                local_metrics.late_authorized_boundaries =
+                    local_metrics.late_authorized_boundaries.saturating_add(1);
+            }
+            return DownBoundaryAdmission::Normal;
+        }
+        if !runtime.musical_physical_commit_started {
+            return DownBoundaryAdmission::Normal;
+        }
+
+        let lateness = now_ticks
+            .checked_duration_since(physical_target_qpc)
+            .unwrap_or(DurationTicks::from_raw(u64::MAX));
+        if runtime.try_consume_late_discovery_rescue(lateness, timing.down_late_grace_ticks) {
+            local_metrics.late_discovery_rescue_attempts = local_metrics
+                .late_discovery_rescue_attempts
+                .saturating_add(1);
+            return DownBoundaryAdmission::LateDiscoveryRescue;
+        }
+
+        // A first overdue boundary beyond grace also consumes the one-shot
+        // credit. This prevents the next distinct overdue boundary from
+        // being rescued without a new exact future observation.
+        let credit_was_available = runtime.down_boundary_state.late_rescue_available();
+        runtime.consume_late_discovery_rescue_credit();
+        if !credit_was_available {
+            local_metrics.late_discovery_rescue_credit_exhausted = local_metrics
+                .late_discovery_rescue_credit_exhausted
+                .saturating_add(1);
+        }
+        DownBoundaryAdmission::MissedBacklog
+    });
     runtime.last_dispatch_was_missed_down = false;
 
     let step = super::dispatch_authored_packet(
@@ -228,7 +251,7 @@ pub(crate) fn dispatch_due_from_plan(
             effective_now_ticks,
             now_ticks,
             physical_target_qpc,
-            missed_down_boundary,
+            down_admission,
             startup_target_selected,
             focus_loss_fault,
             interrupt,
@@ -259,7 +282,7 @@ pub(crate) fn dispatch_due_from_plan(
         && !runtime.last_dispatch_was_missed_down
         && boundary.is_some()
     {
-        runtime.mark_down_commit_started();
+        runtime.mark_down_commit_started(down_admission.is_late_rescue());
     }
     step
 }
@@ -477,6 +500,9 @@ pub(super) fn dispatch(
                                 &mut core.metrics.observer_queue_high_watermark,
                             );
                         }
+                        core.runtime.production_forensics.observe_lifecycle(
+                            super::dispatch::observation::ObserverLifecycle::ResetAll,
+                        );
                         if let Err(error) = ensure_preflight_for_target(
                             &resources.backend,
                             preflight_target,
@@ -565,6 +591,9 @@ pub(super) fn dispatch(
                             &mut core.metrics.observer_queue_high_watermark,
                         );
                     }
+                    core.runtime.production_forensics.observe_lifecycle(
+                        super::dispatch::observation::ObserverLifecycle::ResetAll,
+                    );
                     *core.errors.abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(
                         &resources.backend,
@@ -1041,7 +1070,7 @@ mod tests {
             physical_target_qpc: QpcTicks::from_raw(1_000),
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started();
+        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(stamp);
         assert_eq!(
             runtime.down_boundary_state,
@@ -1066,7 +1095,7 @@ mod tests {
             ..first
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started();
+        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(first);
         assert!(!runtime.authorize_down_boundary(second));
     }
@@ -1083,12 +1112,14 @@ mod tests {
             physical_target_qpc: QpcTicks::from_raw(1_000),
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started();
+        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(stamp);
         runtime.invalidate_down_authorization();
         assert_eq!(
             runtime.down_boundary_state,
-            DownBoundaryState::AwaitingFuture
+            DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            }
         );
         assert!(!runtime.authorize_down_boundary(stamp));
     }

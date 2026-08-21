@@ -50,7 +50,9 @@ pub(crate) struct PhysicalBoundaryStamp {
 pub(crate) enum DownBoundaryState {
     #[default]
     Initial,
-    AwaitingFuture,
+    AwaitingFuture {
+        late_rescue_available: bool,
+    },
     FutureAuthorized(PhysicalBoundaryStamp),
 }
 
@@ -61,11 +63,45 @@ impl DownBoundaryState {
     }
 
     #[inline]
+    pub(crate) const fn late_rescue_available(self) -> bool {
+        matches!(
+            self,
+            Self::AwaitingFuture {
+                late_rescue_available: true
+            }
+        )
+    }
+
+    #[inline]
     pub(crate) const fn authorization(self) -> Option<PhysicalBoundaryStamp> {
         match self {
             Self::FutureAuthorized(stamp) => Some(stamp),
-            Self::Initial | Self::AwaitingFuture => None,
+            Self::Initial | Self::AwaitingFuture { .. } => None,
         }
+    }
+}
+
+/// Musical admission class for one prepared Down-bearing boundary.
+///
+/// `LateDiscoveryRescue` is deliberately distinct from exact future
+/// authorization: it permits one isolated small-late attempt but never
+/// changes the authored target or bypasses the sender cutoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DownBoundaryAdmission {
+    Normal,
+    LateDiscoveryRescue,
+    MissedBacklog,
+}
+
+impl DownBoundaryAdmission {
+    #[inline]
+    pub(crate) const fn is_missed(self) -> bool {
+        matches!(self, Self::MissedBacklog)
+    }
+
+    #[inline]
+    pub(crate) const fn is_late_rescue(self) -> bool {
+        matches!(self, Self::LateDiscoveryRescue)
     }
 }
 
@@ -74,7 +110,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
-    pub(crate) missed_down_boundary: bool,
+    pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) startup_target_selected: bool,
     pub(crate) focus_loss_fault: bool,
     pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,

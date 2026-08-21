@@ -17,17 +17,22 @@ from typing import cast
 
 DEFAULT_CACHE_FILENAME: str = ".cache/input_latency.json"
 SOURCE_DEVICE_CACHE: str = "device_cache"
-SOURCE_DEFAULT_500: str = "default_500"
-SOURCE_OUT_OF_ENVELOPE_DEFAULT_500: str = "out_of_envelope_default_500"
-SOURCE_INVALID_CACHE_DEFAULT_500: str = "invalid_cache_default_500"
-SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = "incompatible_host_default_500"
-SUPPORTED_CACHE_VERSION: int = 7
+SOURCE_DEFAULT_TRANSPORT_300: str = "default_transport_300"
+SOURCE_OUT_OF_ENVELOPE_TRANSPORT_300: str = "out_of_envelope_transport_300"
+SOURCE_INVALID_CACHE_TRANSPORT_300: str = "invalid_cache_transport_300"
+SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300: str = "incompatible_host_transport_300"
+# Symbol aliases retained for callers that only used the old constant names.
+SOURCE_DEFAULT_500: str = SOURCE_DEFAULT_TRANSPORT_300
+SOURCE_OUT_OF_ENVELOPE_DEFAULT_500: str = SOURCE_OUT_OF_ENVELOPE_TRANSPORT_300
+SOURCE_INVALID_CACHE_DEFAULT_500: str = SOURCE_INVALID_CACHE_TRANSPORT_300
+SOURCE_INCOMPATIBLE_HOST_DEFAULT_500: str = SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300
+SUPPORTED_CACHE_VERSION: int = 8
 LEGACY_CACHE_VERSION: int = 3
 PREVIOUS_CACHE_VERSION: int = 4
 SUPPORTED_NATIVE_CALIBRATION_VERSION: int = 15
 COMPATIBLE_CACHE_NATIVE_CALIBRATION_VERSIONS: frozenset[int] = frozenset({15})
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION: int = 10
-SOURCE_FORMULA_VERSION: int = 5
+SOURCE_FORMULA_VERSION: int = 6
 LEGACY_SOURCE_FORMULA_VERSION: int = 3
 HOST_FINGERPRINT_VERSION: int = 2
 CALIBRATION_ARTIFACT_SCHEMA_VERSION: int = 11
@@ -62,18 +67,25 @@ class CalibrationQualification:
     candidate_margin_us: int
     applied_margin_us: int | None
 
+    @property
+    def candidate_transport_margin_us(self) -> int:
+        return self.candidate_margin_us
+
+    @property
+    def applied_transport_margin_us(self) -> int | None:
+        return self.applied_margin_us
+
 
 def qualify_calibration_margin(
-    sender_hold_shrink_p99_us: int,
+    transport_worst_positive_us: int,
 ) -> CalibrationQualification:
-    """Apply the authoritative sender completion-hold qualification formula."""
+    """Qualify transport margin from the worst positive SendInput shrink."""
 
-    if not isinstance(sender_hold_shrink_p99_us, int) or isinstance(
-        sender_hold_shrink_p99_us, bool
+    if not isinstance(transport_worst_positive_us, int) or isinstance(
+        transport_worst_positive_us, bool
     ):
-        raise TypeError("sender_hold_shrink_p99_us must be an integer")
-    positive_p99 = max(0, sender_hold_shrink_p99_us)
-    candidate = positive_p99 + MARGIN_GUARD_US
+        raise TypeError("transport_worst_positive_us must be an integer")
+    candidate = max(0, transport_worst_positive_us) + MARGIN_GUARD_US
     if candidate > MARGIN_CEILING_US:
         return CalibrationQualification(
             status=CalibrationStatus.OUT_OF_ENVELOPE,
@@ -141,6 +153,22 @@ class CalibrationCacheSummary:
     down_us: CalibrationQuantiles | None = None
     up_us: CalibrationQuantiles | None = None
 
+    @property
+    def transport_margin_us(self) -> int | None:
+        return self.margin_us
+
+    @property
+    def transport_worst_positive_us(self) -> int:
+        return self.sender_hold_shrink_p99_us
+
+    @property
+    def transport_margin_candidate_us(self) -> int:
+        return self.candidate_margin_us
+
+    @property
+    def transport_margin_applied_us(self) -> int | None:
+        return self.margin_us
+
 
 @dataclass(frozen=True, slots=True)
 class CalibrationLoadResult:
@@ -148,6 +176,18 @@ class CalibrationLoadResult:
     resolved_margin_us: int
     margin_source: str
     summary: CalibrationCacheSummary | None
+
+    @property
+    def resolved_transport_margin_us(self) -> int:
+        return self.resolved_margin_us
+
+    @property
+    def transport_margin_source(self) -> str:
+        return self.margin_source
+
+    @property
+    def calibration_timing_qualified(self) -> bool:
+        return self.status is CalibrationStatus.VALID
 
 
 def _int(value: object, name: str, *, minimum: int | None = None) -> int:
@@ -421,16 +461,16 @@ def _parse_pair_buckets(data: dict[str, object]) -> dict[str, PairBucketSummary]
 def _recompute_qualification(
     pair_buckets: dict[str, PairBucketSummary],
 ) -> tuple[int, str, CalibrationQualification]:
-    p99_values = {
-        key: max(0, bucket.pair_sender_hold_shrink_us.p99)
+    transport_values = {
+        key: max(0, bucket.sendinput_shrink_us.max)
         for key, bucket in pair_buckets.items()
     }
-    global_p99 = max(0, *(p99_values[key] for key in REQUIRED_BUCKETS))
+    global_transport = max(0, *(transport_values[key] for key in REQUIRED_BUCKETS))
     worst_bucket = max(
         REQUIRED_BUCKETS,
-        key=lambda key: (p99_values[key], -REQUIRED_BUCKETS.index(key)),
+        key=lambda key: (transport_values[key], -REQUIRED_BUCKETS.index(key)),
     )
-    return global_p99, worst_bucket, qualify_calibration_margin(global_p99)
+    return global_transport, worst_bucket, qualify_calibration_margin(global_transport)
 
 
 def _validate_policy_constants(
@@ -479,25 +519,29 @@ def _summary(
     )
 
 
-def _parse_v7(data: dict[str, object]) -> CalibrationCacheSummary:
+def _parse_v8(data: dict[str, object]) -> CalibrationCacheSummary:
     if data.get("source_formula_version") != SOURCE_FORMULA_VERSION:
         raise ValueError("unsupported sender calibration source formula")
     _validate_provenance(data, require_extended=True)
     scheduling_aids = _validate_publishable_scheduling_aids(data.get("scheduling_aids"))
     pair_buckets = _parse_pair_buckets(data)
-    global_p99, worst_bucket, qualification = _recompute_qualification(pair_buckets)
+    global_transport, worst_bucket, qualification = _recompute_qualification(pair_buckets)
 
     raw = data.get("qualification")
     if not isinstance(raw, dict):
         raise TypeError("qualification must be an object")
-    if raw.get("basis") != "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink":
+    if raw.get("basis") != "max_required_bucket_max_positive_sendinput_shrink":
         raise ValueError("qualification basis is missing or invalid")
     if raw.get("worst_bucket") != worst_bucket:
         raise ValueError("qualification worst bucket is inconsistent")
-    if raw.get("sender_hold_shrink_p99_us") != global_p99:
-        raise ValueError("qualification p99 is inconsistent")
+    if raw.get("transport_worst_positive_us") != global_transport:
+        raise ValueError("qualification transport worst-case is inconsistent")
     guard, floor, ceiling = _validate_policy_constants(raw, name="qualification")
-    candidate = _int(raw.get("candidate_margin_us"), "qualification.candidate_margin_us", minimum=0)
+    candidate = _int(
+        raw.get("candidate_transport_margin_us"),
+        "qualification.candidate_transport_margin_us",
+        minimum=0,
+    )
     if candidate != qualification.candidate_margin_us:
         raise ValueError("qualification candidate is inconsistent")
     serialized_status = raw.get("status", data.get("status"))
@@ -508,24 +552,42 @@ def _parse_v7(data: dict[str, object]) -> CalibrationCacheSummary:
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid calibration cache status") from exc
     if status not in (CalibrationStatus.VALID, CalibrationStatus.OUT_OF_ENVELOPE):
-        raise ValueError("v7 cache has a non-publishable status")
+        raise ValueError("v8 cache has a non-publishable status")
     if status is not qualification.status:
         raise ValueError("qualification status is inconsistent")
 
-    applied_value = raw.get("applied_margin_us")
+    applied_value = raw.get("applied_transport_margin_us")
     if applied_value is None:
         applied = None
     else:
-        applied = _int(applied_value, "qualification.applied_margin_us", minimum=0)
+        applied = _int(
+            applied_value, "qualification.applied_transport_margin_us", minimum=0
+        )
     if applied != qualification.applied_margin_us:
         raise ValueError("qualification applied margin is inconsistent")
+    if data.get("transport_margin_us") != applied:
+        raise ValueError("transport margin is inconsistent")
+    if data.get("transport_margin_source") != SOURCE_DEVICE_CACHE:
+        raise ValueError("transport margin source is inconsistent")
+    if data.get("transport_worst_positive_us") != global_transport:
+        raise ValueError("transport worst-positive evidence is inconsistent")
+    if data.get("transport_guard_us") != guard:
+        raise ValueError("transport guard is inconsistent")
+    if data.get("transport_floor_us") != floor:
+        raise ValueError("transport floor is inconsistent")
+    if data.get("transport_ceiling_us") != ceiling:
+        raise ValueError("transport ceiling is inconsistent")
+    if data.get("calibration_timing_qualified") != (
+        status is CalibrationStatus.VALID
+    ):
+        raise ValueError("calibration timing qualification is inconsistent")
 
     return _summary(
         status=status,
         margin_us=applied,
         pair_buckets=pair_buckets,
         worst_bucket=worst_bucket,
-        global_p99=global_p99,
+        global_p99=global_transport,
         candidate_margin_us=candidate,
         guard=guard,
         floor=floor,
@@ -555,7 +617,7 @@ def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
         raise ValueError("unsupported measurement protocol")
     if data.get("source") != SOURCE_DEVICE_CACHE:
         raise ValueError("invalid calibration source")
-    return _parse_v7(data)
+    return _parse_v8(data)
 
 
 def load_calibration_resolution(
@@ -568,7 +630,7 @@ def load_calibration_resolution(
         if not path.exists():
             return CalibrationLoadResult(
                 status=CalibrationStatus.UNCALIBRATED,
-                resolved_margin_us=500,
+                resolved_margin_us=MARGIN_FLOOR_US,
                 margin_source=SOURCE_DEFAULT_500,
                 summary=None,
             )
@@ -577,12 +639,12 @@ def load_calibration_resolution(
         except (OSError, ValueError, TypeError):
             return CalibrationLoadResult(
                 status=CalibrationStatus.INVALID_CACHE,
-                resolved_margin_us=500,
+                resolved_margin_us=MARGIN_FLOOR_US,
                 margin_source=SOURCE_INVALID_CACHE_DEFAULT_500,
                 summary=None,
             )
     if isinstance(data, dict) and (
-        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION, 5, 6)
+        data.get("version") in (2, LEGACY_CACHE_VERSION, PREVIOUS_CACHE_VERSION, 5, 6, 7)
         or data.get("measurement_protocol_version") == 4
         or data.get("measurement_protocol_version") == 8
         or data.get("measurement_protocol_version") == 9
@@ -591,7 +653,7 @@ def load_calibration_resolution(
     ):
         return CalibrationLoadResult(
             status=CalibrationStatus.INCOMPATIBLE,
-            resolved_margin_us=500,
+            resolved_margin_us=MARGIN_FLOOR_US,
             margin_source=SOURCE_INCOMPATIBLE_HOST_DEFAULT_500,
             summary=None,
         )
@@ -600,21 +662,21 @@ def load_calibration_resolution(
     except (TypeError, ValueError, KeyError):
         return CalibrationLoadResult(
             status=CalibrationStatus.INVALID_CACHE,
-            resolved_margin_us=500,
+            resolved_margin_us=MARGIN_FLOOR_US,
             margin_source=SOURCE_INVALID_CACHE_DEFAULT_500,
             summary=None,
         )
     if sys.platform == "win32" and not _host_matches_current(summary.host_fingerprint):
         return CalibrationLoadResult(
             status=CalibrationStatus.INCOMPATIBLE,
-            resolved_margin_us=500,
+            resolved_margin_us=MARGIN_FLOOR_US,
             margin_source=SOURCE_INCOMPATIBLE_HOST_DEFAULT_500,
             summary=summary,
         )
     if summary.status is CalibrationStatus.OUT_OF_ENVELOPE:
         return CalibrationLoadResult(
             status=summary.status,
-            resolved_margin_us=500,
+            resolved_margin_us=MARGIN_FLOOR_US,
             margin_source=SOURCE_OUT_OF_ENVELOPE_DEFAULT_500,
             summary=summary,
         )
@@ -658,11 +720,15 @@ __all__ = [
     "MIN_CALIBRATION_SAMPLE_COUNT",
     "REQUIRED_BUCKETS",
     "SOURCE_DEFAULT_500",
+    "SOURCE_DEFAULT_TRANSPORT_300",
     "SOURCE_DEVICE_CACHE",
     "SOURCE_FORMULA_VERSION",
     "SOURCE_INCOMPATIBLE_HOST_DEFAULT_500",
+    "SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300",
     "SOURCE_INVALID_CACHE_DEFAULT_500",
+    "SOURCE_INVALID_CACHE_TRANSPORT_300",
     "SOURCE_OUT_OF_ENVELOPE_DEFAULT_500",
+    "SOURCE_OUT_OF_ENVELOPE_TRANSPORT_300",
     "SUPPORTED_CACHE_VERSION",
     "SUPPORTED_MEASUREMENT_PROTOCOL_VERSION",
     "SUPPORTED_NATIVE_CALIBRATION_VERSION",

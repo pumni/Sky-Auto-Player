@@ -1,11 +1,56 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
+use super::DownBoundaryAdmission;
 use super::observation::{DispatchObservation, ObserverLifecycle};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_win32::input::TrackedKeyState;
+
+pub(super) fn record_rescue_admission(
+    down_admission: DownBoundaryAdmission,
+    admission: &super::authored::AdmissionOutcome,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if !down_admission.is_late_rescue() {
+        return;
+    }
+    match admission {
+        super::authored::AdmissionOutcome::BlockedUnfocused
+        | super::authored::AdmissionOutcome::FocusLost
+        | super::authored::AdmissionOutcome::TargetChanged => {
+            local_metrics.late_discovery_rescue_blocked_focus_or_target = local_metrics
+                .late_discovery_rescue_blocked_focus_or_target
+                .saturating_add(1);
+        }
+        super::authored::AdmissionOutcome::ControlRejected => {
+            local_metrics.late_discovery_rescue_blocked_control = local_metrics
+                .late_discovery_rescue_blocked_control
+                .saturating_add(1);
+        }
+        super::authored::AdmissionOutcome::Allowed { .. }
+        | super::authored::AdmissionOutcome::Guarded { .. } => {}
+    }
+}
+
+pub(super) fn record_rescue_send(
+    local_metrics: &mut WorkerMetricsLocal,
+    down_admission: DownBoundaryAdmission,
+    sender_cutoff: bool,
+) {
+    if !down_admission.is_late_rescue() {
+        return;
+    }
+    if sender_cutoff {
+        local_metrics.late_discovery_rescue_sender_cutoff_misses = local_metrics
+            .late_discovery_rescue_sender_cutoff_misses
+            .saturating_add(1);
+    } else {
+        local_metrics.late_discovery_rescue_sent =
+            local_metrics.late_discovery_rescue_sent.saturating_add(1);
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum DownMissReason {
@@ -146,6 +191,9 @@ pub(super) fn recover_missed_down_boundary(
                 "missed Down safety Up missing completion boundary",
             );
         };
+        runtime
+            .production_forensics
+            .observe_lifecycle(ObserverLifecycle::RecoveryUp { up_mask });
         if let Some(observer) = observer {
             observer.push(
                 DispatchObservation::Lifecycle(ObserverLifecycle::RecoveryUp { up_mask }),

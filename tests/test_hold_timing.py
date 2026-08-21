@@ -5,6 +5,7 @@ import pytest
 from sky_music.config import VALID_FPS
 from sky_music.domain.hold_timing import (
     HOLD_FRAME_OPTIONS,
+    frame_base_hold_us,
     frame_duration_us,
     materialize_hold_us,
     nearest_hold_frames,
@@ -44,4 +45,4 @@ def test_frame_duration_and_zero_margin() -> None:
 @pytest.mark.parametrize("hold", HOLD_FRAME_OPTIONS)
 def test_materialization_matrix(fps: int, hold: float) -> None:
     value = materialize_hold_us(hold, fps, 500)
-    assert value == round(hold * frame_duration_us(fps)) + 500
+    assert value == frame_base_hold_us(hold, fps) + 500

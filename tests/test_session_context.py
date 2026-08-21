@@ -58,8 +58,9 @@ def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
     )
 
     assert policy.hold_frames == 1.25
-    assert policy.hold_us == policy.min_hold_us == 21_634
-    assert policy.min_hold_margin_us == 800
+    assert policy.hold_us == policy.min_hold_us == 22_134
+    assert policy.min_hold_margin_us == 1_300
+    assert policy.transport_margin_us == 800
     assert policy.min_hold_margin_source == "device_cache"
     assert policy.down_late_grace_us == 500
     assert policy.focus_restore_grace_us == 100_000
@@ -68,10 +69,10 @@ def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
 @pytest.mark.parametrize(
     ("margin_us", "down_late_grace_us", "effective_margin_us"),
     [
-        (300, 500, 500),
-        (800, 500, 800),
+        (300, 500, 800),
+        (800, 500, 1_300),
         (300, 0, 300),
-        (500, 500, 500),
+        (500, 500, 1_000),
     ],
 )
 def test_effective_margin_cannot_be_below_down_late_grace(
@@ -107,10 +108,10 @@ def test_margin_coupling_preserves_selected_hold_frame_ratio(hold_frames: float)
     )
 
     assert policy.hold_frames == hold_frames
-    assert policy.min_hold_margin_us == 500
+    assert policy.min_hold_margin_us == 800
     assert base.min_hold_us == materialize_hold_us(hold_frames, 60, 300)
-    assert policy.min_hold_us == materialize_hold_us(hold_frames, 60, 500)
-    assert policy.min_hold_us - base.min_hold_us == 200
+    assert policy.min_hold_us == materialize_hold_us(hold_frames, 60, 800)
+    assert policy.min_hold_us - base.min_hold_us == 500
 
 
 def test_cli_exposes_hold_frames_and_rejects_removed_absolute_flags() -> None:

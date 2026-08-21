@@ -24,8 +24,8 @@ class CalibrationInput:
     compressed_holds: int = 0
     max_polyphony: int = 0
     note_count: int = 0
-    min_hold_margin_us: int = 500
-    min_hold_margin_source: str = "default_500"
+    min_hold_margin_us: int = 300
+    min_hold_margin_source: str = "default_transport_300"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hold_frames", normalize_hold_frames(self.hold_frames))
@@ -139,6 +139,8 @@ def calibration_input_from_summary(summary: dict) -> CalibrationInput:
         compressed_holds=int(sched.get("compressed_holds", 0)),
         max_polyphony=int(sched.get("max_polyphony", 0)),
         note_count=int(sched.get("note_count", summary.get("total_events", 0))),
-        min_hold_margin_us=max(0, int(summary.get("min_hold_margin_us", 500))),
-        min_hold_margin_source=str(summary.get("min_hold_margin_source", "default_500")),
+        min_hold_margin_us=max(0, int(summary.get("min_hold_margin_us", 300))),
+        min_hold_margin_source=str(
+            summary.get("min_hold_margin_source", "default_transport_300")
+        ),
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import math
 import os
 import sys
 import time
@@ -662,7 +663,7 @@ def _print_hold_comparison_table(
         fps=fps,
     )
     active_policy = resolve_calibrated_policy(active_session, cfg)
-    margin = int(active_policy.min_hold_margin_us)
+    margin = int(active_policy.transport_margin_us or 0)
     margin_label = f"{margin} µs ({active_policy.min_hold_margin_source})"
     intents = {1.0: "Sharpest; default; maximum same-key scheduling room", 1.25: "Moderate visibility cushion", 1.5: "Longest visibility; useful when registration reliability matters more than short repeat room"}
 
@@ -679,8 +680,12 @@ def _print_hold_comparison_table(
         table.add_column(header, justify="left" if header in ("Hold", "Intent") else "right")
     frame_us = frame_duration_us(fps)
     for ratio in HOLD_FRAME_OPTIONS:
-        base = round(ratio * frame_us)
-        effective = materialize_hold_us(ratio, fps, margin)
+        base = math.ceil(ratio * frame_us)
+        effective = materialize_hold_us(
+            ratio,
+            fps,
+            int(active_policy.down_late_grace_us) + margin,
+        )
         table.add_row(format_hold_frames(ratio), f"{ratio:.2f}", str(fps), f"{frame_us} µs", f"{base} µs", margin_label, f"{effective} µs", intents[ratio])
 
     _console.print()

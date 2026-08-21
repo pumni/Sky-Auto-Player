@@ -77,6 +77,12 @@ pub struct WorkerMetricsLocal {
     pub missed_hard_late_boundaries: u64,
     pub late_authorized_boundaries: u64,
     pub deadline_authorization_reuses: u64,
+    pub late_discovery_rescue_attempts: u64,
+    pub late_discovery_rescue_sent: u64,
+    pub late_discovery_rescue_sender_cutoff_misses: u64,
+    pub late_discovery_rescue_credit_exhausted: u64,
+    pub late_discovery_rescue_blocked_control: u64,
+    pub late_discovery_rescue_blocked_focus_or_target: u64,
     pub max_missed_lateness_ticks: u64,
     /// Deferred-observer sender packet-boundary hold forensics. These fields
     /// are deliberately scalar-only and are not part of the dispatch worker's
@@ -91,6 +97,24 @@ pub struct WorkerMetricsLocal {
     pub hold_anchor_overwrite_count: u64,
     pub same_call_retrigger_boundaries: u64,
     pub same_call_retrigger_keys: u64,
+    /// Worker-local fixed-size production forensics. Availability is false
+    /// until a successful physical packet has supplied evidence.
+    pub production_forensics_available: bool,
+    pub production_forensics_version: u32,
+    pub production_hold_pair_samples: u64,
+    pub production_min_pre_call_hold_ticks: u64,
+    pub production_min_completion_hold_ticks: u64,
+    pub production_max_pre_call_shrink_ticks: u64,
+    pub production_max_completion_shrink_ticks: u64,
+    pub production_completion_hold_below_frame_count: u64,
+    pub production_release_gap_samples: u64,
+    pub production_min_release_gap_ticks: u64,
+    pub production_release_gap_below_policy_count: u64,
+    pub production_same_call_same_key_retrigger_count: u64,
+    pub production_anchor_overwrite_count: u64,
+    pub production_unmatched_up_count: u64,
+    pub production_anomaly_ring_overwrite_count: u64,
+    pub production_forensics_anomaly_count: u64,
     /// Fixed-width evidence for the most recently classified missed Down.
     /// This is populated after classification and remains absent from the
     /// lightweight live snapshot.

@@ -236,21 +236,23 @@ Python materializes the fixed floor before native startup:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-measured_margin_us = max(0, calibrated_or_default_margin_us)
+frame_base_hold_us = ceil(hold_frames * frame_us)
 down_late_grace_us = policy.down_late_grace_us
-effective_margin_us = max(measured_margin_us, down_late_grace_us)
-effective_min_hold_us = materialize_hold(selected_hold_frames, frame_us, effective_margin_us)
+transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
+effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
 
 ```text
 authored_up >= authored_down + effective_min_hold
+next_same_key_down - previous_same_key_up >= one_frame_period
 ```
 
-The static margin is materialized once into the authored schedule. The
-`FrameTimingPolicy.min_hold_margin_us` field contains this post-policy
-effective margin, while its source field retains raw measurement provenance.
+The static components are materialized once into the authored schedule. The
+`FrameTimingPolicy.min_hold_margin_us` compatibility field contains the
+Down-grace-plus-transport aggregate; explicit fields retain the frame base,
+grace, transport margin, release gap, and transport provenance.
 An invalid
 interval fails native admission before any musical SendInput. The worker never
 combines Down completion with the authored hold to create a second floor, never
@@ -261,9 +263,9 @@ releases are stored in a fixed `[Option; 15]` per-key table with mask and
 generation ownership. There is no transport retry state.
 
 The session-fixed `down_late_grace_us` is an independent sender correctness
-policy, currently `500 µs`, converted once to QPC ticks at admission. It bounds
-authorized Down lateness only; policy construction enforces
-`effective_margin_us >= down_late_grace_us`. It is never derived from the hold margin,
+policy, currently `500 µs`, converted once to QPC ticks at admission. The
+transport margin defaults/falls back to `300 µs` and is not part of this grace.
+The grace bounds authorized Down lateness only. It is never derived from the hold margin,
 calibration, or dispatch lead, and never changes an authored target. The
 trusted sender repeats the same cutoff check immediately before `SendInput`,
 while Up-only safety releases remain exempt.
@@ -320,6 +322,15 @@ target. The stamp survives waiter-entry latency and a same-boundary
 `Continue`/replan, but not a changed plan, target, epoch, pause, focus rebase,
 or completed/missed commit. The kernel wait result is not the musical proof.
 
+The first overdue Down discovered within the fixed grace may use the
+one-shot late-discovery rescue credit carried by `AwaitingFuture`, but only
+after playback has started and while the exact future authorization,
+focus/control/target, and lease proof remain valid. The credit is consumed at
+admission; a second overdue boundary without an intervening future observation
+is `MissedBacklog`. The sender's pre-call cutoff remains authoritative, so a
+rescue never sends after the cutoff and never retries or catches up a missed
+Down.
+
 An unobserved overdue Down is a recoverable Production deadline miss after the
 first successful musical Down: the Down portion is omitted, the frozen
 coordinator frame is committed as missed, and playback advances to the next
@@ -341,7 +352,12 @@ active/possibly-active keys and verifies the resulting state before successful
 completion. The ready boundary is published only after startup gates and the
 required physical ownership and cleanup state are complete.
 
-Production has no observer failure or queue-overflow path. Diagnostic observer
+Production has no observer failure or queue-overflow path. Its fixed
+worker-local forensics block publishes an availability/version marker and
+bounded scalar evidence for hold pairs, pre-call/completion shrink,
+release-gap policy, same-call retriggers, anchor overwrites, unmatched Ups,
+and a fixed anomaly ring. It adds no QPC sample, allocation, lock, formatting,
+or unbounded scan to the production send path. Diagnostic observer
 failure, telemetry overflow, or metric conversion failure cannot
 rewrite physical ownership. The worker terminates through the normal cleanup
 path and preserves the primary and secondary errors.

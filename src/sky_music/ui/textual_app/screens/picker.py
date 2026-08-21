@@ -1400,10 +1400,10 @@ class PickerScreen(Screen[SongPickerResult]):
         if published.status is CalibrationStatus.OUT_OF_ENVELOPE:
             message = (
                 "Host Sender Hold Calibration: OUT OF ENVELOPE\n\n"
-                f"Host sender hold shrink p99     : {published.sender_hold_shrink_p99_us} \u00b5s\n"
+                f"Host transport shrink max       : {published.transport_worst_positive_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
-                f"Required hold margin           : {published.candidate_margin_us} \u00b5s\n"
+                f"Required transport margin      : {published.transport_margin_us or published.candidate_margin_us} \u00b5s\n"
                 f"Trusted correction ceiling    : {published.ceiling_us} \u00b5s\n\n"
                 "Applied calibrated margin      : NONE\n"
                 "Playback hold fallback         : 500 \u00b5s (not calibrated)\n"
@@ -1422,10 +1422,10 @@ class PickerScreen(Screen[SongPickerResult]):
             assert published.effective_min_hold_us is not None
             message = (
                 "Host Sender Hold Calibration: VALID\n\n"
-                f"Host sender hold shrink p99      : {published.sender_hold_shrink_p99_us} \u00b5s\n"
+                f"Host transport shrink max        : {published.transport_worst_positive_us} \u00b5s\n"
                 f"Worst measured bucket          : {published.worst_bucket}\n"
                 f"Policy guard                   : {published.guard_us} \u00b5s\n"
-                f"Required hold margin            : {published.candidate_margin_us} \u00b5s\n"
+                f"Required transport margin       : {published.transport_margin_us or published.candidate_margin_us} \u00b5s\n"
                 f"Applied calibrated margin       : {published.margin_us} \u00b5s\n"
                 f"Trusted correction ceiling     : {published.ceiling_us} \u00b5s\n"
                 f"Materialized authored hold     : {published.effective_min_hold_us} \u00b5s\n"

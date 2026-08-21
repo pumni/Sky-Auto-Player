@@ -66,14 +66,18 @@ For an authored same-key Down→Up pair, the schedule must satisfy:
 
 ```text
 authored_up >= authored_down + effective_min_hold
+next_same_key_down - previous_same_key_up >= one_frame_period
 ```
 
-`effective_min_hold` is materialized by Python as the selected frame hold plus
-the calibrated static margin. PyO3 passes that value verbatim; Rust only
-range-checks it and validates the authored interval in QPC ticks. The static
-margin is applied once while building the authored schedule. Native admission
-rejects an invalid interval before worker start; SendInput completion is
-evidence only and never creates a second hold floor or a replacement deadline.
+`effective_min_hold` is materialized by Python as
+`ceil(hold_frames * ceil(1_000_000 / fps)) + 500 µs + transport_margin`.
+The transport component defaults/falls back to `300 µs`; calibration may
+replace only that component. PyO3 passes the materialized value verbatim; Rust
+range-checks it and validates both relationships in QPC ticks. Same-timestamp
+same-key overlaps are rejected, while disjoint masks may coalesce. Native
+admission rejects an invalid interval before worker start; SendInput completion
+is evidence only and never creates a second hold floor or a replacement
+deadline. Runtime never delays or repairs an authored boundary.
 
 The worker owns active key masks, stale-Up suppression,
 zero/partial progress handling, focus-loss pause and restore safety release,
@@ -86,7 +90,12 @@ The coordinator also owns a fixed per-key pending-release table for recovery
 state. It cannot move an authored Up or block an unrelated authored Down
 chord. Same-key retriggers whose authored interval is infeasible are rejected
 during schedule admission; no runtime reschedule, retry, or catch-up burst is
-emitted.
+emitted. After the first successful musical Down, the first overdue Down
+discovered within its fixed late grace may consume a one-shot late-discovery
+rescue credit, provided the exact future authorization and focus/control/target
+lease proof remain valid. The credit is consumed immediately; a later overdue
+boundary without an intervening future observation is missed. Sender cutoff is
+authoritative, and no rescue bypasses it.
 
 ## Observer profiles
 
@@ -102,7 +111,10 @@ updates. Its local metrics are merged after the consumer stops.
 The observer is diagnostic only. It cannot authorize, reorder, retry, or
 commit physical input, and observer failure is terminal only when its own
 integrity contract cannot be completed. The dispatch thread never waits for
-observer slack.
+observer slack. Production forensics is separate: a fixed worker-local block
+publishes availability/version plus bounded hold-pair, shrink, release-gap,
+retrigger, anchor, unmatched-Up, and anomaly-ring scalars. It performs no new
+QPC reads, allocations, locks, formatting, or unbounded scans.
 
 ## Python–Rust contract
 
@@ -159,13 +171,15 @@ each bucket. Only class mismatch is retryable. Up is scheduled from exact Down
 completion plus the requested gap, with no Raw Input receipt wait between the
 two sends.
 
-Qualification is the maximum positive required-bucket p99 plus a `100 µs`
-guard, with a `300 µs` floor and `2,000 µs` ceiling. Above the ceiling the
-status is `OUT_OF_ENVELOPE` and playback uses the explicit `500 µs` fallback;
-the ceiling is never raised to force validity. Protocol 10/native schema 15,
-artifact schema 11, cache v7, source formula 5, and
+Qualification is the maximum positive required-bucket
+`sendinput_shrink_us.max` plus a `100 µs` guard, with a `300 µs` floor and
+`2,000 µs` ceiling. Above the ceiling the status is `OUT_OF_ENVELOPE` and
+playback uses the explicit `300 µs` transport fallback; the ceiling is never
+raised to force validity. Protocol 10/native schema 15, artifact schema 11,
+cache v8, source formula 6, and
 `sender_completion_hold_shrink` evidence are required. Older protocol-9,
-schema-13, cache-v5/v6, or Raw Input evidence is rejected and never reinterpreted.
+schema-13, cache-v5/v6/v7, or Raw Input evidence is rejected and never
+reinterpreted.
 The margin is materialized once in `effective_min_hold_us`; Note-On timestamps,
 physical targets, and `down_late_grace_us = 500 µs` remain unchanged.
 

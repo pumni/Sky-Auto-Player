@@ -154,6 +154,21 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    let frame_us =
+        (1_000_000u64 + u64::from(config.timing.game_fps) - 1) / u64::from(config.timing.game_fps);
+    let frame_ticks = match qpc_clock.duration_from_us(frame_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("frame-gap conversion failed: {error:?}"),
+            );
+        }
+    };
+    core.runtime
+        .production_forensics
+        .set_frame_policies(frame_ticks, frame_ticks);
     let down_late_grace_ticks = match qpc_clock.duration_from_us(config.timing.down_late_grace_us) {
         Ok(ticks) => ticks,
         Err(error) => {

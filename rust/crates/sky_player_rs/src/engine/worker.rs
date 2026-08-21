@@ -45,6 +45,7 @@ pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::drain_one_observer;
 #[cfg(test)]
 pub(crate) use dispatch::handle_final_focus_loss;
+pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PhysicalBoundaryStamp,
     dispatch_authored_packet, dispatch_stale_packet,
@@ -251,6 +252,7 @@ pub struct PreparationCounts {
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
+    pub(crate) production_forensics: ProductionHoldForensics,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
@@ -320,21 +322,51 @@ impl WorkerRuntime {
     }
 
     #[inline]
-    pub(crate) fn mark_down_commit_started(&mut self) {
-        self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+    pub(crate) fn mark_down_commit_started(&mut self, late_rescue_consumed: bool) {
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+            late_rescue_available: !late_rescue_consumed,
+        };
     }
 
     #[inline]
     pub(crate) fn mark_down_boundary_missed(&mut self) {
         if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
         }
     }
 
     #[inline]
     pub(crate) fn invalidate_down_authorization(&mut self) {
         if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
+        }
+    }
+
+    #[inline]
+    pub(crate) fn try_consume_late_discovery_rescue(
+        &mut self,
+        lateness: DurationTicks,
+        grace: DurationTicks,
+    ) -> bool {
+        if !self.down_boundary_state.late_rescue_available() || lateness > grace {
+            return false;
+        }
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+            late_rescue_available: false,
+        };
+        true
+    }
+
+    #[inline]
+    pub(crate) fn consume_late_discovery_rescue_credit(&mut self) {
+        if self.down_boundary_state.late_rescue_available() {
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
         }
     }
 

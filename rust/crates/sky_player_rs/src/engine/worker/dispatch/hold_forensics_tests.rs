@@ -1,8 +1,10 @@
-use super::super::hold_forensics::HoldForensics;
+use super::super::hold_forensics::{HoldForensics, ProductionHoldForensics};
 use super::super::observation::ObserverLifecycle;
 use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::input::PhysicalPacket;
+use sky_dispatch_win32::input::SendTransactionStatus;
 use std::num::NonZeroU64;
 
 fn observe(
@@ -372,4 +374,125 @@ fn global_reset_clears_all_released_generations() {
     assert_eq!(metrics.hold_pair_samples, 2);
     assert_eq!(metrics.hold_anchor_overwrite_count, 0);
     assert_eq!(metrics.hold_unmatched_up_count, 0);
+}
+
+fn observe_production(
+    forensics: &mut ProductionHoldForensics,
+    packet: PhysicalPacket,
+    target_qpc: u64,
+    pre_call_qpc: u64,
+    completion_qpc: u64,
+    status: SendTransactionStatus,
+    metrics: &mut WorkerMetricsLocal,
+) {
+    forensics.observe_packet_result(
+        packet,
+        QpcTicks::from_raw(target_qpc),
+        QpcTicks::from_raw(pre_call_qpc),
+        QpcTicks::from_raw(completion_qpc),
+        status,
+        metrics,
+    );
+}
+
+#[test]
+fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(
+        DurationTicks::from_raw(16_667),
+        DurationTicks::from_raw(16_667),
+    );
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_100,
+        1_150,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_100,
+        18_150,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        35_000,
+        35_100,
+        35_150,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        52_000,
+        52_100,
+        52_150,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    assert!(metrics.production_forensics_available);
+    assert_eq!(metrics.production_forensics_version, 1);
+    assert_eq!(metrics.production_hold_pair_samples, 2);
+    assert_eq!(metrics.production_release_gap_samples, 1);
+    assert_eq!(metrics.production_min_release_gap_ticks, 16_850);
+    assert_eq!(metrics.production_forensics_anomaly_count, 0);
+}
+
+#[test]
+fn production_forensics_dropped_down_and_recovery_do_not_fabricate_pairs() {
+    let mut forensics = ProductionHoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        SendTransactionStatus::ZeroProgress,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_000,
+        18_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    assert!(metrics.production_forensics_available);
+    assert_eq!(metrics.production_hold_pair_samples, 0);
+    assert_eq!(metrics.production_unmatched_up_count, 1);
+
+    forensics.observe_lifecycle(ObserverLifecycle::ResetAll);
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        35_000,
+        35_000,
+        35_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    forensics.observe_lifecycle(ObserverLifecycle::RecoveryUp { up_mask: 1 });
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        52_000,
+        52_000,
+        52_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    assert_eq!(metrics.production_hold_pair_samples, 0);
+    assert_eq!(metrics.production_unmatched_up_count, 2);
 }

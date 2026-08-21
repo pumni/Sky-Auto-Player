@@ -743,8 +743,8 @@ class TelemetryLogger:
         run_id: str | None = None,
         fps: int | None = None,
         min_hold_us: int = 0,
-        min_hold_margin_us: int = 500,
-        min_hold_margin_source: str = "default_500",
+        min_hold_margin_us: int = 300,
+        min_hold_margin_source: str = "default_transport_300",
         *,
         retain_records_after_save: bool = False,
     ):

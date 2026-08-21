@@ -16,7 +16,7 @@
         "reason": "onset"
     },
     {
-        "at_us": 1017167,
+        "at_us": 1017467,
         "scan_codes": [
             21
         ],
@@ -24,7 +24,7 @@
         "reason": "repeat_release"
     },
     {
-        "at_us": 1018167,
+        "at_us": 1018467,
         "scan_codes": [
             21
         ],

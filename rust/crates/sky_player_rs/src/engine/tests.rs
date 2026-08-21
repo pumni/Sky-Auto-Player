@@ -39,6 +39,7 @@ fn test_session_options(
         backend,
         profile: DispatchProfile::StrictTimingDiagnostic,
         timing: TimingOptions {
+            game_fps: 60,
             min_hold_us: 0,
             down_late_grace_us: 500,
             strict_timing: false,
@@ -1585,7 +1586,7 @@ fn large_runtime_schedule_starts_and_quits_cleanly() {
             } else {
                 ActionKind::Up
             },
-            scheduled_us: action_index as u64,
+            scheduled_us: (action_index as u64) * 20_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "large-schedule".to_string().into(),
         });
@@ -3234,7 +3235,7 @@ fn future_classification_then_waiter_entry_stall_keeps_exact_boundary_authorized
 }
 
 #[test]
-fn unobserved_overdue_down_is_committed_missed_without_sendinput() {
+fn overdue_down_beyond_rescue_grace_is_committed_missed_without_sendinput() {
     use super::test_support::ProductionDispatchTestHarness;
 
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
@@ -3249,12 +3250,16 @@ fn unobserved_overdue_down_is_committed_missed_without_sendinput() {
 
     harness.advance_playback_time_us(100_000);
     let missed = harness.plan_current_dispatch();
-    let missed_step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&missed);
+    let missed_step = harness.dispatch_known_backlog_with_strict_lateness_for_test(&missed);
     assert!(
-        matches!(missed_step, super::worker::DispatchStep::Dispatched),
+        matches!(
+            missed_step,
+            super::worker::DispatchStep::TerminateStatic("down_deadline_missed_before_send")
+        ),
         "missed step: {missed_step:?}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 0);
     assert!(!harness.has_active_generation(0x16));
     assert!(harness.local_metrics.missed_down_boundaries >= 1);
     assert!(harness.local_metrics.last_missed_down_valid);
@@ -3297,19 +3302,21 @@ fn three_overdue_downs_are_dropped_before_next_future_boundary() {
         harness.dispatch_at_plan_target_for_test(&future),
         super::worker::DispatchStep::Dispatched
     ));
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(harness.local_metrics.missed_down_boundaries, 3);
-    assert_eq!(harness.local_metrics.missed_down_keys, 3);
-    assert_eq!(harness.local_metrics.missed_backlog_boundaries, 3);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 1);
+    assert_eq!(harness.local_metrics.late_discovery_rescue_sent, 1);
+    assert_eq!(harness.local_metrics.missed_down_boundaries, 2);
+    assert_eq!(harness.local_metrics.missed_down_keys, 2);
+    assert_eq!(harness.local_metrics.missed_backlog_boundaries, 2);
     assert_eq!(
         harness.resources.coordinator.active_mask & 0b1_1111,
-        (1 << 0) | (1 << 4),
-        "only the successful A and future E Downs may be active"
+        (1 << 0) | (1 << 1) | (1 << 4),
+        "the one rescued B, successful A, and future E Downs may be active"
     );
 }
 
 #[test]
-fn unobserved_overdue_mixed_packet_sends_only_safety_up() {
+fn overdue_mixed_packet_beyond_rescue_grace_sends_only_safety_up() {
     use super::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_win32::input::PhysicalPacket;
 
@@ -3321,9 +3328,13 @@ fn unobserved_overdue_mixed_packet_sends_only_safety_up() {
         harness.dispatch_at_plan_target_for_test(&first),
         super::worker::DispatchStep::Dispatched
     ));
-    harness.advance_playback_time_us(100_000);
     let missed = harness.plan_current_dispatch();
-    let missed_step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&missed);
+    let beyond_grace = harness
+        .timing
+        .down_late_grace_ticks
+        .checked_add(DurationTicks::from_raw(1))
+        .expect("missed mixed lateness arithmetic");
+    let missed_step = harness.dispatch_same_frozen_plan_at_lateness_for_test(&missed, beyond_grace);
     assert!(
         matches!(missed_step, super::worker::DispatchStep::Dispatched),
         "missed mixed step: {missed_step:?}"
@@ -3334,6 +3345,7 @@ fn unobserved_overdue_mixed_packet_sends_only_safety_up() {
         vec![PhysicalPacket::new(0, 0b001), PhysicalPacket::new(0b001, 0)],
         "a missed Mixed boundary must never send its Down subset"
     );
+    assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 0);
     assert!(!harness.has_active_generation(0x15));
     assert!(!harness.has_active_generation(0x16));
 }
@@ -3368,6 +3380,38 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     );
     assert_eq!(harness.local_metrics.last_missed_down_mask, 0b10);
     assert!(harness.local_metrics.last_missed_down_lateness_ticks > 0);
+}
+
+#[test]
+fn late_discovery_rescue_still_obeys_sender_cutoff() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    // Deliberately do not observe B while future. The one-tick overdue
+    // dispatch is therefore eligible for rescue, but the sender rejects it
+    // before inserting any Down event.
+    let rescue = harness.plan_current_dispatch();
+    harness.configure_deadline_missed_packet_sender();
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&rescue),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 1);
+    assert_eq!(harness.local_metrics.late_discovery_rescue_sent, 0);
+    assert_eq!(
+        harness
+            .local_metrics
+            .late_discovery_rescue_sender_cutoff_misses,
+        1
+    );
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+    assert!(!harness.has_active_generation(0x16));
 }
 
 #[test]
@@ -4391,8 +4435,8 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
             source_action_index: 2,
             kind: ActionKind::Down,
             scheduled_us: 1_000_000,
-            scan_codes: smallvec::smallvec![0x15, 0x16],
-            reason: "retrigger-down".to_string().into(),
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "disjoint-down".to_string().into(),
         },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
@@ -4454,8 +4498,8 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
             source_action_index: 1,
             kind: ActionKind::Down,
             scheduled_us: 1_000_000,
-            scan_codes: smallvec::smallvec![0x15, 0x16],
-            reason: "retrigger-down".to_string().into(),
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "disjoint-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
@@ -4469,7 +4513,7 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
             kind: ActionKind::Up,
             scheduled_us: 1_500_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "release-one".to_string().into(),
+            reason: "stale-release".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 4,
@@ -4501,7 +4545,7 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         "terminal error: {:?}",
         snapshot.terminal_error
     );
-    assert_eq!(snapshot.generation_status_counts["released"], 3);
+    assert_eq!(snapshot.generation_status_counts["released"], 2);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
 
@@ -4514,9 +4558,9 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         .iter()
         .find(|record| record["kind"].as_u64() == Some(2))
         .expect("successful mixed record");
-    assert_eq!(mixed["requested_count"].as_u64(), Some(3));
-    assert_eq!(mixed["sent_count"].as_u64(), Some(3));
-    assert_eq!(mixed["polyphony"].as_u64(), Some(3));
+    assert_eq!(mixed["requested_count"].as_u64(), Some(2));
+    assert_eq!(mixed["sent_count"].as_u64(), Some(2));
+    assert_eq!(mixed["polyphony"].as_u64(), Some(2));
 }
 
 #[test]
@@ -4601,7 +4645,7 @@ fn native_min_hold_admission_uses_runtime_qpc_tick_domain() {
 }
 
 #[test]
-fn late_down_completion_uses_overdue_policy_not_hold_failure() {
+fn completion_latency_does_not_create_hold_failure_after_release_gap() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -4620,14 +4664,14 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 1_000,
+            scheduled_us: 1_000 + 16_667,
             scan_codes: smallvec::smallvec![0x15, 0x16],
-            reason: "same-key-chord".to_string().into(),
+            reason: "same-key-chord-after-release-gap".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 2_000,
+            scheduled_us: 2_000 + 16_667,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "cleanup".to_string().into(),
         },
@@ -4660,10 +4704,7 @@ fn late_down_completion_uses_overdue_policy_not_hold_failure() {
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert!(snapshot.terminal_error.is_none(), "{snapshot:?}");
-    assert!(
-        snapshot.missed_down_boundaries >= 1 || snapshot.late_authorized_boundaries >= 1,
-        "{snapshot:?}"
-    );
+    assert!(snapshot.hold_pair_samples >= 1, "{snapshot:?}");
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -4768,25 +4809,25 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
             kind: ActionKind::Up,
             scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "retrigger-up".to_string().into(),
+            reason: "release-before-disjoint-mixed-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
             scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "retrigger-down".to_string().into(),
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "disjoint-mixed-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
             scheduled_us: TEST_AUTHORED_EPOCH_US + 1_500_000,
-            scan_codes: smallvec::smallvec![0x15],
+            scan_codes: smallvec::smallvec![0x16],
             reason: "release".to_string().into(),
         },
     ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
-        .expect("valid same-key mixed schedule");
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid disjoint mixed schedule");
     let session = NativeDispatchSession::new(test_session_options(
         schedule,
         1,
