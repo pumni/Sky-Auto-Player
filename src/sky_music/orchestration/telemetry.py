@@ -583,7 +583,8 @@ def materialize_native_trace(
         outcome_code = _required_nonnegative_int(row.get("outcome"), "outcome")
         polyphony = _required_nonnegative_int(row.get("polyphony"), "polyphony")
         _required_nonnegative_int(row.get("flags"), "flags")
-        if kind_code not in (0, 1, 2) or not 0 <= polyphony <= 15:
+        max_polyphony = 30 if kind_code == 2 else 15
+        if kind_code not in (0, 1, 2) or not 0 <= polyphony <= max_polyphony:
             raise ValueError("native telemetry record has invalid kind/polyphony")
         outcome = _NATIVE_TRACE_OUTCOMES.get(outcome_code)
         if outcome is None:

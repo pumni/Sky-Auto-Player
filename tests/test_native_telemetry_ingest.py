@@ -79,6 +79,18 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.skipped_scan_codes == ()
 
 
+def test_native_trace_materializer_accepts_full_mixed_physical_cardinality() -> None:
+    output = _compact_output(requested_count=2, sent_count=2)
+    output["records"][0]["kind"] = 2
+    output["records"][0]["polyphony"] = 2
+
+    record = materialize_native_trace(output)[0]
+
+    assert record.kind == "mixed"
+    assert record.native_polyphony == 2
+    assert record.native_requested_count == 2
+
+
 def test_native_trace_materializer_preserves_zero_relative_send_start() -> None:
     output = _compact_output()
     output["records"][0]["authored_ticks"] = 0
