@@ -216,6 +216,9 @@ impl NativeDispatchSession {
             return Err("session configuration is no longer available".to_string());
         };
 
+        #[cfg(any(test, feature = "test-support"))]
+        let timer_lifecycle_context = config.timer_lifecycle_context.clone();
+
         let shared = Arc::clone(&self.shared);
         self.shared
             .publication
@@ -238,6 +241,19 @@ impl NativeDispatchSession {
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
             .spawn(move || {
+                #[cfg(any(test, feature = "test-support"))]
+                let worker_result = if let Some(context) = timer_lifecycle_context {
+                    sky_dispatch_win32::timer::test_support::with_context(&context, || {
+                        catch_unwind(AssertUnwindSafe(|| {
+                            Worker::new(config, shared.as_ref(), epoch_qpc).run()
+                        }))
+                    })
+                } else {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        Worker::new(config, shared.as_ref(), epoch_qpc).run()
+                    }))
+                };
+                #[cfg(not(any(test, feature = "test-support")))]
                 let worker_result = catch_unwind(AssertUnwindSafe(|| {
                     Worker::new(config, shared.as_ref(), epoch_qpc).run()
                 }));

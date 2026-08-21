@@ -543,6 +543,8 @@ impl<'a> Worker<'a> {
             startup_ordering_hook,
             #[cfg(any(test, feature = "test-support"))]
             restore_race_hook,
+            #[cfg(any(test, feature = "test-support"))]
+                timer_lifecycle_context: _,
         } = options;
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {

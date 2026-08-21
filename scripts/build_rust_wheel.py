@@ -12,9 +12,11 @@ import argparse
 import base64
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -23,6 +25,40 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
+
+
+def pinned_rust_toolchain(rust_dir: Path) -> str:
+    toolchain_path = rust_dir / "rust-toolchain.toml"
+    try:
+        with toolchain_path.open("rb") as source:
+            data = tomllib.load(source)
+    except OSError as exc:
+        raise RuntimeError(f"cannot read Rust toolchain file: {toolchain_path}") from exc
+    channel = data.get("toolchain", {}).get("channel")
+    if not isinstance(channel, str) or re.fullmatch(r"\d+\.\d+\.\d+", channel) is None:
+        raise RuntimeError(f"Rust toolchain must pin an exact x.y.z channel: {toolchain_path}")
+    return channel
+
+
+def verify_build_info(
+    info: dict[str, object], *, expected_commit: str, expected_rustc_prefix: str
+) -> None:
+    rustc_version = info.get("rustc_version")
+    if not isinstance(rustc_version, str) or not rustc_version.startswith(expected_rustc_prefix):
+        raise RuntimeError(
+            "native wheel reports the wrong compiler: "
+            f"expected prefix {expected_rustc_prefix!r}, actual {rustc_version!r}"
+        )
+    if info.get("native_abi") != EXPECTED_NATIVE_ABI:
+        raise RuntimeError(
+            f"native wheel reports the wrong ABI: expected {EXPECTED_NATIVE_ABI!r}, "
+            f"actual {info.get('native_abi')!r}"
+        )
+    if info.get("native_build_commit") != expected_commit:
+        raise RuntimeError(
+            "native wheel reports the wrong build commit: "
+            f"expected {expected_commit!r}, actual {info.get('native_build_commit')!r}"
+        )
 
 
 def git_head(repo_root: Path) -> str:
@@ -159,6 +195,8 @@ def main() -> int:
             print("[build_rust_wheel] WARNING: Interpreter has GIL enabled!", file=sys.stderr)
 
     cargo_manifest = rust_dir / "crates" / "sky_player_rs" / "Cargo.toml"
+    rust_toolchain = pinned_rust_toolchain(rust_dir)
+    expected_rustc_prefix = f"rustc {rust_toolchain} "
     try:
         expected_commit = expected_build_commit(
             repo_root,
@@ -186,6 +224,7 @@ def main() -> int:
         cmd.extend(["--features", "test-support"])
 
     build_env = os.environ.copy()
+    build_env["RUSTUP_TOOLCHAIN"] = rust_toolchain
     build_env["GITHUB_SHA"] = expected_commit
     build_env["SKY_NATIVE_BUILD_COMMIT"] = expected_commit
     build_env["SKY_NATIVE_DIRTY_WORKTREE"] = str(expected_commit.endswith("-dirty")).lower()
@@ -247,6 +286,7 @@ def main() -> int:
             "print('build_info:', info); "
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
             "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
+            "assert info.get('rustc_version', '').startswith(os.environ['SKY_EXPECTED_RUSTC_PREFIX']), info; "
             "gil_after = sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else True; "
             "print('gil_after_import:', gil_after); "
             "assert not gil_after, 'GIL was re-enabled by sky_player_rs import!'"
@@ -255,6 +295,7 @@ def main() -> int:
         clean_env.pop("PYTHONPATH", None)
         clean_env.pop("VIRTUAL_ENV", None)
         clean_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+        clean_env["SKY_EXPECTED_RUSTC_PREFIX"] = expected_rustc_prefix
         print("[build_rust_wheel] Verifying exact wheel import, ABI, commit and GIL...")
         test_res = subprocess.run(
             [str(clean_python), "-c", test_code],
@@ -291,8 +332,21 @@ def main() -> int:
         )
         return active_install.returncode
 
+    try:
+        import sky_player_rs
+
+        verify_build_info(
+            dict(sky_player_rs.build_info()),
+            expected_commit=expected_commit,
+            expected_rustc_prefix=expected_rustc_prefix,
+        )
+    except (ImportError, RuntimeError) as exc:
+        print(f"[build_rust_wheel] ERROR: active wheel metadata verification failed: {exc}", file=sys.stderr)
+        return 1
+
     active_env = os.environ.copy()
     active_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+    active_env["SKY_EXPECTED_RUSTC_PREFIX"] = expected_rustc_prefix
     active_env.pop("PYTHONPATH", None)
     print("[build_rust_wheel] Verifying the active environment wheel...")
     active_test = subprocess.run(
@@ -302,7 +356,8 @@ def main() -> int:
             "import os, sky_player_rs; info = sky_player_rs.build_info(); "
             "print('active_build_info:', info); "
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
-            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info",
+            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
+            "assert info.get('rustc_version', '').startswith(os.environ['SKY_EXPECTED_RUSTC_PREFIX']), info",
         ],
         cwd=str(repo_root),
         env=active_env,

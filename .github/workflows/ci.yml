@@ -202,6 +202,20 @@ jobs:
         with:
           run-runtime-audit: "true"
 
+      - name: Rust — install pinned stable toolchain for packaged build
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+
+      - name: Rust — verify packaged-build compiler
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $version = (rustc --version)
+          if ($version -notmatch '^rustc 1\.98\.0\s') {
+            throw "Expected stable Rust 1.98.0 for packaged build, got: $version"
+          }
+
       - name: Build source PyInstaller bootloader
         run: |
           $bootloader = Join-Path $env:RUNNER_TEMP "sky-auto-player-pyinstaller-bootloader"
@@ -211,6 +225,7 @@ jobs:
 
       - name: Build packaged unsigned app
         env:
+          RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python -m build_app --manifest
 

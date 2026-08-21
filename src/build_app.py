@@ -35,9 +35,49 @@ NATIVE_CALIBRATION_BINARY = "native_calibration.exe"
 NATIVE_UPDATER_BINARY = "Sky-Auto-Player-Updater.exe"
 REQUIRED_ASSETS = ("config.json", "songs")
 OPTIONAL_ASSETS = ("README.md",)
+RUST_TOOLCHAIN_FILE = PROJECT_ROOT / "rust" / "rust-toolchain.toml"
 
 VERSION_PY = PROJECT_ROOT / "src" / "sky_music" / "_version.py"
 NATIVE_BUILD_PY = PROJECT_ROOT / "src" / "sky_music" / "_native_build.py"
+
+
+def get_pinned_rust_toolchain() -> str:
+    """Read and validate the exact Rust channel used by native builds."""
+    try:
+        with RUST_TOOLCHAIN_FILE.open("rb") as source:
+            data = tomllib.load(source)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read Rust toolchain file: {RUST_TOOLCHAIN_FILE}") from exc
+
+    channel = data.get("toolchain", {}).get("channel")
+    if not isinstance(channel, str) or re.fullmatch(r"\d+\.\d+\.\d+", channel) is None:
+        raise RuntimeError(
+            f"Rust toolchain file must pin an exact x.y.z channel: {RUST_TOOLCHAIN_FILE}"
+        )
+    return channel
+
+
+def expected_rustc_version_prefix() -> str:
+    return f"rustc {get_pinned_rust_toolchain()} "
+
+
+def native_build_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    env["RUSTUP_TOOLCHAIN"] = get_pinned_rust_toolchain()
+    return env
+
+
+def cargo_release_build_command(manifest: Path, binary: str) -> list[str]:
+    return [
+        "cargo",
+        "build",
+        "--manifest-path",
+        str(manifest),
+        "--bin",
+        binary,
+        "--release",
+        "--locked",
+    ]
 
 def generate_version_py(version: str) -> None:
     """Write the current version into ``_version.py`` so frozen builds
@@ -127,6 +167,13 @@ def verify_native_build_info(expected_commit: str) -> None:
                 f"native build metadata mismatch for {field}: "
                 f"expected {expected!r}, actual {info.get(field)!r}"
             )
+    rustc_version = info.get("rustc_version")
+    expected_prefix = expected_rustc_version_prefix()
+    if not isinstance(rustc_version, str) or not rustc_version.startswith(expected_prefix):
+        raise RuntimeError(
+            "native build metadata mismatch for rustc_version: "
+            f"expected prefix {expected_prefix!r}, actual {rustc_version!r}"
+        )
 
 def get_project_version() -> str:
     path = PROJECT_ROOT / "pyproject.toml"
@@ -459,16 +506,17 @@ def main() -> None:
     if rust_dir.exists():
         print("[+] Rust workspace detected. Running Rust wheel precheck...")
         build_script = PROJECT_ROOT / "scripts" / "build_rust_wheel.py"
+        native_build_env = native_build_environment()
         subprocess.run(
             [sys.executable, str(build_script)],
             check=True,
             cwd=str(PROJECT_ROOT),
+            env=native_build_env,
         )
         verify_native_build_info(git_head)
         calibration_manifest = rust_dir / "crates" / "sky_dispatch_win32" / "Cargo.toml"
         print("[+] Building the process-isolated native calibration binary...")
         native_build_commit = git_head
-        native_build_env = os.environ.copy()
         native_build_env["GITHUB_SHA"] = native_build_commit
         native_build_env["SKY_NATIVE_BUILD_COMMIT"] = native_build_commit
         from sky_music.orchestration.native_provenance import native_source_fingerprint
@@ -478,15 +526,7 @@ def main() -> None:
         )
         native_build_env["SKY_NATIVE_DIRTY_WORKTREE"] = "false"
         subprocess.run(
-            [
-                "cargo",
-                "build",
-                "--manifest-path",
-                str(calibration_manifest),
-                "--bin",
-                "native_calibration",
-                "--release",
-            ],
+            cargo_release_build_command(calibration_manifest, "native_calibration"),
             check=True,
             cwd=str(PROJECT_ROOT),
             env=native_build_env,
@@ -494,15 +534,7 @@ def main() -> None:
         updater_manifest = rust_dir / "crates" / "sky_updater" / "Cargo.toml"
         print("[+] Building the native self-updater...")
         subprocess.run(
-            [
-                "cargo",
-                "build",
-                "--manifest-path",
-                str(updater_manifest),
-                "--bin",
-                "sky_updater",
-                "--release",
-            ],
+            cargo_release_build_command(updater_manifest, "sky_updater"),
             check=True,
             cwd=str(PROJECT_ROOT),
             env=native_build_env,

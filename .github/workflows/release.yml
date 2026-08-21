@@ -101,6 +101,8 @@ jobs:
           "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
       - name: Build unsigned native app and smoke tests
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: uv run --env-file .env python -m build_app
 
       - name: Generate unsigned-byte manifest

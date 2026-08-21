@@ -66,11 +66,40 @@ fn test_session_options(
         },
         startup_ordering_hook: None,
         restore_race_hook: None,
+        timer_lifecycle_context: None,
     }
 }
 
 fn start_with_test_wall_clock_slack(session: &NativeDispatchSession) {
     session.arm(TEST_WALL_CLOCK_PREROLL_US).expect("worker arm");
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn actual_worker_wait_path_drops_waitable_timer_after_session_exit() {
+    let timer_context = sky_dispatch_win32::timer::test_support::new_counters();
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.timer_lifecycle_context = Some(Arc::clone(&timer_context));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+
+    session.arm(TEST_WALL_CLOCK_PREROLL_US).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let counts = sky_dispatch_win32::timer::test_support::snapshot(&timer_context);
+    assert!(
+        counts.created >= 1,
+        "worker wait path must create a waitable timer"
+    );
+    assert_eq!(counts.created, counts.dropped);
+    assert_eq!(counts.live, 0);
 }
 
 #[test]

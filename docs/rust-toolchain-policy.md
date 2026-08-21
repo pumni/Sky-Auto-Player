@@ -13,6 +13,11 @@ they were written; they do not define the current build contract.
 - Dependency resolution: `rust/Cargo.lock` is committed and must remain
   unchanged during a compiler-only migration. CI, release, and native wheel
   builds use Cargo's locked mode.
+- Every root-level native build, including `build_app`, explicitly exports
+  `RUSTUP_TOOLCHAIN=1.98.0`; the shipped wheel, calibration binary, and updater
+  are each built with `--locked`.
+- Native wheel and packaged-app provenance checks require the embedded
+  `rustc_version` metadata to start with the exact pinned compiler prefix.
 
 The nested toolchain file is discovered reliably when commands run from
 `rust/`. Root-level commands must set `RUSTUP_TOOLCHAIN=1.98.0` explicitly,

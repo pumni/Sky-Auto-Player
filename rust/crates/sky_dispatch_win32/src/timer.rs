@@ -1,37 +1,40 @@
 //! High-resolution Waitable Timer wrapper for microsecond-accurate kernel sleeps.
 
-#[cfg(all(test, windows))]
-pub(crate) mod test_support {
+#[cfg(all(feature = "test-support", windows))]
+pub mod test_support {
     use std::cell::RefCell;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
-        static ACTIVE_COUNTERS: RefCell<Option<Arc<TimerCounters>>> = const { RefCell::new(None) };
+        static ACTIVE_COUNTERS: RefCell<Option<Arc<TimerLifecycleCounters>>> =
+            const { RefCell::new(None) };
     }
 
-    pub(crate) struct TimerCounters {
+    pub struct TimerLifecycleCounters {
         created: AtomicUsize,
         dropped: AtomicUsize,
         live: AtomicUsize,
     }
 
+    pub type TimerLifecycleContext = Arc<TimerLifecycleCounters>;
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub(crate) struct TimerCounts {
-        pub(crate) created: usize,
-        pub(crate) dropped: usize,
-        pub(crate) live: usize,
+    pub struct TimerLifecycleCounts {
+        pub created: usize,
+        pub dropped: usize,
+        pub live: usize,
     }
 
-    pub(crate) fn new_counters() -> Arc<TimerCounters> {
-        Arc::new(TimerCounters {
+    pub fn new_counters() -> TimerLifecycleContext {
+        Arc::new(TimerLifecycleCounters {
             created: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
         })
     }
 
-    pub(crate) fn with_context<R>(counters: &Arc<TimerCounters>, f: impl FnOnce() -> R) -> R {
+    pub fn with_context<R>(counters: &TimerLifecycleContext, f: impl FnOnce() -> R) -> R {
         ACTIVE_COUNTERS.with(|active| {
             let previous = active.replace(Some(Arc::clone(counters)));
             let result = f();
@@ -40,15 +43,15 @@ pub(crate) mod test_support {
         })
     }
 
-    pub(crate) fn snapshot(counters: &Arc<TimerCounters>) -> TimerCounts {
-        TimerCounts {
+    pub fn snapshot(counters: &TimerLifecycleContext) -> TimerLifecycleCounts {
+        TimerLifecycleCounts {
             created: counters.created.load(Ordering::SeqCst),
             dropped: counters.dropped.load(Ordering::SeqCst),
             live: counters.live.load(Ordering::SeqCst),
         }
     }
 
-    pub(super) fn record_created() -> Option<Arc<TimerCounters>> {
+    pub(super) fn record_created() -> Option<TimerLifecycleContext> {
         let counters = ACTIVE_COUNTERS.with(|active| active.borrow().clone());
         if let Some(counters) = counters.as_ref() {
             counters.created.fetch_add(1, Ordering::SeqCst);
@@ -57,7 +60,7 @@ pub(crate) mod test_support {
         counters
     }
 
-    pub(super) fn record_dropped(counters: &Arc<TimerCounters>) {
+    pub(super) fn record_dropped(counters: &TimerLifecycleContext) {
         counters.dropped.fetch_add(1, Ordering::SeqCst);
         counters.live.fetch_sub(1, Ordering::SeqCst);
     }
@@ -66,8 +69,8 @@ pub(crate) mod test_support {
 pub struct WaitableTimer {
     #[cfg(windows)]
     handle: windows_sys::Win32::Foundation::HANDLE,
-    #[cfg(all(test, windows))]
-    counters: Option<std::sync::Arc<test_support::TimerCounters>>,
+    #[cfg(all(feature = "test-support", windows))]
+    counters: Option<test_support::TimerLifecycleContext>,
 }
 
 pub struct TimerResolutionGuard {
@@ -130,11 +133,11 @@ impl WaitableTimer {
                 )
             };
             if !handle.is_null() {
-                #[cfg(all(test, windows))]
+                #[cfg(all(feature = "test-support", windows))]
                 let counters = test_support::record_created();
                 return Ok(WaitableTimer {
                     handle,
-                    #[cfg(all(test, windows))]
+                    #[cfg(all(feature = "test-support", windows))]
                     counters,
                 });
             }
@@ -207,7 +210,7 @@ impl Drop for WaitableTimer {
                 unsafe {
                     windows_sys::Win32::Foundation::CloseHandle(self.handle);
                 }
-                #[cfg(all(test, windows))]
+                #[cfg(all(feature = "test-support", windows))]
                 if let Some(counters) = self.counters.as_ref() {
                     test_support::record_dropped(counters);
                 }

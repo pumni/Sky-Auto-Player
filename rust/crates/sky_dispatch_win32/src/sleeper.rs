@@ -77,7 +77,7 @@ pub fn measure_spin_overhead_us() -> Result<u64, QpcError> {
     Ok((total_overhead_us / ITERATIONS as u64).max(1))
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, feature = "test-support", windows))]
 mod tests {
     use super::THREAD_TIMER;
     use crate::timer::test_support;
