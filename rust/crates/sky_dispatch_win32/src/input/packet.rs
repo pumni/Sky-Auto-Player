@@ -1250,7 +1250,7 @@ mod tests {
 
     #[test]
     fn tagged_calibration_payload_is_materialized_before_sender_handoff() {
-        let source = include_str!("packet.rs");
+        let source = include_str!("packet.rs").replace("\r\n", "\n");
         let production = source
             .split("#[cfg(test)]")
             .next()
