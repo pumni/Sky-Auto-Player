@@ -47,7 +47,14 @@ jobs:
         run: uv run --env-file .env python scripts/audit_security_mandates.py
 
       - name: Rust — format, lint, tests, and native wheel
+        env:
+          RUSTUP_TOOLCHAIN: 1.97.1
         run: |
+          rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
+          $version = (rustc --version)
+          if ($version -notmatch '^rustc 1\.97\.1\s') {
+            throw "Expected stable Rust 1.97.1 from rust/rust-toolchain.toml, got: $version"
+          }
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
           cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
           cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings

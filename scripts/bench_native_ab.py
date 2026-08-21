@@ -263,9 +263,13 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
     cycle_us = (
         60_000
         if args.gap_profile == "cold"
-        else max(10_000, frame_period_us + 500 + 2_500)
+        else max(10_000, frame_period_us + 500 + 300 + frame_period_us)
     )
-    materialized_hold_us = cycle_us - 2_500 if args.gap_profile == "hot" else cycle_us // 2
+    materialized_hold_us = (
+        frame_period_us + 500 + 300
+        if args.gap_profile == "hot"
+        else cycle_us // 2
+    )
     matrix: dict[str, Any] = {
         "actions": args.actions,
         "dispatch_repeats": args.dispatch_repeats,

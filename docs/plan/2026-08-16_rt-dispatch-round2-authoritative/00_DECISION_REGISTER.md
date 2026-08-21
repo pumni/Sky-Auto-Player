@@ -143,7 +143,14 @@ sendinput_completion + effective_min_hold` from this historical decision.
 
 Production must never respond to a large OS/scheduler stall by issuing several overdue physical notes back-to-back.
 
-When more than one distinct physical boundary is already overdue, treat it as a fidelity fault and terminate/cleanup. See `03_P0_OVERDUE_STALL_POLICY.md` for the exact classifier.
+After the first successful musical Down, the first unauthorized overdue Down
+discovered within the fixed `down_late_grace_us` may consume one late-discovery
+rescue credit and proceed through the normal sender cutoff. A later
+unauthorized overdue Down is dropped until an exact future Down boundary has
+been observed. A miss beyond grace is dropped (Mixed uses its safety-Up path);
+startup misses remain terminal. No policy path replays a backlog or terminates
+solely because ordinary post-startup lateness was observed. See
+`03_P0_OVERDUE_STALL_POLICY.md` for the exact classifier.
 
 ---
 

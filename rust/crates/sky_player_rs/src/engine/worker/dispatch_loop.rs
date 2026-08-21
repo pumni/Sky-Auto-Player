@@ -1161,4 +1161,27 @@ mod tests {
 
         assert_eq!(target, None);
     }
+
+    #[test]
+    fn deadline_boundary_matrix_distinguishes_future_exact_and_overdue() {
+        let target = QpcTicks::from_raw(1_000);
+        assert_eq!(
+            physical_target_qpc_for_work(Some(target), QpcTicks::from_raw(999), false)
+                .expect("future target arithmetic"),
+            None,
+            "target - 1 tick remains future work"
+        );
+        assert_eq!(
+            physical_target_qpc_for_work(Some(target), target, false)
+                .expect("exact target arithmetic"),
+            Some(target),
+            "target exact is due"
+        );
+        assert_eq!(
+            physical_target_qpc_for_work(Some(target), QpcTicks::from_raw(1_001), false)
+                .expect("overdue target arithmetic"),
+            Some(target),
+            "target + 1 tick is overdue work"
+        );
+    }
 }

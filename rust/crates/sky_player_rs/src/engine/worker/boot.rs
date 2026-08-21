@@ -154,8 +154,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let frame_us =
-        (1_000_000u64 + u64::from(config.timing.game_fps) - 1) / u64::from(config.timing.game_fps);
+    let frame_us = 1_000_000u64.div_ceil(u64::from(config.timing.game_fps));
     let frame_ticks = match qpc_clock.duration_from_us(frame_us) {
         Ok(ticks) => ticks,
         Err(error) => {

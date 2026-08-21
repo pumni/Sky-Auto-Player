@@ -200,15 +200,15 @@ struct ProductionHoldAnchor {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Default)]
-struct ProductionForensicsAnomaly {
-    kind: u8,
-    slot: u8,
-    source_action_index: u32,
-    mask: u16,
-    target_ticks: u64,
-    observed_ticks: u64,
-    aux_ticks: u64,
-    delta_ticks: u64,
+pub(crate) struct ProductionForensicsAnomaly {
+    pub(crate) kind: u8,
+    pub(crate) slot: u8,
+    pub(crate) source_action_index: u32,
+    pub(crate) mask: u16,
+    pub(crate) target_ticks: u64,
+    pub(crate) observed_ticks: u64,
+    pub(crate) aux_ticks: u64,
+    pub(crate) delta_ticks: u64,
 }
 
 #[derive(Default)]
@@ -257,17 +257,20 @@ impl ProductionHoldForensics {
     }
 
     fn clear_mask(&mut self, mask: u16) {
-        for slot in 0..MAX_KEYS {
-            if mask & (1u16 << slot) != 0 {
-                self.anchors[slot] = ProductionHoldAnchor::default();
-                self.last_up_completion_ticks[slot] = None;
-            }
+        let mut touched = mask;
+        while touched != 0 {
+            let slot = touched.trailing_zeros() as usize;
+            touched &= touched - 1;
+            self.anchors[slot] = ProductionHoldAnchor::default();
+            self.last_up_completion_ticks[slot] = None;
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_packet_result(
         &mut self,
         packet: PhysicalPacket,
+        source_action_index: u32,
         target_qpc: QpcTicks,
         pre_call_qpc: QpcTicks,
         completion_qpc: QpcTicks,
@@ -276,6 +279,7 @@ impl ProductionHoldForensics {
     ) {
         self.observe_packet(
             packet,
+            source_action_index,
             target_qpc,
             pre_call_qpc,
             completion_qpc,
@@ -287,9 +291,11 @@ impl ProductionHoldForensics {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_packet(
         &mut self,
         packet: PhysicalPacket,
+        source_action_index: u32,
         target_qpc: QpcTicks,
         pre_call_qpc: QpcTicks,
         completion_qpc: QpcTicks,
@@ -302,30 +308,66 @@ impl ProductionHoldForensics {
         let target = target_qpc.as_u64();
         let pre_call = pre_call_qpc.as_u64();
         let completion = completion_qpc.as_u64();
-        for slot in 0..MAX_KEYS {
+        let mut up_mask = packet.up_mask;
+        while up_mask != 0 {
+            let slot = up_mask.trailing_zeros() as usize;
             let bit = 1u16 << slot;
-            if packet.up_mask & bit == 0 {
-                continue;
-            }
+            up_mask &= up_mask - 1;
             if self.anchors[slot].valid {
                 let anchor = self.anchors[slot];
                 if packet.down_mask & bit != 0 {
                     self.same_call_same_key_retrigger_count =
                         self.same_call_same_key_retrigger_count.saturating_add(1);
-                    self.record_anomaly(6, slot);
+                    self.record_anomaly(
+                        6,
+                        slot,
+                        source_action_index,
+                        bit,
+                        target,
+                        pre_call,
+                        anchor.target_ticks,
+                        target.abs_diff(anchor.target_ticks),
+                    );
                 }
                 let Some(authored_hold) = target.checked_sub(anchor.target_ticks) else {
-                    self.record_anomaly(1, slot);
+                    self.record_anomaly(
+                        1,
+                        slot,
+                        source_action_index,
+                        bit,
+                        target,
+                        target,
+                        anchor.target_ticks,
+                        target.abs_diff(anchor.target_ticks),
+                    );
                     self.anchors[slot].valid = false;
                     continue;
                 };
                 let Some(pre_call_hold) = pre_call.checked_sub(anchor.pre_call_ticks) else {
-                    self.record_anomaly(2, slot);
+                    self.record_anomaly(
+                        2,
+                        slot,
+                        source_action_index,
+                        bit,
+                        target,
+                        pre_call,
+                        anchor.pre_call_ticks,
+                        pre_call.abs_diff(anchor.pre_call_ticks),
+                    );
                     self.anchors[slot].valid = false;
                     continue;
                 };
                 let Some(completion_hold) = completion.checked_sub(anchor.completion_ticks) else {
-                    self.record_anomaly(3, slot);
+                    self.record_anomaly(
+                        3,
+                        slot,
+                        source_action_index,
+                        bit,
+                        target,
+                        completion,
+                        anchor.completion_ticks,
+                        completion.abs_diff(anchor.completion_ticks),
+                    );
                     self.anchors[slot].valid = false;
                     continue;
                 };
@@ -351,31 +393,73 @@ impl ProductionHoldForensics {
                 self.last_up_completion_ticks[slot] = Some(completion);
             } else {
                 self.unmatched_up_count = self.unmatched_up_count.saturating_add(1);
-                self.record_anomaly(4, slot);
+                self.record_anomaly(4, slot, source_action_index, bit, target, completion, 0, 0);
             }
             self.anchors[slot].valid = false;
         }
-        for slot in 0..MAX_KEYS {
+        let mut down_mask = packet.down_mask;
+        while down_mask != 0 {
+            let slot = down_mask.trailing_zeros() as usize;
             let bit = 1u16 << slot;
-            if packet.down_mask & bit == 0 {
-                continue;
-            }
+            down_mask &= down_mask - 1;
             if let Some(previous_up_completion) = self.last_up_completion_ticks[slot] {
-                let gap = target.saturating_sub(previous_up_completion);
-                self.release_gap_samples = self.release_gap_samples.saturating_add(1);
-                if self.release_gap_samples == 1 {
-                    self.min_release_gap_ticks = gap;
-                } else {
-                    self.min_release_gap_ticks = self.min_release_gap_ticks.min(gap);
-                }
-                if self.release_gap_policy_ticks > 0 && gap < self.release_gap_policy_ticks {
-                    self.release_gap_below_policy_count =
-                        self.release_gap_below_policy_count.saturating_add(1);
+                match pre_call.checked_sub(previous_up_completion) {
+                    None => {
+                        // A pre-call sample before the previous Up completion
+                        // is an ordering fault. Do not turn it into a false
+                        // zero-gap sample; retain both timestamps in the
+                        // anomaly payload.
+                        self.release_gap_below_policy_count =
+                            self.release_gap_below_policy_count.saturating_add(1);
+                        self.record_anomaly(
+                            8,
+                            slot,
+                            source_action_index,
+                            bit,
+                            target,
+                            pre_call,
+                            previous_up_completion,
+                            previous_up_completion.abs_diff(pre_call),
+                        );
+                    }
+                    Some(gap) => {
+                        self.release_gap_samples = self.release_gap_samples.saturating_add(1);
+                        if self.release_gap_samples == 1 {
+                            self.min_release_gap_ticks = gap;
+                        } else {
+                            self.min_release_gap_ticks = self.min_release_gap_ticks.min(gap);
+                        }
+                        if self.release_gap_policy_ticks > 0 && gap < self.release_gap_policy_ticks
+                        {
+                            self.release_gap_below_policy_count =
+                                self.release_gap_below_policy_count.saturating_add(1);
+                            self.record_anomaly(
+                                7,
+                                slot,
+                                source_action_index,
+                                bit,
+                                target,
+                                pre_call,
+                                previous_up_completion,
+                                gap,
+                            );
+                        }
+                    }
                 }
             }
             if self.anchors[slot].valid {
+                let previous_anchor = self.anchors[slot];
                 self.anchor_overwrite_count = self.anchor_overwrite_count.saturating_add(1);
-                self.record_anomaly(5, slot);
+                self.record_anomaly(
+                    5,
+                    slot,
+                    source_action_index,
+                    bit,
+                    target,
+                    pre_call,
+                    previous_anchor.target_ticks,
+                    target.abs_diff(previous_anchor.target_ticks),
+                );
             }
             self.anchors[slot] = ProductionHoldAnchor {
                 valid: true,
@@ -387,18 +471,48 @@ impl ProductionHoldForensics {
         self.publish_metrics(metrics);
     }
 
-    fn record_anomaly(&mut self, kind: u8, slot: usize) {
+    #[allow(clippy::too_many_arguments)]
+    fn record_anomaly(
+        &mut self,
+        kind: u8,
+        slot: usize,
+        source_action_index: u32,
+        mask: u16,
+        target_ticks: u64,
+        observed_ticks: u64,
+        aux_ticks: u64,
+        delta_ticks: u64,
+    ) {
         if self.anomaly_valid[self.next_anomaly] {
             self.anomaly_ring_overwrites = self.anomaly_ring_overwrites.saturating_add(1);
         }
         self.anomalies[self.next_anomaly] = ProductionForensicsAnomaly {
             kind,
             slot: slot as u8,
-            ..ProductionForensicsAnomaly::default()
+            source_action_index,
+            mask,
+            target_ticks,
+            observed_ticks,
+            aux_ticks,
+            delta_ticks,
         };
         self.anomaly_valid[self.next_anomaly] = true;
         self.next_anomaly = (self.next_anomaly + 1) % PRODUCTION_ANOMALY_CAPACITY;
         self.anomaly_count = self.anomaly_count.saturating_add(1);
+    }
+
+    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn latest_anomaly_for_test(&self) -> Option<ProductionForensicsAnomaly> {
+        if self.anomaly_count == 0 {
+            return None;
+        }
+        let index = if self.next_anomaly == 0 {
+            PRODUCTION_ANOMALY_CAPACITY - 1
+        } else {
+            self.next_anomaly - 1
+        };
+        self.anomaly_valid[index].then_some(self.anomalies[index])
     }
 
     fn publish_metrics(&self, metrics: &mut WorkerMetricsLocal) {

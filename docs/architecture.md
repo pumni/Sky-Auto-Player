@@ -255,7 +255,9 @@ candidate > 2_000  -> OUT_OF_ENVELOPE, applied margin = None
 ```
 
 Completed out-of-envelope evidence overwrites the cache with its unhealthy
-v5 status and playback falls back to a clearly-sourced 500 µs hold margin.
+status and playback falls back to the clearly-sourced 300 µs transport
+margin. The independent 500 µs Down late grace remains additive and is not
+called a calibrated or hold-margin fallback.
 Measurement or integrity failure preserves the previous cache. The hold
 margin never changes Note-On timestamps, `physical_target`, dispatch lead, or
 the independent fixed `down_late_grace_us` policy, which is `500 µs` in

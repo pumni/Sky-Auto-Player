@@ -184,7 +184,7 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["fixed_lead_us"] == 0
     assert config["native_profile"] == "strict_timing_diagnostic"
     assert config["require_focus"] is True
-    assert config["materialized_min_hold_us"] == 17_167
+    assert config["materialized_min_hold_us"] == 17_467
 
 
 def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
@@ -228,10 +228,10 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
             "native_profile": "mock_test",
         "native_build_flavor": "test_support",
         "require_focus": False,
-        "materialized_min_hold_us": 17_167,
+        "materialized_min_hold_us": 17_467,
     }
     report = {
-        "benchmark_schema_version": 7,
+        "benchmark_schema_version": 8,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
@@ -268,14 +268,14 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
 
 def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
     candidate = {
-        "benchmark_schema_version": 7,
+        "benchmark_schema_version": 8,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
         "timeline_semantics_version": 2,
     }
     baseline = {
-        "benchmark_schema_version": 7,
+        "benchmark_schema_version": 8,
         "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "timeline_semantics_version": 1,
     }
@@ -393,6 +393,49 @@ def test_expected_hold_pair_samples_canonicalize_same_timestamp_up_before_down()
     )
 
 
+def test_mixed_and_coalesced_positive_actions_use_disjoint_masks() -> None:
+    for scenario in ("mixed", "coalesced"):
+        actions = ACCEPTANCE._actions(3, 15, scenario=scenario)
+        for index in (0, 4, 8):
+            up = actions[index + 1]
+            down = actions[index + 2]
+            assert up[2] == down[2]
+            assert set(up[3]).isdisjoint(down[3])
+
+
+def test_same_key_zero_gap_negative_fixture_is_representative() -> None:
+    actions = ACCEPTANCE._same_key_zero_gap_actions()
+    assert actions[1][2] == actions[2][2]
+    assert set(actions[1][3]) == set(actions[2][3])
+
+
+def test_test_support_native_rejects_same_key_zero_gap_before_start() -> None:
+    if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        pytest.skip("requires the test-support native wheel")
+    ACCEPTANCE._assert_same_key_zero_gap_rejected(
+        backend="mock",
+        mock_base_latency_us=80,
+        mock_per_key_latency_us=40,
+        adaptive_spin=False,
+        rt_priority_mode="off",
+        game_fps=60,
+    )
+
+
+def test_production_correctness_counters_are_acceptance_gates() -> None:
+    snapshot = {
+        "production_completion_hold_below_frame_count": 1,
+        "production_release_gap_below_policy_count": 2,
+        "production_same_call_same_key_retrigger_count": 3,
+    }
+    counters = ACCEPTANCE._correctness_counters(snapshot, {})
+    assert counters["production_completion_hold_below_frame_count"] == 1
+    assert counters["production_release_gap_below_policy_count"] == 2
+    assert counters["production_same_call_same_key_retrigger_count"] == 3
+    with pytest.raises(SystemExit, match="correctness failure"):
+        ACCEPTANCE._assert_report_correctness({"correctness": counters})
+
+
 def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
     required_zero = dict.fromkeys(
         (
@@ -407,8 +450,15 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
             "missed_down_boundaries",
             "pre_call_hold_shrink_over_grace_count",
             "hold_unmatched_up_count",
-            "hold_anchor_overwrite_count",
-            "hold_pair_sample_mismatch",
+        "hold_anchor_overwrite_count",
+        "production_completion_hold_below_frame_count",
+        "production_release_gap_below_policy_count",
+        "production_same_call_same_key_retrigger_count",
+        "production_anchor_overwrite_count",
+        "production_unmatched_up_count",
+        "production_anomaly_ring_overwrite_count",
+        "production_forensics_anomaly_count",
+        "hold_pair_sample_mismatch",
         ),
         0,
     )
@@ -531,8 +581,8 @@ def test_trace_metrics_reject_missing_required_field() -> None:
 def test_hot_and_cold_action_spacing() -> None:
     hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
     cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
-    assert hot[2][2] - hot[0][2] == 19_667
-    assert hot[1][2] - hot[0][2] == 17_167
+    assert hot[2][2] - hot[0][2] == 34_134
+    assert hot[1][2] - hot[0][2] == 17_467
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
@@ -554,7 +604,7 @@ def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
         assert actions[2][2] - actions[0][2] >= (
             (1_000_000 + fps - 1) // fps
             + 500
-            + ACCEPTANCE.BENCHMARK_HOLD_GUARD_US
+            + ACCEPTANCE.DEFAULT_TRANSPORT_MARGIN_US
         )
 
 

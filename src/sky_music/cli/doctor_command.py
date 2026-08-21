@@ -68,7 +68,10 @@ def run_doctor_command(
             else:
                 print("Host Sender Hold Calibration: OUT OF ENVELOPE")
                 print("Applied calibrated margin: NONE")
-                print("Playback transport margin fallback: 300 us (not calibrated)")
+                print("Transport fallback: 300 us (not calibrated)")
+                print("Down late grace: 500 us")
+                print("Total additive hold safety: 800 us")
+                print("Timing qualification: UNQUALIFIED")
                 print("Calibration measurement completed, but host qualification failed.")
             print(f"Clean pairs per bucket: {res.sample_count}")
             print("Note-On timestamps: unchanged")

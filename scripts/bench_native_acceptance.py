@@ -44,7 +44,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 7
+BENCHMARK_SCHEMA_VERSION = 8
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -63,8 +63,19 @@ LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
-BENCHMARK_HOLD_GUARD_US = 2_500
+DEFAULT_DOWN_LATE_GRACE_US = 500
+DEFAULT_TRANSPORT_MARGIN_US = 300
 MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
+
+PRODUCTION_CORRECTNESS_COUNTERS = (
+    "production_completion_hold_below_frame_count",
+    "production_release_gap_below_policy_count",
+    "production_same_call_same_key_retrigger_count",
+    "production_anchor_overwrite_count",
+    "production_unmatched_up_count",
+    "production_anomaly_ring_overwrite_count",
+    "production_forensics_anomaly_count",
+)
 
 
 def _native_build_flavor() -> str:
@@ -124,14 +135,19 @@ def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
     if gap_profile != "hot":
         raise ValueError("gap_profile must be hot or cold")
     frame_period_us = (1_000_000 + game_fps - 1) // game_fps
-    return max(HOT_CYCLE_US, frame_period_us + 500 + BENCHMARK_HOLD_GUARD_US)
+    hold_us = frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
+    return max(HOT_CYCLE_US, hold_us + frame_period_us)
 
 
 def _materialized_hold_us(*, game_fps: int, gap_profile: str) -> int:
-    cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
+    if not 15 <= game_fps <= 240:
+        raise ValueError("game_fps must be in 15..=240")
     if gap_profile == "hot":
-        return cycle_us - BENCHMARK_HOLD_GUARD_US
-    return cycle_us // 2
+        frame_period_us = (1_000_000 + game_fps - 1) // game_fps
+        return frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
+    if gap_profile == "cold":
+        return COLD_CYCLE_US // 2
+    raise ValueError("gap_profile must be hot or cold")
 
 
 def _actions(
@@ -157,9 +173,18 @@ def _actions(
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
-    boundary_scan_codes = [
-        int(SKY_15_SCAN_CODES[offset]) for offset in range(polyphony)
-    ]
+    if scenario in {"mixed", "coalesced"}:
+        # The release-gap validator rejects same-key Up+Down at one target.
+        # Positive mixed/coalesced coverage therefore uses two disjoint masks:
+        # the first mask is released while the second mask is pressed.
+        key_count = max(2, polyphony)
+        boundary_scan_codes = [
+            int(SKY_15_SCAN_CODES[(group * key_count + offset) % len(SKY_15_SCAN_CODES)])
+            for group in range(count)
+            for offset in range(key_count)
+        ]
+    else:
+        boundary_scan_codes = []
     if scenario in {"mixed", "coalesced"}:
         # Each group has one clean Down, one Up+Down mixed boundary, and one
         # final Up.  A full cooldown separates groups so repeated groups do
@@ -168,28 +193,36 @@ def _actions(
         for group in range(count):
             base_index = group * 4
             at_us = start_delay_us + group * group_span_us
+            group_codes = boundary_scan_codes[
+                group * max(2, polyphony) : (group + 1) * max(2, polyphony)
+            ]
+            split = max(1, len(group_codes) // 2)
+            up_scan_codes = group_codes[:split]
+            down_scan_codes = group_codes[split:]
+            if not down_scan_codes:
+                down_scan_codes = [up_scan_codes.pop()]
             actions.extend(
                 (
-                    (base_index, "down", at_us, boundary_scan_codes, f"{scenario}-down"),
+                    (base_index, "down", at_us, up_scan_codes, f"{scenario}-down"),
                     (
                         base_index + 1,
                         "up",
                         at_us + cycle_us,
-                        boundary_scan_codes,
+                        up_scan_codes,
                         f"{scenario}-up",
                     ),
                     (
                         base_index + 2,
                         "down",
                         at_us + cycle_us,
-                        boundary_scan_codes,
+                        down_scan_codes,
                         f"{scenario}-retrigger-down",
                     ),
                     (
                         base_index + 3,
                         "up",
                         at_us + cycle_us * 2,
-                        boundary_scan_codes,
+                        down_scan_codes,
                         f"{scenario}-release",
                     ),
                 )
@@ -582,7 +615,7 @@ def _correctness_counters(
         expected_hold_pair_samples is None
         or actual_hold_pair_samples != expected_hold_pair_samples
     )
-    return {
+    counters = {
         "chord_integrity_lost": chord_integrity_lost,
         "unexpected_held": unexpected_held,
         "pending_unresolved": release_pending,
@@ -603,6 +636,13 @@ def _correctness_counters(
         ),
         "hold_pair_sample_mismatch": hold_pair_sample_mismatch,
     }
+    counters.update(
+        {
+            name: int(snapshot.get(name, 0))
+            for name in PRODUCTION_CORRECTNESS_COUNTERS
+        }
+    )
+    return counters
 
 
 def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
@@ -620,6 +660,7 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
         "hold_pair_sample_mismatch",
+        *PRODUCTION_CORRECTNESS_COUNTERS,
     )
     return {
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
@@ -1076,6 +1117,57 @@ def _new_session(
     )
 
 
+def _same_key_zero_gap_actions() -> list[tuple[int, str, int, list[int], str]]:
+    """Return the deliberately invalid negative-admission fixture."""
+
+    return [
+        (0, "down", 0, [int(SKY_15_SCAN_CODES[0])], "zero-gap-down"),
+        (1, "up", 20_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-up"),
+        (2, "down", 20_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-retrigger"),
+        (3, "up", 40_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-release"),
+    ]
+
+
+def _assert_same_key_zero_gap_rejected(
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+    rt_priority_mode: str,
+    game_fps: int,
+) -> None:
+    """Prove admission rejects the old mixed positive-case construction.
+
+    Construction must fail before a session can be armed, so this negative
+    case performs zero musical SendInput calls by construction.
+    """
+
+    try:
+        _new_session(
+            _same_key_zero_gap_actions(),
+            backend=backend,
+            mock_base_latency_us=mock_base_latency_us,
+            mock_per_key_latency_us=mock_per_key_latency_us,
+            adaptive_spin=adaptive_spin,
+            rt_priority_mode=rt_priority_mode,
+            game_fps=game_fps,
+            gap_profile="hot",
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "release gap" not in message or "same-key" not in message:
+            raise RuntimeError(
+                "same-key zero-gap negative case failed for an unexpected reason: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        return
+    raise RuntimeError(
+        "native admission accepted a same-key zero-gap schedule; "
+        "the negative case would be unsafe to run"
+    )
+
+
 def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
     del require_focus
     raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
@@ -1312,6 +1404,27 @@ def _run_dispatch(
             "same_call_retrigger_keys": int(
                 snapshot.get("same_call_retrigger_keys", 0)
             ),
+            "production_completion_hold_below_frame_count": int(
+                snapshot.get("production_completion_hold_below_frame_count", 0)
+            ),
+            "production_release_gap_below_policy_count": int(
+                snapshot.get("production_release_gap_below_policy_count", 0)
+            ),
+            "production_same_call_same_key_retrigger_count": int(
+                snapshot.get("production_same_call_same_key_retrigger_count", 0)
+            ),
+            "production_anchor_overwrite_count": int(
+                snapshot.get("production_anchor_overwrite_count", 0)
+            ),
+            "production_unmatched_up_count": int(
+                snapshot.get("production_unmatched_up_count", 0)
+            ),
+            "production_anomaly_ring_overwrite_count": int(
+                snapshot.get("production_anomaly_ring_overwrite_count", 0)
+            ),
+            "production_forensics_anomaly_count": int(
+                snapshot.get("production_forensics_anomaly_count", 0)
+            ),
             "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
@@ -1542,7 +1655,7 @@ def _parse_args() -> argparse.Namespace:
         "--scenario",
         choices=("paired", "mixed", "coalesced"),
         default="paired",
-        help="authored action profile; mixed/coalesced share adjacent Up/Down boundaries",
+        help="authored action profile; mixed/coalesced use disjoint adjacent Up/Down masks",
     )
     parser.add_argument(
         "--backend",
@@ -1763,6 +1876,7 @@ def _assert_report_correctness(report: dict[str, Any]) -> None:
         "pre_call_hold_shrink_over_grace_count",
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
+        *PRODUCTION_CORRECTNESS_COUNTERS,
     )
     nonzero = {
         name: correctness.get(name)
@@ -1899,7 +2013,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 7"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 8"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -2195,6 +2309,14 @@ def main() -> int:
         mock_per_key_latency_us=mock_per_key_latency_us,
     )
     benchmark_config["native_build_flavor"] = _require_native_build_flavor(args.backend)
+    _assert_same_key_zero_gap_rejected(
+        backend=args.backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=not args.no_adaptive_spin,
+        rt_priority_mode=args.rt_priority_mode,
+        game_fps=args.game_fps,
+    )
     if args.backend == "sendinput" and command_samples:
         raise SystemExit(
             "SendInput qualification uses a production wheel; use "
@@ -2517,6 +2639,10 @@ def main() -> int:
             "same_call_retrigger_keys": _aggregate_scalar_sum(
                 runs, "same_call_retrigger_keys"
             ),
+            **{
+                name: _aggregate_scalar_sum(runs, name)
+                for name in PRODUCTION_CORRECTNESS_COUNTERS
+            },
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -2647,6 +2773,10 @@ def main() -> int:
         "sender_completion_error": _aggregate_metric(
             dispatch_runs, "sender_completion_error_us"
         ),
+        **{
+            name: _aggregate_scalar_sum(dispatch_runs, name)
+            for name in PRODUCTION_CORRECTNESS_COUNTERS
+        },
         "correctness": _aggregate_correctness(dispatch_runs),
         "deadline_missed_before_send_count": sum(
             run["missed_down_boundaries"] for run in dispatch_runs

@@ -1391,7 +1391,8 @@ class PickerScreen(Screen[SongPickerResult]):
 
         assert published is not None
 
-        # The completed measurement always published a new v3 cache, including
+        # The completed measurement always publishes the current cache schema,
+        # including
         # an unhealthy out-of-envelope result.  Invalidate metadata so the next
         # render resolves the new policy source.
         invalidate_policy_metadata()
@@ -1406,7 +1407,10 @@ class PickerScreen(Screen[SongPickerResult]):
                 f"Required transport margin      : {published.transport_margin_us or published.candidate_margin_us} \u00b5s\n"
                 f"Trusted correction ceiling    : {published.ceiling_us} \u00b5s\n\n"
                 "Applied calibrated margin      : NONE\n"
-                "Playback hold fallback         : 500 \u00b5s (not calibrated)\n"
+                "Transport fallback             : 300 \u00b5s (not calibrated)\n"
+                "Down late grace               : 500 \u00b5s\n"
+                "Total additive hold safety    : 800 \u00b5s\n"
+                "Timing qualification          : UNQUALIFIED\n"
                 f"Clean pairs / required bucket  : {published.sample_count}\n"
                 f"Evidence                       : {published.evidence_kind}\n"
                 f"Cache                          : {published.cache_path}\n\n"

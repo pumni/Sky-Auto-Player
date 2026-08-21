@@ -387,6 +387,7 @@ fn observe_production(
 ) {
     forensics.observe_packet_result(
         packet,
+        0,
         QpcTicks::from_raw(target_qpc),
         QpcTicks::from_raw(pre_call_qpc),
         QpcTicks::from_raw(completion_qpc),
@@ -443,8 +444,95 @@ fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
     assert_eq!(metrics.production_forensics_version, 1);
     assert_eq!(metrics.production_hold_pair_samples, 2);
     assert_eq!(metrics.production_release_gap_samples, 1);
-    assert_eq!(metrics.production_min_release_gap_ticks, 16_850);
+    // Release-gap forensic evidence is measured at the actual Down pre-call
+    // boundary: 35_100 - 18_150, not the authored target 35_000 - 18_150.
+    assert_eq!(metrics.production_min_release_gap_ticks, 16_950);
     assert_eq!(metrics.production_forensics_anomaly_count, 0);
+}
+
+#[test]
+fn production_forensics_anomaly_ring_retains_boundary_payload() {
+    let mut forensics = ProductionHoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_100,
+        1_150,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    // Deliberately exercise the invalid same-call retrigger path. The ring
+    // must retain the action and timestamp context, not only kind/slot.
+    forensics.observe_packet_result(
+        PhysicalPacket::new(1, 1),
+        42,
+        QpcTicks::from_raw(30_000),
+        QpcTicks::from_raw(30_100),
+        QpcTicks::from_raw(30_100),
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    let anomaly = forensics
+        .latest_anomaly_for_test()
+        .expect("same-call retrigger must leave an anomaly payload");
+    assert_eq!(anomaly.kind, 6);
+    assert_eq!(anomaly.slot, 0);
+    assert_eq!(anomaly.source_action_index, 42);
+    assert_eq!(anomaly.mask, 1);
+    assert_eq!(anomaly.target_ticks, 30_000);
+    assert_eq!(anomaly.observed_ticks, 30_100);
+    assert_eq!(anomaly.aux_ticks, 1_000);
+    assert_eq!(anomaly.delta_ticks, 29_000);
+    assert_eq!(metrics.production_forensics_anomaly_count, 1);
+}
+
+#[test]
+fn production_forensics_preserves_negative_release_ordering_as_anomaly() {
+    let mut forensics = ProductionHoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        20_000,
+        20_000,
+        20_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    forensics.observe_packet_result(
+        PhysicalPacket::new(0, 1),
+        91,
+        QpcTicks::from_raw(30_000),
+        QpcTicks::from_raw(19_000),
+        QpcTicks::from_raw(30_000),
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    let anomaly = forensics
+        .latest_anomaly_for_test()
+        .expect("ordering fault must be retained");
+    assert_eq!(anomaly.kind, 8);
+    assert_eq!(anomaly.source_action_index, 91);
+    assert_eq!(anomaly.target_ticks, 30_000);
+    assert_eq!(anomaly.observed_ticks, 19_000);
+    assert_eq!(anomaly.aux_ticks, 20_000);
+    assert_eq!(anomaly.delta_ticks, 1_000);
+    assert_eq!(metrics.production_release_gap_samples, 0);
+    assert_eq!(metrics.production_release_gap_below_policy_count, 1);
 }
 
 #[test]

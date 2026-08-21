@@ -169,7 +169,7 @@ class TestResolveCalibratedPolicy:
         assert policy.min_hold_margin_source == SOURCE_DEFAULT_TRANSPORT_300
         assert int(policy.min_hold_margin_us) == 800
 
-    def test_fallback_to_default_500_when_cache_corrupt(self) -> None:
+    def test_fallback_to_transport_floor_when_cache_corrupt(self) -> None:
         """resolve_calibrated_policy falls back gracefully when loader rejects cache."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
@@ -240,7 +240,7 @@ class TestPreparePlaybackUsesCalibration:
         assert int(plan.active_policy.min_hold_margin_us) == 1_300
 
     def test_prepare_playback_without_cache_uses_default(self) -> None:
-        """prepare_playback falls back to default_500 when no cache."""
+        """prepare_playback falls back to the transport floor when no cache."""
         from sky_music.ui.textual_app.playback_controller import (
             PlaybackPlan,
             prepare_playback,
@@ -385,7 +385,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
             sig_device = _effective_policy_signature(session, cfg)
 
         assert sig_default != sig_device, (
-            "Policy signature must differ between default_500 and device_cache calibration"
+            "Policy signature must differ between transport fallback and device_cache calibration"
         )
         assert sig_default.get("min_hold_margin_source") == SOURCE_DEFAULT_TRANSPORT_300
         assert sig_device.get("min_hold_margin_source") == SOURCE_DEVICE_CACHE
@@ -397,7 +397,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        # conftest returns default_500
+        # conftest returns the transport fallback
         sig = _effective_policy_signature(session, cfg)
         assert "min_hold_margin_source" in sig, (
             "min_hold_margin_source must be part of the persistent cache key signature"
@@ -587,7 +587,7 @@ class TestCalibrationRegressionIntegration:
         assert len(sched.actions) > 0
 
     def test_calibration_regression_default_is_not_reused_after_device_cache(self) -> None:
-        """Persistent cache keys from default_500 must differ from device_cache keys."""
+        """Persistent cache keys from transport fallback differ from device_cache keys."""
         from sky_music.ui.picker_metadata import _effective_policy_signature
 
         session = PlaybackSessionContext.default(fps=60)
@@ -605,7 +605,7 @@ class TestCalibrationRegressionIntegration:
             sig_after = _effective_policy_signature(session, cfg)
 
         assert sig_before != sig_after, (
-            "A default_500 cache key must not match a device_cache key — "
+            "A transport-fallback cache key must not match a device_cache key — "
             "stale metadata would be reused after calibration."
         )
 

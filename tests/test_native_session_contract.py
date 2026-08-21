@@ -62,10 +62,10 @@ def test_session_config_validates_target_and_exposes_user_fields() -> None:
     assert config.profile == "production"
 
 
-def test_session_config_defaults_down_late_grace_to_zero() -> None:
+def test_session_config_defaults_down_late_grace_to_five_hundred_us() -> None:
     config = sky_player_rs.SessionConfig(game_fps=60)  # type: ignore[attr-defined]
 
-    assert config.down_late_grace_us == 0
+    assert config.down_late_grace_us == 500
 
 
 def test_session_config_rejects_down_late_grace_above_min_hold() -> None:
@@ -158,6 +158,7 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=60,
             min_hold_us=100,
+            down_late_grace_us=0,
             require_focus=False,
             focus_restore_grace_us=1_234,
             telemetry=True,

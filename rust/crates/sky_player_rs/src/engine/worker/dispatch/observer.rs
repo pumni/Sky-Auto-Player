@@ -29,7 +29,6 @@ use std::sync::atomic::AtomicBool;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -78,6 +77,7 @@ pub(crate) fn publisher_down_send_outcome(
     };
     runtime.production_forensics.observe_packet_result(
         requested_packet,
+        view.batch_source_action_index,
         physical_target_qpc,
         pre_call_qpc,
         sendinput_completion_qpc,

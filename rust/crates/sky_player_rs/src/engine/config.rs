@@ -136,7 +136,9 @@ impl Default for WorkerConfig {
             timing: TimingOptions {
                 game_fps: 60,
                 min_hold_us: 10_000,
-                down_late_grace_us: 0,
+                // Production's public default is 500 us. Test-support
+                // sessions supply their own explicit timing policy.
+                down_late_grace_us: 500,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,

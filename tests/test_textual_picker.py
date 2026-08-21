@@ -940,8 +940,10 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
                 "OUT OF ENVELOPE",
                 "Applied calibrated margin",
                 "NONE",
-                "Playback hold fallback",
-                "500 µs",
+                "Transport fallback",
+                "Down late grace",
+                "Total additive hold safety",
+                "UNQUALIFIED",
                 "Note-On timestamps: unchanged",
             ),
             (
@@ -983,7 +985,7 @@ def test_textual_picker_calibrate_latency_command(
             source=(
                 "device_cache"
                 if status is CalibrationStatus.VALID
-                else "out_of_envelope_default_500"
+                else "out_of_envelope_transport_300"
             ),
             sample_count=100,
             cache_path=Path(".cache/input_latency.json"),

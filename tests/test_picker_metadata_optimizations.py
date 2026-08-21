@@ -97,7 +97,7 @@ def test_warm_persistent_metadata_cache_adaptive_limit(tmp_path: Path) -> None:
         mock_connect.return_value = mock_conn
         mock_conn.execute.return_value.fetchall.return_value = []
 
-        # 1. Default fallback: 500
+        # 1. Default transport fallback: 300 (hold safety also includes 500 us grace)
         pm._persistent_loaded = False
         warm_persistent_metadata_cache(limit=None, song_paths=None)
         # Check the execute call
