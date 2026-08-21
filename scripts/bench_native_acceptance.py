@@ -332,6 +332,41 @@ def _run_validity_summary(
     }
 
 
+def _expected_record_layout(
+    actions: list[tuple[int, str, int, list[int], str]],
+    scenario: str,
+) -> list[tuple[int, str, set[int]]]:
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
+    combined_boundaries = scenario in {"mixed", "coalesced"}
+    if combined_boundaries and (len(actions) < 2 or len(actions) % 2 != 0):
+        raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
+    layout: list[tuple[int, str, set[int]]] = []
+    for position, action in enumerate(actions):
+        index, kind, scheduled_us, *_ = action
+        if (
+            combined_boundaries
+            and kind == "up"
+            and position + 1 < len(actions)
+            and actions[position + 1][1] == "down"
+            and actions[position + 1][2] == scheduled_us
+        ):
+            continue
+        record_kind = str(kind)
+        consumed = {int(index)}
+        if (
+            combined_boundaries
+            and kind == "down"
+            and position > 0
+            and actions[position - 1][1] == "up"
+            and actions[position - 1][2] == scheduled_us
+        ):
+            record_kind = "mixed"
+            consumed.add(int(actions[position - 1][0]))
+        layout.append((int(index), record_kind, consumed))
+    return layout
+
+
 def _validate_telemetry_integrity(
     *,
     actions: list[tuple[int, str, int, list[int], str]],
@@ -348,36 +383,10 @@ def _validate_telemetry_integrity(
     index and kind mapping before a repetition is eligible for statistics.
     """
 
-    if scenario not in {"paired", "mixed", "coalesced"}:
-        raise ValueError("scenario must be paired, mixed, or coalesced")
     authored_indices = [int(action[0]) for action in actions]
-    combined_boundaries = scenario in {"mixed", "coalesced"}
-    if combined_boundaries and (len(actions) < 2 or len(actions) % 2 != 0):
-        raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
-    expected_indices: list[int] = []
-    expected_kinds: dict[int, str] = {}
-    for position, action in enumerate(actions):
-        index, kind, scheduled_us, *_ = action
-        if (
-            combined_boundaries
-            and kind == "up"
-            and position + 1 < len(actions)
-            and actions[position + 1][1] == "down"
-            and actions[position + 1][2] == scheduled_us
-        ):
-            continue
-        record_kind = str(kind)
-        if (
-            combined_boundaries
-            and kind == "down"
-            and position > 0
-            and actions[position - 1][1] == "up"
-            and actions[position - 1][2] == scheduled_us
-        ):
-            record_kind = "mixed"
-        event_index = int(index)
-        expected_indices.append(event_index)
-        expected_kinds[event_index] = record_kind
+    layout = _expected_record_layout(actions, scenario)
+    expected_indices = [index for index, _, _ in layout]
+    expected_kinds = {index: kind for index, kind, _ in layout}
     expected_authored_indices = set(authored_indices)
     expected_counts = collections.Counter(expected_indices)
     expected_duplicate_indices = sorted(
@@ -401,6 +410,7 @@ def _validate_telemetry_integrity(
         and record.kind != expected_kinds[record.event_index]
     ]
     consumed_authored_indices: set[int] = set()
+    combined_boundaries = scenario in {"mixed", "coalesced"}
     for record in records:
         if combined_boundaries and record.kind == "mixed":
             consumed_authored_indices.update((record.event_index - 1, record.event_index))
@@ -995,7 +1005,12 @@ def _run_dispatch(
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
-        warmup_record_count = warmup_cycles * 2
+        warmup_action_count = warmup_cycles * 2
+        warmup_record_count = sum(
+            1
+            for _, _, consumed in _expected_record_layout(actions, scenario)
+            if consumed and max(consumed) < warmup_action_count
+        )
         if warmup_record_count < 0 or warmup_record_count >= len(records):
             raise RuntimeError("warmup cycles must leave measurement records")
         measurement_records = records[warmup_record_count:]
