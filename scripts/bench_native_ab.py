@@ -146,6 +146,8 @@ def _benchmark_command(
             args.gap_profile,
             "--warmup-cycles",
             str(args.warmup_cycles),
+            "--start-delay-us",
+            str(getattr(args, "start_delay_us", 0)),
             "--rt-priority-mode",
             args.rt_priority_mode,
             "--budget-seconds",
@@ -191,6 +193,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--fixed-lead-us", type=int, default=0)
     parser.add_argument("--gap-profile", choices=("hot", "cold"), required=True)
     parser.add_argument("--warmup-cycles", type=int, required=True)
+    parser.add_argument(
+        "--start-delay-us",
+        type=int,
+        default=0,
+        help="delay the first authored action after arm (default: 0)",
+    )
     parser.add_argument("--rt-priority-mode", default="off")
     parser.add_argument(
         "--budget-seconds",
@@ -251,6 +259,7 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "game_fps": args.game_fps,
         "gap_profile": args.gap_profile,
         "warmup_cycles": args.warmup_cycles,
+        "start_delay_us": getattr(args, "start_delay_us", 0),
         "native_profile": "strict_timing_diagnostic" if real_backend else "mock_test",
         "native_build_flavor": "production" if real_backend else "test_support",
         "require_focus": real_backend,
@@ -326,6 +335,8 @@ def main() -> int:
         raise SystemExit("--fixed-lead-us must be 0 in adaptive mode")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
+    if getattr(args, "start_delay_us", 0) < 0:
+        raise SystemExit("--start-delay-us must be non-negative")
 
     baseline_sha = _full_sha(args.baseline_ref, cwd=ROOT)
     candidate_sha = _full_sha(args.candidate_ref, cwd=ROOT)

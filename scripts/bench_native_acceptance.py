@@ -140,11 +140,14 @@ def _actions(
     *,
     gap_profile: str = "hot",
     game_fps: int = 60,
+    start_delay_us: int = 0,
 ) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
+    if start_delay_us < 0:
+        raise ValueError("start_delay_us must be non-negative")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
@@ -153,7 +156,7 @@ def _actions(
             int(SKY_15_SCAN_CODES[(index * polyphony + offset) % len(SKY_15_SCAN_CODES)])
             for offset in range(polyphony)
         ]
-        at_us = index * cycle_us
+        at_us = start_delay_us + index * cycle_us
         actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
         actions.append(
             (index * 2 + 1, "up", at_us + hold_us, scan_codes, "bench-up")
@@ -224,6 +227,7 @@ def _benchmark_config(
         "mock_per_key_latency_us": mock_per_key_latency_us,
         "actions": args.actions,
         "polyphony": polyphonies,
+        "start_delay_us": getattr(args, "start_delay_us", 0),
         "lead_mode": effective_lead_mode,
         "fixed_lead_us": effective_fixed_lead_us,
         "gap_profile": args.gap_profile,
@@ -1185,6 +1189,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup-cycles", type=int, default=8)
     parser.add_argument(
+        "--start-delay-us",
+        type=int,
+        default=0,
+        help="delay the first authored action after arm (default: 0)",
+    )
+    parser.add_argument(
         "--continue-after-failure",
         action="store_true",
         help="run remaining repetitions for diagnostics, but still exit non-zero",
@@ -1556,6 +1566,7 @@ def _assert_baseline_compatible(
         "fixed_lead_us",
         "gap_profile",
         "warmup_cycles",
+        "start_delay_us",
         "native_profile",
         "native_build_flavor",
         "require_focus",
@@ -1772,6 +1783,8 @@ def main() -> int:
     args = _parse_args()
     if os.name != "nt":
         raise SystemExit("this acceptance benchmark requires Windows")
+    if args.start_delay_us < 0:
+        raise SystemExit("--start-delay-us must be non-negative")
     dispatch_repeats, command_samples = _resolve_repeat_counts(args)
     lead_mode, fixed_lead_us = _resolve_lead_config(args)
     if args.actions <= 0:
@@ -1839,6 +1852,7 @@ def main() -> int:
             current_polyphony,
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
+            start_delay_us=args.start_delay_us,
         )
         try:
             for polyphony in polyphonies:
@@ -1848,6 +1862,7 @@ def main() -> int:
                     polyphony,
                     gap_profile=args.gap_profile,
                     game_fps=args.game_fps,
+                    start_delay_us=args.start_delay_us,
                 )
                 run = _run_dispatch(
                     current_actions,
@@ -1930,7 +1945,13 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_actions = _actions(1, 1, gap_profile=args.gap_profile, game_fps=args.game_fps)
+    command_actions = _actions(
+        1,
+        1,
+        gap_profile=args.gap_profile,
+        game_fps=args.game_fps,
+        start_delay_us=args.start_delay_us,
+    )
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -2034,6 +2055,7 @@ def main() -> int:
             polyphony,
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
+            start_delay_us=args.start_delay_us,
         )
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {

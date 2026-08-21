@@ -204,9 +204,10 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
         "polyphony": [1, 2, 3, 5, 8, 15],
         "lead_mode": "fixed",
         "fixed_lead_us": 0,
-        "gap_profile": "hot",
-        "warmup_cycles": 8,
-        "native_profile": "mock_test",
+            "gap_profile": "hot",
+            "warmup_cycles": 8,
+            "start_delay_us": 0,
+            "native_profile": "mock_test",
         "native_build_flavor": "test_support",
         "require_focus": False,
         "materialized_min_hold_us": 17_167,
@@ -436,6 +437,16 @@ def test_hot_and_cold_action_spacing() -> None:
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
+
+
+def test_start_delay_shifts_authored_actions_without_changing_spacing() -> None:
+    baseline = ACCEPTANCE._actions(2, 1, gap_profile="hot")
+    delayed = ACCEPTANCE._actions(2, 1, gap_profile="hot", start_delay_us=100_000)
+    assert [action[2] for action in delayed] == [
+        action[2] + 100_000 for action in baseline
+    ]
+    with pytest.raises(ValueError, match="start_delay_us"):
+        ACCEPTANCE._actions(1, 1, start_delay_us=-1)
 
 
 def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
