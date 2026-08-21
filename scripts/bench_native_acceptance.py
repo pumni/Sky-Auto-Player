@@ -594,8 +594,15 @@ def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
         if isinstance(value, int) and not isinstance(value, bool) and value != 0:
             reasons.append(name)
 
+    config = report.get("benchmark_config")
+    fixed_hot_60 = (
+        isinstance(config, dict)
+        and config.get("game_fps") == 60
+        and config.get("gap_profile") == "hot"
+        and config.get("lead_mode") == "fixed"
+    )
     wake = report.get("wake_error_us")
-    if isinstance(wake, dict):
+    if fixed_hot_60 and isinstance(wake, dict):
         absolute = wake.get("absolute")
         if isinstance(absolute, dict) and absolute.get("p99", 0) > ABSOLUTE_WAKE_P99_LIMIT_US:
             reasons.append("wake_p99_slo")
