@@ -21,6 +21,17 @@ fn timeline_rebase_reason(_code: u8) -> Option<String> {
     None
 }
 
+fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
+    if !valid {
+        return None;
+    }
+    match reason_code {
+        1 => Some("backlog".to_string()),
+        2 => Some("hard_late".to_string()),
+        _ => None,
+    }
+}
+
 pub(crate) fn validate_native_schedule_timing(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
     effective_min_hold_us: u64,
@@ -680,6 +691,25 @@ impl NativeDispatchSession {
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
             rollback_residue_keys: local.rollback_residue_keys,
+            hold_pair_samples: local.hold_pair_samples,
+            min_pre_call_hold_us: local.min_pre_call_hold_us,
+            min_completion_hold_us: local.min_completion_hold_us,
+            max_pre_call_hold_shrink_us: local.max_pre_call_hold_shrink_us,
+            max_completion_hold_shrink_us: local.max_completion_hold_shrink_us,
+            pre_call_hold_shrink_over_grace_count: local.pre_call_hold_shrink_over_grace_count,
+            hold_unmatched_up_count: local.hold_unmatched_up_count,
+            hold_anchor_overwrite_count: local.hold_anchor_overwrite_count,
+            same_call_retrigger_boundaries: local.same_call_retrigger_boundaries,
+            same_call_retrigger_keys: local.same_call_retrigger_keys,
+            last_missed_down_reason: last_missed_down_reason(
+                local.last_missed_down_valid,
+                local.last_missed_down_reason_code,
+            ),
+            last_missed_down_source_action_index: local
+                .last_missed_down_valid
+                .then_some(local.last_missed_down_source_action_index),
+            last_missed_down_mask: local.last_missed_down_mask,
+            last_missed_down_lateness_ticks: local.last_missed_down_lateness_ticks,
             chord_integrity_lost: local.chord_integrity_lost,
             lead_saturation_count_down: local.lead_saturation_count_down.to_vec(),
             lead_saturation_count_up: local.lead_saturation_count_up.to_vec(),

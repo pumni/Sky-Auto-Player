@@ -236,7 +236,10 @@ Python materializes the fixed floor before native startup:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold_us = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
+measured_margin_us = max(0, calibrated_or_default_margin_us)
+down_late_grace_us = policy.down_late_grace_us
+effective_margin_us = max(measured_margin_us, down_late_grace_us)
+effective_min_hold_us = materialize_hold(selected_hold_frames, frame_us, effective_margin_us)
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
@@ -245,7 +248,10 @@ Native admission checked tick arithmetic enforces before worker start:
 authored_up >= authored_down + effective_min_hold
 ```
 
-The static margin is materialized once into the authored schedule. An invalid
+The static margin is materialized once into the authored schedule. The
+`FrameTimingPolicy.min_hold_margin_us` field contains this post-policy
+effective margin, while its source field retains raw measurement provenance.
+An invalid
 interval fails native admission before any musical SendInput. The worker never
 combines Down completion with the authored hold to create a second floor, never
 creates a completion-derived minimum-hold terminal state, and never rewrites an
@@ -256,7 +262,8 @@ generation ownership. There is no transport retry state.
 
 The session-fixed `down_late_grace_us` is an independent sender correctness
 policy, currently `500 µs`, converted once to QPC ticks at admission. It bounds
-authorized Down lateness only; it is never derived from the hold margin,
+authorized Down lateness only; policy construction enforces
+`effective_margin_us >= down_late_grace_us`. It is never derived from the hold margin,
 calibration, or dispatch lead, and never changes an authored target. The
 trusted sender repeats the same cutoff check immediately before `SendInput`,
 while Up-only safety releases remain exempt.
@@ -339,8 +346,11 @@ failure, telemetry overflow, or metric conversion failure cannot
 rewrite physical ownership. The worker terminates through the normal cleanup
 path and preserves the primary and secondary errors.
 
-The live snapshot is a small projection of authoritative playback state. The
-The diagnostic final report is materialized after worker and observer shutdown;
+The live snapshot is a small projection of authoritative playback state.
+The diagnostic observer publishes sender hold-forensics scalars and the last
+classified missed-Down sample only in the terminal/full snapshot; the
+lightweight polling snapshot remains unchanged. The diagnostic final report is
+materialized after worker and observer shutdown;
 the production report uses worker scalar state. Historical estimator plumbing
 is not part of the active production session contract and cannot affect timing.
 

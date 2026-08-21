@@ -78,6 +78,27 @@ pub struct WorkerMetricsLocal {
     pub late_authorized_boundaries: u64,
     pub deadline_authorization_reuses: u64,
     pub max_missed_lateness_ticks: u64,
+    /// Deferred-observer sender packet-boundary hold forensics. These fields
+    /// are deliberately scalar-only and are not part of the dispatch worker's
+    /// precision path.
+    pub hold_pair_samples: u64,
+    pub min_pre_call_hold_us: u64,
+    pub min_completion_hold_us: u64,
+    pub max_pre_call_hold_shrink_us: u64,
+    pub max_completion_hold_shrink_us: u64,
+    pub pre_call_hold_shrink_over_grace_count: u64,
+    pub hold_unmatched_up_count: u64,
+    pub hold_anchor_overwrite_count: u64,
+    pub same_call_retrigger_boundaries: u64,
+    pub same_call_retrigger_keys: u64,
+    /// Fixed-width evidence for the most recently classified missed Down.
+    /// This is populated after classification and remains absent from the
+    /// lightweight live snapshot.
+    pub last_missed_down_valid: bool,
+    pub last_missed_down_reason_code: u8,
+    pub last_missed_down_source_action_index: u32,
+    pub last_missed_down_mask: u16,
+    pub last_missed_down_lateness_ticks: u64,
     pub keys_inserted_before_failure: u64,
     pub keys_rolled_back: u64,
     pub rollback_residue_keys: u64,
@@ -183,6 +204,45 @@ impl WorkerMetricsLocal {
         self.recovered_zero_progress_but_late = self
             .recovered_zero_progress_but_late
             .saturating_add(observer.recovered_zero_progress_but_late);
+        self.hold_pair_samples = self
+            .hold_pair_samples
+            .saturating_add(observer.hold_pair_samples);
+        if observer.min_pre_call_hold_us != 0 {
+            self.min_pre_call_hold_us = if self.min_pre_call_hold_us == 0 {
+                observer.min_pre_call_hold_us
+            } else {
+                self.min_pre_call_hold_us.min(observer.min_pre_call_hold_us)
+            };
+        }
+        if observer.min_completion_hold_us != 0 {
+            self.min_completion_hold_us = if self.min_completion_hold_us == 0 {
+                observer.min_completion_hold_us
+            } else {
+                self.min_completion_hold_us
+                    .min(observer.min_completion_hold_us)
+            };
+        }
+        self.max_pre_call_hold_shrink_us = self
+            .max_pre_call_hold_shrink_us
+            .max(observer.max_pre_call_hold_shrink_us);
+        self.max_completion_hold_shrink_us = self
+            .max_completion_hold_shrink_us
+            .max(observer.max_completion_hold_shrink_us);
+        self.pre_call_hold_shrink_over_grace_count = self
+            .pre_call_hold_shrink_over_grace_count
+            .saturating_add(observer.pre_call_hold_shrink_over_grace_count);
+        self.hold_unmatched_up_count = self
+            .hold_unmatched_up_count
+            .saturating_add(observer.hold_unmatched_up_count);
+        self.hold_anchor_overwrite_count = self
+            .hold_anchor_overwrite_count
+            .saturating_add(observer.hold_anchor_overwrite_count);
+        self.same_call_retrigger_boundaries = self
+            .same_call_retrigger_boundaries
+            .saturating_add(observer.same_call_retrigger_boundaries);
+        self.same_call_retrigger_keys = self
+            .same_call_retrigger_keys
+            .saturating_add(observer.same_call_retrigger_keys);
         self.effective_spin_threshold_us = self
             .effective_spin_threshold_us
             .max(observer.effective_spin_threshold_us);

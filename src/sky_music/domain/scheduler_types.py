@@ -67,6 +67,10 @@ class FrameTimingPolicy:
     min_hold_margin_source: str = "default_500"
     down_late_grace_us: Microseconds = Microseconds(DEFAULT_DOWN_LATE_GRACE_US)
 
+    def __post_init__(self) -> None:
+        if self.min_hold_margin_us < self.down_late_grace_us:
+            raise ValueError("min_hold_margin_us must be at least down_late_grace_us")
+
     @classmethod
     def from_timing_policy(
         cls,
@@ -76,7 +80,10 @@ class FrameTimingPolicy:
     ) -> FrameTimingPolicy:
         ratio = validate_hold_frames(policy.hold_frames)
         frame_us = frame_duration_us(fps)
-        effective = materialize_hold_us(ratio, fps, policy.min_hold_margin_us)
+        measured_margin_us = max(0, int(policy.min_hold_margin_us))
+        down_late_grace_us = int(policy.down_late_grace_us)
+        effective_margin_us = max(measured_margin_us, down_late_grace_us)
+        effective = materialize_hold_us(ratio, fps, effective_margin_us)
         conflict = same_key_conflict_policy or policy.same_key_conflict_policy
         if conflict not in ("strict", "drop_chord", "degraded"):
             conflict = DEFAULT_SAME_KEY_CONFLICT_POLICY
@@ -88,9 +95,9 @@ class FrameTimingPolicy:
             min_hold_us=Microseconds(effective),
             focus_restore_grace_us=policy.focus_restore_grace_us,
             same_key_conflict_policy=conflict,
-            min_hold_margin_us=Microseconds(max(0, int(policy.min_hold_margin_us))),
+            min_hold_margin_us=Microseconds(effective_margin_us),
             min_hold_margin_source=policy.min_hold_margin_source,
-            down_late_grace_us=Microseconds(policy.down_late_grace_us),
+            down_late_grace_us=Microseconds(down_late_grace_us),
         )
 
     @classmethod

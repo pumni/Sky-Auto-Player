@@ -105,6 +105,7 @@ _INTEGRATION_CACHE: dict = {
 }
 
 _EXPECTED_MARGIN_US = 800
+_LOW_CALIBRATED_MARGIN_US = 300
 
 def _resolution(
     margin_us: int,
@@ -174,6 +175,23 @@ class TestResolveCalibratedPolicy:
             policy = resolve_calibrated_policy(session, cfg)
 
         assert policy.min_hold_margin_source == SOURCE_DEFAULT_500
+
+    def test_low_device_cache_margin_is_raised_without_changing_provenance(self) -> None:
+        """The effective policy couples a low calibrated margin to Down grace."""
+        from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
+
+        session = PlaybackSessionContext.default(fps=60)
+        cfg = AppConfig()
+
+        with patch(
+            _LOADER_PATCH,
+            return_value=_resolution(_LOW_CALIBRATED_MARGIN_US, SOURCE_DEVICE_CACHE),
+        ):
+            policy = resolve_calibrated_policy(session, cfg)
+
+        assert int(policy.min_hold_margin_us) == 500
+        assert policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
+        assert policy.down_late_grace_us == 500
 
 
 # ---------------------------------------------------------------------------

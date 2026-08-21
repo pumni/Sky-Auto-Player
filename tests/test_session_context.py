@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from sky_music.config import AppConfig
+from sky_music.domain.hold_timing import materialize_hold_us
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
     merge_session_with_overrides,
@@ -61,6 +63,54 @@ def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
     assert policy.min_hold_margin_source == "device_cache"
     assert policy.down_late_grace_us == 500
     assert policy.focus_restore_grace_us == 100_000
+
+
+@pytest.mark.parametrize(
+    ("margin_us", "down_late_grace_us", "effective_margin_us"),
+    [
+        (300, 500, 500),
+        (800, 500, 800),
+        (300, 0, 300),
+        (500, 500, 500),
+    ],
+)
+def test_effective_margin_cannot_be_below_down_late_grace(
+    margin_us: int,
+    down_late_grace_us: int,
+    effective_margin_us: int,
+) -> None:
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.0,
+        60,
+        margin_us=margin_us,
+        down_late_grace_us=down_late_grace_us,
+    )
+
+    assert policy.min_hold_margin_us == effective_margin_us
+    assert policy.min_hold_us == 16_667 + effective_margin_us
+    assert policy.min_hold_margin_us >= policy.down_late_grace_us
+
+
+@pytest.mark.parametrize("hold_frames", [1.0, 1.25, 1.5])
+def test_margin_coupling_preserves_selected_hold_frame_ratio(hold_frames: float) -> None:
+    base = FrameTimingPolicy.from_hold_frames(
+        hold_frames,
+        60,
+        margin_us=300,
+        down_late_grace_us=0,
+    )
+    policy = FrameTimingPolicy.from_hold_frames(
+        hold_frames,
+        60,
+        margin_us=300,
+        down_late_grace_us=500,
+    )
+
+    assert policy.hold_frames == hold_frames
+    assert policy.min_hold_margin_us == 500
+    assert base.min_hold_us == materialize_hold_us(hold_frames, 60, 300)
+    assert policy.min_hold_us == materialize_hold_us(hold_frames, 60, 500)
+    assert policy.min_hold_us - base.min_hold_us == 200
 
 
 def test_cli_exposes_hold_frames_and_rejects_removed_absolute_flags() -> None:

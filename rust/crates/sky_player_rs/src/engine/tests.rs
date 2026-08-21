@@ -3257,6 +3257,14 @@ fn unobserved_overdue_down_is_committed_missed_without_sendinput() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(!harness.has_active_generation(0x16));
     assert!(harness.local_metrics.missed_down_boundaries >= 1);
+    assert!(harness.local_metrics.last_missed_down_valid);
+    assert_eq!(harness.local_metrics.last_missed_down_reason_code, 1);
+    assert_eq!(
+        harness.local_metrics.last_missed_down_source_action_index,
+        1
+    );
+    assert_eq!(harness.local_metrics.last_missed_down_mask, 0b10);
+    assert!(harness.local_metrics.last_missed_down_lateness_ticks > 0);
 }
 
 #[test]
@@ -3352,6 +3360,14 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     assert!(matches!(hard_late, super::worker::DispatchStep::Dispatched));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+    assert!(harness.local_metrics.last_missed_down_valid);
+    assert_eq!(harness.local_metrics.last_missed_down_reason_code, 2);
+    assert_eq!(
+        harness.local_metrics.last_missed_down_source_action_index,
+        1
+    );
+    assert_eq!(harness.local_metrics.last_missed_down_mask, 0b10);
+    assert!(harness.local_metrics.last_missed_down_lateness_ticks > 0);
 }
 
 #[test]

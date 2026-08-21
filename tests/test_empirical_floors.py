@@ -15,7 +15,9 @@ def test_production_hold_is_frame_relative(fps: int, hold_frames: float) -> None
 
 
 def test_zero_margin_one_frame_equals_one_frame() -> None:
-    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=0)
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=0, down_late_grace_us=0
+    )
 
     assert policy.hold_us == policy.min_hold_us == policy.frame_us == 16_667
 
@@ -25,7 +27,8 @@ def test_negative_margin_is_clamped() -> None:
         TimingPolicy(hold_frames=1.0, min_hold_margin_us=-500), fps=60  # type: ignore[arg-type]
     )
 
-    assert policy.hold_us == policy.min_hold_us == 16_667
+    assert policy.hold_us == policy.min_hold_us == 17_167
+    assert policy.min_hold_margin_us == 500
 
 
 def test_frame_policy_requires_positive_fps() -> None:

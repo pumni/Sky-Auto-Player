@@ -1,3 +1,6 @@
+import pytest
+
+from sky_music.domain.domain import Microseconds
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 
 
@@ -20,7 +23,9 @@ def test_calibrated_margin_is_forwarded() -> None:
 
 
 def test_zero_margin_is_valid_for_one_frame() -> None:
-    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=0)
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=0, down_late_grace_us=0
+    )
 
     assert policy.hold_us == policy.min_hold_us == policy.frame_us
 
@@ -32,15 +37,31 @@ def test_calibrated_hold_margin_does_not_change_down_late_grace() -> None:
     assert policy.down_late_grace_us == 500
 
 
-def test_down_late_grace_does_not_change_materialized_hold() -> None:
+def test_down_late_grace_is_a_floor_for_materialized_hold() -> None:
     a = FrameTimingPolicy.from_hold_frames(
-        1.0, 60, margin_us=800, down_late_grace_us=100
+        1.0, 60, margin_us=300, down_late_grace_us=100
     )
     b = FrameTimingPolicy.from_hold_frames(
-        1.0, 60, margin_us=800, down_late_grace_us=500
+        1.0, 60, margin_us=300, down_late_grace_us=500
     )
 
-    assert a.min_hold_us == b.min_hold_us
+    assert a.min_hold_margin_us == 300
+    assert b.min_hold_margin_us == 500
+    assert b.min_hold_us > a.min_hold_us
+
+
+def test_frame_policy_rejects_an_ineffective_margin() -> None:
+    with pytest.raises(ValueError, match="min_hold_margin_us"):
+        FrameTimingPolicy(
+            fps=60,
+            frame_us=Microseconds(16_667),
+            hold_frames=1.0,
+            hold_us=Microseconds(16_967),
+            min_hold_us=Microseconds(16_967),
+            focus_restore_grace_us=Microseconds(100_000),
+            min_hold_margin_us=Microseconds(300),
+            down_late_grace_us=Microseconds(500),
+        )
 
 
 def test_calibration_does_not_shift_authored_note_on_timestamps() -> None:

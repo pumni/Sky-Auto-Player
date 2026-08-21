@@ -35,7 +35,10 @@ requested hold, and passes:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-effective_min_hold = materialize_hold(selected_hold_frames, frame_us, calibrated_margin_us)
+measured_margin_us = max(0, calibrated_or_default_margin_us)
+down_late_grace_us = policy.down_late_grace_us
+effective_margin_us = max(measured_margin_us, down_late_grace_us)
+effective_min_hold = materialize_hold(selected_hold_frames, frame_us, effective_margin_us)
 ```
 
 For every authored same-key Down→Up pair:
@@ -51,7 +54,15 @@ the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
 
-`min_hold_margin_us` affects only the authored effective minimum hold. It is
+`FrameTimingPolicy.min_hold_margin_us` is the post-policy effective static
+margin. Calibration qualification may report a lower raw measurement, while
+`min_hold_margin_source` preserves its provenance. The policy enforces:
+
+```text
+effective_margin_us >= down_late_grace_us
+```
+
+The effective margin affects only the authored effective minimum hold. It is
 never added to the authored target, never used as dispatch lead, and never
 adapted during playback. Independently, production uses the fixed
 `down_late_grace_us = 500` sender policy, materialized once as
@@ -65,6 +76,10 @@ therefore:
 authored_up - actual_down_pre_call
     >= effective_min_hold - down_late_grace
 ```
+
+Because the effective static margin is at least the Down grace, every
+production-accepted Down preserves at least the selected frame-base hold at
+the authoritative pre-call boundary.
 
 Equality at the cutoff is permitted; a pre-call QPC one tick beyond it makes
 zero Down `SendInput` syscalls and follows the existing missed-Down recovery
@@ -396,7 +411,12 @@ health windows, telemetry record materialization, shared metric publication,
 and observer timing counters. It uses its own local health state and metrics.
 On shutdown, the worker signals the consumer, joins it, merges its metrics,
 and only then publishes the final report. Observer output cannot authorize or
-reorder input.
+reorder input. The observer also owns fixed `[Option<HoldAnchor>; 15]` sender
+packet-boundary hold forensics. Successful packets are processed in canonical
+UP-then-DOWN order; each paired sample compares authored target, pre-call, and
+completion QPC boundaries. These are sender-side hold proxies only, never game
+observations. Incomplete transport does not mutate pairing state, and the
+forensics scalars do not alter the native telemetry schema or dispatch path.
 
 ## 7. Observability and compatibility
 
@@ -412,7 +432,10 @@ The authoritative sender-side metrics are:
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
 - release-floor/defer evidence; and
-- diagnostic-only observer queue/drop and telemetry counters.
+- diagnostic-only observer queue/drop and telemetry counters;
+- diagnostic-only sender packet-boundary hold pairs, including minimum
+  pre-call/completion hold, positive shrink, grace violations, ownership
+  anomalies, and same-call retrigger counts.
 
 The producer-side maximum SendInput pre-call lateness is retained in raw QPC
 ticks. The `2 ms`, `5 ms`, and `10 ms` bucket cutoffs are converted once during

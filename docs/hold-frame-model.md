@@ -8,8 +8,10 @@ For a selected ratio and FPS, Python first materializes the requested hold:
 
 ```text
 frame_us = ceil(1_000_000 / fps)
-requested_min_hold_us = round(hold_frames * frame_us) + margin_us
-effective_min_hold_us = requested_min_hold_us
+measured_margin_us = max(0, calibrated_or_default_margin_us)
+down_late_grace_us = policy.down_late_grace_us
+effective_margin_us = max(measured_margin_us, down_late_grace_us)
+effective_min_hold_us = round(hold_frames * frame_us) + effective_margin_us
 ```
 
 The default hold margin is `500 µs`; calibration may provide a validated
@@ -39,10 +41,19 @@ about game-observed timing.
 The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. PyO3 does not add another frame-relative floor;
 Rust only range-checks and validates this value in QPC ticks. It does not learn
-or subtract SendInput cost. The independent fixed `down_late_grace_us` sender
-policy is `500 µs` and is converted once to QPC ticks. It bounds authorized
-Down lateness at the final sender cutoff; it is never derived from calibration,
-added to an authored target, or adapted during playback. Equality at the cutoff is allowed;
+or subtract SendInput cost. `FrameTimingPolicy.min_hold_margin_us` is the
+post-policy effective static margin, not necessarily the raw calibration
+measurement; `min_hold_margin_source` still records measurement provenance.
+The independent fixed `down_late_grace_us` sender policy is `500 µs` and is
+converted once to QPC ticks. The policy coupling enforces:
+
+```text
+effective_margin_us >= down_late_grace_us
+```
+
+Therefore an authorized Down accepted at the latest cutoff cannot reduce the
+sender pre-call hold below the selected frame-base hold. Grace is never added
+to an authored target or adapted during playback. Equality at the cutoff is allowed;
 the first QPC tick beyond it is a missed Down. Up-only releases remain exempt.
 
 At 60 FPS with the default margin:

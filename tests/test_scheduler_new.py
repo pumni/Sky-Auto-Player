@@ -119,7 +119,12 @@ def test_release_precedes_new_down_at_same_timestamp() -> None:
             Note(Millis(1010), NoteKey("Key0")),
         ),
     )
-    result = build_key_actions(song, policy=_policy(1.0, 100, margin_us=0))
+    result = build_key_actions(
+        song,
+        policy=FrameTimingPolicy.from_hold_frames(
+            1.0, 100, margin_us=0, down_late_grace_us=0
+        ),
+    )
     boundary = [action for action in result.actions if action.at_us == 1_010_000]
 
     assert [action.kind.value for action in boundary[:2]] == ["up", "down"]
@@ -136,7 +141,9 @@ def test_all_hold_choices_materialize_to_equal_hold_and_min_hold(
 
 
 def test_zero_margin_one_frame_is_valid_in_schedule_validation() -> None:
-    policy = _policy(1.0, 60, margin_us=0)
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=0, down_late_grace_us=0
+    )
     actions = (
         KeyAction(ActionKind.DOWN, (ScanCode(0x15),), Microseconds(0)),
         KeyAction(ActionKind.UP, (ScanCode(0x15),), policy.frame_us),
@@ -146,7 +153,9 @@ def test_zero_margin_one_frame_is_valid_in_schedule_validation() -> None:
 
 
 def test_validation_rejects_hold_shorter_than_one_frame() -> None:
-    policy = _policy(1.0, 60, margin_us=0)
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.0, 60, margin_us=0, down_late_grace_us=0
+    )
     actions = (
         KeyAction(ActionKind.DOWN, (ScanCode(0x15),), Microseconds(0)),
         KeyAction(ActionKind.UP, (ScanCode(0x15),), Microseconds(policy.frame_us - 1)),

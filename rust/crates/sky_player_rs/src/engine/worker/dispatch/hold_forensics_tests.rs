@@ -1,0 +1,298 @@
+use super::super::hold_forensics::HoldForensics;
+use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+use sky_dispatch_win32::input::PhysicalPacket;
+use std::num::NonZeroU64;
+
+fn observe(
+    forensics: &mut HoldForensics,
+    packet: PhysicalPacket,
+    target_qpc: u64,
+    pre_call_qpc: u64,
+    completion_qpc: u64,
+    full_transport_success: bool,
+    metrics: &mut WorkerMetricsLocal,
+) {
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+    forensics
+        .observe_packet(
+            packet,
+            QpcTicks::from_raw(target_qpc),
+            QpcTicks::from_raw(pre_call_qpc),
+            QpcTicks::from_raw(completion_qpc),
+            full_transport_success,
+            metrics,
+            qpc_clock,
+            qpc_clock.duration_from_us(500).unwrap(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn ordinary_pair_reports_sender_boundary_holds_and_shrink() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_100,
+        1_150,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_000,
+        18_020,
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.hold_pair_samples, 1);
+    assert_eq!(metrics.min_pre_call_hold_us, 16_900);
+    assert_eq!(metrics.min_completion_hold_us, 16_870);
+    assert_eq!(metrics.max_pre_call_hold_shrink_us, 100);
+    assert_eq!(metrics.max_completion_hold_shrink_us, 130);
+    assert_eq!(metrics.pre_call_hold_shrink_over_grace_count, 0);
+}
+
+#[test]
+fn chord_and_staggered_release_pairs_are_counted_per_slot() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 0b111),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0b001, 0),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0b110, 0),
+        19_000,
+        19_000,
+        19_000,
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.hold_pair_samples, 3);
+    assert_eq!(metrics.hold_unmatched_up_count, 0);
+}
+
+#[test]
+fn same_call_retrigger_closes_old_generation_before_opening_new_one() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 1),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        35_000,
+        35_000,
+        35_000,
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.same_call_retrigger_boundaries, 1);
+    assert_eq!(metrics.same_call_retrigger_keys, 1);
+    assert_eq!(metrics.hold_pair_samples, 2);
+    assert_eq!(metrics.hold_anchor_overwrite_count, 0);
+}
+
+#[test]
+fn mixed_unrelated_and_partial_overlap_track_only_retriggers() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 0b001),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0b001, 0b010),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0b010, 0),
+        19_000,
+        19_000,
+        19_000,
+        true,
+        &mut metrics,
+    );
+    assert_eq!(metrics.same_call_retrigger_boundaries, 0);
+    assert_eq!(metrics.same_call_retrigger_keys, 0);
+
+    let mut overlap_forensics = HoldForensics::default();
+    let mut overlap_metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut overlap_forensics,
+        PhysicalPacket::new(0, 0b011),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut overlap_metrics,
+    );
+    observe(
+        &mut overlap_forensics,
+        PhysicalPacket::new(0b010, 0b110),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut overlap_metrics,
+    );
+    assert_eq!(overlap_metrics.same_call_retrigger_boundaries, 1);
+    assert_eq!(overlap_metrics.same_call_retrigger_keys, 1);
+}
+
+#[test]
+fn unmatched_up_and_anchor_overwrite_are_counted_without_panicking() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        2_000,
+        2_000,
+        2_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        3_000,
+        3_000,
+        3_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        4_000,
+        4_000,
+        4_000,
+        true,
+        &mut metrics,
+    );
+    assert_eq!(metrics.hold_unmatched_up_count, 1);
+    assert_eq!(metrics.hold_anchor_overwrite_count, 1);
+    assert_eq!(metrics.hold_pair_samples, 1);
+}
+
+#[test]
+fn incomplete_transport_does_not_mutate_pairing_state() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_000,
+        18_000,
+        false,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        19_000,
+        19_000,
+        19_000,
+        true,
+        &mut metrics,
+    );
+    assert_eq!(metrics.hold_pair_samples, 1);
+    assert_eq!(metrics.hold_unmatched_up_count, 0);
+}
+
+#[test]
+fn synthetic_pre_call_grace_violation_is_counted() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        16_500,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    assert_eq!(metrics.max_pre_call_hold_shrink_us, 1_500);
+    assert_eq!(metrics.pre_call_hold_shrink_over_grace_count, 1);
+}

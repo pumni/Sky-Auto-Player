@@ -11,6 +11,7 @@ use super::super::{
     signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
 };
 use super::authored::resolve_slo_terminal_step;
+pub(crate) use super::hold_forensics::HoldForensics;
 use super::observation::{
     BlockedUnfocusedObservation, DispatchObservation, DownObservation, DownTraceObservation,
     OBSERVATION_QUEUE_CAPACITY, PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation,
@@ -18,6 +19,7 @@ use super::observation::{
     record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
     up_transport_counts,
 };
+use super::observer_wake::take_deadline_wake_qpc;
 use super::timing::{DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use crossbeam_queue::ArrayQueue;
@@ -27,34 +29,7 @@ use std::sync::atomic::AtomicBool;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-pub(crate) fn take_deadline_wake_qpc(
-    runtime: &mut WorkerRuntime,
-    _final_proof_qpc: sky_dispatch_win32::clock::QpcTicks,
-) -> Option<sky_dispatch_win32::clock::QpcTicks> {
-    runtime.last_dispatch_deadline_wake_qpc.take()
-}
-#[cfg(test)]
-mod wake_tests {
-    use super::take_deadline_wake_qpc;
-    use crate::engine::worker::WorkerRuntime;
-    use sky_dispatch_win32::clock::QpcTicks;
 
-    #[test]
-    fn deadline_wake_is_consumed_by_only_one_observation() {
-        let mut runtime = WorkerRuntime {
-            last_dispatch_deadline_wake_qpc: Some(QpcTicks::from_raw(100)),
-            ..WorkerRuntime::default()
-        };
-        assert_eq!(
-            take_deadline_wake_qpc(&mut runtime, QpcTicks::from_raw(125)),
-            Some(QpcTicks::from_raw(100))
-        );
-        assert_eq!(
-            take_deadline_wake_qpc(&mut runtime, QpcTicks::from_raw(150)),
-            None
-        );
-    }
-}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -337,6 +312,7 @@ impl ObserverRuntime {
             .name("sky-dispatch-observer".to_string())
             .spawn(move || {
                 let mut local_metrics = WorkerMetricsLocal::default();
+                let mut hold_forensics = HoldForensics::default();
                 let mut health = WorkerHealthState::new(health_options);
                 let mut timing = timing;
                 let mut terminal_error = None;
@@ -366,6 +342,7 @@ impl ObserverRuntime {
                         qpc_clock,
                         now_qpc_ticks,
                         &mut timing,
+                        &mut hold_forensics,
                     ) {
                         Ok(Some(drain_us)) => {
                             local_metrics.observer_duration_max_us =
@@ -447,6 +424,7 @@ pub(crate) fn drain_down_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
     timing: &WorkerTimingState,
+    hold_forensics: &mut HoldForensics,
 ) -> Result<(), DispatchStep> {
     let path = observation.path();
     let health_budget = build_dispatch_budget(path, health.options);
@@ -571,6 +549,16 @@ pub(crate) fn drain_down_send_outcome(
         )
     ) && observation.trace.result_success();
     let clean_dispatch_sample = is_clean_dispatch_observation(_observation_evidence);
+    hold_forensics.observe_packet(
+        observation.requested_packet,
+        observation.physical_target_qpc,
+        observation.pre_call_qpc,
+        observation.sendinput_completion_qpc,
+        clean_dispatch_sample,
+        local_metrics,
+        qpc_clock,
+        timing.down_late_grace_ticks,
+    )?;
     let strict_completion_late = timing.strict_timing
         && clean_dispatch_sample
         && completion_lateness_ticks > 0
@@ -811,6 +799,7 @@ pub(crate) fn drain_one_observer(
     qpc_clock: QpcClock,
     now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
     timing: &mut WorkerTimingState,
+    hold_forensics: &mut HoldForensics,
 ) -> Result<Option<u64>, DispatchStep> {
     let Some(observation) = pending.pop_front() else {
         return Ok(None);
@@ -838,6 +827,7 @@ pub(crate) fn drain_one_observer(
             qpc_clock,
             now_us,
             timing,
+            hold_forensics,
         )?,
         DispatchObservation::Up(up) => drain_up_send_outcome(
             up,
@@ -898,3 +888,7 @@ pub(crate) fn drain_one_observer(
     }
     Ok(Some(drain_us))
 }
+
+#[cfg(test)]
+#[path = "hold_forensics_tests.rs"]
+mod hold_forensics_tests;

@@ -359,6 +359,24 @@ def test_correctness_is_checked_before_percentiles() -> None:
         )
 
 
+def test_hold_forensics_anomalies_are_acceptance_correctness_gates() -> None:
+    snapshot = {
+        "missed_down_boundaries": 1,
+        "pre_call_hold_shrink_over_grace_count": 2,
+        "hold_unmatched_up_count": 3,
+        "hold_anchor_overwrite_count": 4,
+    }
+
+    counters = ACCEPTANCE._correctness_counters(snapshot, {})
+
+    assert counters["missed_down_boundaries"] == 1
+    assert counters["pre_call_hold_shrink_over_grace_count"] == 2
+    assert counters["hold_unmatched_up_count"] == 3
+    assert counters["hold_anchor_overwrite_count"] == 4
+    with pytest.raises(SystemExit, match="correctness failure"):
+        ACCEPTANCE._assert_report_correctness({"correctness": counters})
+
+
 def test_transport_reference_compares_only_raw_sendinput_metrics(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

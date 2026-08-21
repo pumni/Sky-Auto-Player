@@ -541,6 +541,14 @@ def _correctness_counters(
         "sender_integrity_failures": partial + zero_progress,
         "unexpected_transport_failures": partial + zero_progress,
         "authored_trace_missing_duplicate_mismatch": trace_errors,
+        "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+        "pre_call_hold_shrink_over_grace_count": int(
+            snapshot.get("pre_call_hold_shrink_over_grace_count", 0)
+        ),
+        "hold_unmatched_up_count": int(snapshot.get("hold_unmatched_up_count", 0)),
+        "hold_anchor_overwrite_count": int(
+            snapshot.get("hold_anchor_overwrite_count", 0)
+        ),
     }
 
 
@@ -554,6 +562,10 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         "sender_integrity_failures",
         "unexpected_transport_failures",
         "authored_trace_missing_duplicate_mismatch",
+        "missed_down_boundaries",
+        "pre_call_hold_shrink_over_grace_count",
+        "hold_unmatched_up_count",
+        "hold_anchor_overwrite_count",
     )
     return {
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
@@ -887,6 +899,19 @@ def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return _nonnegative_metric_report(rows, name)
 
 
+def _aggregate_scalar_sum(runs: list[dict[str, Any]], name: str) -> int:
+    return sum(int(run.get(name, 0)) for run in runs)
+
+
+def _aggregate_scalar_min_nonzero(runs: list[dict[str, Any]], name: str) -> int:
+    values = [int(run.get(name, 0)) for run in runs if int(run.get(name, 0)) > 0]
+    return min(values, default=0)
+
+
+def _aggregate_scalar_max(runs: list[dict[str, Any]], name: str) -> int:
+    return max((int(run.get(name, 0)) for run in runs), default=0)
+
+
 def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
     return _completion_error_report_pairs(
         [
@@ -1186,6 +1211,38 @@ def _run_dispatch(
             "lead_by_polyphony": lead_by_polyphony,
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
             "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+            "missed_backlog_boundaries": int(
+                snapshot.get("missed_backlog_boundaries", 0)
+            ),
+            "missed_hard_late_boundaries": int(
+                snapshot.get("missed_hard_late_boundaries", 0)
+            ),
+            "hold_pair_samples": int(snapshot.get("hold_pair_samples", 0)),
+            "min_pre_call_hold_us": int(snapshot.get("min_pre_call_hold_us", 0)),
+            "min_completion_hold_us": int(
+                snapshot.get("min_completion_hold_us", 0)
+            ),
+            "max_pre_call_hold_shrink_us": int(
+                snapshot.get("max_pre_call_hold_shrink_us", 0)
+            ),
+            "max_completion_hold_shrink_us": int(
+                snapshot.get("max_completion_hold_shrink_us", 0)
+            ),
+            "pre_call_hold_shrink_over_grace_count": int(
+                snapshot.get("pre_call_hold_shrink_over_grace_count", 0)
+            ),
+            "hold_unmatched_up_count": int(
+                snapshot.get("hold_unmatched_up_count", 0)
+            ),
+            "hold_anchor_overwrite_count": int(
+                snapshot.get("hold_anchor_overwrite_count", 0)
+            ),
+            "same_call_retrigger_boundaries": int(
+                snapshot.get("same_call_retrigger_boundaries", 0)
+            ),
+            "same_call_retrigger_keys": int(
+                snapshot.get("same_call_retrigger_keys", 0)
+            ),
             "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
@@ -1621,6 +1678,10 @@ def _assert_report_correctness(report: dict[str, Any]) -> None:
         "sender_integrity_failures",
         "unexpected_transport_failures",
         "authored_trace_missing_duplicate_mismatch",
+        "missed_down_boundaries",
+        "pre_call_hold_shrink_over_grace_count",
+        "hold_unmatched_up_count",
+        "hold_anchor_overwrite_count",
     )
     nonzero = {
         name: correctness.get(name)
@@ -2323,6 +2384,43 @@ def main() -> int:
             "sender_completion_error": _aggregate_metric(
                 runs, "sender_completion_error_us"
             ),
+            "missed_down_boundaries": _aggregate_scalar_sum(
+                runs, "missed_down_boundaries"
+            ),
+            "missed_backlog_boundaries": _aggregate_scalar_sum(
+                runs, "missed_backlog_boundaries"
+            ),
+            "missed_hard_late_boundaries": _aggregate_scalar_sum(
+                runs, "missed_hard_late_boundaries"
+            ),
+            "hold_pair_samples": _aggregate_scalar_sum(runs, "hold_pair_samples"),
+            "min_pre_call_hold_us": _aggregate_scalar_min_nonzero(
+                runs, "min_pre_call_hold_us"
+            ),
+            "min_completion_hold_us": _aggregate_scalar_min_nonzero(
+                runs, "min_completion_hold_us"
+            ),
+            "max_pre_call_hold_shrink_us": _aggregate_scalar_max(
+                runs, "max_pre_call_hold_shrink_us"
+            ),
+            "max_completion_hold_shrink_us": _aggregate_scalar_max(
+                runs, "max_completion_hold_shrink_us"
+            ),
+            "pre_call_hold_shrink_over_grace_count": _aggregate_scalar_sum(
+                runs, "pre_call_hold_shrink_over_grace_count"
+            ),
+            "hold_unmatched_up_count": _aggregate_scalar_sum(
+                runs, "hold_unmatched_up_count"
+            ),
+            "hold_anchor_overwrite_count": _aggregate_scalar_sum(
+                runs, "hold_anchor_overwrite_count"
+            ),
+            "same_call_retrigger_boundaries": _aggregate_scalar_sum(
+                runs, "same_call_retrigger_boundaries"
+            ),
+            "same_call_retrigger_keys": _aggregate_scalar_sum(
+                runs, "same_call_retrigger_keys"
+            ),
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -2456,6 +2554,43 @@ def main() -> int:
         "correctness": _aggregate_correctness(dispatch_runs),
         "deadline_missed_before_send_count": sum(
             run["missed_down_boundaries"] for run in dispatch_runs
+        ),
+        "missed_down_boundaries": _aggregate_scalar_sum(
+            dispatch_runs, "missed_down_boundaries"
+        ),
+        "missed_backlog_boundaries": _aggregate_scalar_sum(
+            dispatch_runs, "missed_backlog_boundaries"
+        ),
+        "missed_hard_late_boundaries": _aggregate_scalar_sum(
+            dispatch_runs, "missed_hard_late_boundaries"
+        ),
+        "hold_pair_samples": _aggregate_scalar_sum(dispatch_runs, "hold_pair_samples"),
+        "min_pre_call_hold_us": _aggregate_scalar_min_nonzero(
+            dispatch_runs, "min_pre_call_hold_us"
+        ),
+        "min_completion_hold_us": _aggregate_scalar_min_nonzero(
+            dispatch_runs, "min_completion_hold_us"
+        ),
+        "max_pre_call_hold_shrink_us": _aggregate_scalar_max(
+            dispatch_runs, "max_pre_call_hold_shrink_us"
+        ),
+        "max_completion_hold_shrink_us": _aggregate_scalar_max(
+            dispatch_runs, "max_completion_hold_shrink_us"
+        ),
+        "pre_call_hold_shrink_over_grace_count": _aggregate_scalar_sum(
+            dispatch_runs, "pre_call_hold_shrink_over_grace_count"
+        ),
+        "hold_unmatched_up_count": _aggregate_scalar_sum(
+            dispatch_runs, "hold_unmatched_up_count"
+        ),
+        "hold_anchor_overwrite_count": _aggregate_scalar_sum(
+            dispatch_runs, "hold_anchor_overwrite_count"
+        ),
+        "same_call_retrigger_boundaries": _aggregate_scalar_sum(
+            dispatch_runs, "same_call_retrigger_boundaries"
+        ),
+        "same_call_retrigger_keys": _aggregate_scalar_sum(
+            dispatch_runs, "same_call_retrigger_keys"
         ),
         "non_dispatch_count": sum(
             sum(

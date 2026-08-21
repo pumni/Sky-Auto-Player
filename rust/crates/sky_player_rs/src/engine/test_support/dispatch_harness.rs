@@ -11,6 +11,7 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::dispatch::PendingObservationQueue;
+use crate::engine::worker::dispatch::observer::HoldForensics;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, dispatch_authored_packet,
 };
@@ -55,6 +56,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
+    pub(crate) hold_forensics: HoldForensics,
     pub(crate) interrupt: OwnedEvent,
     pub(crate) last_wait_result: Option<WaitResult>,
     effective_now_ticks: TimelineTicks,
@@ -667,6 +669,7 @@ impl ProductionDispatchTestHarness {
             metrics: SharedMetrics::default(),
             progress_clock,
             observer: PendingObservationQueue::default(),
+            hold_forensics: HoldForensics::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
             last_wait_result: None,
             effective_now_ticks: TimelineTicks::ZERO,
@@ -1497,6 +1500,7 @@ impl ProductionDispatchTestHarness {
             self.resources.clock,
             sky_dispatch_win32::clock::QpcTicks::ZERO,
             &mut self.timing,
+            &mut self.hold_forensics,
         )
     }
     pub fn pop_observation(

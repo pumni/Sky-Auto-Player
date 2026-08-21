@@ -1,5 +1,13 @@
 # 02 — P0: Per-Key Release Scheduler and Physical Feasibility
 
+> **Current-contract banner — D-008 is SUPERSEDED.** This proposal records
+> historical release-scheduler work. Current production keeps authored Up
+> targets immutable; Down completion does not create a new hold deadline.
+> Sender headroom is materialized statically with
+> `effective_margin >= down_late_grace`, and completion timing is diagnostic /
+> calibration evidence only. Do not use the historical completion-anchor text
+> below to reverse the current implementation.
+
 ## 0. Why this is P0
 
 Current runtime makes the effective deadline of a whole compiled same-timestamp packet:

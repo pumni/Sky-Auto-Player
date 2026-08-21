@@ -10,6 +10,26 @@ pub(super) enum DownMissReason {
     HardLate,
 }
 
+fn record_last_missed_down_sample(
+    local_metrics: &mut WorkerMetricsLocal,
+    source_action_index: u32,
+    down_mask: u16,
+    physical_target_qpc: QpcTicks,
+    observed_qpc: QpcTicks,
+    reason: DownMissReason,
+) {
+    local_metrics.last_missed_down_valid = true;
+    local_metrics.last_missed_down_reason_code = match reason {
+        DownMissReason::Backlog => 1,
+        DownMissReason::HardLate => 2,
+    };
+    local_metrics.last_missed_down_source_action_index = source_action_index;
+    local_metrics.last_missed_down_mask = down_mask;
+    local_metrics.last_missed_down_lateness_ticks = observed_qpc
+        .checked_duration_since(physical_target_qpc)
+        .map_or(0, |lateness| lateness.as_u64());
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recover_missed_down_boundary(
     view: &AuthoredBatchView,
@@ -23,6 +43,14 @@ pub(super) fn recover_missed_down_boundary(
     observed_qpc: QpcTicks,
     reason: DownMissReason,
 ) -> DispatchStep {
+    record_last_missed_down_sample(
+        local_metrics,
+        view.batch_source_action_index,
+        view.packet_masks.down_mask,
+        physical_target_qpc,
+        observed_qpc,
+        reason,
+    );
     if config.timing.strict_timing {
         return DispatchStep::TerminateStatic(match reason {
             DownMissReason::Backlog => "down_deadline_missed_before_send",
@@ -151,4 +179,51 @@ pub(super) fn recover_missed_down_boundary(
             .max(lateness.as_u64());
     }
     DispatchStep::Dispatched
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DownMissReason, record_last_missed_down_sample};
+    use crate::engine::telemetry::WorkerMetricsLocal;
+    use sky_dispatch_win32::clock::QpcTicks;
+
+    #[test]
+    fn last_missed_down_sample_records_backlog_evidence() {
+        let mut metrics = WorkerMetricsLocal::default();
+
+        record_last_missed_down_sample(
+            &mut metrics,
+            41,
+            0b101,
+            QpcTicks::from_raw(1_000),
+            QpcTicks::from_raw(1_250),
+            DownMissReason::Backlog,
+        );
+
+        assert!(metrics.last_missed_down_valid);
+        assert_eq!(metrics.last_missed_down_reason_code, 1);
+        assert_eq!(metrics.last_missed_down_source_action_index, 41);
+        assert_eq!(metrics.last_missed_down_mask, 0b101);
+        assert_eq!(metrics.last_missed_down_lateness_ticks, 250);
+    }
+
+    #[test]
+    fn last_missed_down_sample_records_hard_late_evidence() {
+        let mut metrics = WorkerMetricsLocal::default();
+
+        record_last_missed_down_sample(
+            &mut metrics,
+            7,
+            0b010,
+            QpcTicks::from_raw(10_000),
+            QpcTicks::from_raw(10_005),
+            DownMissReason::HardLate,
+        );
+
+        assert!(metrics.last_missed_down_valid);
+        assert_eq!(metrics.last_missed_down_reason_code, 2);
+        assert_eq!(metrics.last_missed_down_source_action_index, 7);
+        assert_eq!(metrics.last_missed_down_mask, 0b010);
+        assert_eq!(metrics.last_missed_down_lateness_ticks, 5);
+    }
 }

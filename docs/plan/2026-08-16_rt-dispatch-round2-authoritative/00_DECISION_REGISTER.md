@@ -119,17 +119,21 @@ Python scheduler validation remains useful but is not the native safety boundary
 
 ---
 
-## D-008 — Runtime completion anchoring remains
+## D-008 — SUPERSEDED: Runtime completion anchoring
 
-**Decision: KEEP**
+**Decision: SUPERSEDED by the current production contract**
 
-For a successful Down:
+The historical completion-anchored release floor is no longer authoritative.
+Current production semantics are:
 
-```text
-release_not_before = sendinput_completion + effective_min_hold
-```
+- authored Up targets remain immutable;
+- Down completion does not create a new runtime hold deadline;
+- sender-side visibility headroom is materialized statically; and
+- the effective static margin MUST be at least the Down late grace.
 
-Do not change this to authored Down time or admission time merely to avoid release deferral. Completion anchoring protects the configured sender-side minimum hold from the sender's own call duration.
+Completion-boundary hold remains diagnostic/calibration evidence only; it is not
+a runtime controller. Do not restore `release_not_before =
+sendinput_completion + effective_min_hold` from this historical decision.
 
 ---
 

@@ -284,6 +284,41 @@ impl NativeDispatchSessionPy {
             "missed_hard_late_boundaries",
             snap.missed_hard_late_boundaries,
         )?;
+        dict.set_item("hold_pair_samples", snap.hold_pair_samples)?;
+        dict.set_item("min_pre_call_hold_us", snap.min_pre_call_hold_us)?;
+        dict.set_item("min_completion_hold_us", snap.min_completion_hold_us)?;
+        dict.set_item(
+            "max_pre_call_hold_shrink_us",
+            snap.max_pre_call_hold_shrink_us,
+        )?;
+        dict.set_item(
+            "max_completion_hold_shrink_us",
+            snap.max_completion_hold_shrink_us,
+        )?;
+        dict.set_item(
+            "pre_call_hold_shrink_over_grace_count",
+            snap.pre_call_hold_shrink_over_grace_count,
+        )?;
+        dict.set_item("hold_unmatched_up_count", snap.hold_unmatched_up_count)?;
+        dict.set_item(
+            "hold_anchor_overwrite_count",
+            snap.hold_anchor_overwrite_count,
+        )?;
+        dict.set_item(
+            "same_call_retrigger_boundaries",
+            snap.same_call_retrigger_boundaries,
+        )?;
+        dict.set_item("same_call_retrigger_keys", snap.same_call_retrigger_keys)?;
+        dict.set_item("last_missed_down_reason", snap.last_missed_down_reason)?;
+        dict.set_item(
+            "last_missed_down_source_action_index",
+            snap.last_missed_down_source_action_index,
+        )?;
+        dict.set_item("last_missed_down_mask", snap.last_missed_down_mask)?;
+        dict.set_item(
+            "last_missed_down_lateness_ticks",
+            snap.last_missed_down_lateness_ticks,
+        )?;
         dict.set_item(
             "late_authorized_boundaries",
             snap.late_authorized_boundaries,
