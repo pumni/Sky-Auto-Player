@@ -794,7 +794,7 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     actions = [
         (index, kind, at_us * 4 + 100_000, scan_codes, reason)
         for index, kind, at_us, scan_codes, reason in ACCEPTANCE._actions(
-            4, 3, gap_profile="cold", game_fps=60
+            1, 3, gap_profile="cold", game_fps=60
         )
     ]
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
