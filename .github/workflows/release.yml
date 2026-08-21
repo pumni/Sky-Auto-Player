@@ -3,15 +3,9 @@ name: Release
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing release tag to build and publish
-        required: true
-        type: string
 
 concurrency:
-  group: release-${{ inputs.release_tag || github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -37,30 +31,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.release_tag || github.ref }}
-
-      - name: Bind release source provenance
-        id: source
-        run: |
-          $head = (git rev-parse --verify HEAD).Trim()
-          if (-not $head) { throw "Cannot resolve checkout HEAD" }
-
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $tag = "${{ inputs.release_tag }}"
-            if ($tag -notmatch '^v[0-9A-Za-z][0-9A-Za-z._+-]*$') {
-              throw "Invalid manual release tag: $tag"
-            }
-            git fetch --force --tags origin
-            $tagHead = (git rev-parse --verify "refs/tags/$tag^{commit}").Trim()
-            if ($tagHead -ne $head) {
-              throw "Manual release tag $tag resolves to $tagHead but checkout HEAD is $head"
-            }
-          } elseif ($env:GITHUB_SHA -ne $head) {
-            throw "Tag-push GITHUB_SHA $env:GITHUB_SHA does not match checkout HEAD $head"
-          }
-
-          "build_commit=$head" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
-          Write-Host "Release source provenance bound to $head"
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
@@ -79,7 +49,6 @@ jobs:
       - name: Rust — format, lint, tests, and native wheel
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-          SKY_EXPECTED_BUILD_COMMIT: ${{ steps.source.outputs.build_commit }}
         run: |
           rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
           $version = (rustc --version)
@@ -98,11 +67,7 @@ jobs:
       - name: Assert tag version equals pyproject.toml
         id: verlock
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $tag = "${{ inputs.release_tag }}"
-          } else {
-            $tag = $env:GITHUB_REF_NAME
-          }
+          $tag = $env:GITHUB_REF_NAME
           if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
           $tagVer = $Matches[1]
           $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
@@ -123,7 +88,6 @@ jobs:
           $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
           Write-Host "is_prerelease: $isPre"
           "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
-          "tag=$tag"              | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
           # `Add-Content` (not `Set-Content -Append`) — `Set-Content` has no
           # `-Append` parameter in PowerShell 7; the previous form failed the
           # v2.4.0 release run (29657111725) at this step.
@@ -194,7 +158,6 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: ${{ steps.verlock.outputs.tag }}
           files: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
