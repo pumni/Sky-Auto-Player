@@ -7,6 +7,14 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeAcceptanceSinkFocus {
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
 
 $title = "Sky Auto Player — Native Acceptance Sink"
 $form = New-Object System.Windows.Forms.Form
@@ -46,7 +54,11 @@ $record = {
 
 $form.Add_KeyDown({ param($Sender, $Event) & $record "key_press" $Event })
 $form.Add_KeyUp({ param($Sender, $Event) & $record "key_release" $Event })
-$form.Add_Shown({ $form.Activate(); $form.Focus() })
+$form.Add_Shown({
+    $form.Activate()
+    $form.Focus()
+    [void][NativeAcceptanceSinkFocus]::SetForegroundWindow($form.Handle)
+})
 $form.Add_FormClosed({
     if ($null -ne $eventWriter) {
         $eventWriter.Dispose()
