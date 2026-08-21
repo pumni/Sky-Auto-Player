@@ -847,6 +847,9 @@ pub(crate) fn drain_one_observer(
         DispatchObservation::BlockedUnfocused(blocked) => {
             drain_blocked_unfocused_observation(blocked, telemetry)?;
         }
+        DispatchObservation::Lifecycle(lifecycle) => {
+            hold_forensics.observe_lifecycle(*lifecycle);
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     {

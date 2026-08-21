@@ -468,6 +468,15 @@ pub(super) fn dispatch(
                                 Some(format!("focus restoration failed: {error}"));
                             break;
                         }
+                        if let Some(observer) = core.observer.pending.as_ref() {
+                            observer.push(
+                                super::dispatch::observation::DispatchObservation::Lifecycle(
+                                    super::dispatch::observation::ObserverLifecycle::ResetAll,
+                                ),
+                                &mut core.metrics.observer_dropped_samples,
+                                &mut core.metrics.observer_queue_high_watermark,
+                            );
+                        }
                         if let Err(error) = ensure_preflight_for_target(
                             &resources.backend,
                             preflight_target,
@@ -546,6 +555,15 @@ pub(super) fn dispatch(
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
+                    }
+                    if let Some(observer) = core.observer.pending.as_ref() {
+                        observer.push(
+                            super::dispatch::observation::DispatchObservation::Lifecycle(
+                                super::dispatch::observation::ObserverLifecycle::ResetAll,
+                            ),
+                            &mut core.metrics.observer_dropped_samples,
+                            &mut core.metrics.observer_queue_high_watermark,
+                        );
                     }
                     *core.errors.abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(

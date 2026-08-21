@@ -359,6 +359,52 @@ def test_correctness_is_checked_before_percentiles() -> None:
         )
 
 
+def test_expected_hold_pair_samples_simulate_authored_generations() -> None:
+    paired = [
+        (0, "down", 0, [1], "down"),
+        (1, "up", 1, [1], "up"),
+    ]
+    mixed = [
+        (0, "down", 0, [1, 2], "down"),
+        (1, "up", 1, [1, 2], "up"),
+        (2, "down", 1, [1, 2], "retrigger"),
+        (3, "up", 2, [1, 2], "release"),
+    ]
+
+    assert ACCEPTANCE._expected_hold_pair_samples(paired, "paired") == 1
+    assert ACCEPTANCE._expected_hold_pair_samples(mixed, "mixed") == 4
+    assert ACCEPTANCE._expected_hold_pair_samples(mixed, "coalesced") == 4
+
+
+def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
+    required_zero = dict.fromkeys(
+        (
+            "chord_integrity_lost",
+            "unexpected_held",
+            "pending_unresolved",
+            "cleanup_uncertainty",
+            "telemetry_integrity_failures",
+            "sender_integrity_failures",
+            "unexpected_transport_failures",
+            "authored_trace_missing_duplicate_mismatch",
+            "missed_down_boundaries",
+            "pre_call_hold_shrink_over_grace_count",
+            "hold_unmatched_up_count",
+            "hold_anchor_overwrite_count",
+            "hold_pair_sample_mismatch",
+        ),
+        0,
+    )
+    with pytest.raises(SystemExit, match="hold-pair completeness"):
+        ACCEPTANCE._assert_report_correctness(
+            {
+                "correctness": required_zero,
+                "hold_pair_samples": 0,
+                "expected_hold_pair_samples": 1,
+            }
+        )
+
+
 def test_hold_forensics_anomalies_are_acceptance_correctness_gates() -> None:
     snapshot = {
         "missed_down_boundaries": 1,
@@ -832,6 +878,8 @@ def test_acceptance_failure_reasons_classify_deadline_miss_without_hiding_it() -
         "deadline_missed_before_send_count": 1,
         "non_dispatch_count": 0,
         "observer_dropped_records": 0,
+        "hold_pair_samples": 0,
+        "expected_hold_pair_samples": 0,
         "correctness": {"chord_integrity_lost": 0},
         "wake_error_us": {"absolute": {"p99": 20}},
         "pre_call_lateness_us": {

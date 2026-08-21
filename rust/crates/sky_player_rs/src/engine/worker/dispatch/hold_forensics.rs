@@ -1,6 +1,7 @@
 use super::super::super::{DurationTicks, QpcClock};
 use super::super::WorkerMetricsLocal;
 use super::DispatchStep;
+use super::observation::ObserverLifecycle;
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::PhysicalPacket;
 
@@ -19,6 +20,22 @@ pub(crate) struct HoldForensics {
 }
 
 impl HoldForensics {
+    pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
+        match lifecycle {
+            ObserverLifecycle::RecoveryUp { up_mask } => self.clear_mask(up_mask),
+            ObserverLifecycle::ResetAll => self.active.fill(None),
+        }
+    }
+
+    fn clear_mask(&mut self, mask: u16) {
+        for slot in 0..MAX_KEYS {
+            if mask & (1u16 << slot) != 0 {
+                self.active[slot] = None;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_packet(
         &mut self,
         packet: PhysicalPacket,

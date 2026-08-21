@@ -1383,12 +1383,13 @@ impl ProductionDispatchTestHarness {
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("overdue test target arithmetic");
         self.runtime.record_due_without_wait_for_test();
-        self.dispatch_plan_at(
+        self.dispatch_plan_at_with_sender_option(
             plan,
             plan.deadline_ticks().expect("physical deadline"),
             overdue_now,
             false,
             None,
+            true,
         )
     }
 
@@ -1429,6 +1430,41 @@ impl ProductionDispatchTestHarness {
             overdue_now,
             false,
             Some(target),
+        )
+    }
+
+    pub fn dispatch_with_strict_admission_late_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let view = plan
+            .physical()
+            .expect("strict admission requires physical plan");
+        let target = plan
+            .physical_target_qpc()
+            .expect("strict admission requires physical target");
+        let late = self
+            .timing
+            .down_late_grace_ticks
+            .checked_add(DurationTicks::from_raw(1))
+            .expect("strict admission lateness arithmetic");
+        let effective_now_ticks = TimelineTicks::from_raw(
+            view.authored_view
+                .authored_batch_scheduled_ticks
+                .as_u64()
+                .saturating_add(late.as_u64()),
+        );
+        let now_ticks = target
+            .checked_add_duration(late)
+            .expect("strict admission QPC lateness arithmetic");
+        self.config.timing.strict_timing = true;
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            effective_now_ticks,
+            now_ticks,
+            false,
+            Some(target),
+            false,
         )
     }
     /// Query the current authored packet path without mutating state.

@@ -3399,6 +3399,10 @@ fn authorized_down_first_tick_beyond_grace_misses_without_down_syscall() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
     assert_eq!(harness.local_metrics.missed_down_boundaries, 1);
+    assert_eq!(
+        harness.local_metrics.last_missed_down_lateness_ticks,
+        one_tick_beyond_grace.as_u64()
+    );
 }
 
 #[test]
@@ -3463,6 +3467,39 @@ fn hard_late_mixed_packet_sends_safety_up_without_down() {
         vec![PhysicalPacket::new(0, 0b001), PhysicalPacket::new(0b001, 0)]
     );
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+}
+
+#[test]
+fn hard_late_safety_up_queues_hold_forensics_lifecycle_evidence() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::observation::{DispatchObservation, ObserverLifecycle};
+
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::Down(_))
+    ));
+
+    let future = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&future),
+        super::worker::DispatchStep::NoWork
+    ));
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_after_hard_late_for_test(&future),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::Lifecycle(
+            ObserverLifecycle::RecoveryUp { up_mask: 1 }
+        ))
+    ));
 }
 
 #[test]
@@ -3553,7 +3590,29 @@ fn first_musical_down_hard_miss_remains_startup_terminal() {
         super::worker::DispatchStep::TerminateStatic("down_deadline_missed_before_send")
     ));
     assert_eq!(harness.backend_active_mask(), 0);
-    assert_eq!(harness.local_metrics.missed_down_boundaries, 0);
+    assert_eq!(harness.local_metrics.missed_down_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+    assert!(harness.local_metrics.last_missed_down_valid);
+    assert_eq!(harness.local_metrics.last_missed_down_reason_code, 2);
+}
+
+#[test]
+fn strict_pre_admission_down_late_is_classified_before_termination() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    let plan = harness.plan_current_dispatch();
+    let step = harness.dispatch_with_strict_admission_late_for_test(&plan);
+
+    assert!(matches!(step, super::worker::DispatchStep::Terminate(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.local_metrics.missed_down_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_backlog_boundaries, 0);
+    assert_eq!(harness.local_metrics.last_missed_down_reason_code, 2);
+    assert!(harness.local_metrics.last_missed_down_valid);
+    assert!(harness.local_metrics.last_missed_down_lateness_ticks > 0);
 }
 
 #[test]

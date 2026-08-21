@@ -10,9 +10,11 @@ use super::super::{
     record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
     target_stamp_still_current, wait_to_precision_boundary,
 };
-use super::observation::BlockedUnfocusedObservation;
+use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
 use super::observer::publisher_down_send_outcome;
-use super::recovery::{DownMissReason, recover_missed_down_boundary};
+use super::recovery::{
+    DownMissReason, record_missed_down_classification, recover_missed_down_boundary,
+};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
@@ -160,6 +162,7 @@ fn commit_down_send_outcome(
         progress_clock,
         effective_now_ticks,
         now_ticks,
+        physical_target_qpc,
         timing,
         has_conflicts,
         focus_loss_fault,
@@ -198,6 +201,7 @@ fn commit_down_send_outcome(
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         admission,
+        observer,
     ) {
         Ok(admission) => admission,
         Err(step) => return step,
@@ -214,6 +218,7 @@ fn commit_down_send_outcome(
             physical_target_qpc,
             now_ticks,
             DownMissReason::Backlog,
+            observer,
         );
     }
     record_down_send_outcome(
@@ -236,7 +241,6 @@ fn commit_down_send_outcome(
         observer,
     )
 }
-
 pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
@@ -276,6 +280,7 @@ fn admit_authored_down(
     progress_clock: &SharedProgressClock,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
+    physical_target_qpc: QpcTicks,
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
@@ -297,6 +302,7 @@ fn admit_authored_down(
                 "focus suspension failed: {error}"
             )));
         }
+        super::observation::enqueue_lifecycle(observer, ObserverLifecycle::ResetAll, local_metrics);
         if let Err(error) = clock_state.enter_pause(PauseReason::Focus, now_ticks) {
             return Err(DispatchStep::Terminate(format!(
                 "playback clock failure: {error}"
@@ -350,6 +356,14 @@ fn admit_authored_down(
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.down_late_grace_ticks)
     {
+        record_missed_down_classification(
+            local_metrics,
+            view.batch_source_action_index,
+            view.packet_masks.down_mask,
+            physical_target_qpc,
+            now_ticks,
+            DownMissReason::HardLate,
+        );
         return Err(DispatchStep::Terminate(
             "authored Down exceeded the session down late-grace window".to_string(),
         ));
@@ -426,6 +440,7 @@ fn finalize_authored_down_admission(
     lease_timeout_ticks: DurationTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
+    observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let AdmissionOutcome::Guarded {
         trace_kind,
@@ -511,7 +526,7 @@ fn finalize_authored_down_admission(
         }) {
             DownAdmission::Allowed => {}
             DownAdmission::FocusLost => {
-                return handle_final_focus_loss(
+                let result = handle_final_focus_loss(
                     qpc_clock,
                     backend,
                     coordinator,
@@ -520,6 +535,14 @@ fn finalize_authored_down_admission(
                     target_hwnd,
                     progress_clock,
                 );
+                if result.is_ok() {
+                    super::observation::enqueue_lifecycle(
+                        observer,
+                        ObserverLifecycle::ResetAll,
+                        local_metrics,
+                    );
+                }
+                return result;
             }
             DownAdmission::TargetChanged => {
                 runtime.verified_target = None;
@@ -682,20 +705,22 @@ fn record_down_send_outcome(
         sky_dispatch_win32::input::SendTransactionStatus::DeadlineMissedBeforeSend
     ) && view.packet_masks.down_mask != 0
     {
+        let Some(observed_qpc) = result.evidence.started_ticks else {
+            return DispatchStep::TerminateStatic(
+                "DeadlineMissedBeforeSend missing authoritative start boundary",
+            );
+        };
         if !runtime.musical_physical_commit_started {
+            record_missed_down_classification(
+                local_metrics,
+                view.batch_source_action_index,
+                view.packet_masks.down_mask,
+                physical_target_qpc,
+                observed_qpc,
+                DownMissReason::HardLate,
+            );
             return DispatchStep::TerminateStatic("down_deadline_missed_before_send");
         }
-        #[cfg(any(test, feature = "test-support"))]
-        let observed_qpc = test_now_ticks.unwrap_or(_now_ticks);
-        #[cfg(not(any(test, feature = "test-support")))]
-        let observed_qpc = match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return DispatchStep::Terminate(format!(
-                    "QPC hard-late recovery failure: {error:?}"
-                ));
-            }
-        };
         return recover_missed_down_boundary(
             view,
             config,
@@ -707,6 +732,7 @@ fn record_down_send_outcome(
             physical_target_qpc,
             observed_qpc,
             DownMissReason::HardLate,
+            observer,
         );
     }
     if result_chord_integrity_lost {

@@ -531,6 +531,9 @@ fn add_observation(
         DispatchObservation::BlockedUnfocused(value) => {
             panic!("benchmark handoff queued unexpected blocked observation: {value:?}")
         }
+        DispatchObservation::Lifecycle(value) => {
+            panic!("benchmark handoff queued unexpected lifecycle observation: {value:?}")
+        }
     }
 }
 

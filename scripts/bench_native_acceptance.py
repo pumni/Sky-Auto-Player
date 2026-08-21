@@ -395,6 +395,38 @@ def _expected_record_layout(
     return layout
 
 
+def _expected_hold_pair_samples(
+    actions: list[tuple[int, str, int, list[int], str]],
+    scenario: str,
+) -> int:
+    """Simulate canonical physical ownership and count closed generations.
+
+    The input is the authored action set, not observer output.  A generation
+    is closed by an Up before a later Down can open a replacement, matching
+    the packet builder's all-Up-before-all-Down ordering.
+    """
+
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
+    active: set[int] = set()
+    samples = 0
+    for index, kind, _scheduled_us, scan_codes, _label in actions:
+        del index
+        slots = {int(scan_code) for scan_code in scan_codes}
+        if len(slots) != len(scan_codes):
+            raise ValueError("authored action contains duplicate physical keys")
+        if kind == "up":
+            samples += len(active & slots)
+            active.difference_update(slots)
+        elif kind == "down":
+            active.update(slots)
+        else:
+            raise ValueError(f"unsupported authored action kind: {kind!r}")
+    if active:
+        raise ValueError("authored action set leaves physical generations open")
+    return samples
+
+
 def _validate_telemetry_integrity(
     *,
     actions: list[tuple[int, str, int, list[int], str]],
@@ -498,7 +530,10 @@ def _validate_telemetry_integrity(
 
 
 def _correctness_counters(
-    snapshot: dict[str, Any], diagnostics: dict[str, Any]
+    snapshot: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    expected_hold_pair_samples: int | None = None,
 ) -> dict[str, int]:
     statuses = snapshot.get("generation_status_counts", {})
     release_pending = (
@@ -530,6 +565,11 @@ def _correctness_counters(
     )
     partial = int(snapshot.get("sendinput_partial_events", 0))
     zero_progress = int(snapshot.get("sendinput_zero_progress_failures", 0))
+    actual_hold_pair_samples = int(snapshot.get("hold_pair_samples", 0))
+    hold_pair_sample_mismatch = int(
+        expected_hold_pair_samples is None
+        or actual_hold_pair_samples != expected_hold_pair_samples
+    )
     return {
         "chord_integrity_lost": chord_integrity_lost,
         "unexpected_held": unexpected_held,
@@ -549,6 +589,7 @@ def _correctness_counters(
         "hold_anchor_overwrite_count": int(
             snapshot.get("hold_anchor_overwrite_count", 0)
         ),
+        "hold_pair_sample_mismatch": hold_pair_sample_mismatch,
     }
 
 
@@ -566,6 +607,7 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         "pre_call_hold_shrink_over_grace_count",
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
+        "hold_pair_sample_mismatch",
     )
     return {
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
@@ -587,6 +629,15 @@ def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
         reasons.append("non_dispatch")
     if report.get("observer_dropped_records", 0):
         reasons.append("observer_dropped_records")
+
+    expected_hold_pair_samples = report.get("expected_hold_pair_samples")
+    actual_hold_pair_samples = report.get("hold_pair_samples")
+    if (
+        not isinstance(expected_hold_pair_samples, int)
+        or not isinstance(actual_hold_pair_samples, int)
+        or actual_hold_pair_samples != expected_hold_pair_samples
+    ):
+        reasons.append("hold_pair_sample_completeness")
 
     correctness = report.get("correctness")
     if isinstance(correctness, dict):
@@ -1058,6 +1109,7 @@ def _run_dispatch(
     fault_mode: str = "none",
     native_build_commit: str | None = None,
 ) -> dict[str, Any]:
+    expected_hold_pair_samples = _expected_hold_pair_samples(actions, scenario)
     session = _new_session(
         actions,
         backend=backend,
@@ -1166,7 +1218,11 @@ def _run_dispatch(
             "_snapshot": snapshot,
             "_telemetry": telemetry,
             "_telemetry_integrity": diagnostics,
-            "correctness": _correctness_counters(snapshot, diagnostics),
+            "correctness": _correctness_counters(
+                snapshot,
+                diagnostics,
+                expected_hold_pair_samples=expected_hold_pair_samples,
+            ),
             "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
             "pre_call_lateness_us": _pre_call_error_report_pairs(
                 metric_rows["pre_call_lateness_us"]
@@ -1218,6 +1274,7 @@ def _run_dispatch(
                 snapshot.get("missed_hard_late_boundaries", 0)
             ),
             "hold_pair_samples": int(snapshot.get("hold_pair_samples", 0)),
+            "expected_hold_pair_samples": expected_hold_pair_samples,
             "min_pre_call_hold_us": int(snapshot.get("min_pre_call_hold_us", 0)),
             "min_completion_hold_us": int(
                 snapshot.get("min_completion_hold_us", 0)
@@ -1594,6 +1651,18 @@ def _assert_correctness(run: dict[str, Any]) -> None:
             "native acceptance correctness counters are non-zero: "
             + json.dumps(correctness, sort_keys=True)
         )
+    expected_hold_pair_samples = run.get("expected_hold_pair_samples")
+    actual_hold_pair_samples = run.get("hold_pair_samples")
+    if (
+        not isinstance(expected_hold_pair_samples, int)
+        or not isinstance(actual_hold_pair_samples, int)
+        or actual_hold_pair_samples != expected_hold_pair_samples
+    ):
+        raise RuntimeError(
+            "native acceptance hold-pair completeness failure: "
+            f"actual={actual_hold_pair_samples!r} "
+            f"expected={expected_hold_pair_samples!r}"
+        )
     statuses = run["generation_status_counts"]
     nonterminal = sum(
         int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending")
@@ -1692,6 +1761,18 @@ def _assert_report_correctness(report: dict[str, Any]) -> None:
         raise SystemExit(
             "native benchmark correctness failure before percentile comparison: "
             + json.dumps(nonzero, sort_keys=True)
+        )
+    expected_hold_pair_samples = report.get("expected_hold_pair_samples")
+    actual_hold_pair_samples = report.get("hold_pair_samples")
+    if (
+        not isinstance(expected_hold_pair_samples, int)
+        or not isinstance(actual_hold_pair_samples, int)
+        or actual_hold_pair_samples != expected_hold_pair_samples
+    ):
+        raise SystemExit(
+            "native benchmark hold-pair completeness failure: "
+            f"actual={actual_hold_pair_samples!r} "
+            f"expected={expected_hold_pair_samples!r}"
         )
 
 
@@ -2394,6 +2475,9 @@ def main() -> int:
                 runs, "missed_hard_late_boundaries"
             ),
             "hold_pair_samples": _aggregate_scalar_sum(runs, "hold_pair_samples"),
+            "expected_hold_pair_samples": _aggregate_scalar_sum(
+                runs, "expected_hold_pair_samples"
+            ),
             "min_pre_call_hold_us": _aggregate_scalar_min_nonzero(
                 runs, "min_pre_call_hold_us"
             ),
@@ -2565,6 +2649,9 @@ def main() -> int:
             dispatch_runs, "missed_hard_late_boundaries"
         ),
         "hold_pair_samples": _aggregate_scalar_sum(dispatch_runs, "hold_pair_samples"),
+        "expected_hold_pair_samples": _aggregate_scalar_sum(
+            dispatch_runs, "expected_hold_pair_samples"
+        ),
         "min_pre_call_hold_us": _aggregate_scalar_min_nonzero(
             dispatch_runs, "min_pre_call_hold_us"
         ),

@@ -17,6 +17,12 @@ use sky_dispatch_win32::wait::WaitOutcome;
 pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
+pub enum ObserverLifecycle {
+    RecoveryUp { up_mask: u16 },
+    ResetAll,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
     // Retained for the observer schema and test/support scenarios; the
@@ -26,6 +32,21 @@ pub enum DispatchObservation {
     Wait(WaitObservation),
     StaleMetadata(StaleMetadataObservation),
     BlockedUnfocused(BlockedUnfocusedObservation),
+    Lifecycle(ObserverLifecycle),
+}
+
+pub(super) fn enqueue_lifecycle(
+    observer: Option<&super::observer::PendingObservationQueue>,
+    lifecycle: ObserverLifecycle,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if let Some(observer) = observer {
+        observer.push(
+            DispatchObservation::Lifecycle(lifecycle),
+            &mut local_metrics.observer_dropped_samples,
+            &mut local_metrics.observer_queue_high_watermark,
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

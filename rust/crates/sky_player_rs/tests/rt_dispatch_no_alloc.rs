@@ -364,6 +364,7 @@ fn overflow_drops_newest_for_down_and_up() {
             DispatchObservation::BlockedUnfocused(_) => {
                 panic!("blocked observation not expected")
             }
+            DispatchObservation::Lifecycle(_) => panic!("lifecycle observation not expected"),
         }
 
         let mut last = None;
@@ -383,6 +384,7 @@ fn overflow_drops_newest_for_down_and_up() {
             DispatchObservation::BlockedUnfocused(_) => {
                 panic!("blocked observation not expected")
             }
+            DispatchObservation::Lifecycle(_) => panic!("lifecycle observation not expected"),
         }
     }
 }

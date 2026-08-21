@@ -1,4 +1,5 @@
 use super::super::hold_forensics::HoldForensics;
+use super::super::observation::ObserverLifecycle;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::input::PhysicalPacket;
@@ -295,4 +296,80 @@ fn synthetic_pre_call_grace_violation_is_counted() {
     );
     assert_eq!(metrics.max_pre_call_hold_shrink_us, 1_500);
     assert_eq!(metrics.pre_call_hold_shrink_over_grace_count, 1);
+}
+
+#[test]
+fn recovery_safety_up_clears_released_generation_before_retrigger() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    forensics.observe_lifecycle(ObserverLifecycle::RecoveryUp { up_mask: 1 });
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        35_000,
+        35_000,
+        35_000,
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.hold_pair_samples, 1);
+    assert_eq!(metrics.hold_anchor_overwrite_count, 0);
+    assert_eq!(metrics.hold_unmatched_up_count, 0);
+}
+
+#[test]
+fn global_reset_clears_all_released_generations() {
+    let mut forensics = HoldForensics::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 0b11),
+        1_000,
+        1_000,
+        1_000,
+        true,
+        &mut metrics,
+    );
+    forensics.observe_lifecycle(ObserverLifecycle::ResetAll);
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 0b11),
+        18_000,
+        18_000,
+        18_000,
+        true,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0b11, 0),
+        35_000,
+        35_000,
+        35_000,
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.hold_pair_samples, 2);
+    assert_eq!(metrics.hold_anchor_overwrite_count, 0);
+    assert_eq!(metrics.hold_unmatched_up_count, 0);
 }
