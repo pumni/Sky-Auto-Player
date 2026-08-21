@@ -142,6 +142,7 @@ def _actions(
     game_fps: int = 60,
     start_delay_us: int = 0,
     scenario: str = "paired",
+    warmup_cycles: int = 0,
 ) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
@@ -151,6 +152,8 @@ def _actions(
         raise ValueError("scenario must be paired, mixed, or coalesced")
     if start_delay_us < 0:
         raise ValueError("start_delay_us must be non-negative")
+    if warmup_cycles < 0:
+        raise ValueError("warmup_cycles must be non-negative")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     boundary_hold_us = max(hold_us, cycle_us)
@@ -162,12 +165,19 @@ def _actions(
         ]
         at_us = start_delay_us + index * cycle_us
         if scenario in {"mixed", "coalesced"}:
-            hold_us_for_action = boundary_hold_us
+            # Keep the warmup/measurement seam out of a coalesced record.  A
+            # transition record containing one warmup Up and one measured Down
+            # cannot be assigned to either statistics window cleanly.
+            hold_us_for_action = (
+                hold_us if index == warmup_cycles - 1 else boundary_hold_us
+            )
             reason_prefix = scenario
         else:
             hold_us_for_action = hold_us
             reason_prefix = "bench"
-        actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
+        actions.append(
+            (index * 2, "down", at_us, scan_codes, f"{reason_prefix}-down")
+        )
         actions.append(
             (
                 index * 2 + 1,
@@ -328,6 +338,7 @@ def _validate_telemetry_integrity(
     telemetry: dict[str, Any],
     records: list[TelemetryRecord],
     polyphony: int,
+    scenario: str = "paired",
     snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prove that the compact native trace is a complete authored action set.
@@ -337,8 +348,25 @@ def _validate_telemetry_integrity(
     index and kind mapping before a repetition is eligible for statistics.
     """
 
-    expected_indices = [int(action[0]) for action in actions]
-    expected_kinds = {int(action[0]): str(action[1]) for action in actions}
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
+    authored_indices = [int(action[0]) for action in actions]
+    authored_kinds = {int(action[0]): str(action[1]) for action in actions}
+    combined_boundaries = scenario in {"mixed", "coalesced"}
+    if combined_boundaries:
+        if len(actions) < 2 or len(actions) % 2 != 0:
+            raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
+        expected_indices = [authored_indices[0], *authored_indices[2::2], authored_indices[-1]]
+        expected_kinds = {
+            authored_indices[0]: "down",
+            **dict.fromkeys(authored_indices[2::2], "mixed"),
+            authored_indices[-1]: "up",
+        }
+        expected_authored_indices = set(authored_indices)
+    else:
+        expected_indices = authored_indices
+        expected_kinds = authored_kinds
+        expected_authored_indices = set(authored_indices)
     expected_counts = collections.Counter(expected_indices)
     expected_duplicate_indices = sorted(
         index for index, count in expected_counts.items() if count > 1
@@ -360,6 +388,15 @@ def _validate_telemetry_integrity(
         if record.event_index in expected_kinds
         and record.kind != expected_kinds[record.event_index]
     ]
+    consumed_authored_indices: set[int] = set()
+    for record in records:
+        if combined_boundaries and record.kind == "mixed":
+            consumed_authored_indices.update((record.event_index - 1, record.event_index))
+        else:
+            consumed_authored_indices.add(record.event_index)
+    unconsumed_authored_indices = sorted(
+        expected_authored_indices - consumed_authored_indices
+    )
     diagnostics: dict[str, Any] = {
         "polyphony": polyphony,
         "snapshot_status": None if snapshot is None else snapshot.get("status"),
@@ -373,6 +410,7 @@ def _validate_telemetry_integrity(
         ),
         "authored_action_count": len(actions),
         "trace_expected_count": len(actions),
+        "expected_record_count": len(expected_indices),
         "trace_actual_count": len(records),
         "last_trace_source_index": actual_indices[-1] if actual_indices else None,
         "expected_count": len(actions),
@@ -382,6 +420,8 @@ def _validate_telemetry_integrity(
         "dropped": telemetry.get("dropped"),
         "truncated": telemetry.get("truncated"),
         "expected_indices": expected_indices,
+        "expected_authored_indices": authored_indices,
+        "unconsumed_authored_indices": unconsumed_authored_indices,
         "expected_duplicate_indices": expected_duplicate_indices,
         "actual_indices": actual_indices,
         "missing_indices": missing_indices,
@@ -390,16 +430,17 @@ def _validate_telemetry_integrity(
         "kind_mismatches": kind_mismatches,
     }
     valid = (
-        diagnostics["attempted"] == len(actions)
-        and diagnostics["accepted"] == len(actions)
+        diagnostics["attempted"] == len(expected_indices)
+        and diagnostics["accepted"] == len(expected_indices)
         and diagnostics["dropped"] == 0
         and diagnostics["truncated"] is False
-        and len(records) == len(actions)
+        and len(records) == len(expected_indices)
         and not expected_duplicate_indices
         and not missing_indices
         and not duplicate_indices
         and not unexpected_indices
         and not kind_mismatches
+        and not unconsumed_authored_indices
     )
     if not valid:
         raise TelemetryIntegrityError(diagnostics)
@@ -428,6 +469,7 @@ def _correctness_counters(
         len(diagnostics.get(name, []))
         for name in (
             "missing_indices",
+            "unconsumed_authored_indices",
             "duplicate_indices",
             "unexpected_indices",
             "kind_mismatches",
@@ -866,6 +908,7 @@ def _run_dispatch(
     game_fps: int = 60,
     gap_profile: str = "hot",
     require_focus: bool = False,
+    scenario: str = "paired",
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
@@ -936,6 +979,7 @@ def _run_dispatch(
             telemetry=telemetry,
             records=records,
             polyphony=polyphony,
+            scenario=scenario,
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
@@ -1894,6 +1938,7 @@ def main() -> int:
             game_fps=args.game_fps,
             start_delay_us=args.start_delay_us,
             scenario=args.scenario,
+            warmup_cycles=args.warmup_cycles,
         )
         try:
             for polyphony in polyphonies:
@@ -1905,6 +1950,7 @@ def main() -> int:
                     game_fps=args.game_fps,
                     start_delay_us=args.start_delay_us,
                     scenario=args.scenario,
+                    warmup_cycles=args.warmup_cycles,
                 )
                 run = _run_dispatch(
                     current_actions,
@@ -1919,6 +1965,7 @@ def main() -> int:
                     game_fps=args.game_fps,
                     gap_profile=args.gap_profile,
                     require_focus=benchmark_config["require_focus"],
+                    scenario=args.scenario,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                     native_build_commit=expected_native_commit,
