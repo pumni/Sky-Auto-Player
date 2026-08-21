@@ -643,6 +643,33 @@ def test_warmup_records_are_integrity_input_but_measurement_slice_excludes_them(
     assert [record.event_index for record in records[2:]] == [2, 3, 4, 5]
 
 
+@pytest.mark.parametrize(
+    ("scenario", "polyphony", "expected_records"),
+    (("paired", 1, 16), ("mixed", 2, 24), ("coalesced", 2, 24)),
+)
+def test_warmup_record_count_follows_actual_native_layout(
+    scenario: str,
+    polyphony: int,
+    expected_records: int,
+) -> None:
+    actions = ACCEPTANCE._actions(8, polyphony, scenario=scenario)
+
+    assert ACCEPTANCE._warmup_record_count(actions, scenario, 8) == expected_records
+    assert ACCEPTANCE._aggregate_warmup_records(
+        [{"warmup_records": expected_records}, {"warmup_records": expected_records}]
+    ) == expected_records * 2
+
+
+def test_command_interrupt_artifact_uses_the_actual_one_key_fixture() -> None:
+    actions = ACCEPTANCE._command_interrupt_actions()
+
+    assert actions == [
+        (0, "down", 100_000, [int(ACCEPTANCE.SKY_15_SCAN_CODES[0])], "interrupt-down"),
+        (1, "up", 10_000_000, [int(ACCEPTANCE.SKY_15_SCAN_CODES[0])], "interrupt-cleanup"),
+    ]
+    assert ACCEPTANCE._command_interrupt_polyphony(actions) == 1
+
+
 def test_fixed_and_adaptive_lead_arguments_are_strict() -> None:
     assert ACCEPTANCE._resolve_lead_config(
         SimpleNamespace(lead_mode="fixed", fixed_lead_us=0)

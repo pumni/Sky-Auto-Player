@@ -466,6 +466,24 @@ def _expected_record_layout(
     return layout
 
 
+def _warmup_record_count(
+    actions: list[tuple[int, str, int, list[int], str]],
+    scenario: str,
+    warmup_cycles: int,
+) -> int:
+    if warmup_cycles < 0:
+        raise ValueError("warmup_cycles must be non-negative")
+    warmup_action_count = _actions_per_polyphony(
+        actions=warmup_cycles,
+        scenario=scenario,
+    )
+    return sum(
+        1
+        for _, _, consumed in _expected_record_layout(actions, scenario)
+        if consumed and max(consumed) < warmup_action_count
+    )
+
+
 def _expected_hold_pair_samples(
     actions: list[tuple[int, str, int, list[int], str]],
     scenario: str,
@@ -1073,6 +1091,10 @@ def _aggregate_native_packet_size_counts(
     return counts
 
 
+def _aggregate_warmup_records(runs: list[dict[str, Any]]) -> int:
+    return sum(int(run["warmup_records"]) for run in runs)
+
+
 def _aggregate_scalar_min_nonzero(runs: list[dict[str, Any]], name: str) -> int:
     values = [int(run.get(name, 0)) for run in runs if int(run.get(name, 0)) > 0]
     return min(values, default=0)
@@ -1192,6 +1214,23 @@ def _same_key_zero_gap_actions() -> list[tuple[int, str, int, list[int], str]]:
         (2, "down", 20_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-retrigger"),
         (3, "up", 40_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-release"),
     ]
+
+
+def _command_interrupt_actions() -> list[tuple[int, str, int, list[int], str]]:
+    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
+    return [
+        (0, "down", 100_000, interrupt_key, "interrupt-down"),
+        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
+    ]
+
+
+def _command_interrupt_polyphony(
+    actions: list[tuple[int, str, int, list[int], str]],
+) -> int:
+    down_actions = [action for action in actions if action[1] == "down"]
+    if len(down_actions) != 1 or not down_actions[0][3]:
+        raise RuntimeError("command-interrupt fixture must contain one non-empty Down")
+    return len(down_actions[0][3])
 
 
 def _assert_same_key_zero_gap_rejected(
@@ -1349,14 +1388,10 @@ def _run_dispatch(
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
-        warmup_action_count = _actions_per_polyphony(
-            actions=warmup_cycles,
-            scenario=scenario,
-        )
-        warmup_record_count = sum(
-            1
-            for _, _, consumed in _expected_record_layout(actions, scenario)
-            if consumed and max(consumed) < warmup_action_count
+        warmup_record_count = _warmup_record_count(
+            actions,
+            scenario,
+            warmup_cycles,
         )
         if warmup_record_count < 0 or warmup_record_count >= len(records):
             raise RuntimeError("warmup cycles must leave measurement records")
@@ -1545,11 +1580,7 @@ def _measure_command_interrupt(
     # command after that first musical commit.  Pre-roll Pause now cancels the
     # start attempt by contract, so this probe must exercise the mid-play
     # command path rather than the preroll cancellation path.
-    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
-    actions = [
-        (0, "down", 100_000, interrupt_key, "interrupt-down"),
-        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
-    ]
+    actions = _command_interrupt_actions()
     session = _new_session(
         actions,
         backend=backend,
@@ -2529,15 +2560,8 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_polyphony = 2 if args.scenario in {"mixed", "coalesced"} else 1
-    command_actions = _actions(
-        1,
-        command_polyphony,
-        gap_profile=args.gap_profile,
-        game_fps=args.game_fps,
-        start_delay_us=args.start_delay_us,
-        scenario=args.scenario,
-    )
+    command_actions = _command_interrupt_actions()
+    command_polyphony = _command_interrupt_polyphony(command_actions)
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -2669,7 +2693,7 @@ def main() -> int:
             "lead_mode": benchmark_config["lead_mode"],
             "actions": len(actions),
             "warmup_cycles": args.warmup_cycles,
-            "warmup_records": args.warmup_cycles * 2,
+            "warmup_records": _aggregate_warmup_records(runs),
             "measurement_records": sum(run["measurement_records"] for run in runs),
             "physical_boundaries": sum(run["measurement_records"] for run in runs),
             "native_packet_size_counts": _aggregate_native_packet_size_counts(runs),
@@ -2837,7 +2861,7 @@ def main() -> int:
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
-        "warmup_records": args.warmup_cycles * 2 * len(polyphonies) * dispatch_repeats,
+        "warmup_records": _aggregate_warmup_records(dispatch_runs),
         "measurement_records": physical_boundaries,
         "physical_boundaries": physical_boundaries,
         "qualification_gate": {
