@@ -40,6 +40,7 @@ jobs:
           ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Bind release source provenance
+        id: source
         run: |
           $head = (git rev-parse --verify HEAD).Trim()
           if (-not $head) { throw "Cannot resolve checkout HEAD" }
@@ -58,7 +59,7 @@ jobs:
             throw "Tag-push GITHUB_SHA $env:GITHUB_SHA does not match checkout HEAD $head"
           }
 
-          "SKY_EXPECTED_BUILD_COMMIT=$head" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+          "build_commit=$head" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
           Write-Host "Release source provenance bound to $head"
 
       - name: Set up Python environment
@@ -78,6 +79,7 @@ jobs:
       - name: Rust — format, lint, tests, and native wheel
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
+          SKY_EXPECTED_BUILD_COMMIT: ${{ steps.source.outputs.build_commit }}
         run: |
           rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
           $version = (rustc --version)
