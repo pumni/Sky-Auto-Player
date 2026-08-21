@@ -45,6 +45,7 @@ pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::drain_one_observer;
 #[cfg(test)]
 pub(crate) use dispatch::handle_final_focus_loss;
+pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PhysicalBoundaryStamp,
     dispatch_authored_packet, dispatch_stale_packet,
@@ -251,6 +252,7 @@ pub struct PreparationCounts {
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
+    pub(crate) production_forensics: ProductionHoldForensics,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
@@ -320,21 +322,51 @@ impl WorkerRuntime {
     }
 
     #[inline]
-    pub(crate) fn mark_down_commit_started(&mut self) {
-        self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+    pub(crate) fn mark_down_commit_started(&mut self, late_rescue_consumed: bool) {
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+            late_rescue_available: !late_rescue_consumed,
+        };
     }
 
     #[inline]
     pub(crate) fn mark_down_boundary_missed(&mut self) {
         if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
         }
     }
 
     #[inline]
     pub(crate) fn invalidate_down_authorization(&mut self) {
         if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
+        }
+    }
+
+    #[inline]
+    pub(crate) fn try_consume_late_discovery_rescue(
+        &mut self,
+        lateness: DurationTicks,
+        grace: DurationTicks,
+    ) -> bool {
+        if !self.down_boundary_state.late_rescue_available() || lateness > grace {
+            return false;
+        }
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+            late_rescue_available: false,
+        };
+        true
+    }
+
+    #[inline]
+    pub(crate) fn consume_late_discovery_rescue_credit(&mut self) {
+        if self.down_boundary_state.late_rescue_available() {
+            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
+                late_rescue_available: false,
+            };
         }
     }
 
@@ -558,12 +590,98 @@ impl<'a> Worker<'a> {
 
 #[cfg(test)]
 mod observer_profile_tests {
-    use super::WorkerObserverState;
+    use super::{
+        DownBoundaryState, PhysicalBoundaryStamp, QpcTicks, WorkerObserverState, WorkerRuntime,
+    };
+    use sky_dispatch_core::time::DurationTicks;
+
+    fn boundary(source_action_index: u32) -> PhysicalBoundaryStamp {
+        PhysicalBoundaryStamp {
+            first_batch_index: 0,
+            packet_index: 0,
+            packet_batch_count: 1,
+            source_action_index,
+            up_mask: 0,
+            down_mask: 1,
+            physical_target_qpc: QpcTicks::from_raw(100),
+        }
+    }
 
     #[test]
     fn default_production_observer_state_has_no_queue_or_thread() {
         let state = WorkerObserverState::default();
         assert!(state.pending.is_none());
         assert!(state.runtime.is_none());
+    }
+
+    #[test]
+    fn late_rescue_cutoff_matrix_is_inclusive_and_one_shot() {
+        let grace = DurationTicks::from_raw(500);
+        for lateness in [0, 1, 100, 499, 500] {
+            let mut runtime = WorkerRuntime::create_test_runtime(None);
+            runtime.mark_down_commit_started(false);
+            assert!(
+                runtime
+                    .try_consume_late_discovery_rescue(DurationTicks::from_raw(lateness), grace,)
+            );
+            assert!(!runtime.try_consume_late_discovery_rescue(DurationTicks::from_raw(1), grace,));
+            assert!(matches!(
+                runtime.down_boundary_state,
+                DownBoundaryState::AwaitingFuture {
+                    late_rescue_available: false
+                }
+            ));
+        }
+        let mut beyond = WorkerRuntime::create_test_runtime(None);
+        beyond.mark_down_commit_started(false);
+        assert!(!beyond.try_consume_late_discovery_rescue(DurationTicks::from_raw(501), grace,));
+    }
+
+    #[test]
+    fn future_observation_rearms_rescue_only_after_boundary_commit() {
+        let mut runtime = WorkerRuntime::create_test_runtime(None);
+        runtime.mark_down_commit_started(false);
+        assert!(runtime.try_consume_late_discovery_rescue(
+            DurationTicks::from_raw(1),
+            DurationTicks::from_raw(500),
+        ));
+        let stamp = boundary(7);
+        runtime.observe_future_down_boundary(stamp);
+        assert!(runtime.authorize_down_boundary(stamp));
+        assert!(!runtime.try_consume_late_discovery_rescue(
+            DurationTicks::from_raw(1),
+            DurationTicks::from_raw(500),
+        ));
+        runtime.mark_down_commit_started(false);
+        assert!(runtime.try_consume_late_discovery_rescue(
+            DurationTicks::from_raw(1),
+            DurationTicks::from_raw(500),
+        ));
+    }
+
+    #[test]
+    fn randomized_rescue_sequence_never_catches_up_without_future_observation() {
+        let grace = DurationTicks::from_raw(500);
+        let mut runtime = WorkerRuntime::create_test_runtime(None);
+        runtime.mark_down_commit_started(false);
+        let mut state = 0x1357_9bdf_u64;
+        let mut rescue_sent_since_future = false;
+        for _ in 0..10_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            if state & 0b111 == 0 {
+                runtime.observe_future_down_boundary(boundary((state >> 8) as u32));
+                runtime.mark_down_commit_started(false);
+                rescue_sent_since_future = false;
+                continue;
+            }
+            let rescued = runtime
+                .try_consume_late_discovery_rescue(DurationTicks::from_raw(state % 501), grace);
+            if rescued {
+                assert!(!rescue_sent_since_future);
+                rescue_sent_since_future = true;
+            }
+        }
     }
 }

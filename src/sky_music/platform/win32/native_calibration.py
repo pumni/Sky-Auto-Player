@@ -2,7 +2,7 @@
 
 The native process owns the prepared SendInput sender and emits signed paired
 completion-hold evidence. This adapter validates the complete result before
-writing an artifact or the version-7 production cache. Raw Input diagnostics,
+writing an artifact or the version-8 production cache. Raw Input diagnostics,
 if retained by a separate engineering mode, are never accepted here.
 """
 
@@ -27,6 +27,7 @@ from sky_music.domain.hold_timing import (
     DEFAULT_HOLD_FRAMES,
     materialize_hold_us,
 )
+from sky_music.domain.scheduler_types import DEFAULT_DOWN_LATE_GRACE_US
 from sky_music.infrastructure.calibration_loader import (
     CALIBRATION_EVIDENCE_KIND,
     HOST_FINGERPRINT_VERSION,
@@ -35,6 +36,8 @@ from sky_music.infrastructure.calibration_loader import (
     MARGIN_GUARD_US,
     MIN_CALIBRATION_SAMPLE_COUNT,
     REQUIRED_BUCKETS,
+    SOURCE_FORMULA_VERSION,
+    SUPPORTED_CACHE_VERSION,
     CalibrationCacheSummary,
     CalibrationStatus,
     PairBucketSummary,
@@ -93,8 +96,33 @@ class PublishedCalibrationResult:
     worst_bucket: str = ""
     sender_hold_shrink_p99_us: int = 0
     guard_us: int = MARGIN_GUARD_US
+    floor_us: int = MARGIN_FLOOR_US
     ceiling_us: int = MARGIN_CEILING_US
     effective_min_hold_us: int | None = None
+
+    @property
+    def transport_margin_us(self) -> int | None:
+        return self.margin_us
+
+    @property
+    def transport_worst_positive_us(self) -> int:
+        return self.sender_hold_shrink_p99_us
+
+    @property
+    def transport_margin_candidate_us(self) -> int:
+        return self.candidate_margin_us
+
+    @property
+    def transport_margin_applied_us(self) -> int | None:
+        return self.margin_us
+
+    @property
+    def transport_guard_us(self) -> int:
+        return self.guard_us
+
+    @property
+    def transport_floor_us(self) -> int:
+        return self.floor_us
 
 
 class NativeCalibrationError(RuntimeError):
@@ -643,7 +671,7 @@ def _bucket_key(polyphony: int, class_name: str) -> str:
     return f"{polyphony}/{class_name}"
 
 
-def _cache_v7(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_v8(result: dict[str, Any]) -> dict[str, Any]:
     raw_buckets = _require_mapping(result.get("pair_buckets"), "pair_buckets")
     flattened: dict[str, dict[str, Any]] = {}
     for polyphony, class_name in calibration_bucket_keys():
@@ -663,30 +691,41 @@ def _cache_v7(result: dict[str, Any]) -> dict[str, Any]:
             "down_call_duration_us": bucket["down_call_duration_us"],
             "up_call_duration_us": bucket["up_call_duration_us"],
         }
-    p99_values = {
-        key: max(0, int(bucket["pair_sender_hold_shrink_us"]["p99"]))
+    transport_values = {
+        key: max(0, int(bucket["sendinput_shrink_us"]["max"]))
         for key, bucket in flattened.items()
     }
-    global_p99 = max(p99_values.values())
-    worst_bucket = max(REQUIRED_BUCKETS, key=lambda key: (p99_values[key], -REQUIRED_BUCKETS.index(key)))
-    qualification_result = qualify_calibration_margin(global_p99)
+    global_transport = max(transport_values.values())
+    worst_bucket = max(
+        REQUIRED_BUCKETS,
+        key=lambda key: (transport_values[key], -REQUIRED_BUCKETS.index(key)),
+    )
+    qualification_result = qualify_calibration_margin(global_transport)
     qualification = {
-        "basis": "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink",
+        "basis": "max_required_bucket_max_positive_sendinput_shrink",
         "worst_bucket": worst_bucket,
-        "sender_hold_shrink_p99_us": global_p99,
+        "transport_worst_positive_us": global_transport,
         "guard_us": MARGIN_GUARD_US,
         "floor_us": MARGIN_FLOOR_US,
         "ceiling_us": MARGIN_CEILING_US,
-        "candidate_margin_us": qualification_result.candidate_margin_us,
-        "applied_margin_us": qualification_result.applied_margin_us,
+        "candidate_transport_margin_us": qualification_result.candidate_margin_us,
+        "applied_transport_margin_us": qualification_result.applied_margin_us,
     }
+    timing_qualified = qualification_result.status is CalibrationStatus.VALID
     return {
-        "version": 7,
+        "version": SUPPORTED_CACHE_VERSION,
         "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "source": "device_cache",
         "status": qualification_result.status.value,
+        "transport_margin_us": qualification_result.applied_margin_us,
+        "transport_margin_source": "device_cache",
+        "transport_worst_positive_us": global_transport,
+        "transport_guard_us": MARGIN_GUARD_US,
+        "transport_floor_us": MARGIN_FLOOR_US,
+        "transport_ceiling_us": MARGIN_CEILING_US,
+        "calibration_timing_qualified": timing_qualified,
         "evidence_kind": result["evidence_kind"],
-        "source_formula_version": 5,
+        "source_formula_version": SOURCE_FORMULA_VERSION,
         "native_calibration_version": result["version"],
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
@@ -700,6 +739,11 @@ def _cache_v7(result: dict[str, Any]) -> dict[str, Any]:
         "pair_buckets": flattened,
         "qualification": qualification,
     }
+
+
+def _cache_v7(result: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility name for callers that used the previous helper."""
+    return _cache_v8(result)
 
 
 def _failure_report(*, class_name: str, polyphony: int, detail: str) -> dict[str, Any]:
@@ -1212,7 +1256,7 @@ def finalize_native_calibration(
     final = _finalize_artifacts(
         artifacts, orchestration=orchestration, expected_provenance=stable_provenance
     )
-    cache = _cache_v7(final)
+    cache = _cache_v8(final)
     parse_calibration_cache_summary(cache)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), cache)
@@ -1263,7 +1307,7 @@ def run_native_calibration(
         samples=FULL_SAMPLE_COUNT,
     )
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
-    cache = _cache_v7(result)
+    cache = _cache_v8(result)
     # Validation happens before either write; an invalid run leaves an old
     # cache untouched.
     parse_calibration_cache_summary(cache)
@@ -1283,7 +1327,7 @@ def run_published_native_calibration(
     result = run_native_calibration(
         mode="quick", output_path=output_path, cache_path=cache_path, timeout_seconds=timeout_seconds
     )
-    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v7(result))
+    summary: CalibrationCacheSummary = parse_calibration_cache_summary(_cache_v8(result))
     return PublishedCalibrationResult(
         status=summary.status,
         margin_us=summary.margin_us,
@@ -1298,9 +1342,14 @@ def run_published_native_calibration(
         worst_bucket=summary.worst_bucket,
         sender_hold_shrink_p99_us=summary.sender_hold_shrink_p99_us,
         guard_us=summary.guard_us,
+        floor_us=summary.floor_us,
         ceiling_us=summary.ceiling_us,
         effective_min_hold_us=(
-            materialize_hold_us(hold_frames, fps, summary.margin_us)
+            materialize_hold_us(
+                hold_frames,
+                fps,
+                DEFAULT_DOWN_LATE_GRACE_US + int(summary.margin_us),
+            )
             if summary.status is CalibrationStatus.VALID and summary.margin_us is not None
             else None
         ),

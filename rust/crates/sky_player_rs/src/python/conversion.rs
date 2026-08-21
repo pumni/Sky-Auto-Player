@@ -200,7 +200,12 @@ pub(super) fn parse_schedule_with_allowlist(
 pub(super) fn validate_schedule_timing(
     schedule: &RuntimeSchedule,
     effective_min_hold_us: u64,
+    min_release_gap_us: u64,
 ) -> PyResult<()> {
-    sky_dispatch_core::validation::validate_min_hold_feasibility(schedule, effective_min_hold_us)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
+        schedule,
+        effective_min_hold_us,
+        min_release_gap_us,
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))
 }

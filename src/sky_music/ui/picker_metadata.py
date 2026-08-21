@@ -259,7 +259,8 @@ def _effective_policy_signature(session: PlaybackSessionContext, cfg: AppConfig 
 
     Uses :func:`~sky_music.orchestration.calibrated_policy.resolve_calibrated_policy`
     so that ``min_hold_margin_us`` and ``min_hold_margin_source`` reflect the
-    device-calibrated margin — cache keys derived from a ``default_500`` run
+    device-calibrated transport margin — cache keys derived from a
+    ``default_transport_300`` run
     will never match entries produced after ``device_cache`` calibration.
     """
     from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy

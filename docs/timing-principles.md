@@ -22,6 +22,8 @@ microsecond conversions.
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
 | `down_late_grace` | Independent fixed sender correctness grace for authorized Down admission; production is `500 µs`. |
+| `transport_margin` | Calibrated sender transport component; default/fallback is `300 µs` and calibration never changes the Down grace. |
+| `min_release_gap` | One frame period at the selected FPS between a same-key Up and the next same-key Down. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -35,16 +37,20 @@ requested hold, and passes:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
-measured_margin_us = max(0, calibrated_or_default_margin_us)
+frame_base_hold_us = ceil(hold_frames * frame_us)
 down_late_grace_us = policy.down_late_grace_us
-effective_margin_us = max(measured_margin_us, down_late_grace_us)
-effective_min_hold = materialize_hold(selected_hold_frames, frame_us, effective_margin_us)
+transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
+effective_min_hold = (
+    frame_base_hold_us + down_late_grace_us + transport_margin_us
+)
+min_release_gap_us = frame_us
 ```
 
 For every authored same-key Down→Up pair:
 
 ```text
 authored_up >= authored_down + effective_min_hold
+next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
 The static margin is applied once while materializing the authored schedule.
@@ -54,12 +60,15 @@ the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
 
-`FrameTimingPolicy.min_hold_margin_us` is the post-policy effective static
-margin. Calibration qualification may report a lower raw measurement, while
-`min_hold_margin_source` preserves its provenance. The policy enforces:
+`FrameTimingPolicy.min_hold_margin_us` remains a compatibility aggregate of the
+Down grace and transport component. The explicit policy fields are
+`frame_base_hold_us`, `down_late_grace_us`, `transport_margin_us`, and
+`min_release_gap_us`; `min_hold_margin_source` preserves transport provenance.
+The policy enforces:
 
 ```text
-effective_margin_us >= down_late_grace_us
+transport_margin_us >= 0
+effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
 ```
 
 The effective margin affects only the authored effective minimum hold. It is
@@ -121,11 +130,12 @@ sender_hold_shrink = scheduler_shrink + sendinput_shrink
 ```
 
 The identity is checked before converting to microseconds. All tick
-subtractions and conversions are checked; failure is terminal. The production
-metric is one signed `pair_sender_hold_shrink_us` per Down/Up packet pair, not
-a per-key worst value and not a sum of component quantiles. Polyphony remains
-important because 1-, 5-, and 15-key packets have different SendInput call
-durations.
+subtractions and conversions are checked; failure is terminal. The signed
+pair metric remains diagnostic evidence, but qualification uses only the
+positive `sendinput_shrink_us.max` from each required bucket. It is not a
+per-key worst value and not a sum of scheduler and SendInput quantiles.
+Polyphony remains important because 1-, 5-, and 15-key packets have different
+SendInput call durations.
 
 The required matrix is exactly `1/hot`, `1/cold`, `5/hot`, `5/cold`, `15/hot`,
 and `15/cold`. Each bucket requires 100 clean pairs and permits at most 200
@@ -134,23 +144,25 @@ are anchored to the previous completion plus the requested gap; Up targets
 are anchored to the exact Down completion plus the requested gap. After `C_D`,
 the runner waits for `T_U` directly and sends Up without waiting for a receipt.
 
-For each bucket, qualification uses the signed p99 of the pair metric:
+For each bucket, qualification uses the maximum positive SendInput shrink:
 
 ```text
-global_positive_p99 = max(0, maximum required-bucket pair_sender_hold_shrink p99)
-candidate_margin_us = global_positive_p99 + 100
+transport_worst_positive = max(0, maximum required-bucket sendinput_shrink_us.max)
+candidate_transport_margin_us = transport_worst_positive + 100
 
 candidate <= 2,000 µs -> VALID, applied = max(300 µs, candidate)
-candidate > 2,000 µs  -> OUT_OF_ENVELOPE, applied = none, playback = 500 µs
+candidate > 2,000 µs  -> OUT_OF_ENVELOPE, applied = none,
+                         playback transport margin = 300 µs
 ```
 
 The correction is applied exactly once to the authored minimum hold. It does
 not change Note-On timestamps, physical Down targets, `down_late_grace_us`
 (`500 µs`), or runtime scheduling. Protocol 10, native schema 15, artifact
-schema 11, cache version 7, source formula version 5, and evidence kind
+schema 11, cache version 8, source formula version 6, and evidence kind
 `sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
-cache-v5/v6 Raw Input evidence. A failed or invalid measurement preserves the
-previous compatible cache; an old cache falls back to 500 µs.
+cache-v5/v6/v7 Raw Input or old sender-formula evidence. A failed or invalid
+measurement preserves the previous compatible cache; an old cache falls back
+to the explicit `300 µs` transport margin and is not timing-qualified.
 
 Before warm-up, sender calibration performs a sender-only preflight: it proves
 physical All-Up, sends one prepared full All-Up packet through the production

@@ -8,24 +8,29 @@ For a selected ratio and FPS, Python first materializes the requested hold:
 
 ```text
 frame_us = ceil(1_000_000 / fps)
-measured_margin_us = max(0, calibrated_or_default_margin_us)
+frame_base_hold_us = ceil(hold_frames * frame_us)
 down_late_grace_us = policy.down_late_grace_us
-effective_margin_us = max(measured_margin_us, down_late_grace_us)
-effective_min_hold_us = round(hold_frames * frame_us) + effective_margin_us
+transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
+effective_min_hold_us = (
+    frame_base_hold_us + down_late_grace_us + transport_margin_us
+)
 ```
 
-The default hold margin is `500 µs`; calibration may provide a validated
-sender-side completion-hold correction. Production calibration uses one pair
-metric per Down/Up SendInput packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`;
-Raw Input receipt timing is not part of qualification. It uses exactly the six
-`1/5/15 × hot/cold` buckets, at least 100 clean pairs per bucket, and at most
-200 attempts per bucket. Its candidate is the maximum positive p99 of
-`sender_hold_shrink` plus `100 µs`. A candidate at or below `2,000 µs` is
-valid and applies `max(300 µs, candidate)`; a candidate above `2,000 µs` is
-out of the trusted correction envelope and applies no calibrated margin.
-Protocol 9/cache v5/v6 evidence is incompatible with protocol 10/cache v7 and
-falls back to the unchanged `500 µs` default. Completed out-of-envelope
-protocol-10 evidence is retained as unhealthy cache evidence.
+The independent Down late-discovery grace is `500 µs`. The default and every
+fallback transport margin is `300 µs`; a valid calibration may replace only
+that transport component. Thus the default effective additive margin is
+`800 µs`, and calibration is never reported as qualified when fallback is
+used. Production calibration uses one pair metric per Down/Up SendInput
+packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`; Raw Input receipt timing is
+not part of qualification. It uses exactly the six `1/5/15 × hot/cold`
+buckets, at least 100 clean pairs per bucket, and at most 200 attempts per
+bucket. Its transport candidate is the maximum positive
+`sendinput_shrink_us.max` across required buckets plus a `100 µs` guard. A
+candidate at or below `2,000 µs` is valid and applies at least the `300 µs`
+floor; a candidate above `2,000 µs` is out of the trusted correction envelope,
+keeps the evidence unhealthy, and falls back to the `300 µs` transport floor.
+Protocol 9/cache v5/v6/v7 evidence is incompatible with protocol 10/cache v8
+and falls back to the explicit transport floor.
 
 The sender evidence is computed in raw QPC ticks before conversion:
 
@@ -42,13 +47,14 @@ The native worker receives only the materialized `effective_min_hold_us` and
 uses it as a fixed duration. PyO3 does not add another frame-relative floor;
 Rust only range-checks and validates this value in QPC ticks. It does not learn
 or subtract SendInput cost. `FrameTimingPolicy.min_hold_margin_us` is the
-post-policy effective static margin, not necessarily the raw calibration
-measurement; `min_hold_margin_source` still records measurement provenance.
+compatibility aggregate of the fixed Down grace and transport margin; the
+explicit policy fields retain the frame-base, grace, transport, and release-gap
+components. `min_hold_margin_source` records transport provenance.
 The independent fixed `down_late_grace_us` sender policy is `500 µs` and is
 converted once to QPC ticks. The policy coupling enforces:
 
 ```text
-effective_margin_us >= down_late_grace_us
+effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
 ```
 
 Therefore an authorized Down accepted at the latest cutoff cannot reduce the
@@ -60,9 +66,9 @@ At 60 FPS with the default margin:
 
 | Hold | Requested | Effective |
 |---:|---:|---:|
-| 1.0 frame | 17,167 µs | 17,167 µs |
-| 1.25 frames | 21,334 µs | 21,334 µs |
-| 1.5 frames | 25,500 µs | 25,500 µs |
+| 1.0 frame | 16,667 µs | 17,467 µs |
+| 1.25 frames | 20,834 µs | 21,634 µs |
+| 1.5 frames | 25,001 µs | 25,801 µs |
 
 ## Authored minimum-hold validation
 
@@ -75,18 +81,23 @@ authored_up >= authored_down + effective_min_hold_us
 
 The static margin is materialized once while building the authored schedule.
 The native boundary validates this interval in checked QPC ticks before the
-worker starts. An invalid schedule is rejected; the runtime never delays or
-replaces the authored Up target to repair it.
+worker starts. It also requires at least one frame period between a same-key
+Up and the next same-key Down. An invalid schedule is rejected; the runtime
+never delays or replaces authored targets to repair it.
 
 ## Feasibility and diagnostics
 
 Authored validation rejects a same-key interval below the selected hold floor.
 The native-boundary validator performs this check before the worker can send
 anything, including exact same-timestamp retriggers and timestamp overflow
-cases. Runtime completion is evidence for sender-side telemetry and ownership
-accounting only; it does not create a completion-relative hold floor or a new
-deadline. Runtime deadline/overdue policy handles a late boundary without
-rewriting authored timestamps or emitting a catch-up send.
+cases. It also requires the next same-key Down to be at least one frame period
+after the previous same-key Up. Equal release-gap boundaries are valid;
+same-timestamp same-key overlaps are rejected, while disjoint masks may still
+coalesce. Runtime never delays, retries, or rewrites these authored targets.
+Completion is evidence for sender-side telemetry and ownership accounting
+only; it does not create a completion-relative hold floor or a new deadline.
+Runtime deadline/overdue policy handles a late boundary without rewriting
+authored timestamps or emitting a catch-up send.
 
 A transport zero/partial result is terminal and is handled by fail-closed
 cleanup; it is not retried in production. Strict timing evaluates completion
@@ -94,7 +105,12 @@ residuals, while normal playback preserves the schedule when transport
 integrity remains valid.
 
 Diagnostic mode may report sender-side start, completion, lateness, duration,
-and release-floor evidence. Production retains only bounded scalar timing
-counters. These values are not game-onset or audio-onset measurements. The
-old estimator and adaptive dispatch lead are not part of this model; historical
-lead fields are compatibility-only zeros.
+and release-floor evidence. Production retains only bounded worker-local
+scalars and a fixed anomaly ring: hold-pair count/minima, pre-call and
+completion shrink maxima, below-frame count, release-gap minima/violations,
+same-call retriggers, anchor overwrites, unmatched Ups, and ring overwrites.
+The production forensics block exposes an availability/version marker and
+never allocates, locks, samples QPC, or consults the diagnostic observer.
+These values are not game-onset or audio-onset measurements. The old estimator
+and adaptive dispatch lead are not part of this model; historical lead fields
+are compatibility-only zeros.

@@ -26,6 +26,21 @@ pub enum ScheduleTimingError {
         earliest_release_ticks: u64,
     },
     #[error(
+        "same-key release gap too short for scan code {scan_code}: previous up action {previous_up_source_action_index} at {previous_up_scheduled_us}us, next down action {next_down_source_action_index} at {next_down_scheduled_us}us, gap={release_gap_us}us, required={required_release_gap_us}us"
+    )]
+    SameKeyReleaseGapTooShort {
+        scan_code: u16,
+        previous_up_source_action_index: u32,
+        next_down_source_action_index: u32,
+        previous_up_scheduled_us: u64,
+        next_down_scheduled_us: u64,
+        release_gap_us: u64,
+        required_release_gap_us: u64,
+        previous_up_ticks: u64,
+        next_down_ticks: u64,
+        required_release_gap_ticks: u64,
+    },
+    #[error(
         "generation ownership mismatch for scan code {scan_code}: expected generation {expected_generation_id}, found {actual_generation_id} at up action {up_source_action_index}"
     )]
     GenerationOwnershipMismatch {
@@ -47,6 +62,13 @@ struct OpenGeneration {
     down_scheduled_ticks: TimelineTicks,
 }
 
+#[derive(Clone, Copy)]
+struct ReleaseBoundary {
+    source_action_index: u32,
+    scheduled_us: u64,
+    scheduled_ticks: TimelineTicks,
+}
+
 /// Validate every authored same-key Down→Up interval against the native floor.
 ///
 /// The walk follows the compiler's canonical physical order: all Up intents
@@ -65,6 +87,22 @@ pub fn validate_min_hold_feasibility(
     )
 }
 
+/// Validate holds and the minimum observable release-to-repress interval.
+pub fn validate_min_hold_and_release_gap_feasibility(
+    schedule: &RuntimeSchedule,
+    effective_min_hold_us: u64,
+    min_release_gap_us: u64,
+) -> Result<(), ScheduleTimingError> {
+    validate_min_hold_and_release_gap_feasibility_ticks(
+        schedule,
+        effective_min_hold_us,
+        DurationTicks::from_raw(effective_min_hold_us),
+        min_release_gap_us,
+        DurationTicks::from_raw(min_release_gap_us),
+        |microseconds| Some(TimelineTicks::from_raw(microseconds)),
+    )
+}
+
 /// Validate same-key holds in the timing domain used by the runtime.
 ///
 /// Authored timestamps are expressed in microseconds, but the worker places
@@ -76,6 +114,28 @@ pub fn validate_min_hold_feasibility_ticks<F>(
     schedule: &RuntimeSchedule,
     effective_min_hold_us: u64,
     effective_min_hold_ticks: DurationTicks,
+    microseconds_to_ticks: F,
+) -> Result<(), ScheduleTimingError>
+where
+    F: FnMut(u64) -> Option<TimelineTicks>,
+{
+    validate_min_hold_and_release_gap_feasibility_ticks(
+        schedule,
+        effective_min_hold_us,
+        effective_min_hold_ticks,
+        0,
+        DurationTicks::from_raw(0),
+        microseconds_to_ticks,
+    )
+}
+
+/// Validate same-key holds and release gaps in the runtime tick domain.
+pub fn validate_min_hold_and_release_gap_feasibility_ticks<F>(
+    schedule: &RuntimeSchedule,
+    effective_min_hold_us: u64,
+    effective_min_hold_ticks: DurationTicks,
+    min_release_gap_us: u64,
+    min_release_gap_ticks: DurationTicks,
     mut microseconds_to_ticks: F,
 ) -> Result<(), ScheduleTimingError>
 where
@@ -90,6 +150,7 @@ where
         .ok_or(ScheduleTimingError::TimestampOverflow)?;
 
     let mut open_by_slot: [Option<OpenGeneration>; MAX_KEYS] = [None; MAX_KEYS];
+    let mut last_release_by_slot: [Option<ReleaseBoundary>; MAX_KEYS] = [None; MAX_KEYS];
 
     for (packet_index, packet) in schedule.packets.iter().enumerate() {
         let batch_start = usize::try_from(packet.first_batch_index)
@@ -174,6 +235,13 @@ where
                                     earliest_release_ticks: earliest_release_ticks.as_u64(),
                                 });
                             }
+                            if min_release_gap_us > 0 {
+                                last_release_by_slot[slot] = Some(ReleaseBoundary {
+                                    source_action_index: batch.source_action_index,
+                                    scheduled_us: batch.scheduled_us,
+                                    scheduled_ticks: batch_ticks,
+                                });
+                            }
                         }
                         ActionKind::Down => {
                             if compact.generation_id() == NO_GENERATION_ID || open.is_some() {
@@ -183,6 +251,30 @@ where
                                     actual_generation_id: compact.generation_id(),
                                     up_source_action_index: batch.source_action_index,
                                 });
+                            }
+                            if let Some(previous_up) = last_release_by_slot[slot]
+                                && min_release_gap_us > 0
+                            {
+                                let release_gap_ticks = batch_ticks
+                                    .checked_duration_since(previous_up.scheduled_ticks)
+                                    .unwrap_or_else(|_| DurationTicks::from_raw(0));
+                                if release_gap_ticks < min_release_gap_ticks {
+                                    return Err(ScheduleTimingError::SameKeyReleaseGapTooShort {
+                                        scan_code,
+                                        previous_up_source_action_index: previous_up
+                                            .source_action_index,
+                                        next_down_source_action_index: batch.source_action_index,
+                                        previous_up_scheduled_us: previous_up.scheduled_us,
+                                        next_down_scheduled_us: batch.scheduled_us,
+                                        release_gap_us: batch
+                                            .scheduled_us
+                                            .saturating_sub(previous_up.scheduled_us),
+                                        required_release_gap_us: min_release_gap_us,
+                                        previous_up_ticks: previous_up.scheduled_ticks.as_u64(),
+                                        next_down_ticks: batch_ticks.as_u64(),
+                                        required_release_gap_ticks: min_release_gap_ticks.as_u64(),
+                                    });
+                                }
                             }
                             *open = Some(OpenGeneration {
                                 generation_id: compact.generation_id(),
@@ -276,6 +368,44 @@ mod tests {
             (ActionKind::Up, 300, 1),
         ]);
         assert!(validate_min_hold_feasibility(&schedule, 100).is_ok());
+    }
+
+    #[test]
+    fn rejects_same_timestamp_retrigger_when_release_gap_is_required() {
+        let schedule = schedule(&[
+            (ActionKind::Down, 100, 1),
+            (ActionKind::Up, 200, 1),
+            (ActionKind::Down, 200, 1),
+            (ActionKind::Up, 300, 1),
+        ]);
+        let error = validate_min_hold_and_release_gap_feasibility(&schedule, 100, 100)
+            .expect_err("same-key retrigger must leave one frame of release gap");
+        assert_eq!(
+            error,
+            ScheduleTimingError::SameKeyReleaseGapTooShort {
+                scan_code: 1,
+                previous_up_source_action_index: 1,
+                next_down_source_action_index: 2,
+                previous_up_scheduled_us: 200,
+                next_down_scheduled_us: 200,
+                release_gap_us: 0,
+                required_release_gap_us: 100,
+                previous_up_ticks: 200,
+                next_down_ticks: 200,
+                required_release_gap_ticks: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn accepts_same_key_retrigger_after_one_frame_release_gap() {
+        let schedule = schedule(&[
+            (ActionKind::Down, 100, 1),
+            (ActionKind::Up, 200, 1),
+            (ActionKind::Down, 300, 1),
+            (ActionKind::Up, 400, 1),
+        ]);
+        assert!(validate_min_hold_and_release_gap_feasibility(&schedule, 100, 100).is_ok());
     }
 
     #[test]

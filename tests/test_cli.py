@@ -328,9 +328,13 @@ def test_doctor_calibrate_returns_one_for_out_of_envelope(monkeypatch, capsys) -
         lambda: SimpleNamespace(
             status=CalibrationStatus.OUT_OF_ENVELOPE,
             sender_hold_shrink_p99_us=12_088,
+            transport_worst_positive_us=12_088,
             worst_bucket="15/hot",
             candidate_margin_us=12_188,
+            transport_margin_candidate_us=12_188,
             ceiling_us=2_000,
+            transport_guard_us=100,
+            transport_floor_us=300,
             margin_us=None,
             effective_min_hold_us=None,
             sample_count=100,
@@ -347,7 +351,7 @@ def test_doctor_calibrate_returns_one_for_out_of_envelope(monkeypatch, capsys) -
     assert result == 1
     output = capsys.readouterr().out
     assert "Calibration measurement completed, but host qualification failed." in output
-    assert "Policy guard (us): 100" in output
+    assert "Transport guard (us): 100" in output
     assert "Evidence: sender_completion_hold_shrink" in output
     assert "Cache: .cache/input_latency.json" in output
     assert "Calibration complete successfully" not in output

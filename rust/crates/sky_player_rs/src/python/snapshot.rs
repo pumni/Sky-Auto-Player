@@ -159,7 +159,51 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) deadline_authorization_reuses: u64,
     #[pyo3(get)]
+    pub(super) late_discovery_rescue_attempts: u64,
+    #[pyo3(get)]
+    pub(super) late_discovery_rescue_sent: u64,
+    #[pyo3(get)]
+    pub(super) late_discovery_rescue_sender_cutoff_misses: u64,
+    #[pyo3(get)]
+    pub(super) late_discovery_rescue_credit_exhausted: u64,
+    #[pyo3(get)]
+    pub(super) late_discovery_rescue_blocked_control: u64,
+    #[pyo3(get)]
+    pub(super) late_discovery_rescue_blocked_focus_or_target: u64,
+    #[pyo3(get)]
     pub(super) max_missed_lateness_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_forensics_available: bool,
+    #[pyo3(get)]
+    pub(super) production_forensics_version: u32,
+    #[pyo3(get)]
+    pub(super) production_hold_pair_samples: u64,
+    #[pyo3(get)]
+    pub(super) production_min_pre_call_hold_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_min_completion_hold_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_max_pre_call_shrink_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_max_completion_shrink_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_completion_hold_below_frame_count: u64,
+    #[pyo3(get)]
+    pub(super) production_release_gap_samples: u64,
+    #[pyo3(get)]
+    pub(super) production_min_release_gap_ticks: u64,
+    #[pyo3(get)]
+    pub(super) production_release_gap_below_policy_count: u64,
+    #[pyo3(get)]
+    pub(super) production_same_call_same_key_retrigger_count: u64,
+    #[pyo3(get)]
+    pub(super) production_anchor_overwrite_count: u64,
+    #[pyo3(get)]
+    pub(super) production_unmatched_up_count: u64,
+    #[pyo3(get)]
+    pub(super) production_anomaly_ring_overwrite_count: u64,
+    #[pyo3(get)]
+    pub(super) production_forensics_anomaly_count: u64,
     #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
@@ -238,7 +282,35 @@ impl ProgressSnapshotPy {
             missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
             late_authorized_boundaries: snapshot.late_authorized_boundaries,
             deadline_authorization_reuses: snapshot.deadline_authorization_reuses,
+            late_discovery_rescue_attempts: snapshot.late_discovery_rescue_attempts,
+            late_discovery_rescue_sent: snapshot.late_discovery_rescue_sent,
+            late_discovery_rescue_sender_cutoff_misses: snapshot
+                .late_discovery_rescue_sender_cutoff_misses,
+            late_discovery_rescue_credit_exhausted: snapshot.late_discovery_rescue_credit_exhausted,
+            late_discovery_rescue_blocked_control: snapshot.late_discovery_rescue_blocked_control,
+            late_discovery_rescue_blocked_focus_or_target: snapshot
+                .late_discovery_rescue_blocked_focus_or_target,
             max_missed_lateness_ticks: snapshot.max_missed_lateness_ticks,
+            production_forensics_available: snapshot.production_forensics_available,
+            production_forensics_version: snapshot.production_forensics_version,
+            production_hold_pair_samples: snapshot.production_hold_pair_samples,
+            production_min_pre_call_hold_ticks: snapshot.production_min_pre_call_hold_ticks,
+            production_min_completion_hold_ticks: snapshot.production_min_completion_hold_ticks,
+            production_max_pre_call_shrink_ticks: snapshot.production_max_pre_call_shrink_ticks,
+            production_max_completion_shrink_ticks: snapshot.production_max_completion_shrink_ticks,
+            production_completion_hold_below_frame_count: snapshot
+                .production_completion_hold_below_frame_count,
+            production_release_gap_samples: snapshot.production_release_gap_samples,
+            production_min_release_gap_ticks: snapshot.production_min_release_gap_ticks,
+            production_release_gap_below_policy_count: snapshot
+                .production_release_gap_below_policy_count,
+            production_same_call_same_key_retrigger_count: snapshot
+                .production_same_call_same_key_retrigger_count,
+            production_anchor_overwrite_count: snapshot.production_anchor_overwrite_count,
+            production_unmatched_up_count: snapshot.production_unmatched_up_count,
+            production_anomaly_ring_overwrite_count: snapshot
+                .production_anomaly_ring_overwrite_count,
+            production_forensics_anomaly_count: snapshot.production_forensics_anomaly_count,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {

@@ -29,7 +29,6 @@ use std::sync::atomic::AtomicBool;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -76,10 +75,15 @@ pub(crate) fn publisher_down_send_outcome(
     } else {
         None
     };
-    // HARD DISPATCH READY BOUNDARY:
-    // physical/coordinator ownership is safe for the next dispatch.  From
-    // here on, only a fixed raw observation enqueue and terminal policy may
-    // run on this call stack.
+    runtime.production_forensics.observe_packet_result(
+        requested_packet,
+        view.batch_source_action_index,
+        physical_target_qpc,
+        pre_call_qpc,
+        sendinput_completion_qpc,
+        result_status,
+        local_metrics,
+    );
     if let Some(observer) = observer {
         let observation = DownObservation {
             epoch_qpc: timing_proof.epoch_qpc,
@@ -283,9 +287,8 @@ impl PendingObservationQueue {
     }
 }
 
-/// Dedicated consumer for diagnostic dispatch observations. The producer side
-/// only performs a bounded `ArrayQueue::push`; all telemetry and health work
-/// runs here, off the physical dispatch thread.
+/// Dedicated consumer for diagnostic observations; all telemetry and health
+/// work runs here, off the physical dispatch thread.
 pub(crate) struct ObserverRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<ObserverOutput>>,

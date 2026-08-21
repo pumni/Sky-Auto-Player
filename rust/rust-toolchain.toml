@@ -1,4 +1,5 @@
 [toolchain]
+# Stable production pin. rust-version in Cargo.toml remains the workspace MSRV.
 channel = "1.97.1"
 profile = "minimal"
 targets = ["x86_64-pc-windows-msvc"]

@@ -13,7 +13,7 @@ use crate::engine::telemetry::{
 use crate::engine::worker::dispatch::PendingObservationQueue;
 use crate::engine::worker::dispatch::observer::HoldForensics;
 use crate::engine::worker::dispatch::{
-    AuthoredPacketContext, DispatchStep, dispatch_authored_packet,
+    AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
@@ -1538,7 +1538,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_target_qpc,
-            missed_down_boundary: false,
+            down_admission: DownBoundaryAdmission::Normal,
             startup_target_selected: false,
             focus_loss_fault: false,
             interrupt: &self.interrupt,

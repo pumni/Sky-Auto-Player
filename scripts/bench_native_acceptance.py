@@ -44,7 +44,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 7
+BENCHMARK_SCHEMA_VERSION = 8
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -63,8 +63,52 @@ LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
-BENCHMARK_HOLD_GUARD_US = 2_500
+DEFAULT_DOWN_LATE_GRACE_US = 500
+DEFAULT_TRANSPORT_MARGIN_US = 300
 MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
+
+PRODUCTION_CORRECTNESS_COUNTERS = (
+    "production_completion_hold_below_frame_count",
+    "production_release_gap_below_policy_count",
+    "production_same_call_same_key_retrigger_count",
+    "production_anchor_overwrite_count",
+    "production_unmatched_up_count",
+    "production_anomaly_ring_overwrite_count",
+    "production_forensics_anomaly_count",
+)
+
+MIXED_POLY_TIMING_FIELDS = (
+    "wake_error_us",
+    "pre_send_software_latency_us",
+    "pre_call_lateness_us",
+    "sendinput_call_duration_us",
+    "core_post_send_duration_us",
+    "sender_completion_error_us",
+    "wake_error",
+    "pre_send",
+    "sendinput",
+    "core_post_send",
+    "observer",
+    "sender_completion_error",
+    "startup_latency_us",
+    "spin_cpu_time_us",
+    "worker_cpu_time_us",
+    "process_cpu_time_us",
+    "playback_wall_time_us",
+    "spin_duty_cycle_ppm",
+    "worker_cpu_ratio_ppm",
+    "process_cpu_ratio_ppm",
+    "spin_cpu_ratio_ppm",
+    "peak_rss_bytes",
+    "lead_by_polyphony",
+    "sendinput_warn_threshold_us",
+    "core_post_send_warn_threshold_us",
+    "wait_warn_threshold_us",
+    "sendinput_degraded_samples",
+    "core_post_send_degraded_samples",
+    "wait_degraded_samples",
+    "positive_residual_at_cap",
+)
 
 
 def _native_build_flavor() -> str:
@@ -124,14 +168,19 @@ def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
     if gap_profile != "hot":
         raise ValueError("gap_profile must be hot or cold")
     frame_period_us = (1_000_000 + game_fps - 1) // game_fps
-    return max(HOT_CYCLE_US, frame_period_us + 500 + BENCHMARK_HOLD_GUARD_US)
+    hold_us = frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
+    return max(HOT_CYCLE_US, hold_us + frame_period_us)
 
 
 def _materialized_hold_us(*, game_fps: int, gap_profile: str) -> int:
-    cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
+    if not 15 <= game_fps <= 240:
+        raise ValueError("game_fps must be in 15..=240")
     if gap_profile == "hot":
-        return cycle_us - BENCHMARK_HOLD_GUARD_US
-    return cycle_us // 2
+        frame_period_us = (1_000_000 + game_fps - 1) // game_fps
+        return frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
+    if gap_profile == "cold":
+        return COLD_CYCLE_US // 2
+    raise ValueError("gap_profile must be hot or cold")
 
 
 def _actions(
@@ -150,6 +199,11 @@ def _actions(
         raise ValueError("gap_profile must be hot or cold")
     if scenario not in {"paired", "mixed", "coalesced"}:
         raise ValueError("scenario must be paired, mixed, or coalesced")
+    if scenario in {"mixed", "coalesced"} and polyphony < 2:
+        raise ValueError(
+            "mixed/coalesced scenarios require polyphony >= 2; "
+            "polyphony=1 would silently change packet size"
+        )
     if start_delay_us < 0:
         raise ValueError("start_delay_us must be non-negative")
     if warmup_cycles < 0:
@@ -157,9 +211,18 @@ def _actions(
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
-    boundary_scan_codes = [
-        int(SKY_15_SCAN_CODES[offset]) for offset in range(polyphony)
-    ]
+    if scenario in {"mixed", "coalesced"}:
+        # The release-gap validator rejects same-key Up+Down at one target.
+        # Positive mixed/coalesced coverage therefore uses two disjoint masks:
+        # the first mask is released while the second mask is pressed.
+        key_count = polyphony
+        boundary_scan_codes = [
+            int(SKY_15_SCAN_CODES[(group * key_count + offset) % len(SKY_15_SCAN_CODES)])
+            for group in range(count)
+            for offset in range(key_count)
+        ]
+    else:
+        boundary_scan_codes = []
     if scenario in {"mixed", "coalesced"}:
         # Each group has one clean Down, one Up+Down mixed boundary, and one
         # final Up.  A full cooldown separates groups so repeated groups do
@@ -168,28 +231,36 @@ def _actions(
         for group in range(count):
             base_index = group * 4
             at_us = start_delay_us + group * group_span_us
+            group_codes = boundary_scan_codes[
+                group * polyphony : (group + 1) * polyphony
+            ]
+            split = max(1, len(group_codes) // 2)
+            up_scan_codes = group_codes[:split]
+            down_scan_codes = group_codes[split:]
+            if not down_scan_codes:
+                down_scan_codes = [up_scan_codes.pop()]
             actions.extend(
                 (
-                    (base_index, "down", at_us, boundary_scan_codes, f"{scenario}-down"),
+                    (base_index, "down", at_us, up_scan_codes, f"{scenario}-down"),
                     (
                         base_index + 1,
                         "up",
                         at_us + cycle_us,
-                        boundary_scan_codes,
+                        up_scan_codes,
                         f"{scenario}-up",
                     ),
                     (
                         base_index + 2,
                         "down",
                         at_us + cycle_us,
-                        boundary_scan_codes,
+                        down_scan_codes,
                         f"{scenario}-retrigger-down",
                     ),
                     (
                         base_index + 3,
                         "up",
                         at_us + cycle_us * 2,
-                        boundary_scan_codes,
+                        down_scan_codes,
                         f"{scenario}-release",
                     ),
                 )
@@ -395,6 +466,24 @@ def _expected_record_layout(
     return layout
 
 
+def _warmup_record_count(
+    actions: list[tuple[int, str, int, list[int], str]],
+    scenario: str,
+    warmup_cycles: int,
+) -> int:
+    if warmup_cycles < 0:
+        raise ValueError("warmup_cycles must be non-negative")
+    warmup_action_count = _actions_per_polyphony(
+        actions=warmup_cycles,
+        scenario=scenario,
+    )
+    return sum(
+        1
+        for _, _, consumed in _expected_record_layout(actions, scenario)
+        if consumed and max(consumed) < warmup_action_count
+    )
+
+
 def _expected_hold_pair_samples(
     actions: list[tuple[int, str, int, list[int], str]],
     scenario: str,
@@ -582,7 +671,7 @@ def _correctness_counters(
         expected_hold_pair_samples is None
         or actual_hold_pair_samples != expected_hold_pair_samples
     )
-    return {
+    counters = {
         "chord_integrity_lost": chord_integrity_lost,
         "unexpected_held": unexpected_held,
         "pending_unresolved": release_pending,
@@ -603,6 +692,13 @@ def _correctness_counters(
         ),
         "hold_pair_sample_mismatch": hold_pair_sample_mismatch,
     }
+    counters.update(
+        {
+            name: int(snapshot.get(name, 0))
+            for name in PRODUCTION_CORRECTNESS_COUNTERS
+        }
+    )
+    return counters
 
 
 def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
@@ -620,6 +716,7 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
         "hold_pair_sample_mismatch",
+        *PRODUCTION_CORRECTNESS_COUNTERS,
     )
     return {
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
@@ -928,6 +1025,22 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
     return dict(rows)
 
 
+def _native_packet_size_counts(
+    records: list[TelemetryRecord],
+) -> dict[str, dict[str, int]]:
+    """Count actual native packet sizes without conflating suite labels."""
+
+    counts: dict[str, dict[str, int]] = {"down": {}, "up": {}}
+    for record in records:
+        size = _required_int(record.native_polyphony, "native_polyphony")
+        if size <= 0:
+            raise RuntimeError("native_polyphony must be positive")
+        kind_counts = counts.setdefault(record.kind, {})
+        key = str(size)
+        kind_counts[key] = kind_counts.get(key, 0) + 1
+    return counts
+
+
 def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
     rows = [row for run in runs for row in run["_metric_rows"][name]]
     if name in {"wake_error_us", "sender_completion_error_us", "pre_call_lateness_us"}:
@@ -964,6 +1077,22 @@ def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 def _aggregate_scalar_sum(runs: list[dict[str, Any]], name: str) -> int:
     return sum(int(run.get(name, 0)) for run in runs)
+
+
+def _aggregate_native_packet_size_counts(
+    runs: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {"down": {}, "up": {}}
+    for run in runs:
+        for kind, kind_counts in run["native_packet_size_counts"].items():
+            target = counts.setdefault(kind, {})
+            for size, count in kind_counts.items():
+                target[size] = target.get(size, 0) + int(count)
+    return counts
+
+
+def _aggregate_warmup_records(runs: list[dict[str, Any]]) -> int:
+    return sum(int(run["warmup_records"]) for run in runs)
 
 
 def _aggregate_scalar_min_nonzero(runs: list[dict[str, Any]], name: str) -> int:
@@ -1073,6 +1202,74 @@ def _new_session(
             telemetry=True,
             profile="strict_timing_diagnostic",
         ),
+    )
+
+
+def _same_key_zero_gap_actions() -> list[tuple[int, str, int, list[int], str]]:
+    """Return the deliberately invalid negative-admission fixture."""
+
+    return [
+        (0, "down", 0, [int(SKY_15_SCAN_CODES[0])], "zero-gap-down"),
+        (1, "up", 20_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-up"),
+        (2, "down", 20_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-retrigger"),
+        (3, "up", 40_000, [int(SKY_15_SCAN_CODES[0])], "zero-gap-release"),
+    ]
+
+
+def _command_interrupt_actions() -> list[tuple[int, str, int, list[int], str]]:
+    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
+    return [
+        (0, "down", 100_000, interrupt_key, "interrupt-down"),
+        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
+    ]
+
+
+def _command_interrupt_polyphony(
+    actions: list[tuple[int, str, int, list[int], str]],
+) -> int:
+    down_actions = [action for action in actions if action[1] == "down"]
+    if len(down_actions) != 1 or not down_actions[0][3]:
+        raise RuntimeError("command-interrupt fixture must contain one non-empty Down")
+    return len(down_actions[0][3])
+
+
+def _assert_same_key_zero_gap_rejected(
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+    rt_priority_mode: str,
+    game_fps: int,
+) -> None:
+    """Prove admission rejects the old mixed positive-case construction.
+
+    Construction must fail before a session can be armed, so this negative
+    case performs zero musical SendInput calls by construction.
+    """
+
+    try:
+        _new_session(
+            _same_key_zero_gap_actions(),
+            backend=backend,
+            mock_base_latency_us=mock_base_latency_us,
+            mock_per_key_latency_us=mock_per_key_latency_us,
+            adaptive_spin=adaptive_spin,
+            rt_priority_mode=rt_priority_mode,
+            game_fps=game_fps,
+            gap_profile="hot",
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "release gap" not in message or "same-key" not in message:
+            raise RuntimeError(
+                "same-key zero-gap negative case failed for an unexpected reason: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        return
+    raise RuntimeError(
+        "native admission accepted a same-key zero-gap schedule; "
+        "the negative case would be unsafe to run"
     )
 
 
@@ -1191,14 +1388,10 @@ def _run_dispatch(
             snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
-        warmup_action_count = _actions_per_polyphony(
-            actions=warmup_cycles,
-            scenario=scenario,
-        )
-        warmup_record_count = sum(
-            1
-            for _, _, consumed in _expected_record_layout(actions, scenario)
-            if consumed and max(consumed) < warmup_action_count
+        warmup_record_count = _warmup_record_count(
+            actions,
+            scenario,
+            warmup_cycles,
         )
         if warmup_record_count < 0 or warmup_record_count >= len(records):
             raise RuntimeError("warmup cycles must leave measurement records")
@@ -1230,6 +1423,7 @@ def _run_dispatch(
             "_snapshot": snapshot,
             "_telemetry": telemetry,
             "_telemetry_integrity": diagnostics,
+            "native_packet_size_counts": _native_packet_size_counts(measurement_records),
             "correctness": _correctness_counters(
                 snapshot,
                 diagnostics,
@@ -1312,6 +1506,27 @@ def _run_dispatch(
             "same_call_retrigger_keys": int(
                 snapshot.get("same_call_retrigger_keys", 0)
             ),
+            "production_completion_hold_below_frame_count": int(
+                snapshot.get("production_completion_hold_below_frame_count", 0)
+            ),
+            "production_release_gap_below_policy_count": int(
+                snapshot.get("production_release_gap_below_policy_count", 0)
+            ),
+            "production_same_call_same_key_retrigger_count": int(
+                snapshot.get("production_same_call_same_key_retrigger_count", 0)
+            ),
+            "production_anchor_overwrite_count": int(
+                snapshot.get("production_anchor_overwrite_count", 0)
+            ),
+            "production_unmatched_up_count": int(
+                snapshot.get("production_unmatched_up_count", 0)
+            ),
+            "production_anomaly_ring_overwrite_count": int(
+                snapshot.get("production_anomaly_ring_overwrite_count", 0)
+            ),
+            "production_forensics_anomaly_count": int(
+                snapshot.get("production_forensics_anomaly_count", 0)
+            ),
             "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
@@ -1365,11 +1580,7 @@ def _measure_command_interrupt(
     # command after that first musical commit.  Pre-roll Pause now cancels the
     # start attempt by contract, so this probe must exercise the mid-play
     # command path rather than the preroll cancellation path.
-    interrupt_key = [int(SKY_15_SCAN_CODES[0])]
-    actions = [
-        (0, "down", 100_000, interrupt_key, "interrupt-down"),
-        (1, "up", 10_000_000, interrupt_key, "interrupt-cleanup"),
-    ]
+    actions = _command_interrupt_actions()
     session = _new_session(
         actions,
         backend=backend,
@@ -1536,13 +1747,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--polyphony",
         default="1,2,3,5,8,15",
-        help="comma-separated chord sizes to exercise (default: 1,2,3,5,8,15)",
+        help=(
+            "comma-separated chord sizes to exercise (default: 1,2,3,5,8,15); "
+            "mixed/coalesced require every value >= 2"
+        ),
     )
     parser.add_argument(
         "--scenario",
         choices=("paired", "mixed", "coalesced"),
         default="paired",
-        help="authored action profile; mixed/coalesced share adjacent Up/Down boundaries",
+        help=(
+            "authored action profile; mixed/coalesced use disjoint adjacent Up/Down "
+            "masks and are correctness-only per requested suite"
+        ),
     )
     parser.add_argument(
         "--backend",
@@ -1763,6 +1980,7 @@ def _assert_report_correctness(report: dict[str, Any]) -> None:
         "pre_call_hold_shrink_over_grace_count",
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
+        *PRODUCTION_CORRECTNESS_COUNTERS,
     )
     nonzero = {
         name: correctness.get(name)
@@ -1899,7 +2117,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 7"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 8"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -2016,6 +2234,10 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
     if report.get("comparison_role") != TRANSPORT_REFERENCE:
         _assert_absolute_pre_call_slo(report)
     comparison_role = report["comparison_role"]
+    correctness_only_scenario = report.get("benchmark_config", {}).get("scenario") in {
+        "mixed",
+        "coalesced",
+    }
     signed_metrics = (
         ("wake_error_us", "absolute", "p99", 0.05, 5),
         ("wake_error_us", "absolute", "p999", 0.10, 10),
@@ -2059,6 +2281,8 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         # deliberately limited to raw SendInput call duration; command
         # lifecycle, CPU/RSS/startup, wake, pre-send, and core-tail metrics
         # belong to SAME_SEMANTICS only.
+        if correctness_only_scenario:
+            return
         for polyphony in report["benchmark_config"]["polyphony"]:
             observed_poly = report["by_polyphony"][str(polyphony)]
             baseline_poly = baseline["by_polyphony"][str(polyphony)]
@@ -2108,6 +2332,9 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
             relative_fraction=relative,
             absolute_floor=floor,
         )
+
+    if correctness_only_scenario:
+        return
 
     for polyphony in report["benchmark_config"]["polyphony"]:
         observed_poly = report["by_polyphony"][str(polyphony)]
@@ -2188,6 +2415,13 @@ def main() -> int:
     comparison_metadata = _comparison_metadata(expected_native_commit, args.baseline)
 
     polyphonies = _parse_polyphony(args.polyphony)
+    if args.scenario in {"mixed", "coalesced"} and any(
+        polyphony < 2 for polyphony in polyphonies
+    ):
+        raise SystemExit(
+            "mixed/coalesced scenarios require every --polyphony value to be >= 2; "
+            "polyphony=1 would silently change packet size"
+        )
     benchmark_config = _benchmark_config(
         args=args,
         polyphonies=polyphonies,
@@ -2195,6 +2429,14 @@ def main() -> int:
         mock_per_key_latency_us=mock_per_key_latency_us,
     )
     benchmark_config["native_build_flavor"] = _require_native_build_flavor(args.backend)
+    _assert_same_key_zero_gap_rejected(
+        backend=args.backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=not args.no_adaptive_spin,
+        rt_priority_mode=args.rt_priority_mode,
+        game_fps=args.game_fps,
+    )
     if args.backend == "sendinput" and command_samples:
         raise SystemExit(
             "SendInput qualification uses a production wheel; use "
@@ -2318,14 +2560,8 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_actions = _actions(
-        1,
-        1,
-        gap_profile=args.gap_profile,
-        game_fps=args.game_fps,
-        start_delay_us=args.start_delay_us,
-        scenario=args.scenario,
-    )
+    command_actions = _command_interrupt_actions()
+    command_polyphony = _command_interrupt_polyphony(command_actions)
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -2351,7 +2587,7 @@ def main() -> int:
                 native_info=native_info,
                 host_info=host_info,
                 run_index=dispatch_repeats + sample_index,
-                polyphony=1,
+                polyphony=command_polyphony,
                 actions=command_actions,
                 snapshot=None,
                 telemetry=None,
@@ -2441,6 +2677,11 @@ def main() -> int:
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {
             "polyphony": polyphony,
+            "timing_comparison_scope": (
+                "correctness_only_requested_suite"
+                if args.scenario in {"mixed", "coalesced"}
+                else "requested_polyphony"
+            ),
             "schema_version": BENCHMARK_SCHEMA_VERSION,
             "timeline_semantics_version": TIMELINE_SEMANTICS_VERSION,
             "candidate_sha": comparison_metadata["candidate_sha"],
@@ -2452,9 +2693,10 @@ def main() -> int:
             "lead_mode": benchmark_config["lead_mode"],
             "actions": len(actions),
             "warmup_cycles": args.warmup_cycles,
-            "warmup_records": args.warmup_cycles * 2,
+            "warmup_records": _aggregate_warmup_records(runs),
             "measurement_records": sum(run["measurement_records"] for run in runs),
             "physical_boundaries": sum(run["measurement_records"] for run in runs),
+            "native_packet_size_counts": _aggregate_native_packet_size_counts(runs),
             "wake_error_us": _aggregate_metric(runs, "wake_error_us"),
             "pre_send_software_latency_us": _aggregate_metric(
                 runs, "pre_send_software_latency_us"
@@ -2517,6 +2759,10 @@ def main() -> int:
             "same_call_retrigger_keys": _aggregate_scalar_sum(
                 runs, "same_call_retrigger_keys"
             ),
+            **{
+                name: _aggregate_scalar_sum(runs, name)
+                for name in PRODUCTION_CORRECTNESS_COUNTERS
+            },
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -2577,6 +2823,9 @@ def main() -> int:
                 "correctness_checked_before_percentiles": True,
             },
         }
+        if args.scenario in {"mixed", "coalesced"}:
+            for field in MIXED_POLY_TIMING_FIELDS:
+                poly_report.pop(field, None)
         by_polyphony[str(polyphony)] = poly_report
     report: dict[str, Any] = {
         "label": args.label,
@@ -2596,6 +2845,11 @@ def main() -> int:
         "command_timing_domain": COMMAND_TIMING_DOMAIN,
         "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
         "benchmark_config": benchmark_config,
+        "timing_comparison_scope": (
+            "aggregate_actual_packets"
+            if args.scenario in {"mixed", "coalesced"}
+            else "requested_polyphony"
+        ),
         **validity,
         "requested_dispatch_suites": dispatch_repeats,
         "successful_dispatch_suites": len(successful_suites),
@@ -2607,7 +2861,7 @@ def main() -> int:
         "excluded_runs": 0,
         "failures": [],
         "warmup_cycles": args.warmup_cycles,
-        "warmup_records": args.warmup_cycles * 2 * len(polyphonies) * dispatch_repeats,
+        "warmup_records": _aggregate_warmup_records(dispatch_runs),
         "measurement_records": physical_boundaries,
         "physical_boundaries": physical_boundaries,
         "qualification_gate": {
@@ -2647,6 +2901,10 @@ def main() -> int:
         "sender_completion_error": _aggregate_metric(
             dispatch_runs, "sender_completion_error_us"
         ),
+        **{
+            name: _aggregate_scalar_sum(dispatch_runs, name)
+            for name in PRODUCTION_CORRECTNESS_COUNTERS
+        },
         "correctness": _aggregate_correctness(dispatch_runs),
         "deadline_missed_before_send_count": sum(
             run["missed_down_boundaries"] for run in dispatch_runs
@@ -2781,6 +3039,7 @@ def main() -> int:
         if args.backend == "mock"
         else None,
         "by_polyphony": by_polyphony,
+        "native_packet_size_counts": _aggregate_native_packet_size_counts(dispatch_runs),
         "evidence_scope": (
             "sender_pre_call" if args.backend == "sendinput" else "sender_completion"
         ),

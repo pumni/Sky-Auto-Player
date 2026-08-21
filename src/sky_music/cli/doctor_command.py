@@ -51,12 +51,13 @@ def run_doctor_command(
 
             res = run_published_native_calibration()
             print(
-                "Host sender hold shrink p99 (us): "
-                f"{res.sender_hold_shrink_p99_us} (worst bucket: {res.worst_bucket})"
+                "Host transport shrink worst-positive (us): "
+                f"{res.transport_worst_positive_us} (worst bucket: {res.worst_bucket})"
             )
-            print(f"Required hold margin (us): {res.candidate_margin_us}")
-            print(f"Policy guard (us): {res.guard_us}")
-            print(f"Trusted correction ceiling (us): {res.ceiling_us}")
+            print(f"Required transport margin (us): {res.transport_margin_candidate_us}")
+            print(f"Transport guard (us): {res.transport_guard_us}")
+            print(f"Transport floor (us): {res.transport_floor_us}")
+            print(f"Transport ceiling (us): {res.ceiling_us}")
             print(f"Evidence: {res.evidence_kind}")
             print(f"Cache: {res.cache_path.as_posix()}")
             if res.status is CalibrationStatus.VALID:
@@ -67,7 +68,10 @@ def run_doctor_command(
             else:
                 print("Host Sender Hold Calibration: OUT OF ENVELOPE")
                 print("Applied calibrated margin: NONE")
-                print("Playback hold fallback: 500 us (not calibrated)")
+                print("Transport fallback: 300 us (not calibrated)")
+                print("Down late grace: 500 us")
+                print("Total additive hold safety: 800 us")
+                print("Timing qualification: UNQUALIFIED")
                 print("Calibration measurement completed, but host qualification failed.")
             print(f"Clean pairs per bucket: {res.sample_count}")
             print("Note-On timestamps: unchanged")

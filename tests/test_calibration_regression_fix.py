@@ -19,7 +19,7 @@ from sky_music.config import AppConfig
 from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.calibration_loader import (
-    SOURCE_DEFAULT_500,
+    SOURCE_DEFAULT_TRANSPORT_300,
     SOURCE_DEVICE_CACHE,
     CalibrationLoadResult,
     CalibrationStatus,
@@ -54,12 +54,12 @@ _HOST_FINGERPRINT = {
     "sampled_at_us": 123,
 }
 _INTEGRATION_CACHE: dict = {
-    "version": 7,
+    "version": 8,
     "artifact_schema_version": 11,
     "status": "valid",
     "source": "device_cache",
     "evidence_kind": "sender_completion_hold_shrink",
-    "source_formula_version": 5,
+    "source_formula_version": 6,
     "native_source_fingerprint": "test-fingerprint",
     "rustc_version": "rustc test",
     "native_calibration_version": 15,
@@ -86,22 +86,29 @@ _INTEGRATION_CACHE: dict = {
             "partial_send": 0,
             "pair_sender_hold_shrink_us": _signed_stats(700 if key == "15/cold" else 6),
             "scheduler_shrink_us": _signed_stats(6),
-            "sendinput_shrink_us": _signed_stats(6),
+            "sendinput_shrink_us": _signed_stats(698 if key == "15/cold" else 4),
             "down_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
             "up_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
         }
         for key in _REQUIRED_BUCKETS
     },
     "qualification": {
-        "basis": "max_required_bucket_p99_positive_pair_sender_completion_hold_shrink",
+        "basis": "max_required_bucket_max_positive_sendinput_shrink",
         "worst_bucket": "15/cold",
-        "sender_hold_shrink_p99_us": 700,
+        "transport_worst_positive_us": 700,
         "guard_us": 100,
         "floor_us": 300,
         "ceiling_us": 2000,
-        "candidate_margin_us": 800,
-        "applied_margin_us": 800,
+        "candidate_transport_margin_us": 800,
+        "applied_transport_margin_us": 800,
     },
+    "transport_margin_us": 800,
+    "transport_margin_source": "device_cache",
+    "transport_worst_positive_us": 700,
+    "transport_guard_us": 100,
+    "transport_floor_us": 300,
+    "transport_ceiling_us": 2000,
+    "calibration_timing_qualified": True,
 }
 
 _EXPECTED_MARGIN_US = 800
@@ -141,11 +148,13 @@ class TestResolveCalibratedPolicy:
         with patch(_LOADER_PATCH, return_value=_resolution(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             policy = resolve_calibrated_policy(session, cfg)
 
-        assert int(policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
+        assert int(policy.min_hold_margin_us) == 1_300
+        assert policy.transport_margin_us is not None
+        assert int(policy.transport_margin_us) == _EXPECTED_MARGIN_US
         assert policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
 
-    def test_fallback_to_default_500_when_cache_missing(self) -> None:
-        """resolve_calibrated_policy falls back to 500 µs when cache is absent."""
+    def test_fallback_to_default_transport_floor_when_cache_missing(self) -> None:
+        """resolve_calibrated_policy falls back to the 300 µs transport floor."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
         session = PlaybackSessionContext.default(fps=60)
@@ -153,15 +162,14 @@ class TestResolveCalibratedPolicy:
 
         with patch(
             _LOADER_PATCH,
-            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+            return_value=_resolution(300, SOURCE_DEFAULT_TRANSPORT_300, CalibrationStatus.UNCALIBRATED),
         ):
             policy = resolve_calibrated_policy(session, cfg)
 
-        assert policy.min_hold_margin_source == SOURCE_DEFAULT_500
-        # Default fallback is 500 µs constant
-        assert int(policy.min_hold_margin_us) == 500
+        assert policy.min_hold_margin_source == SOURCE_DEFAULT_TRANSPORT_300
+        assert int(policy.min_hold_margin_us) == 800
 
-    def test_fallback_to_default_500_when_cache_corrupt(self) -> None:
+    def test_fallback_to_transport_floor_when_cache_corrupt(self) -> None:
         """resolve_calibrated_policy falls back gracefully when loader rejects cache."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
@@ -170,11 +178,11 @@ class TestResolveCalibratedPolicy:
 
         with patch(
             _LOADER_PATCH,
-            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.INVALID_CACHE),
+            return_value=_resolution(300, SOURCE_DEFAULT_TRANSPORT_300, CalibrationStatus.INVALID_CACHE),
         ):
             policy = resolve_calibrated_policy(session, cfg)
 
-        assert policy.min_hold_margin_source == SOURCE_DEFAULT_500
+        assert policy.min_hold_margin_source == SOURCE_DEFAULT_TRANSPORT_300
 
     def test_low_device_cache_margin_is_raised_without_changing_provenance(self) -> None:
         """The effective policy couples a low calibrated margin to Down grace."""
@@ -189,7 +197,7 @@ class TestResolveCalibratedPolicy:
         ):
             policy = resolve_calibrated_policy(session, cfg)
 
-        assert int(policy.min_hold_margin_us) == 500
+        assert int(policy.min_hold_margin_us) == 800
         assert policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
         assert policy.down_late_grace_us == 500
 
@@ -229,10 +237,10 @@ class TestPreparePlaybackUsesCalibration:
 
         assert isinstance(plan, PlaybackPlan)
         assert plan.active_policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
-        assert int(plan.active_policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
+        assert int(plan.active_policy.min_hold_margin_us) == 1_300
 
     def test_prepare_playback_without_cache_uses_default(self) -> None:
-        """prepare_playback falls back to default_500 when no cache."""
+        """prepare_playback falls back to the transport floor when no cache."""
         from sky_music.ui.textual_app.playback_controller import (
             PlaybackPlan,
             prepare_playback,
@@ -246,11 +254,11 @@ class TestPreparePlaybackUsesCalibration:
         # because its nodeid contains "test_calibration_regression".
         with patch(
             _LOADER_PATCH,
-            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+            return_value=_resolution(300, SOURCE_DEFAULT_TRANSPORT_300, CalibrationStatus.UNCALIBRATED),
         ):
             plan = prepare_playback(song, session, cfg)
         assert isinstance(plan, PlaybackPlan)
-        assert plan.active_policy.min_hold_margin_source == SOURCE_DEFAULT_500
+        assert plan.active_policy.min_hold_margin_source == SOURCE_DEFAULT_TRANSPORT_300
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +336,7 @@ class TestRebuildPreservesCalibration:
 
         assert isinstance(rebuilt, PlaybackPlan)
         assert rebuilt.active_policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
-        assert int(rebuilt.active_policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
+        assert int(rebuilt.active_policy.min_hold_margin_us) == 1_300
 
     def test_rebuild_with_tempo_keeps_device_cache(self) -> None:
         from sky_music.ui.textual_app.playback_controller import (
@@ -369,7 +377,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
 
         with patch(
             self._SIG_PATCH,
-            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+            return_value=_resolution(300, SOURCE_DEFAULT_TRANSPORT_300, CalibrationStatus.UNCALIBRATED),
         ):
             sig_default = _effective_policy_signature(session, cfg)
 
@@ -377,11 +385,11 @@ class TestPickerMetadataSignatureIncludesCalibration:
             sig_device = _effective_policy_signature(session, cfg)
 
         assert sig_default != sig_device, (
-            "Policy signature must differ between default_500 and device_cache calibration"
+            "Policy signature must differ between transport fallback and device_cache calibration"
         )
-        assert sig_default.get("min_hold_margin_source") == SOURCE_DEFAULT_500
+        assert sig_default.get("min_hold_margin_source") == SOURCE_DEFAULT_TRANSPORT_300
         assert sig_device.get("min_hold_margin_source") == SOURCE_DEVICE_CACHE
-        assert sig_device.get("min_hold_margin_us") == _EXPECTED_MARGIN_US
+        assert sig_device.get("min_hold_margin_us") == 1_300
 
     def test_signature_includes_min_hold_margin_source(self) -> None:
         from sky_music.ui.picker_metadata import _effective_policy_signature
@@ -389,7 +397,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
         session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
-        # conftest returns default_500
+        # conftest returns the transport fallback
         sig = _effective_policy_signature(session, cfg)
         assert "min_hold_margin_source" in sig, (
             "min_hold_margin_source must be part of the persistent cache key signature"
@@ -546,7 +554,7 @@ class TestCalibrationRegressionIntegration:
             hold_margin_source=resolution.margin_source,
         )
 
-        assert int(policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
+        assert int(policy.min_hold_margin_us) == 1_300
         assert policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
 
     def test_calibration_regression_policy_applied_to_schedule(self) -> None:
@@ -573,13 +581,13 @@ class TestCalibrationRegressionIntegration:
         sched = build_key_actions(song, policy=policy, scan_code_mode="physical")
 
         # Policy must carry the device margin
-        assert int(policy.min_hold_margin_us) == _EXPECTED_MARGIN_US
+        assert int(policy.min_hold_margin_us) == 1_300
         assert policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
         # Schedule was built without error
         assert len(sched.actions) > 0
 
     def test_calibration_regression_default_is_not_reused_after_device_cache(self) -> None:
-        """Persistent cache keys from default_500 must differ from device_cache keys."""
+        """Persistent cache keys from transport fallback differ from device_cache keys."""
         from sky_music.ui.picker_metadata import _effective_policy_signature
 
         session = PlaybackSessionContext.default(fps=60)
@@ -589,7 +597,7 @@ class TestCalibrationRegressionIntegration:
 
         with patch(
             _SIG_PATCH,
-            return_value=_resolution(500, SOURCE_DEFAULT_500, CalibrationStatus.UNCALIBRATED),
+            return_value=_resolution(300, SOURCE_DEFAULT_TRANSPORT_300, CalibrationStatus.UNCALIBRATED),
         ):
             sig_before = _effective_policy_signature(session, cfg)
 
@@ -597,7 +605,7 @@ class TestCalibrationRegressionIntegration:
             sig_after = _effective_policy_signature(session, cfg)
 
         assert sig_before != sig_after, (
-            "A default_500 cache key must not match a device_cache key — "
+            "A transport-fallback cache key must not match a device_cache key — "
             "stale metadata would be reused after calibration."
         )
 
@@ -665,8 +673,20 @@ class TestPublishedCalibrationResultContract:
         cache = json.loads(json.dumps(_INTEGRATION_CACHE))
         for bucket in cache["pair_buckets"].values():
             bucket["pair_sender_hold_shrink_us"] = _signed_stats(-2)
+            bucket["sendinput_shrink_us"] = _signed_stats(-2)
         cache["qualification"].update(
-            {"worst_bucket": "1/hot", "sender_hold_shrink_p99_us": 0, "candidate_margin_us": 100, "applied_margin_us": 300}
+            {
+                "worst_bucket": "1/hot",
+                "transport_worst_positive_us": 0,
+                "candidate_transport_margin_us": 100,
+                "applied_transport_margin_us": 300,
+            }
+        )
+        cache.update(
+            {
+                "transport_margin_us": 300,
+                "transport_worst_positive_us": 0,
+            }
         )
         summary = parse_calibration_cache_summary(cache)
         assert summary.margin_us == 300

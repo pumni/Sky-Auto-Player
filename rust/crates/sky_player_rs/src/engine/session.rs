@@ -32,20 +32,39 @@ fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn validate_native_schedule_timing(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
     effective_min_hold_us: u64,
     qpc_clock: QpcClock,
 ) -> Result<(), String> {
-    sky_dispatch_core::validation::validate_min_hold_feasibility(schedule, effective_min_hold_us)
-        .map_err(|error| format!("native schedule admission failed: {error}"))?;
+    validate_native_schedule_timing_with_release_gap(schedule, effective_min_hold_us, 0, qpc_clock)
+}
+
+pub(crate) fn validate_native_schedule_timing_with_release_gap(
+    schedule: &sky_dispatch_core::model::RuntimeSchedule,
+    effective_min_hold_us: u64,
+    min_release_gap_us: u64,
+    qpc_clock: QpcClock,
+) -> Result<(), String> {
+    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
+        schedule,
+        effective_min_hold_us,
+        min_release_gap_us,
+    )
+    .map_err(|error| format!("native schedule admission failed: {error}"))?;
     let effective_min_hold_ticks = qpc_clock
         .duration_from_us(effective_min_hold_us)
         .map_err(|error| format!("native hold-floor conversion failed: {error:?}"))?;
-    sky_dispatch_core::validation::validate_min_hold_feasibility_ticks(
+    let min_release_gap_ticks = qpc_clock
+        .duration_from_us(min_release_gap_us)
+        .map_err(|error| format!("native release-gap conversion failed: {error:?}"))?;
+    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility_ticks(
         schedule,
         effective_min_hold_us,
         effective_min_hold_ticks,
+        min_release_gap_us,
+        min_release_gap_ticks,
         |microseconds| qpc_clock.timeline_from_us(microseconds).ok(),
     )
     .map_err(|error| format!("native tick-domain admission failed: {error}"))
@@ -68,7 +87,13 @@ impl NativeDispatchSession {
         // after the worker has started.
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
-        validate_native_schedule_timing(&options.schedule, options.timing.min_hold_us, qpc_clock)?;
+        let min_release_gap_us = 1_000_000u64.div_ceil(u64::from(options.timing.game_fps));
+        validate_native_schedule_timing_with_release_gap(
+            &options.schedule,
+            options.timing.min_hold_us,
+            min_release_gap_us,
+            qpc_clock,
+        )?;
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
@@ -565,10 +590,37 @@ impl NativeDispatchSession {
             missed_hard_late_boundaries: local.missed_hard_late_boundaries,
             late_authorized_boundaries: local.late_authorized_boundaries,
             deadline_authorization_reuses: local.deadline_authorization_reuses,
+            late_discovery_rescue_attempts: local.late_discovery_rescue_attempts,
+            late_discovery_rescue_sent: local.late_discovery_rescue_sent,
+            late_discovery_rescue_sender_cutoff_misses: local
+                .late_discovery_rescue_sender_cutoff_misses,
+            late_discovery_rescue_credit_exhausted: local.late_discovery_rescue_credit_exhausted,
+            late_discovery_rescue_blocked_control: local.late_discovery_rescue_blocked_control,
+            late_discovery_rescue_blocked_focus_or_target: local
+                .late_discovery_rescue_blocked_focus_or_target,
             max_missed_lateness_ticks: local.max_missed_lateness_ticks,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
             rollback_residue_keys: local.rollback_residue_keys,
+            production_forensics_available: local.production_forensics_available,
+            production_forensics_version: local.production_forensics_version,
+            production_hold_pair_samples: local.production_hold_pair_samples,
+            production_min_pre_call_hold_ticks: local.production_min_pre_call_hold_ticks,
+            production_min_completion_hold_ticks: local.production_min_completion_hold_ticks,
+            production_max_pre_call_shrink_ticks: local.production_max_pre_call_shrink_ticks,
+            production_max_completion_shrink_ticks: local.production_max_completion_shrink_ticks,
+            production_completion_hold_below_frame_count: local
+                .production_completion_hold_below_frame_count,
+            production_release_gap_samples: local.production_release_gap_samples,
+            production_min_release_gap_ticks: local.production_min_release_gap_ticks,
+            production_release_gap_below_policy_count: local
+                .production_release_gap_below_policy_count,
+            production_same_call_same_key_retrigger_count: local
+                .production_same_call_same_key_retrigger_count,
+            production_anchor_overwrite_count: local.production_anchor_overwrite_count,
+            production_unmatched_up_count: local.production_unmatched_up_count,
+            production_anomaly_ring_overwrite_count: local.production_anomaly_ring_overwrite_count,
+            production_forensics_anomaly_count: local.production_forensics_anomaly_count,
             input_path_degraded: local.input_path_degraded,
             sendinput_path_degraded: local.sendinput_path_degraded,
             core_post_send_degraded: local.core_post_send_degraded,
@@ -687,6 +739,14 @@ impl NativeDispatchSession {
             missed_hard_late_boundaries: local.missed_hard_late_boundaries,
             late_authorized_boundaries: local.late_authorized_boundaries,
             deadline_authorization_reuses: local.deadline_authorization_reuses,
+            late_discovery_rescue_attempts: local.late_discovery_rescue_attempts,
+            late_discovery_rescue_sent: local.late_discovery_rescue_sent,
+            late_discovery_rescue_sender_cutoff_misses: local
+                .late_discovery_rescue_sender_cutoff_misses,
+            late_discovery_rescue_credit_exhausted: local.late_discovery_rescue_credit_exhausted,
+            late_discovery_rescue_blocked_control: local.late_discovery_rescue_blocked_control,
+            late_discovery_rescue_blocked_focus_or_target: local
+                .late_discovery_rescue_blocked_focus_or_target,
             max_missed_lateness_ticks: local.max_missed_lateness_ticks,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
@@ -701,6 +761,25 @@ impl NativeDispatchSession {
             hold_anchor_overwrite_count: local.hold_anchor_overwrite_count,
             same_call_retrigger_boundaries: local.same_call_retrigger_boundaries,
             same_call_retrigger_keys: local.same_call_retrigger_keys,
+            production_forensics_available: local.production_forensics_available,
+            production_forensics_version: local.production_forensics_version,
+            production_hold_pair_samples: local.production_hold_pair_samples,
+            production_min_pre_call_hold_ticks: local.production_min_pre_call_hold_ticks,
+            production_min_completion_hold_ticks: local.production_min_completion_hold_ticks,
+            production_max_pre_call_shrink_ticks: local.production_max_pre_call_shrink_ticks,
+            production_max_completion_shrink_ticks: local.production_max_completion_shrink_ticks,
+            production_completion_hold_below_frame_count: local
+                .production_completion_hold_below_frame_count,
+            production_release_gap_samples: local.production_release_gap_samples,
+            production_min_release_gap_ticks: local.production_min_release_gap_ticks,
+            production_release_gap_below_policy_count: local
+                .production_release_gap_below_policy_count,
+            production_same_call_same_key_retrigger_count: local
+                .production_same_call_same_key_retrigger_count,
+            production_anchor_overwrite_count: local.production_anchor_overwrite_count,
+            production_unmatched_up_count: local.production_unmatched_up_count,
+            production_anomaly_ring_overwrite_count: local.production_anomaly_ring_overwrite_count,
+            production_forensics_anomaly_count: local.production_forensics_anomaly_count,
             last_missed_down_reason: last_missed_down_reason(
                 local.last_missed_down_valid,
                 local.last_missed_down_reason_code,

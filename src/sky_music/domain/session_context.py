@@ -16,6 +16,8 @@ from sky_music.domain.hold_timing import (
 from sky_music.domain.scheduler_types import (
     DEFAULT_DOWN_LATE_GRACE_US,
     DEFAULT_FOCUS_RESTORE_GRACE_US,
+    DEFAULT_TRANSPORT_MARGIN_SOURCE,
+    DEFAULT_TRANSPORT_MARGIN_US,
     FrameTimingPolicy,
     TimingPolicy,
 )
@@ -102,8 +104,8 @@ class PlaybackSessionContext:
         self,
         cfg: AppConfig | None = None,
         *,
-        hold_margin_us: int = 500,
-        hold_margin_source: str = "default_500",
+        hold_margin_us: int = DEFAULT_TRANSPORT_MARGIN_US,
+        hold_margin_source: str = DEFAULT_TRANSPORT_MARGIN_SOURCE,
     ) -> FrameTimingPolicy:
         del cfg
         if type(hold_margin_us) is not int or hold_margin_us < 0:

@@ -21,6 +21,13 @@ class ScheduleBuildError(ValueError):
         self.recommended_hold_frames = recommended_hold_frames
 
 
+def _release_gap_us(policy: FrameTimingPolicy) -> int:
+    value = policy.min_release_gap_us
+    if value is None:
+        raise ValueError("FrameTimingPolicy must materialize min_release_gap_us")
+    return int(value)
+
+
 def _recommended_tempo_scale_for_repeats(
     shortest_interval_us: int | None,
     policy: FrameTimingPolicy,
@@ -28,7 +35,7 @@ def _recommended_tempo_scale_for_repeats(
 ) -> float | None:
     if shortest_interval_us is None or shortest_interval_us <= 0:
         return None
-    min_cycle_us = int(policy.min_hold_us)
+    min_cycle_us = int(policy.min_hold_us) + _release_gap_us(policy)
     if shortest_interval_us >= min_cycle_us:
         return None
     suggested = tempo_scale * shortest_interval_us / min_cycle_us
@@ -87,14 +94,14 @@ def plan_same_key_hold(
     target_hold_us: int,
     min_hold_us: int,
     effective_delta_us: int | None,
+    min_release_gap_us: int = 0,
 ) -> PlannedKeyHold:
     if effective_delta_us is None:
         return PlannedKeyHold(hold_us=target_hold_us, risk="ok")
 
-    max_hold_us = effective_delta_us
-    # Feasibility floor is exactly the authored min_hold. A same-key repeat
-    # whose interval is below that hold is rejected for real playback during
-    # preparation; the runtime never derives a release target from completion.
+    max_hold_us = effective_delta_us - max(0, min_release_gap_us)
+    # A same-key cycle must contain both the effective hold and one full frame
+    # of release visibility. The runtime never delays or derives a target.
     feasibility_floor_us = min_hold_us
     if max_hold_us < feasibility_floor_us:
         return PlannedKeyHold(
@@ -221,6 +228,7 @@ def build_key_actions(
             target_hold_us=int(policy.hold_us),
             min_hold_us=int(policy.min_hold_us),
             effective_delta_us=effective_delta_us,
+            min_release_gap_us=_release_gap_us(policy),
         )
 
         if planned_hold.risk == "severe":
@@ -233,15 +241,17 @@ def build_key_actions(
                 code="impossible_repeat",
                 message=(
                     f"Repeat too fast: {effective_delta_us / 1000:.1f}ms interval < "
-                    f"{int(policy.min_hold_us) / 1000:.1f}ms min_hold; preserving min_hold means "
-                    "the next same-key down occurs before the previous release."
+                    f"{(int(policy.min_hold_us) + _release_gap_us(policy)) / 1000:.1f}ms "
+                    "minimum hold-plus-release-gap cycle; the next same-key down cannot be "
+                    "observed as a distinct press."
                 )
             ))
             if policy.same_key_conflict_policy == "strict":
                 raise ScheduleBuildError(
                     f"Cannot build schedule under strict policy: same-key repeat interval "
-                    f"{effective_delta_us / 1000:.1f}ms is below min_hold "
-                    f"{int(policy.min_hold_us) / 1000:.1f}ms.",
+                    f"{effective_delta_us / 1000:.1f}ms is below the required "
+                        f"{(int(policy.min_hold_us) + _release_gap_us(policy)) / 1000:.1f}ms "
+                    "hold-plus-release-gap cycle.",
                     recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
                         effective_delta_us, policy, tempo_scale
                     ),

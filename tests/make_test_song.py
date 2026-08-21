@@ -94,7 +94,7 @@ write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 # now mainly for synthetic boundary/forensics work. Real-song acceptance should use
 # TEST_repeat_clean_* and the corpus gate in tests/acceptance_completion_anchor.py.
 #   144fps local_precise: min_hold = ceil(1e6/144) + 500us margin = 7445 us (~7.4 ms)
-#   60fps  local_precise: min_hold = ceil(1e6/60)  + 500us margin = 17167 us (~17.2 ms)
+#   60fps  local_precise: min_hold = ceil(1e6/60) + 500us grace + 300us transport = 17467 us
 # Headroom per 144fps block: 8ms=555us, 9ms=1555us, 10ms=2555us, 12ms=4555us, ...
 # (the 7ms block now sits BELOW the margin-included floor and probes the infeasible band).
 # READING IT: the 8ms block sits just above the min_hold floor at 144fps. Blocks from 9ms upward

@@ -1,7 +1,6 @@
-# 03 — P0: Overdue / Stall Fidelity Policy (superseded design)
+# 03 — P0: Overdue / Stall Fidelity Policy
 
-This working-note file records the current production policy. The earlier
-boolean physical-boundary abort policy is obsolete: ordinary deadline misses
+This file records the current production policy. Ordinary deadline misses
 after startup are recoverable, while the no-catch-up guarantee remains
 mandatory.
 
@@ -40,18 +39,31 @@ musical authority. Up-only sends never arm or clear this state.
 ## 3. Production miss semantics
 
 When a Down-bearing boundary is due and has no exact authorization, classify it
-as a missed musical Down. Before the first successful musical Down commit this
-is still a startup-terminal failure with zero musical input. After startup:
+as a missed musical Down unless the one-shot late-discovery rescue below
+applies. Before the first successful musical Down commit this is still a
+startup-terminal failure with zero musical input. After startup:
 
-- Down-only: make zero `SendInput` calls and commit the frozen authored frame
-  with its Down mask marked `DroppedExpired`.
-- Mixed: send only one prebuilt Up-only safety packet, require complete
-  transport confirmation, then commit the Up release and missed Down mask from
-  the frozen commit token. A partial, zero, skipped, or uncertain Up is
-  terminal and requires cleanup.
-- Up-only: send the owned Up normally even when its authored target is late;
-  it is exempt from the musical no-catch-up rule and does not alter Down
-  authorization state.
+- The first unauthorized overdue Down discovered at or below
+  `down_late_grace_us` may consume the available rescue credit and proceed
+  through ordinary final admission. The authored target is not changed, no
+  synthetic waiter result is created, and the sender cutoff remains
+  authoritative.
+- Rescue credit is consumed before the physical send attempt. A second
+  unauthorized overdue Down cannot be rescued without an intervening exact
+  future Down observation. A future observation re-arms one credit after that
+  boundary completes.
+- A boundary discovered overdue beyond grace, or after rescue credit is
+  exhausted, is handled as a missed Down:
+
+  - Down-only: make zero `SendInput` calls and commit the frozen authored frame
+    with its Down mask marked `DroppedExpired`.
+  - Mixed: send only one prebuilt Up-only safety packet, require complete
+    transport confirmation, then commit the Up release and missed Down mask from
+    the frozen commit token. A partial, zero, skipped, or uncertain Up is
+    terminal and requires cleanup.
+  - Up-only: send the owned Up normally even when its authored target is late;
+    it is exempt from the musical no-catch-up rule and does not alter Down
+    authorization state.
 
 The coordinator must perform a typed deadline-miss commit. Advancing an index
 without ownership accounting is not a valid recovery. Dropped Down generations
@@ -60,8 +72,10 @@ never become active, and their later authored Ups become stale/no-op.
 ## 4. Hard-late sender cutoff
 
 The trusted sender keeps the authoritative pre-call QPC check and uses the
-session-fixed `down_late_grace_us` supplied from authored
-`min_hold_margin_us`. If an authorized Down crosses that cutoff,
+session-fixed `down_late_grace_us` policy. This grace is independent from the
+transport component of the additive hold margin; `min_hold_margin_us` is not
+used as a substitute for the sender grace. If an authorized or rescued Down
+crosses that cutoff,
 `SendInput` is not called. In Production after startup, the typed result follows
 the same missed-Down recovery path. StrictTimingDiagnostic may record the
 evidence and remain terminal for qualification.
@@ -91,6 +105,10 @@ those Down deadlines were missed.
 ## 6. Required tests
 
 The deterministic matrix must cover:
+
+0. target - 1 tick (future), target exact (due), target + 1 tick and +100 µs;
+   rescue at grace - 1 tick and exactly grace; rejection at grace + 1 tick;
+   rescue re-arm after a future-authorized boundary;
 
 1. normal future Down authorization and send;
 2. future observation followed by a stall before waiter entry;

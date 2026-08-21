@@ -71,7 +71,9 @@ def _bucket(*, clean: int = 100, attempted: int | None = None, p99: int = 6) -> 
         "up_call_duration_us": {"min": 1, "p50": 1, "p90": 2, "p95": 2, "p99": 3, "max": 3, "mean": 1},
         "pair_sender_hold_shrink_us": _quantiles(p99),
         "scheduler_shrink_us": _quantiles(6),
-        "sendinput_shrink_us": _quantiles(6),
+        # The transport contract uses the positive max, so make the helper's
+        # requested value the serialized max rather than the p99 label.
+        "sendinput_shrink_us": _quantiles(p99 - 2),
     }
 
 
@@ -329,7 +331,7 @@ def test_publishable_calibration_rejects_degraded_scheduling_aids(
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
     assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_native_result_rejects_missing_required_bucket() -> None:
@@ -533,7 +535,7 @@ def test_cache_v7_uses_max_positive_sender_p99_and_preserves_signed_values() -> 
     result = _native_result(p99_by_key={"15/cold": 42, "5/hot": -8})
     cache = native_calibration._cache_v7(result)
     summary = loader.parse_calibration_cache_summary(cache)
-    assert cache["version"] == 7
+    assert cache["version"] == 8
     assert summary.sender_hold_shrink_p99_us == 42
     assert summary.worst_bucket == "15/cold"
     assert summary.margin_us == 300
@@ -578,7 +580,7 @@ def test_cache_v6_shape_is_incompatible_after_retry_counter_migration() -> None:
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
     assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_cache_v1_is_rejected_and_falls_back() -> None:
@@ -594,7 +596,7 @@ def test_previous_measurement_protocol_is_not_reinterpreted() -> None:
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
     assert resolution.status is loader.CalibrationStatus.INVALID_CACHE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_protocol9_cache_is_rejected_after_protocol10_semantics_bump() -> None:
@@ -604,7 +606,7 @@ def test_protocol9_cache_is_rejected_after_protocol10_semantics_bump() -> None:
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
     assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_cache_requires_100_clean_pairs_per_cell() -> None:
@@ -674,12 +676,12 @@ def test_raw_input_diagnostic_delay_cannot_change_sender_qualification() -> None
         summary = loader.parse_calibration_cache_summary(
             native_calibration._cache_v7(result)
         )
-        assert summary.sender_hold_shrink_p99_us == 780
+        assert summary.transport_worst_positive_us == 780
         assert summary.candidate_margin_us == 880
         assert summary.margin_us == 880
 
 
-def test_sender_qualification_does_not_sum_component_quantiles() -> None:
+def test_transport_qualification_uses_positive_sendinput_max() -> None:
     result = _native_result(
         p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 100)
     )
@@ -690,9 +692,9 @@ def test_sender_qualification_does_not_sum_component_quantiles() -> None:
     summary = loader.parse_calibration_cache_summary(
         native_calibration._cache_v7(result)
     )
-    assert summary.sender_hold_shrink_p99_us == 100
-    assert summary.candidate_margin_us == 200
-    assert summary.margin_us == 300
+    assert summary.transport_worst_positive_us == 10_002
+    assert summary.candidate_margin_us == 10_102
+    assert summary.margin_us is None
 
 
 def test_old_raw_input_evidence_and_cache_v5_are_incompatible() -> None:
@@ -707,7 +709,7 @@ def test_old_raw_input_evidence_and_cache_v5_are_incompatible() -> None:
         loader.parse_calibration_cache_summary(cache)
     resolution = loader.load_calibration_resolution(data=cache)
     assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
@@ -720,15 +722,15 @@ def test_out_of_envelope_cache_keeps_candidate_and_no_applied_margin() -> None:
     assert summary.margin_us is None
     assert summary.candidate_margin_us == 12_188
     assert summary.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
-    assert cache["qualification"]["applied_margin_us"] is None  # type: ignore[index]
+    assert cache["qualification"]["applied_transport_margin_us"] is None  # type: ignore[index]
 
 
 @pytest.mark.parametrize(
     "field, value",
     [
-        ("candidate_margin_us", 2_000),
+        ("candidate_transport_margin_us", 2_000),
         ("worst_bucket", "15/cold"),
-        ("sender_hold_shrink_p99_us", 0),
+        ("transport_worst_positive_us", 0),
     ],
 )
 def test_v4_rejects_tampered_qualification(field: str, value: object) -> None:
@@ -744,7 +746,7 @@ def test_v4_rejects_out_of_envelope_saturated_applied_margin() -> None:
             p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)
         )
     )
-    cast(dict[str, object], cache["qualification"])["applied_margin_us"] = 2_000
+    cast(dict[str, object], cache["qualification"])["applied_transport_margin_us"] = 2_000
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(cache)
 
@@ -760,7 +762,7 @@ def test_v4_rejects_wrong_status_and_valid_null_applied_margin() -> None:
         loader.parse_calibration_cache_summary(out_cache)
 
     valid_cache = native_calibration._cache_v7(_native_result())
-    cast(dict[str, object], valid_cache["qualification"])["applied_margin_us"] = None
+    cast(dict[str, object], valid_cache["qualification"])["applied_transport_margin_us"] = None
     with pytest.raises(ValueError):
         loader.parse_calibration_cache_summary(valid_cache)
 
@@ -776,20 +778,20 @@ def test_legacy_cache_is_rejected_without_reinterpreting_vnext(
         loader.parse_calibration_cache_summary(legacy)
     resolution = loader.load_calibration_resolution(data=legacy)
     assert resolution.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert resolution.resolved_margin_us == 500
+    assert resolution.resolved_margin_us == 300
 
 
 def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(loader, "_current_host_fingerprint", _host_fingerprint)
     missing = loader.load_calibration_resolution(data=None, cache_path=Path("does-not-exist.json"))
     assert missing.status is loader.CalibrationStatus.UNCALIBRATED
-    assert missing.resolved_margin_us == 500
-    assert missing.margin_source == loader.SOURCE_DEFAULT_500
+    assert missing.resolved_margin_us == 300
+    assert missing.margin_source == loader.SOURCE_DEFAULT_TRANSPORT_300
 
     corrupt = loader.load_calibration_resolution(data={"version": 1})
     assert corrupt.status is loader.CalibrationStatus.INVALID_CACHE
-    assert corrupt.resolved_margin_us == 500
-    assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_DEFAULT_500
+    assert corrupt.resolved_margin_us == 300
+    assert corrupt.margin_source == loader.SOURCE_INVALID_CACHE_TRANSPORT_300
 
     valid_cache = native_calibration._cache_v7(
         _native_result(p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 700))
@@ -804,8 +806,8 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     )
     out = loader.load_calibration_resolution(data=out_cache)
     assert out.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
-    assert out.resolved_margin_us == 500
-    assert out.margin_source == loader.SOURCE_OUT_OF_ENVELOPE_DEFAULT_500
+    assert out.resolved_margin_us == 300
+    assert out.margin_source == loader.SOURCE_OUT_OF_ENVELOPE_TRANSPORT_300
 
 
 def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
@@ -822,7 +824,7 @@ def test_host_identity_match_ignores_sampling_time_but_rejects_topology_change(
     monkeypatch.setattr(loader, "_current_host_fingerprint", lambda: changed)
     result = loader.load_calibration_resolution(data=cache)
     assert result.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert result.resolved_margin_us == 500
+    assert result.resolved_margin_us == 300
 
 
 @pytest.mark.parametrize(
@@ -855,7 +857,7 @@ def test_each_required_host_identity_field_mismatch_is_incompatible(
     result = loader.load_calibration_resolution(data=cache)
 
     assert result.status is loader.CalibrationStatus.INCOMPATIBLE
-    assert result.resolved_margin_us == 500
+    assert result.resolved_margin_us == 300
 
 
 def test_diagnostic_run_writes_report_but_never_production_cache(
@@ -1083,7 +1085,7 @@ def test_published_result_populates_effective_native_floor(
         output_path=tmp_path / "raw.json", cache_path=tmp_path / "cache.json", fps=60
     )
 
-    assert published.effective_min_hold_us == 16_967
+    assert published.effective_min_hold_us == 17_467
     assert published.status is loader.CalibrationStatus.VALID
     assert published.candidate_margin_us == 106
 
@@ -1096,7 +1098,7 @@ def test_published_result_populates_effective_native_floor(
         hold_frames=1.0,
     )
     assert stressed_published.margin_us == 800
-    assert stressed_published.effective_min_hold_us == 17_467
+    assert stressed_published.effective_min_hold_us == 17_967
 
     out = _native_result(
         p99_by_key=dict.fromkeys(native_calibration.REQUIRED_BUCKETS, 12088)

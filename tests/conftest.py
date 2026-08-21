@@ -47,8 +47,8 @@ def isolate_input_latency_cache(request, monkeypatch):
     def _default_resolution(*_args: object, **_kwargs: object):
         return loader_module.CalibrationLoadResult(
             status=loader_module.CalibrationStatus.UNCALIBRATED,
-            resolved_margin_us=500,
-            margin_source=loader_module.SOURCE_DEFAULT_500,
+            resolved_margin_us=300,
+            margin_source=loader_module.SOURCE_DEFAULT_TRANSPORT_300,
             summary=None,
         )
 

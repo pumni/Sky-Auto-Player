@@ -52,11 +52,15 @@ def frame_duration_us(fps: int) -> int:
     return math.ceil(1_000_000 / fps)
 
 
+def frame_base_hold_us(hold_frames: float, fps: int) -> int:
+    """Return the conservative ceil-rounded hold before safety margins."""
+    ratio = validate_hold_frames(hold_frames)
+    return math.ceil(ratio * frame_duration_us(fps))
+
+
 def materialize_hold_us(hold_frames: float, fps: int, margin_us: int = 0) -> int:
     """Materialize a selected ratio using the canonical frame formula."""
-    ratio = validate_hold_frames(hold_frames)
-    frame_us = frame_duration_us(fps)
-    return round(ratio * frame_us) + max(0, int(margin_us))
+    return frame_base_hold_us(hold_frames, fps) + max(0, int(margin_us))
 
 
 def format_hold_frames(hold_frames: float) -> str:

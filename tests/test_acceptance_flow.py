@@ -56,7 +56,7 @@ def test_calibration_recommendation_uses_hold_frames() -> None:
     )
 
     assert rec.hold_frames == 1.25
-    assert rec.recommended_hold_us == 21_334
+    assert rec.recommended_hold_us == 21_634
 
 
 def test_calibration_repeat_stress_wins_over_polyphony() -> None:
@@ -92,4 +92,4 @@ def test_calibration_uses_summary_device_margin() -> None:
     )
     rec = calibrate_timing(inp)
 
-    assert rec.recommended_hold_us == 17_467
+    assert rec.recommended_hold_us == 17_967

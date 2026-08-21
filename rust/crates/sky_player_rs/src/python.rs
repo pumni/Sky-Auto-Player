@@ -75,7 +75,7 @@ impl Default for NativeSessionConfigPy {
         Self {
             game_fps: 60,
             min_hold_us: 50_000,
-            down_late_grace_us: 0,
+            down_late_grace_us: 500,
             require_focus: false,
             focus_restore_grace_us: 100_000,
             target_hwnd: 0,
@@ -91,7 +91,7 @@ impl NativeSessionConfigPy {
     #[pyo3(signature = (
         game_fps,
         min_hold_us = StrictU64(50000),
-        down_late_grace_us = StrictU64(0),
+        down_late_grace_us = StrictU64(500),
         require_focus = false,
         focus_restore_grace_us = StrictU64(100000),
         target_hwnd = StrictU64(0),
@@ -215,4 +215,14 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         )?)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NativeSessionConfigPy;
+
+    #[test]
+    fn production_session_config_defaults_to_five_hundred_us_grace() {
+        assert_eq!(NativeSessionConfigPy::default().down_late_grace_us, 500);
+    }
 }
