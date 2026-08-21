@@ -354,6 +354,17 @@ materialized after worker and observer shutdown;
 the production report uses worker scalar state. Historical estimator plumbing
 is not part of the active production session contract and cannot affect timing.
 
+Hold-forensics ownership must also follow physical releases that are outside a
+regular successful authored observation. After a successful recovery safety Up,
+the dispatch producer enqueues the bounded FIFO lifecycle event
+`RecoveryUp(mask)`; the observer clears only those physical anchors. After a
+successful global release (for example focus suspension or manual pause), it
+enqueues `ResetAll`; the observer clears every anchor. These lifecycle events
+are diagnostic state synchronization only and never authorize, split, retry,
+or catch up a physical packet. Dropping lifecycle evidence is reported through
+`observer_dropped_samples` and makes diagnostic qualification invalid, because
+the observer can no longer prove generation ownership.
+
 ## 8. Verification matrix
 
 - `sky_dispatch_core`: controlled-clock deadline, hold-floor, authored

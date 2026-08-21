@@ -376,6 +376,23 @@ def test_expected_hold_pair_samples_simulate_authored_generations() -> None:
     assert ACCEPTANCE._expected_hold_pair_samples(mixed, "coalesced") == 4
 
 
+def test_expected_hold_pair_samples_canonicalize_same_timestamp_up_before_down() -> None:
+    authored_order_is_down_first = [
+        (0, "down", 0, [1], "down-a"),
+        (2, "down", 10, [1], "down-b"),
+        (1, "up", 10, [1], "up-a"),
+        (3, "up", 20, [1], "up-b"),
+    ]
+
+    assert (
+        ACCEPTANCE._expected_hold_pair_samples(
+            authored_order_is_down_first,
+            "mixed",
+        )
+        == 2
+    )
+
+
 def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
     required_zero = dict.fromkeys(
         (

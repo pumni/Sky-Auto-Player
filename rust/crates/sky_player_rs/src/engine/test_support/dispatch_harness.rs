@@ -1393,6 +1393,46 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    /// Inject a known backlog while strict diagnostic mode also observes a
+    /// lateness greater than the Down grace.  The boundary must retain the
+    /// Backlog classification; strict mode changes the terminal behavior,
+    /// not the reason that the future authorization was missed.
+    pub fn dispatch_known_backlog_with_strict_lateness_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let view = plan
+            .physical()
+            .expect("strict backlog test requires a physical plan");
+        let target = plan
+            .physical_target_qpc()
+            .expect("strict backlog test requires a physical target");
+        let lateness = self
+            .timing
+            .down_late_grace_ticks
+            .checked_add(DurationTicks::from_raw(1))
+            .expect("strict backlog lateness arithmetic");
+        let effective_now_ticks = TimelineTicks::from_raw(
+            view.authored_view
+                .authored_batch_scheduled_ticks
+                .as_u64()
+                .saturating_add(lateness.as_u64()),
+        );
+        let overdue_now = target
+            .checked_add_duration(lateness)
+            .expect("strict backlog QPC lateness arithmetic");
+        self.config.timing.strict_timing = true;
+        self.runtime.record_due_without_wait_for_test();
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            effective_now_ticks,
+            overdue_now,
+            false,
+            None,
+            false,
+        )
+    }
+
     /// Inject an authorized boundary whose trusted pre-call sample is beyond
     /// the session Down late-grace cutoff. The sender must make zero Down calls;
     /// Production recovery then commits the boundary as missed.

@@ -3616,6 +3616,49 @@ fn strict_pre_admission_down_late_is_classified_before_termination() {
 }
 
 #[test]
+fn strict_known_backlog_keeps_backlog_precedence_over_grace_gate() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    let calls = harness.configure_send_counter();
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    harness.advance_playback_time_us(100_000);
+    let future = harness.plan_current_dispatch();
+    assert!(harness.runtime.down_boundary_state.awaiting_future());
+    assert!(harness.runtime.musical_physical_commit_started);
+
+    let step = harness.dispatch_known_backlog_with_strict_lateness_for_test(&future);
+
+    assert!(
+        matches!(
+            step,
+            super::worker::DispatchStep::TerminateStatic("down_deadline_missed_before_send")
+        ),
+        "unexpected strict backlog step: {step:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.local_metrics.missed_down_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_backlog_boundaries, 1);
+    assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 0);
+    assert!(harness.local_metrics.last_missed_down_valid);
+    assert_eq!(harness.local_metrics.last_missed_down_reason_code, 1);
+    assert_eq!(
+        harness.local_metrics.last_missed_down_source_action_index,
+        1
+    );
+    assert_eq!(harness.local_metrics.last_missed_down_mask, 0b10);
+    assert!(
+        harness.local_metrics.last_missed_down_lateness_ticks
+            > harness.timing.down_late_grace_ticks.as_u64()
+    );
+}
+
+#[test]
 fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
     use super::test_support::ProductionDispatchTestHarness;
 

@@ -408,20 +408,32 @@ def _expected_hold_pair_samples(
 
     if scenario not in {"paired", "mixed", "coalesced"}:
         raise ValueError("scenario must be paired, mixed, or coalesced")
-    active: set[int] = set()
-    samples = 0
-    for index, kind, _scheduled_us, scan_codes, _label in actions:
-        del index
+    grouped: dict[int, list[tuple[str, list[int]]]] = {}
+    for _index, kind, scheduled_us, scan_codes, _label in actions:
         slots = {int(scan_code) for scan_code in scan_codes}
         if len(slots) != len(scan_codes):
             raise ValueError("authored action contains duplicate physical keys")
-        if kind == "up":
-            samples += len(active & slots)
-            active.difference_update(slots)
-        elif kind == "down":
-            active.update(slots)
-        else:
+        if kind not in {"up", "down"}:
             raise ValueError(f"unsupported authored action kind: {kind!r}")
+        grouped.setdefault(int(scheduled_us), []).append(
+            (str(kind), [int(scan_code) for scan_code in scan_codes])
+        )
+
+    active: set[int] = set()
+    samples = 0
+    for _scheduled_us, group in sorted(grouped.items()):
+        # PreparedPhysicalPacket emits every Up before every Down in one
+        # timestamp group.  Keep the simulator independent of authored list
+        # order so it predicts the native generation ownership, not caller
+        # ordering.
+        for kind, scan_codes in group:
+            if kind == "up":
+                slots = set(scan_codes)
+                samples += len(active & slots)
+                active.difference_update(slots)
+        for kind, scan_codes in group:
+            if kind == "down":
+                active.update(scan_codes)
     if active:
         raise ValueError("authored action set leaves physical generations open")
     return samples

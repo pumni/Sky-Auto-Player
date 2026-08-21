@@ -163,6 +163,7 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        missed_down_boundary,
         timing,
         has_conflicts,
         focus_loss_fault,
@@ -256,7 +257,6 @@ pub(crate) enum AdmissionOutcome {
     TargetChanged,
     ControlRejected,
 }
-
 /// Pre-send admission gate: focus, preflight, Down late-grace cutoff, conflict
 /// detection, and final down-admission.  The unfocused path commits pause
 /// state and enqueues fixed observation evidence; the observer materializes
@@ -281,6 +281,7 @@ fn admit_authored_down(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    missed_down_boundary: bool,
     timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
@@ -352,6 +353,7 @@ fn admit_authored_down(
     }
     if has_down_events
         && config.timing.strict_timing
+        && !missed_down_boundary
         && effective_now_ticks
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.down_late_grace_ticks)
@@ -412,7 +414,6 @@ fn admit_authored_down(
         preflight_target: has_down_events.then_some(preflight_target),
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn finalize_authored_down_admission(
     view: &AuthoredBatchView,
@@ -581,7 +582,6 @@ fn finalize_authored_down_admission(
         final_proof_qpc,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_final_focus_loss(
     qpc_clock: QpcClock,
