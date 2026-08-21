@@ -46,6 +46,7 @@ $record = {
 
 $form.Add_KeyDown({ param($Sender, $Event) & $record "key_press" $Event })
 $form.Add_KeyUp({ param($Sender, $Event) & $record "key_release" $Event })
+$form.Add_Shown({ $form.Activate(); $form.Focus() })
 $form.Add_FormClosed({
     if ($null -ne $eventWriter) {
         $eventWriter.Dispose()
