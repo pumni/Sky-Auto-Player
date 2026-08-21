@@ -7,13 +7,14 @@ PlaybackProfile = Literal["production", "strict_timing_diagnostic"]
 class SessionConfig:
     game_fps: int
     min_hold_us: int
+    min_release_gap_us: int
     down_late_grace_us: int
     require_focus: bool
     target_hwnd: int
     telemetry: bool
     focus_restore_grace_us: int
     profile: PlaybackProfile
-    def __init__(self, *, game_fps: int, min_hold_us: int = ..., down_late_grace_us: int = 0, require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., focus_restore_grace_us: int = ..., profile: PlaybackProfile = ...) -> None: ...
+    def __init__(self, *, game_fps: int, min_hold_us: int = ..., down_late_grace_us: int = 0, require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., focus_restore_grace_us: int = ..., profile: PlaybackProfile = ..., min_release_gap_us: int | None = ...) -> None: ...
 
 
 class BackendHealthSnapshot:

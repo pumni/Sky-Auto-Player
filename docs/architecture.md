@@ -62,15 +62,26 @@ The compatibility `send_started_ticks` and `send_completed_ticks` fields refer
 to `pre_call_qpc` and `sendinput_completion_qpc`; they do not cause an
 additional production QPC sample.
 
+Timing evidence has four distinct boundaries: the authored target, sender
+pre-call QPC, SendInput completion QPC, and game observation. The application
+can verify only the first three; completion evidence cannot prove game
+sampling. `require_focus=true` is a safety profile with a final foreground
+verification cost, so it is not promised to have the same latency as
+`require_focus=false`.
+
 For an authored same-key Down→Up pair, the schedule must satisfy:
 
 ```text
 authored_up >= authored_down + effective_min_hold
-next_same_key_down - previous_same_key_up >= one_frame_period
+next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
 `effective_min_hold` is materialized by Python as
 `ceil(hold_frames * ceil(1_000_000 / fps)) + 500 µs + transport_margin`.
+The release visibility policy is materialized alongside it as
+`ceil(1_000_000 / fps) + 500 µs + transport_margin`. The 500 µs Down grace
+and calibrated transport component are one static sender headroom budget;
+the release gap is not a claim that the game observed the Up transition.
 The transport component defaults/falls back to `300 µs`; calibration may
 replace only that component. PyO3 passes the materialized value verbatim; Rust
 range-checks it and validates both relationships in QPC ticks. Same-timestamp
@@ -123,6 +134,14 @@ hold selection, and schedule timing before creating a native session. The
 native boundary exposes lifecycle commands, target/focus hints, a small live
 snapshot, and one final report. `snapshot_lite` excludes trace records, maps,
 generation detail, and compatibility estimator payloads.
+
+The resolved `min_release_gap_us` is one application contract value: it is
+materialized by `FrameTimingPolicy`, forwarded by `PlaybackEngine` and
+`RustDispatchRuntime`, carried by PyO3 `SessionConfig` into native
+`TimingOptions`, used by microsecond and QPC admission, and converted once for
+production release-gap forensics. The Rust application path does not derive a
+replacement value from FPS; only the backward-compatible omitted PyO3 argument
+uses the legacy one-frame fallback for external callers.
 
 The active Python/native session contract does not carry estimator state.
 Historical lead and estimator artifacts are not timing inputs and cannot

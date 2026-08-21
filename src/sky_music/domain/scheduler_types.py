@@ -103,9 +103,24 @@ class FrameTimingPolicy:
         elif self.transport_margin_us < 0:
             raise ValueError("transport_margin_us must be non-negative")
         if self.min_release_gap_us is None:
-            object.__setattr__(self, "min_release_gap_us", Microseconds(self.frame_us))
-        elif self.min_release_gap_us < 0:
-            raise ValueError("min_release_gap_us must be non-negative")
+            fallback_release_gap_us = int(self.frame_us) + int(self.min_hold_margin_us)
+            if fallback_release_gap_us > 60_000_000:
+                raise ValueError("min_release_gap_us must be at most 60000000")
+            object.__setattr__(
+                self,
+                "min_release_gap_us",
+                Microseconds(fallback_release_gap_us),
+            )
+        elif (
+            not isinstance(self.min_release_gap_us, int)
+            or isinstance(self.min_release_gap_us, bool)
+            or self.min_release_gap_us < self.frame_us
+            or self.min_release_gap_us > 60_000_000
+        ):
+            raise ValueError(
+                "min_release_gap_us must be an integer in "
+                f"{int(self.frame_us)}..=60000000"
+            )
 
     @classmethod
     def from_timing_policy(
@@ -136,7 +151,9 @@ class FrameTimingPolicy:
             down_late_grace_us=Microseconds(down_late_grace_us),
             frame_base_hold_us=Microseconds(base_hold_us),
             transport_margin_us=Microseconds(transport_margin_us),
-            min_release_gap_us=Microseconds(frame_us),
+            min_release_gap_us=Microseconds(
+                frame_us + down_late_grace_us + transport_margin_us
+            ),
         )
 
     @classmethod

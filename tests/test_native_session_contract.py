@@ -45,6 +45,7 @@ def test_session_config_validates_target_and_exposes_user_fields() -> None:
     config = sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
         game_fps=120,
         min_hold_us=50_000,
+        min_release_gap_us=9_134,
         down_late_grace_us=500,
         require_focus=True,
         focus_restore_grace_us=12_345,
@@ -53,6 +54,7 @@ def test_session_config_validates_target_and_exposes_user_fields() -> None:
         profile="production",
     )
     assert config.min_hold_us == 50_000
+    assert config.min_release_gap_us == 9_134
     assert config.down_late_grace_us == 500
     assert config.game_fps == 120
     assert config.require_focus is True
@@ -66,6 +68,7 @@ def test_session_config_defaults_down_late_grace_to_five_hundred_us() -> None:
     config = sky_player_rs.SessionConfig(game_fps=60)  # type: ignore[attr-defined]
 
     assert config.down_late_grace_us == 500
+    assert config.min_release_gap_us == 16_667
 
 
 def test_session_config_rejects_down_late_grace_above_min_hold() -> None:
@@ -129,6 +132,46 @@ def test_native_constructor_accepts_exact_effective_hold_boundary() -> None:
     assert session is not None
 
 
+def test_native_constructor_accepts_exact_explicit_release_gap_boundary() -> None:
+    hold_us = 17_467
+    release_gap_us = 17_467
+    scan_code = SKY_15_SCAN_CODES[0]
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [scan_code], "down-a"),
+            (1, "up", hold_us, [scan_code], "up-a"),
+            (2, "down", hold_us + release_gap_us, [scan_code], "down-b"),
+            (3, "up", hold_us * 2 + release_gap_us, [scan_code], "up-b"),
+        ],
+        config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            game_fps=60,
+            min_hold_us=hold_us,
+            min_release_gap_us=release_gap_us,
+        ),
+    )
+    assert session is not None
+
+
+def test_native_constructor_rejects_one_microsecond_short_release_gap() -> None:
+    hold_us = 17_467
+    release_gap_us = 17_466
+    scan_code = SKY_15_SCAN_CODES[0]
+    with pytest.raises(ValueError, match="release gap"):
+        sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+            [
+                (0, "down", 0, [scan_code], "down-a"),
+                (1, "up", hold_us, [scan_code], "up-a"),
+                (2, "down", hold_us + release_gap_us, [scan_code], "down-b"),
+                (3, "up", hold_us * 2 + release_gap_us, [scan_code], "up-b"),
+            ],
+            config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                game_fps=60,
+                min_hold_us=hold_us,
+                min_release_gap_us=17_467,
+            ),
+        )
+
+
 @pytest.mark.parametrize("margin_us", [300, 400, 499, 500])
 def test_native_constructor_accepts_python_materialized_calibration_margin(
     margin_us: int,
@@ -184,6 +227,7 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
         "game_fps": 60,
         "requested_min_hold_us": 100,
         "effective_min_hold_us": 100,
+        "min_release_gap_us": 16_667,
         "down_late_grace_us": 0,
         "require_focus": False,
         "focus_restore_grace_us": 1_234,

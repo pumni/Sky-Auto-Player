@@ -328,7 +328,9 @@ def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any, *, fps: in
     text.append(f"Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}\n", style=muted)
     if sched_meta.impossible_same_key_repeats > 0:
         text.append(
-            f"  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @{fps}fps - the game may merge them)\n",
+            f"  ({sched_meta.impossible_same_key_repeats} same-key repeats are infeasible under "
+            f"the materialized hold/release policy @{fps}fps; sender-side policy does not "
+            "prove game observation)\n",
             style=warning,
         )
     text.append(f"Risky same-key repeats      : {sched_meta.risky_same_key_repeats}\n", style=muted)
@@ -603,6 +605,8 @@ def play_selected_song(
     # ProgressRenderer only erases its own previously-rendered lines; static print()
     # output from _mini_preflight would otherwise remain visible above the HUD.
     clear_terminal()
+    if active_policy.min_release_gap_us is None:
+        raise RuntimeError("FrameTimingPolicy did not materialize min_release_gap_us")
 
     engine = PlaybackEngine(
         song=song,
@@ -618,6 +622,7 @@ def play_selected_song(
         tempo_scale=current_tempo,
         focus_restore_grace_us=int(active_policy.focus_restore_grace_us),
         min_hold_us=int(active_policy.min_hold_us),
+        min_release_gap_us=int(active_policy.min_release_gap_us),
         min_hold_margin_us=int(active_policy.min_hold_margin_us),
         min_hold_margin_source=active_policy.min_hold_margin_source,
         down_late_grace_us=int(active_policy.down_late_grace_us),

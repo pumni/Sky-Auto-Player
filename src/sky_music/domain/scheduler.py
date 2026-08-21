@@ -275,7 +275,7 @@ def build_key_actions(
             if (
                 int(policy.frame_us) > 0
                 and planned_hold.risk != "severe"
-                and same_key_up_gap_us < int(policy.frame_us)
+                and same_key_up_gap_us < _release_gap_us(policy)
             ):
                 gap_below_frame_repeats += 1
                 diagnostics.append(ScheduleDiagnostic(
@@ -284,9 +284,10 @@ def build_key_actions(
                     scan_code=draft.scan_code,
                     code="gap_below_frame",
                     message=(
-                        f"Release-to-repress gap {same_key_up_gap_us / 1000:.1f}ms is below one frame "
-                        f"({int(policy.frame_us) / 1000:.1f}ms); the game may sample the key as continuously "
-                        "held and miss the repeat."
+                        f"Authored release gap {same_key_up_gap_us}us is below the required "
+                        f"release visibility gap {_release_gap_us(policy)}us; base game frame "
+                        f"is {int(policy.frame_us)}us. This is a sender-side policy, not a "
+                        "guarantee that the game observed Up."
                     ),
                 ))
             
@@ -368,8 +369,9 @@ def build_key_actions(
     if gap_below_frame_repeats > 0:
         warnings.append(
             f"Detected {gap_below_frame_repeats} same-key repeat(s) whose release-to-repress gap is "
-            f"below one game frame ({int(policy.frame_us) / 1000:.1f}ms). The game may miss these repeats; "
-            "consider lowering the tempo scale or accepting probabilistic repeat registration."
+            f"below the required release visibility policy ({_release_gap_us(policy) / 1000:.1f}ms; "
+            f"base game frame {int(policy.frame_us) / 1000:.1f}ms). The sender-side policy does not "
+            "prove game observation; consider lowering the tempo scale."
         )
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)

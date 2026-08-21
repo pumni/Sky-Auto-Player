@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.orchestration.telemetry import (
     TelemetryRecord,
@@ -63,8 +64,6 @@ LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
-DEFAULT_DOWN_LATE_GRACE_US = 500
-DEFAULT_TRANSPORT_MARGIN_US = 300
 MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
 
 PRODUCTION_CORRECTNESS_COUNTERS = (
@@ -167,20 +166,36 @@ def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
         return COLD_CYCLE_US
     if gap_profile != "hot":
         raise ValueError("gap_profile must be hot or cold")
-    frame_period_us = (1_000_000 + game_fps - 1) // game_fps
-    hold_us = frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
-    return max(HOT_CYCLE_US, hold_us + frame_period_us)
+    return max(HOT_CYCLE_US, _same_key_cycle_us(game_fps=game_fps, gap_profile=gap_profile))
 
 
 def _materialized_hold_us(*, game_fps: int, gap_profile: str) -> int:
     if not 15 <= game_fps <= 240:
         raise ValueError("game_fps must be in 15..=240")
     if gap_profile == "hot":
-        frame_period_us = (1_000_000 + game_fps - 1) // game_fps
-        return frame_period_us + DEFAULT_DOWN_LATE_GRACE_US + DEFAULT_TRANSPORT_MARGIN_US
+        policy = FrameTimingPolicy.from_hold_frames(1.0, game_fps)
+        return int(policy.min_hold_us)
     if gap_profile == "cold":
         return COLD_CYCLE_US // 2
     raise ValueError("gap_profile must be hot or cold")
+
+
+def _materialized_release_gap_us(*, game_fps: int) -> int:
+    """Materialize the static sender-side release visibility policy."""
+
+    if not 15 <= game_fps <= 240:
+        raise ValueError("game_fps must be in 15..=240")
+    policy = FrameTimingPolicy.from_hold_frames(1.0, game_fps)
+    return int(policy.min_release_gap_us)
+
+
+def _same_key_cycle_us(*, game_fps: int, gap_profile: str) -> int:
+    """Return one exact same-key Down/Up/Down cycle duration."""
+
+    return _materialized_hold_us(
+        game_fps=game_fps,
+        gap_profile=gap_profile,
+    ) + _materialized_release_gap_us(game_fps=game_fps)
 
 
 def _actions(
@@ -197,8 +212,12 @@ def _actions(
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
-    if scenario not in {"paired", "mixed", "coalesced"}:
-        raise ValueError("scenario must be paired, mixed, or coalesced")
+    if scenario not in {"paired", "mixed", "coalesced", "same_key_min_cycle"}:
+        raise ValueError(
+            "scenario must be paired, mixed, coalesced, or same_key_min_cycle"
+        )
+    if scenario == "same_key_min_cycle" and polyphony != 1:
+        raise ValueError("same_key_min_cycle requires polyphony=1")
     if scenario in {"mixed", "coalesced"} and polyphony < 2:
         raise ValueError(
             "mixed/coalesced scenarios require polyphony >= 2; "
@@ -221,7 +240,26 @@ def _actions(
             for group in range(count)
             for offset in range(key_count)
         ]
-    else:
+    elif scenario == "same_key_min_cycle":
+        scan_code = int(SKY_15_SCAN_CODES[0])
+        for index in range(count):
+            at_us = start_delay_us + index * _same_key_cycle_us(
+                game_fps=game_fps,
+                gap_profile=gap_profile,
+            )
+            actions.extend(
+                (
+                    (index * 2, "down", at_us, [scan_code], "same-key-down"),
+                    (
+                        index * 2 + 1,
+                        "up",
+                        at_us + hold_us,
+                        [scan_code],
+                        "same-key-up",
+                    ),
+                )
+            )
+    elif scenario != "same_key_min_cycle":
         boundary_scan_codes = []
     if scenario in {"mixed", "coalesced"}:
         # Each group has one clean Down, one Up+Down mixed boundary, and one
@@ -265,7 +303,7 @@ def _actions(
                     ),
                 )
             )
-    else:
+    elif scenario != "same_key_min_cycle":
         for index in range(count):
             scan_codes = [
                 int(
@@ -370,6 +408,9 @@ def _benchmark_config(
             game_fps=args.game_fps,
             gap_profile=args.gap_profile,
         ),
+        "materialized_release_gap_us": _materialized_release_gap_us(
+            game_fps=args.game_fps,
+        ),
     }
 
 
@@ -435,8 +476,10 @@ def _expected_record_layout(
     actions: list[tuple[int, str, int, list[int], str]],
     scenario: str,
 ) -> list[tuple[int, str, set[int]]]:
-    if scenario not in {"paired", "mixed", "coalesced"}:
-        raise ValueError("scenario must be paired, mixed, or coalesced")
+    if scenario not in {"paired", "mixed", "coalesced", "same_key_min_cycle"}:
+        raise ValueError(
+            "scenario must be paired, mixed, coalesced, or same_key_min_cycle"
+        )
     combined_boundaries = scenario in {"mixed", "coalesced"}
     if combined_boundaries and (len(actions) < 2 or len(actions) % 2 != 0):
         raise ValueError("mixed/coalesced scenarios require Down/Up action pairs")
@@ -495,8 +538,10 @@ def _expected_hold_pair_samples(
     the packet builder's all-Up-before-all-Down ordering.
     """
 
-    if scenario not in {"paired", "mixed", "coalesced"}:
-        raise ValueError("scenario must be paired, mixed, or coalesced")
+    if scenario not in {"paired", "mixed", "coalesced", "same_key_min_cycle"}:
+        raise ValueError(
+            "scenario must be paired, mixed, coalesced, or same_key_min_cycle"
+        )
     grouped: dict[int, list[tuple[str, list[int]]]] = {}
     for _index, kind, scheduled_us, scan_codes, _label in actions:
         slots = {int(scan_code) for scan_code in scan_codes}
@@ -683,6 +728,7 @@ def _correctness_counters(
         "unexpected_transport_failures": partial + zero_progress,
         "authored_trace_missing_duplicate_mismatch": trace_errors,
         "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+        "missed_down_keys": int(snapshot.get("missed_down_keys", 0)),
         "pre_call_hold_shrink_over_grace_count": int(
             snapshot.get("pre_call_hold_shrink_over_grace_count", 0)
         ),
@@ -712,6 +758,7 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
         "unexpected_transport_failures",
         "authored_trace_missing_duplicate_mismatch",
         "missed_down_boundaries",
+        "missed_down_keys",
         "pre_call_hold_shrink_over_grace_count",
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
@@ -1160,6 +1207,7 @@ def _new_session(
         game_fps=game_fps,
         gap_profile=gap_profile,
     )
+    materialized_release_gap_us = _materialized_release_gap_us(game_fps=game_fps)
 
     if backend == "mock":
         test_session = getattr(sky_player_rs, "TestDispatchSession", None)
@@ -1172,6 +1220,7 @@ def _new_session(
             actions,
             list(SKY_15_SCAN_CODES),
             min_hold_us=materialized_min_hold_us,
+            min_release_gap_us=materialized_release_gap_us,
             game_fps=game_fps,
             mock_latency_base_us=mock_base_latency_us,
             mock_latency_per_key_us=mock_per_key_latency_us,
@@ -1197,6 +1246,7 @@ def _new_session(
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=game_fps,
             min_hold_us=materialized_min_hold_us,
+            min_release_gap_us=materialized_release_gap_us,
             require_focus=require_focus,
             target_hwnd=target_hwnd,
             telemetry=True,
@@ -1435,6 +1485,10 @@ def _run_dispatch(
             ),
             "completion_error_us": _completion_error_report_pairs(completion_error_rows),
             "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
+            "effective_spin_threshold_us": _required_int(
+                snapshot.get("effective_spin_threshold_us"),
+                "effective_spin_threshold_us",
+            ),
             "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
             "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
             "playback_wall_time_us": int(snapshot.get("playback_wall_time_us", 0)),
@@ -1473,6 +1527,7 @@ def _run_dispatch(
             "lead_by_polyphony": lead_by_polyphony,
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
             "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
+            "missed_down_keys": int(snapshot.get("missed_down_keys", 0)),
             "missed_backlog_boundaries": int(
                 snapshot.get("missed_backlog_boundaries", 0)
             ),
@@ -1754,11 +1809,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--scenario",
-        choices=("paired", "mixed", "coalesced"),
+        choices=("paired", "mixed", "coalesced", "same_key_min_cycle"),
         default="paired",
         help=(
             "authored action profile; mixed/coalesced use disjoint adjacent Up/Down "
-            "masks and are correctness-only per requested suite"
+            "masks, while same_key_min_cycle hammers one physical key"
         ),
     )
     parser.add_argument(
@@ -1977,6 +2032,7 @@ def _assert_report_correctness(report: dict[str, Any]) -> None:
         "unexpected_transport_failures",
         "authored_trace_missing_duplicate_mismatch",
         "missed_down_boundaries",
+        "missed_down_keys",
         "pre_call_hold_shrink_over_grace_count",
         "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
@@ -2156,6 +2212,7 @@ def _assert_baseline_compatible(
         "native_build_flavor",
         "require_focus",
         "materialized_min_hold_us",
+        "materialized_release_gap_us",
     )
     baseline_config = baseline.get("benchmark_config")
     report_config = report.get("benchmark_config")
@@ -2421,6 +2478,11 @@ def main() -> int:
         raise SystemExit(
             "mixed/coalesced scenarios require every --polyphony value to be >= 2; "
             "polyphony=1 would silently change packet size"
+        )
+    if args.scenario == "same_key_min_cycle" and polyphonies != [1]:
+        raise SystemExit(
+            "same_key_min_cycle requires exactly --polyphony 1 so every boundary "
+            "uses one physical scan code"
         )
     benchmark_config = _benchmark_config(
         args=args,
@@ -2696,6 +2758,9 @@ def main() -> int:
             "warmup_records": _aggregate_warmup_records(runs),
             "measurement_records": sum(run["measurement_records"] for run in runs),
             "physical_boundaries": sum(run["measurement_records"] for run in runs),
+            "effective_spin_threshold_us": _aggregate_scalar_max(
+                runs, "effective_spin_threshold_us"
+            ),
             "native_packet_size_counts": _aggregate_native_packet_size_counts(runs),
             "wake_error_us": _aggregate_metric(runs, "wake_error_us"),
             "pre_send_software_latency_us": _aggregate_metric(
@@ -2722,6 +2787,7 @@ def main() -> int:
             "missed_down_boundaries": _aggregate_scalar_sum(
                 runs, "missed_down_boundaries"
             ),
+            "missed_down_keys": _aggregate_scalar_sum(runs, "missed_down_keys"),
             "missed_backlog_boundaries": _aggregate_scalar_sum(
                 runs, "missed_backlog_boundaries"
             ),
@@ -2845,6 +2911,12 @@ def main() -> int:
         "command_timing_domain": COMMAND_TIMING_DOMAIN,
         "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
         "benchmark_config": benchmark_config,
+        "scenario": args.scenario,
+        "game_fps": args.game_fps,
+        "materialized_min_hold_us": benchmark_config["materialized_min_hold_us"],
+        "materialized_release_gap_us": benchmark_config[
+            "materialized_release_gap_us"
+        ],
         "timing_comparison_scope": (
             "aggregate_actual_packets"
             if args.scenario in {"mixed", "coalesced"}
@@ -2864,6 +2936,11 @@ def main() -> int:
         "warmup_records": _aggregate_warmup_records(dispatch_runs),
         "measurement_records": physical_boundaries,
         "physical_boundaries": physical_boundaries,
+        "physical_boundary_count": physical_boundaries,
+        "effective_spin_threshold_us": _aggregate_scalar_max(
+            dispatch_runs, "effective_spin_threshold_us"
+        ),
+        "require_focus": benchmark_config["require_focus"],
         "qualification_gate": {
             "minimum_physical_boundaries": MIN_QUALIFICATION_PHYSICAL_BOUNDARIES,
             "measured_physical_boundaries": physical_boundaries,
@@ -2912,6 +2989,7 @@ def main() -> int:
         "missed_down_boundaries": _aggregate_scalar_sum(
             dispatch_runs, "missed_down_boundaries"
         ),
+        "missed_down_keys": _aggregate_scalar_sum(dispatch_runs, "missed_down_keys"),
         "missed_backlog_boundaries": _aggregate_scalar_sum(
             dispatch_runs, "missed_backlog_boundaries"
         ),

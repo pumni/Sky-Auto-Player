@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from sky_music.domain.domain import Song
+from sky_music.domain.hold_timing import frame_duration_us
 from sky_music.domain.scheduler_types import (
     DEFAULT_DOWN_LATE_GRACE_US,
     DEFAULT_FOCUS_RESTORE_GRACE_US,
@@ -50,6 +51,7 @@ class PlaybackEngine:
         self,
         song: Song,
         actions: tuple[KeyAction, ...],
+        min_release_gap_us: int,
         controls: Any = None,
         renderer: Any = None,
         telemetry_enabled: bool = False,
@@ -83,6 +85,15 @@ class PlaybackEngine:
         self.game_fps = int(game_fps)
         if not 15 <= self.game_fps <= 240:
             raise ValueError("game_fps must be in 15..=240")
+        if type(min_release_gap_us) is not int:
+            raise ValueError("min_release_gap_us must be an integer")
+        frame_us = frame_duration_us(self.game_fps)
+        if not frame_us <= min_release_gap_us <= 60_000_000:
+            raise ValueError(
+                "min_release_gap_us must be in "
+                f"{frame_us}..=60000000"
+            )
+        self.min_release_gap_us = min_release_gap_us
         self.min_hold_us = max(0, int(min_hold_us))
         self.min_hold_margin_us = min_hold_margin_us
         if type(down_late_grace_us) is not int or down_late_grace_us < 0:
@@ -116,6 +127,7 @@ class PlaybackEngine:
                 "rust_dispatch_schema_version": RUST_DISPATCH_SCHEMA_VERSION,
                 "dry_run": self.dry_run,
                 "min_hold_us": self.min_hold_us,
+                "min_release_gap_us": self.min_release_gap_us,
                 "down_late_grace_us": self.down_late_grace_us,
                 "focus_required": self.require_focus,
             }
@@ -135,6 +147,7 @@ class PlaybackEngine:
             song_name=self.song.name,
             game_fps=self.game_fps,
             min_hold_us=self.min_hold_us,
+            min_release_gap_us=self.min_release_gap_us,
             down_late_grace_us=self.down_late_grace_us,
             require_focus=self.require_focus,
             focus_restore_grace_us=self.focus_restore_grace_us,
@@ -235,6 +248,7 @@ class PlaybackEngine:
                 "wait_strategy_acquired": snapshot.get("wait_strategy_acquired"),
                 "input_path_degraded": snapshot.get("input_path_degraded", False),
                 "min_hold_us": self.min_hold_us,
+                "min_release_gap_us": self.min_release_gap_us,
                 "min_hold_margin_us": self.min_hold_margin_us,
                 "min_hold_margin_source": self.telemetry.min_hold_margin_source,
                 "down_late_grace_us": self.down_late_grace_us,

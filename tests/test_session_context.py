@@ -61,6 +61,7 @@ def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
     assert policy.hold_us == policy.min_hold_us == 22_134
     assert policy.min_hold_margin_us == 1_300
     assert policy.transport_margin_us == 800
+    assert policy.min_release_gap_us == 17_967
     assert policy.min_hold_margin_source == "device_cache"
     assert policy.down_late_grace_us == 500
     assert policy.focus_restore_grace_us == 100_000

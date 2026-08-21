@@ -23,12 +23,18 @@ microsecond conversions.
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
 | `down_late_grace` | Independent fixed sender correctness grace for authorized Down admission; production is `500 µs`. |
 | `transport_margin` | Calibrated sender transport component; default/fallback is `300 µs` and calibration never changes the Down grace. |
-| `min_release_gap` | One frame period at the selected FPS between a same-key Up and the next same-key Down. |
+| `min_release_gap` | One frame period plus the same static sender headroom reserved for the hold floor, between a same-key Up and the next same-key Down. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
 `physical_target`. Historical `dispatch_lead_us`, estimator state, and lead
 saturation fields are accepted only for compatibility and are non-operative.
+
+The timing evidence has four distinct boundaries: the authored target, the
+sender pre-call QPC, the SendInput completion QPC, and game observation. Only
+the first three are available to this application. `require_focus=true` is a
+safety profile with a final foreground-verification cost; it must not be
+described as having the same latency as `require_focus=false`.
 
 ## 2. Hold and release contract
 
@@ -43,7 +49,8 @@ transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
 effective_min_hold = (
     frame_base_hold_us + down_late_grace_us + transport_margin_us
 )
-min_release_gap_us = frame_us
+sender_headroom_us = down_late_grace_us + transport_margin_us
+min_release_gap_us = frame_us + sender_headroom_us
 ```
 
 For every authored same-key Down→Up pair:
@@ -59,6 +66,11 @@ checks this relationship before worker start in
 the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never
 reschedules the Up target.
+
+The release gap is authored statically and uses the same bounded sender-side
+headroom as the hold floor. Runtime never delays the next Down to repair a
+boundary. Sender completion evidence can verify the sender-side interval, but
+it does not prove that the game sampled either transition.
 
 `FrameTimingPolicy.min_hold_margin_us` remains a compatibility aggregate of the
 Down grace and transport component. The explicit policy fields are
@@ -371,7 +383,7 @@ authorization.
 
 The production wait path is a high-resolution waitable timer to the
 `T - 2,000 µs` admission boundary with zero waiter spin. The only production
-busy-spin is the final authored precision stage, fixed at `700 µs`; no adaptive
+busy-spin is the final authored precision stage, fixed at `1,000 µs`; no adaptive
 probe, EMA, PID, or runtime threshold controller is allowed. Timer/wake guard
 is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate

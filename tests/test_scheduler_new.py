@@ -60,6 +60,36 @@ def test_plan_same_key_hold_reports_compression_and_infeasibility() -> None:
     assert (severe.hold_us, severe.risk, severe.compressed) == (10_000, "severe", False)
 
 
+def test_same_key_cycle_exact_release_policy_is_feasible() -> None:
+    planned = plan_same_key_hold(
+        target_hold_us=10_000,
+        min_hold_us=10_000,
+        effective_delta_us=20_000,
+        min_release_gap_us=10_000,
+    )
+
+    assert (planned.hold_us, planned.risk, planned.compressed) == (
+        10_000,
+        "ok",
+        False,
+    )
+
+
+def test_same_key_cycle_one_microsecond_short_is_infeasible() -> None:
+    planned = plan_same_key_hold(
+        target_hold_us=10_000,
+        min_hold_us=10_000,
+        effective_delta_us=19_999,
+        min_release_gap_us=10_000,
+    )
+
+    assert (planned.hold_us, planned.risk, planned.compressed) == (
+        10_000,
+        "severe",
+        False,
+    )
+
+
 def test_chord_batching_and_deduplication() -> None:
     song = Song(
         "Test Chord",

@@ -82,7 +82,7 @@ def _native_policy(
         "lead_mode": "adaptive" if historical else "fixed",
         "fixed_lead_us": 0,
         "adaptive_lead": historical,
-        "spin_policy": "adaptive_floor_700_threshold_150" if historical else "fixed_700",
+        "spin_policy": "adaptive_floor_700_threshold_150" if historical else "fixed_1000",
     }
 
 
@@ -247,11 +247,15 @@ def _install_patches(native_build_commit: str) -> None:
             game_fps=game_fps,
             gap_profile=gap_profile,
         )
+        materialized_release_gap_us = acceptance._materialized_release_gap_us(
+            game_fps=game_fps,
+        )
         require_focus = bool(kwargs.get("require_focus", True))
         target_hwnd = acceptance._real_input_target_hwnd(require_focus=require_focus)
         config = sky_player_rs.SessionConfig(
             game_fps=game_fps,
             min_hold_us=materialized_min_hold_us,
+            min_release_gap_us=materialized_release_gap_us,
             require_focus=require_focus,
             target_hwnd=target_hwnd,
             telemetry=True,

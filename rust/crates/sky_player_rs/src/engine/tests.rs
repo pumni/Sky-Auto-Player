@@ -41,6 +41,7 @@ fn test_session_options(
         timing: TimingOptions {
             game_fps: 60,
             min_hold_us: 0,
+            min_release_gap_us: 16_667,
             down_late_grace_us: 500,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
@@ -4672,6 +4673,134 @@ fn native_min_hold_admission_uses_runtime_qpc_tick_domain() {
             .as_ref()
             .is_err_and(|error| error.contains("same-key hold too short")),
         "tick-domain admission must reject before worker creation: {result:?}"
+    );
+}
+
+#[test]
+fn native_release_gap_admission_accepts_exact_explicit_boundary() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 16_767,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-b".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 16_867,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-b".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid exact release-gap schedule");
+    let qpc_clock = QpcClock::from_frequency_hz(
+        std::num::NonZeroU64::new(1_000_000).expect("non-zero test frequency"),
+    );
+    let result = super::session::validate_native_schedule_timing_with_release_gap(
+        &schedule, 100, 16_667, qpc_clock,
+    );
+    assert!(
+        result.is_ok(),
+        "exact release gap must be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn native_release_gap_admission_rejects_one_microsecond_short() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 16_766,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-b".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid short release-gap schedule");
+    let qpc_clock = QpcClock::from_frequency_hz(
+        std::num::NonZeroU64::new(1_000_000).expect("non-zero test frequency"),
+    );
+    let result = super::session::validate_native_schedule_timing_with_release_gap(
+        &schedule, 100, 16_667, qpc_clock,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("release gap")),
+        "one microsecond below the release policy must reject: {result:?}"
+    );
+}
+
+#[test]
+fn native_release_gap_admission_checks_qpc_tick_rounding() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-a".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 200,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down-b".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid microsecond release-gap schedule");
+    let qpc_clock = QpcClock::from_frequency_hz(
+        std::num::NonZeroU64::new(3_125_000).expect("non-zero test frequency"),
+    );
+    let result = super::session::validate_native_schedule_timing_with_release_gap(
+        &schedule, 100, 100, qpc_clock,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("tick-domain") && error.contains("release gap")),
+        "QPC tick rounding must remain authoritative: {result:?}"
     );
 }
 

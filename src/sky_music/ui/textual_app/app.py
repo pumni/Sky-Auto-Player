@@ -758,6 +758,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         command_bridge = PlaybackCommandBridge(self.controls)
         self._active_playback_commands = command_bridge
         self._shutting_down_playback = False
+        if plan.active_policy.min_release_gap_us is None:
+            raise RuntimeError("FrameTimingPolicy did not materialize min_release_gap_us")
 
         engine = PlaybackEngine(
             song=plan.song,
@@ -773,6 +775,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             tempo_scale=plan.session.tempo_scale,
             focus_restore_grace_us=int(plan.active_policy.focus_restore_grace_us),
             min_hold_us=int(plan.active_policy.min_hold_us),
+            min_release_gap_us=int(plan.active_policy.min_release_gap_us),
             min_hold_margin_us=int(plan.active_policy.min_hold_margin_us),
             min_hold_margin_source=plan.active_policy.min_hold_margin_source,
             down_late_grace_us=int(plan.active_policy.down_late_grace_us),

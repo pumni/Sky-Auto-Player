@@ -10,6 +10,7 @@ def test_default_margin_applies_to_both_hold_outputs() -> None:
     assert policy.hold_us == policy.min_hold_us == 7_745
     assert policy.min_hold_margin_us == 800
     assert policy.transport_margin_us == 300
+    assert policy.min_release_gap_us == 7_745
     assert policy.min_hold_margin_source == "default_transport_300"
 
 
@@ -21,6 +22,7 @@ def test_calibrated_margin_is_forwarded() -> None:
     assert policy.hold_us == policy.min_hold_us == 22_134
     assert policy.min_hold_margin_us == 1_300
     assert policy.transport_margin_us == 800
+    assert policy.min_release_gap_us == 17_967
     assert policy.min_hold_margin_source == "device_cache"
 
 
@@ -30,6 +32,30 @@ def test_zero_margin_is_valid_for_one_frame() -> None:
     )
 
     assert policy.hold_us == policy.min_hold_us == policy.frame_us
+    assert policy.min_release_gap_us == policy.frame_us
+
+
+@pytest.mark.parametrize(
+    ("fps", "expected_frame_us", "expected_policy_us"),
+    ((60, 16_667, 17_467), (120, 8_334, 9_134)),
+)
+def test_release_gap_reserves_the_same_static_headroom_as_hold(
+    fps: int,
+    expected_frame_us: int,
+    expected_policy_us: int,
+) -> None:
+    policy = FrameTimingPolicy.from_hold_frames(1.0, fps)
+
+    assert policy.frame_us == expected_frame_us
+    assert policy.min_hold_us == expected_policy_us
+    assert policy.min_release_gap_us == expected_policy_us
+
+
+def test_calibrated_transport_margin_reaches_release_gap() -> None:
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=1_000)
+
+    assert policy.min_hold_us == 18_167
+    assert policy.min_release_gap_us == 18_167
 
 
 def test_calibrated_hold_margin_does_not_change_down_late_grace() -> None:
