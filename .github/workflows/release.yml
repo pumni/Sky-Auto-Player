@@ -48,12 +48,12 @@ jobs:
 
       - name: Rust — format, lint, tests, and native wheel
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+          rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
           $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.97\.1\s') {
-            throw "Expected stable Rust 1.97.1 from rust/rust-toolchain.toml, got: $version"
+          if ($version -notmatch '^rustc 1\.98\.0\s') {
+            throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
           cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features

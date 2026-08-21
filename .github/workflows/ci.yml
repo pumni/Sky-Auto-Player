@@ -141,40 +141,40 @@ jobs:
           run-runtime-audit: "true"
 
       - name: Rust — install pinned stable toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+        run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
       - name: Rust — verify pinned stable toolchain
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.97\.1\s') {
-            throw "Expected stable Rust 1.97.1 from rust/rust-toolchain.toml, got: $version"
+          if ($version -notmatch '^rustc 1\.98\.0\s') {
+            throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
 
       - name: Rust — format
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 
       - name: Rust — check
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
 
       - name: Rust — clippy
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 
       - name: Rust — unit tests
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features
 
       - name: Rust — build wheel
         env:
-          RUSTUP_TOOLCHAIN: 1.97.1
+          RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
 
