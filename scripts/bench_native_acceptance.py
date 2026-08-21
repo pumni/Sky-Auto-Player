@@ -141,15 +141,19 @@ def _actions(
     gap_profile: str = "hot",
     game_fps: int = 60,
     start_delay_us: int = 0,
+    scenario: str = "paired",
 ) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
+    if scenario not in {"paired", "mixed", "coalesced"}:
+        raise ValueError("scenario must be paired, mixed, or coalesced")
     if start_delay_us < 0:
         raise ValueError("start_delay_us must be non-negative")
     cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     hold_us = _materialized_hold_us(game_fps=game_fps, gap_profile=gap_profile)
+    boundary_hold_us = max(hold_us, cycle_us)
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
         scan_codes = [
@@ -157,9 +161,21 @@ def _actions(
             for offset in range(polyphony)
         ]
         at_us = start_delay_us + index * cycle_us
+        if scenario in {"mixed", "coalesced"}:
+            hold_us_for_action = boundary_hold_us
+            reason_prefix = scenario
+        else:
+            hold_us_for_action = hold_us
+            reason_prefix = "bench"
         actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
         actions.append(
-            (index * 2 + 1, "up", at_us + hold_us, scan_codes, "bench-up")
+            (
+                index * 2 + 1,
+                "up",
+                at_us + hold_us_for_action,
+                scan_codes,
+                f"{reason_prefix}-up",
+            )
         )
     return actions
 
@@ -202,6 +218,9 @@ def _benchmark_config(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
 ) -> dict[str, Any]:
+    require_focus = getattr(args, "require_focus", None)
+    if require_focus is None:
+        require_focus = args.backend == "sendinput"
     if args.backend == "sendinput":
         # DispatchSession owns these production settings; the legacy CLI
         # knobs are not passed through to the real backend.
@@ -228,6 +247,7 @@ def _benchmark_config(
         "actions": args.actions,
         "polyphony": polyphonies,
         "start_delay_us": getattr(args, "start_delay_us", 0),
+        "scenario": getattr(args, "scenario", "paired"),
         "lead_mode": effective_lead_mode,
         "fixed_lead_us": effective_fixed_lead_us,
         "gap_profile": args.gap_profile,
@@ -236,7 +256,7 @@ def _benchmark_config(
         "native_build_flavor": (
             "production" if args.backend == "sendinput" else "test_support"
         ),
-        "require_focus": args.backend == "sendinput",
+        "require_focus": require_focus,
         "materialized_min_hold_us": _materialized_hold_us(
             game_fps=args.game_fps,
             gap_profile=args.gap_profile,
@@ -761,6 +781,7 @@ def _new_session(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
     gap_profile: str = "hot",
+    require_focus: bool = False,
     fault_mode: str = "none",
 ) -> Any:
     import sky_player_rs
@@ -800,13 +821,13 @@ def _new_session(
             "SendInput qualification requires a production native wheel; "
             "test-support is not a valid physical timing path"
         )
-    target_hwnd = _real_input_target_hwnd()
+    target_hwnd = _real_input_target_hwnd(require_focus=require_focus)
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
             game_fps=game_fps,
             min_hold_us=materialized_min_hold_us,
-            require_focus=True,
+            require_focus=require_focus,
             target_hwnd=target_hwnd,
             telemetry=True,
             profile="strict_timing_diagnostic",
@@ -814,7 +835,9 @@ def _new_session(
     )
 
 
-def _real_input_target_hwnd() -> int:
+def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
+    if not require_focus:
+        return 0
     raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
     if raw is None or not raw.strip():
         raise RuntimeError(
@@ -842,6 +865,7 @@ def _run_dispatch(
     fixed_lead_us: int = 0,
     game_fps: int = 60,
     gap_profile: str = "hot",
+    require_focus: bool = False,
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
@@ -858,6 +882,7 @@ def _run_dispatch(
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
         gap_profile=gap_profile,
+        require_focus=require_focus,
         fault_mode=fault_mode,
     )
     snapshot: dict[str, Any] | None = None
@@ -1035,6 +1060,7 @@ def _measure_command_interrupt(
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
+    require_focus: bool = False,
 ) -> dict[str, int]:
     # Put the first Down in a controlled future slot, then measure the pause
     # command after that first musical commit.  Pre-roll Pause now cancels the
@@ -1055,6 +1081,7 @@ def _measure_command_interrupt(
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
+        require_focus=require_focus,
     )
     # Test-only epoch choice made before worker arm; the frozen authored
     # timestamps remain unchanged and production callers do not use this path.
@@ -1213,6 +1240,12 @@ def _parse_args() -> argparse.Namespace:
         help="comma-separated chord sizes to exercise (default: 1,2,3,5,8,15)",
     )
     parser.add_argument(
+        "--scenario",
+        choices=("paired", "mixed", "coalesced"),
+        default="paired",
+        help="authored action profile; mixed/coalesced share adjacent Up/Down boundaries",
+    )
+    parser.add_argument(
         "--backend",
         choices=("mock", "sendinput"),
         default="mock",
@@ -1222,6 +1255,12 @@ def _parse_args() -> argparse.Namespace:
         "--allow-real-input",
         action="store_true",
         help="required with --backend sendinput; keys may reach the foreground window",
+    )
+    parser.add_argument(
+        "--require-focus",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="require the configured target window to remain focused (sendinput default: true)",
     )
     parser.add_argument(
         "--mock-base-latency-us",
@@ -1567,6 +1606,7 @@ def _assert_baseline_compatible(
         "gap_profile",
         "warmup_cycles",
         "start_delay_us",
+        "scenario",
         "native_profile",
         "native_build_flavor",
         "require_focus",
@@ -1853,6 +1893,7 @@ def main() -> int:
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
             start_delay_us=args.start_delay_us,
+            scenario=args.scenario,
         )
         try:
             for polyphony in polyphonies:
@@ -1863,6 +1904,7 @@ def main() -> int:
                     gap_profile=args.gap_profile,
                     game_fps=args.game_fps,
                     start_delay_us=args.start_delay_us,
+                    scenario=args.scenario,
                 )
                 run = _run_dispatch(
                     current_actions,
@@ -1876,6 +1918,7 @@ def main() -> int:
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
                     gap_profile=args.gap_profile,
+                    require_focus=benchmark_config["require_focus"],
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                     native_build_commit=expected_native_commit,
@@ -1951,6 +1994,7 @@ def main() -> int:
         gap_profile=args.gap_profile,
         game_fps=args.game_fps,
         start_delay_us=args.start_delay_us,
+        scenario=args.scenario,
     )
     for sample_index in range(command_samples):
         try:
@@ -1964,6 +2008,7 @@ def main() -> int:
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
+                    require_focus=benchmark_config["require_focus"],
                 )
             )
         except Exception as exc:
@@ -2056,6 +2101,7 @@ def main() -> int:
             gap_profile=args.gap_profile,
             game_fps=args.game_fps,
             start_delay_us=args.start_delay_us,
+            scenario=args.scenario,
         )
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {

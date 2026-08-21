@@ -207,6 +207,7 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
             "gap_profile": "hot",
             "warmup_cycles": 8,
             "start_delay_us": 0,
+            "scenario": "paired",
             "native_profile": "mock_test",
         "native_build_flavor": "test_support",
         "require_focus": False,

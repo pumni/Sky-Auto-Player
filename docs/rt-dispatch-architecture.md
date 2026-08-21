@@ -58,6 +58,14 @@ observation gap makes the scenario and aggregate `acceptance_clean=false`; the
 aggregate is `statistics_eligible` only when every scenario is clean and has at
 least 10,000 iterations. A host-preemption event is therefore retained for
 paired baseline comparison instead of being silently reported as green.
+The native acceptance harness fingerprints a controlled `start_delay_us` so
+paired legs do not put their first authored event at worker startup. Its
+`paired`, `mixed`, and `coalesced` profiles respectively exercise separated
+Down/Up pairs or adjacent Up/Down boundaries; `--require-focus` and
+`--no-require-focus` are explicit matrix dimensions. These profiles only make
+the harness capable of the requested matrix. Real `SendInput` runs still
+require an isolated project-owned target HWND and explicit operator approval;
+they must never use an arbitrary foreground window.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
