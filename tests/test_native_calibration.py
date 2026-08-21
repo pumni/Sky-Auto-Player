@@ -798,6 +798,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     )
     valid = loader.load_calibration_resolution(data=valid_cache)
     assert valid.status is loader.CalibrationStatus.VALID
+    assert valid.calibration_timing_qualified is True
     assert valid.resolved_margin_us == 800
     assert valid.margin_source == loader.SOURCE_DEVICE_CACHE
 
@@ -806,6 +807,7 @@ def test_load_calibration_resolution_states(monkeypatch: pytest.MonkeyPatch) -> 
     )
     out = loader.load_calibration_resolution(data=out_cache)
     assert out.status is loader.CalibrationStatus.OUT_OF_ENVELOPE
+    assert out.calibration_timing_qualified is False
     assert out.resolved_margin_us == 300
     assert out.margin_source == loader.SOURCE_OUT_OF_ENVELOPE_TRANSPORT_300
 
