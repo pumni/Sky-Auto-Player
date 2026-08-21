@@ -130,8 +130,9 @@ def validate_key_actions(
                                 message=(
                                     f"Scan code {sc} was released at {last_ups[sc]}us and "
                                     f"re-pressed at {action.at_us}us; release gap "
-                                    f"{release_gap}us is below one frame "
-                                    f"({int(min_release_gap_us)}us)"
+                                    f"{release_gap}us is below the required release "
+                                    f"visibility gap ({int(min_release_gap_us)}us); base "
+                                    f"game frame is {int(policy.frame_us)}us"
                                 ),
                                 at_us=action.at_us,
                                 scan_code=sc,
