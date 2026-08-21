@@ -139,6 +139,7 @@ jobs:
       - name: Build unsigned native app and smoke tests
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
+          SKY_EXPECTED_BUILD_COMMIT: ${{ steps.source.outputs.build_commit }}
         run: uv run --env-file .env python -m build_app
 
       - name: Generate unsigned-byte manifest
