@@ -187,6 +187,7 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["native_profile"] == "strict_timing_diagnostic"
     assert config["require_focus"] is True
     assert config["materialized_min_hold_us"] == 17_467
+    assert config["materialized_release_gap_us"] == 17_467
 
 
 def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
@@ -228,10 +229,11 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
             "start_delay_us": 0,
             "scenario": "paired",
             "native_profile": "mock_test",
-        "native_build_flavor": "test_support",
-        "require_focus": False,
-        "materialized_min_hold_us": 17_467,
-    }
+            "native_build_flavor": "test_support",
+            "require_focus": False,
+            "materialized_min_hold_us": 17_467,
+            "materialized_release_gap_us": 17_467,
+        }
     report = {
         "benchmark_schema_version": 8,
         "candidate_sha": "candidate-sha",
@@ -512,9 +514,10 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
             "telemetry_integrity_failures",
             "sender_integrity_failures",
             "unexpected_transport_failures",
-            "authored_trace_missing_duplicate_mismatch",
-            "missed_down_boundaries",
-            "pre_call_hold_shrink_over_grace_count",
+        "authored_trace_missing_duplicate_mismatch",
+        "missed_down_boundaries",
+        "missed_down_keys",
+        "pre_call_hold_shrink_over_grace_count",
             "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
         "production_completion_hold_below_frame_count",
@@ -541,6 +544,7 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
 def test_hold_forensics_anomalies_are_acceptance_correctness_gates() -> None:
     snapshot = {
         "missed_down_boundaries": 1,
+        "missed_down_keys": 3,
         "pre_call_hold_shrink_over_grace_count": 2,
         "hold_unmatched_up_count": 3,
         "hold_anchor_overwrite_count": 4,
@@ -549,6 +553,7 @@ def test_hold_forensics_anomalies_are_acceptance_correctness_gates() -> None:
     counters = ACCEPTANCE._correctness_counters(snapshot, {})
 
     assert counters["missed_down_boundaries"] == 1
+    assert counters["missed_down_keys"] == 3
     assert counters["pre_call_hold_shrink_over_grace_count"] == 2
     assert counters["hold_unmatched_up_count"] == 3
     assert counters["hold_anchor_overwrite_count"] == 4
@@ -647,11 +652,57 @@ def test_trace_metrics_reject_missing_required_field() -> None:
 def test_hot_and_cold_action_spacing() -> None:
     hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
     cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
-    assert hot[2][2] - hot[0][2] == 34_134
+    assert hot[2][2] - hot[0][2] == 34_934
     assert hot[1][2] - hot[0][2] == 17_467
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
+
+
+def test_same_key_min_cycle_materializes_one_physical_key_and_exact_boundaries() -> None:
+    count = 5
+    actions = ACCEPTANCE._actions(
+        count,
+        1,
+        game_fps=60,
+        gap_profile="hot",
+        scenario="same_key_min_cycle",
+    )
+    scan_code = int(ACCEPTANCE.SKY_15_SCAN_CODES[0])
+    hold_us = ACCEPTANCE._materialized_hold_us(game_fps=60, gap_profile="hot")
+    release_gap_us = ACCEPTANCE._materialized_release_gap_us(game_fps=60)
+    cycle_us = ACCEPTANCE._same_key_cycle_us(game_fps=60, gap_profile="hot")
+
+    assert len(actions) == count * 2
+    assert sum(action[1] == "down" for action in actions) == count
+    assert sum(action[1] == "up" for action in actions) == count
+    assert all(action[3] == [scan_code] for action in actions)
+    assert all(action[4] in {"same-key-down", "same-key-up"} for action in actions)
+    assert [action[0] for action in actions] == list(range(count * 2))
+    assert [action[2] for action in actions] == sorted(action[2] for action in actions)
+    assert actions == ACCEPTANCE._actions(
+        count,
+        1,
+        game_fps=60,
+        gap_profile="hot",
+        scenario="same_key_min_cycle",
+    )
+
+    for cycle in range(count):
+        down = actions[cycle * 2]
+        up = actions[cycle * 2 + 1]
+        assert down[1] == "down"
+        assert up[1] == "up"
+        assert up[2] - down[2] == hold_us
+        if cycle + 1 < count:
+            next_down = actions[(cycle + 1) * 2]
+            assert next_down[2] - up[2] == release_gap_us
+            assert next_down[2] - down[2] == cycle_us
+
+
+def test_same_key_min_cycle_requires_one_polyphony() -> None:
+    with pytest.raises(ValueError, match="requires polyphony=1"):
+        ACCEPTANCE._actions(1, 2, scenario="same_key_min_cycle")
 
 
 def test_start_delay_shifts_authored_actions_without_changing_spacing() -> None:
@@ -668,9 +719,7 @@ def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
     for fps in (30, 60, 120, 240):
         actions = ACCEPTANCE._actions(2, 15, gap_profile="hot", game_fps=fps)
         assert actions[2][2] - actions[0][2] >= (
-            (1_000_000 + fps - 1) // fps
-            + 500
-            + ACCEPTANCE.DEFAULT_TRANSPORT_MARGIN_US
+            ACCEPTANCE._same_key_cycle_us(game_fps=fps, gap_profile="hot")
         )
 
 
