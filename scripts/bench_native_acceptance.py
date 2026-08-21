@@ -2529,9 +2529,10 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
+    command_polyphony = 2 if args.scenario in {"mixed", "coalesced"} else 1
     command_actions = _actions(
         1,
-        1,
+        command_polyphony,
         gap_profile=args.gap_profile,
         game_fps=args.game_fps,
         start_delay_us=args.start_delay_us,
@@ -2562,7 +2563,7 @@ def main() -> int:
                 native_info=native_info,
                 host_info=host_info,
                 run_index=dispatch_repeats + sample_index,
-                polyphony=1,
+                polyphony=command_polyphony,
                 actions=command_actions,
                 snapshot=None,
                 telemetry=None,
