@@ -17,7 +17,7 @@ use sky_dispatch_win32::input::{
 };
 use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, OBSERVATION_QUEUE_CAPACITY,
+    DispatchObservation, DispatchPath, DispatchStep, NextDispatchPlan, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
     ProductionDispatchTestHarness,
 };
@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;
 
-const DEFAULT_ITERATIONS: usize = 2_000;
+const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
 const WAKE_PROBE_SAMPLES: usize = 32;
@@ -209,7 +209,8 @@ fn observer_ab_iterations() -> usize {
 
 fn representative_observation() -> DispatchObservation {
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0);
-    let plan = harness.plan_current_dispatch_projected();
+    let mut plan = NextDispatchPlan::default();
+    harness.plan_current_dispatch_projected_into(&mut plan);
     let step = harness.dispatch_authored_with_plan(&plan);
     assert!(
         matches!(step, DispatchStep::Dispatched),
@@ -533,10 +534,8 @@ fn add_observation(
     }
 }
 
-fn plan_projected(
-    harness: &mut ProductionDispatchTestHarness,
-) -> sky_player_rs::engine::dispatch_primitives::NextDispatchPlan {
-    harness.plan_current_dispatch_projected()
+fn plan_projected(harness: &mut ProductionDispatchTestHarness, plan: &mut NextDispatchPlan) {
+    harness.plan_current_dispatch_projected_into(plan);
 }
 
 fn record_preparation_sample(samples: &mut Samples, counts: PreparationCounts, elapsed_ns: u64) {
@@ -695,8 +694,9 @@ fn run_down(
             mode.effective_spin_threshold_us,
         )?;
         harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
-        let plan = plan_projected(&mut harness);
+        plan_projected(&mut harness, &mut plan);
         record_preparation_sample(
             &mut samples,
             harness.preparation_counts(),
@@ -747,8 +747,9 @@ fn run_up(
             "authored benchmark setup did not leave the requested physical UpOnly packet"
         );
         harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
-        let plan = plan_projected(&mut harness);
+        plan_projected(&mut harness, &mut plan);
         record_preparation_sample(
             &mut samples,
             harness.preparation_counts(),
@@ -792,8 +793,9 @@ fn run_mixed(
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
         harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
-        let plan = plan_projected(&mut harness);
+        plan_projected(&mut harness, &mut plan);
         record_preparation_sample(
             &mut samples,
             harness.preparation_counts(),

@@ -44,8 +44,12 @@ Write-Output "assembly=$resolvedAssemblyPath"
 foreach ($target in $targets) {
     $range = Find-FunctionBody $target.Fragment
     if ($null -eq $range) {
-        Write-Output "$($target.Name): NOT_FOUND"
-        $failed = $true
+        if ($target.Policy -eq 'clean') {
+            Write-Output "$($target.Name): NOT_FOUND (required clean target)"
+            $failed = $true
+        } else {
+            Write-Output "$($target.Name): INLINED_OR_NOT_FOUND (report-only target)"
+        }
         continue
     }
 
@@ -60,18 +64,30 @@ foreach ($target in $targets) {
     $memmoveCount = @($body | Where-Object { $_ -match '\bmemmove\b' }).Count
     $chkstkCount = @($body | Where-Object { $_ -match '\b__chkstk\b' }).Count
     $udivti3Count = @($body | Where-Object { $_ -match '\b__udivti3\b' }).Count
+    $divti3Count = @($body | Where-Object { $_ -match '\b__divti3\b' }).Count
+    $divisionInstructionCount = @(
+        $body | Where-Object { $_ -match '^\s*(?:u?div|idiv)[bwlq]\s' }
+    ).Count
     $copySizes = @(
         $body |
             Where-Object { $_ -match 'movl\s+\$(\d+),\s+%r8d' } |
             ForEach-Object { $Matches[1] }
     ) -join ','
     Write-Output (
-        '{0}: lines={1}-{2} instructions={3} seh_stackalloc=[{4}] memcpy={5} memmove={6} __chkstk={7} __udivti3={8} copy_size_immediates=[{9}]' -f
+        '{0}: lines={1}-{2} instructions={3} seh_stackalloc=[{4}] memcpy={5} memmove={6} __chkstk={7} __udivti3={8} __divti3={9} div_instructions={10} copy_size_immediates=[{11}]' -f
         $target.Name, ($range[0] + 1), ($range[1] + 1), $instructionCount, $stackFrames,
-        $memcpyCount, $memmoveCount, $chkstkCount, $udivti3Count, $copySizes
+        $memcpyCount, $memmoveCount, $chkstkCount, $udivti3Count, $divti3Count,
+        $divisionInstructionCount, $copySizes
     )
 
-    if ($target.Policy -eq 'clean' -and ($memcpyCount -gt 0 -or $memmoveCount -gt 0 -or $chkstkCount -gt 0)) {
+    if ($target.Policy -eq 'clean' -and (
+            $memcpyCount -gt 0 -or
+            $memmoveCount -gt 0 -or
+            $chkstkCount -gt 0 -or
+            $udivti3Count -gt 0 -or
+            $divti3Count -gt 0 -or
+            $divisionInstructionCount -gt 0
+        )) {
         $failed = $true
     }
 }

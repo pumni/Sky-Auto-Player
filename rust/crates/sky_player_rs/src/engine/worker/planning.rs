@@ -200,8 +200,9 @@ pub(crate) struct PlanningInput<'a> {
 }
 
 /// Write the epoch product into the caller-owned slot so the approximately
-/// 1.9 KiB physical plan is not returned through the `Result` ABI.
-#[inline(never)]
+/// 1.9 KiB physical plan is not returned through the `Result` ABI. The
+/// optimizer is free to inline this helper; assembly acceptance audits the
+/// shipping caller after optimization rather than forcing a standalone body.
 pub(crate) fn plan_next_dispatch_projected(
     input: PlanningInput<'_>,
     plan: &mut NextDispatchPlan,
@@ -300,7 +301,6 @@ fn planning_view(result: BatchViewResult) -> Result<AuthoredBatchView, PlanningE
     }
 }
 
-#[inline(never)]
 fn physical_plan_from_view(
     authored_view: AuthoredBatchView,
     epoch_qpc: QpcTicks,

@@ -12,6 +12,11 @@ use crate::time::DurationTicks;
 use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
+#[cfg(any(test, feature = "test-support"))]
+type PacketSourceActionLookup = (u32, u64);
+#[cfg(not(any(test, feature = "test-support")))]
+type PacketSourceActionLookup = u32;
+
 impl RuntimeDispatchCoordinator {
     #[cfg(test)]
     fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
@@ -111,7 +116,8 @@ impl RuntimeDispatchCoordinator {
         packet: &CompiledPacket,
         intent_index: usize,
         kind: ActionKind,
-    ) -> Result<(u32, u64), CoordinatorError> {
+        #[cfg(any(test, feature = "test-support"))] batch_visits: &mut u64,
+    ) -> Result<PacketSourceActionLookup, CoordinatorError> {
         let first_batch = usize::try_from(packet.first_batch_index).map_err(|_| {
             CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
                 "packet first batch index does not fit in usize".into(),
@@ -123,14 +129,16 @@ impl RuntimeDispatchCoordinator {
             .ok_or(CoordinatorError::Time(
                 crate::time::TimeArithmeticError::Overflow,
             ))?;
-        let mut batch_visits = 0u64;
         for batch in self
             .schedule
             .batches
             .get(first_batch..last_batch)
             .ok_or(CoordinatorError::InvalidBatchIndex { index: first_batch })?
         {
-            batch_visits = batch_visits.saturating_add(1);
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                *batch_visits = (*batch_visits).saturating_add(1);
+            }
             if batch.kind != kind {
                 continue;
             }
@@ -146,7 +154,10 @@ impl RuntimeDispatchCoordinator {
                         crate::time::TimeArithmeticError::Overflow,
                     ))?;
             if (start..end).contains(&intent_index) {
-                return Ok((batch.source_action_index, batch_visits));
+                #[cfg(any(test, feature = "test-support"))]
+                return Ok((batch.source_action_index, *batch_visits));
+                #[cfg(not(any(test, feature = "test-support")))]
+                return Ok(batch.source_action_index);
             }
         }
         Err(CoordinatorError::Invariant(
@@ -255,21 +266,32 @@ impl RuntimeDispatchCoordinator {
             } else {
                 deferred_up_mask |= bit;
                 let source_action_index = {
-                    let (source_action_index, batch_visits) = self
-                        .packet_intent_source_action_index(
+                    #[cfg(any(test, feature = "test-support"))]
+                    {
+                        let mut batch_visits = 0u64;
+                        let (source_action_index, batch_visits) = self
+                            .packet_intent_source_action_index(
+                                packet.header,
+                                intent_index,
+                                ActionKind::Up,
+                                &mut batch_visits,
+                            )?;
+                        #[cfg(feature = "test-support")]
+                        {
+                            preparation_evidence.secondary_batch_visits = preparation_evidence
+                                .secondary_batch_visits
+                                .saturating_add(batch_visits);
+                        }
+                        source_action_index
+                    }
+                    #[cfg(not(any(test, feature = "test-support")))]
+                    {
+                        self.packet_intent_source_action_index(
                             packet.header,
                             intent_index,
                             ActionKind::Up,
-                        )?;
-                    #[cfg(feature = "test-support")]
-                    {
-                        preparation_evidence.secondary_batch_visits = preparation_evidence
-                            .secondary_batch_visits
-                            .saturating_add(batch_visits);
+                        )?
                     }
-                    #[cfg(not(feature = "test-support"))]
-                    let _ = batch_visits;
-                    source_action_index
                 };
                 up_intents.push(PreparedUpIntent {
                     intent: compact,
@@ -440,12 +462,14 @@ impl RuntimeDispatchCoordinator {
             if self.pending_release_by_slot[usize::from(slot)].is_some() {
                 return Err(CoordinatorError::PendingReleaseAlreadyRegistered { slot });
             }
+            let mut batch_visits = 0u64;
             let (source_action_index, _) = self.packet_intent_source_action_index(
                 &packet,
                 up_start.checked_add(offset).ok_or(CoordinatorError::Time(
                     crate::time::TimeArithmeticError::Overflow,
                 ))?,
                 ActionKind::Up,
+                &mut batch_visits,
             )?;
             self.pending_release_by_slot[usize::from(slot)] = Some(PendingRelease {
                 generation_id,
@@ -657,13 +681,31 @@ impl RuntimeDispatchCoordinator {
                     source_action_index: 0,
                 });
             } else if prepared.deferred_up_mask & bit != 0 {
-                let (source_action_index, _) = self.packet_intent_source_action_index(
-                    &packet,
-                    up_start.checked_add(offset).ok_or(CoordinatorError::Time(
-                        crate::time::TimeArithmeticError::Overflow,
-                    ))?,
-                    ActionKind::Up,
-                )?;
+                let source_action_index = {
+                    #[cfg(any(test, feature = "test-support"))]
+                    {
+                        let mut batch_visits = 0u64;
+                        let (source_action_index, _) = self.packet_intent_source_action_index(
+                            &packet,
+                            up_start.checked_add(offset).ok_or(CoordinatorError::Time(
+                                crate::time::TimeArithmeticError::Overflow,
+                            ))?,
+                            ActionKind::Up,
+                            &mut batch_visits,
+                        )?;
+                        source_action_index
+                    }
+                    #[cfg(not(any(test, feature = "test-support")))]
+                    {
+                        self.packet_intent_source_action_index(
+                            &packet,
+                            up_start.checked_add(offset).ok_or(CoordinatorError::Time(
+                                crate::time::TimeArithmeticError::Overflow,
+                            ))?,
+                            ActionKind::Up,
+                        )?
+                    }
+                };
                 up_intents.push(PreparedUpIntent {
                     intent,
                     source_action_index,

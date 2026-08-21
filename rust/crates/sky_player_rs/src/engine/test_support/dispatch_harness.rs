@@ -975,27 +975,33 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
-        self.align_epoch_to_selected_boundary_before_planning();
         let mut plan = NextDispatchPlan::default();
+        self.plan_current_dispatch_projected_into(&mut plan);
+        plan
+    }
+
+    /// Build the projected plan directly into caller-owned storage so the
+    /// benchmark uses the same ABI shape as the production worker.
+    pub fn plan_current_dispatch_projected_into(&mut self, plan: &mut NextDispatchPlan) {
+        self.align_epoch_to_selected_boundary_before_planning();
         plan_next_dispatch_projected(
             crate::engine::worker::PlanningInput {
                 coordinator: &self.resources.coordinator,
                 epoch_qpc: self.resources.playback.epoch,
                 preparation_probe: &self.runtime.preparation_probe,
             },
-            &mut plan,
+            plan,
         )
         .expect("projected dispatch plan");
         preflight_prepared_plan(
-            &mut plan,
+            plan,
             &mut self.resources.backend,
             &mut self.runtime,
             &self.target_hwnd,
             &self.target_generation,
         )
         .expect("preflight prepared projected plan");
-        self.refresh_physical_target_for_test(&mut plan);
-        plan
+        self.refresh_physical_target_for_test(plan);
     }
 
     pub fn preparation_counts(&self) -> PreparationCounts {

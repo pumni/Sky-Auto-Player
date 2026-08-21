@@ -46,9 +46,11 @@ invalidate it and cause a replan.
 
 The planner writes this product into the caller-owned plan slot instead of
 returning the large physical enum through the `Result` ABI. The release
-assembly audit in `scripts/audit_dispatch_assembly.ps1` covers the planner,
-physical-plan construction, the dispatch-loop caller, due dispatch, and missed-
-Down recovery; bounded materialization remains before the precision wait.
+assembly report in `scripts/audit_dispatch_assembly.ps1` covers the planner,
+physical-plan construction, and the dispatch-loop caller, while its hard
+copy/stack/division policy applies only to due dispatch and missed-Down
+recovery. Planner materialization remains a report-only optimization objective
+before the precision wait; the optimizer may inline planner helpers.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
