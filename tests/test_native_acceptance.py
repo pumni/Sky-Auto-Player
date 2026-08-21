@@ -727,9 +727,9 @@ def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> No
     assert workflow.index(manual_branch) < workflow.index(path_diff)
     assert "fetch-depth: 0" in workflow
     assert "cargo fmt --manifest-path rust/Cargo.toml --all -- --check" in workflow
-    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features" in workflow
-    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings" in workflow
-    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features" in workflow
+    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked" in workflow
+    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings" in workflow
+    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked" in workflow
     assert "scripts/build_rust_wheel.py --test-support" in workflow
     assert "uv run pytest -m \"not slow\"" in workflow
     assert "baseline_sha:" not in workflow

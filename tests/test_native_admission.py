@@ -11,7 +11,7 @@ APP_COMMIT = "a" * 40
 BASE_INFO: dict[str, object] = {
     "version": "0.1.0",
     "rust_core_version": "0.1.0",
-    "rustc_version": "rustc 1.97.1",
+    "rustc_version": "rustc 1.98.0",
     "schema_version": 4,
     "native_schema_version": 4,
     "native_abi": "cp314t-win_amd64",

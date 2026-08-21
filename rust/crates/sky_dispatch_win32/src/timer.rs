@@ -1,8 +1,73 @@
 //! High-resolution Waitable Timer wrapper for microsecond-accurate kernel sleeps.
 
+#[cfg(all(test, windows))]
+pub(crate) mod test_support {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static ACTIVE_COUNTERS: RefCell<Option<Arc<TimerCounters>>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) struct TimerCounters {
+        created: AtomicUsize,
+        dropped: AtomicUsize,
+        live: AtomicUsize,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) struct TimerCounts {
+        pub(crate) created: usize,
+        pub(crate) dropped: usize,
+        pub(crate) live: usize,
+    }
+
+    pub(crate) fn new_counters() -> Arc<TimerCounters> {
+        Arc::new(TimerCounters {
+            created: AtomicUsize::new(0),
+            dropped: AtomicUsize::new(0),
+            live: AtomicUsize::new(0),
+        })
+    }
+
+    pub(crate) fn with_context<R>(counters: &Arc<TimerCounters>, f: impl FnOnce() -> R) -> R {
+        ACTIVE_COUNTERS.with(|active| {
+            let previous = active.replace(Some(Arc::clone(counters)));
+            let result = f();
+            active.replace(previous);
+            result
+        })
+    }
+
+    pub(crate) fn snapshot(counters: &Arc<TimerCounters>) -> TimerCounts {
+        TimerCounts {
+            created: counters.created.load(Ordering::SeqCst),
+            dropped: counters.dropped.load(Ordering::SeqCst),
+            live: counters.live.load(Ordering::SeqCst),
+        }
+    }
+
+    pub(super) fn record_created() -> Option<Arc<TimerCounters>> {
+        let counters = ACTIVE_COUNTERS.with(|active| active.borrow().clone());
+        if let Some(counters) = counters.as_ref() {
+            counters.created.fetch_add(1, Ordering::SeqCst);
+            counters.live.fetch_add(1, Ordering::SeqCst);
+        }
+        counters
+    }
+
+    pub(super) fn record_dropped(counters: &Arc<TimerCounters>) {
+        counters.dropped.fetch_add(1, Ordering::SeqCst);
+        counters.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub struct WaitableTimer {
     #[cfg(windows)]
     handle: windows_sys::Win32::Foundation::HANDLE,
+    #[cfg(all(test, windows))]
+    counters: Option<std::sync::Arc<test_support::TimerCounters>>,
 }
 
 pub struct TimerResolutionGuard {
@@ -65,7 +130,13 @@ impl WaitableTimer {
                 )
             };
             if !handle.is_null() {
-                return Ok(WaitableTimer { handle });
+                #[cfg(all(test, windows))]
+                let counters = test_support::record_created();
+                return Ok(WaitableTimer {
+                    handle,
+                    #[cfg(all(test, windows))]
+                    counters,
+                });
             }
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
@@ -135,6 +206,10 @@ impl Drop for WaitableTimer {
                 // SAFETY: this wrapper is the unique owner and Drop runs once.
                 unsafe {
                     windows_sys::Win32::Foundation::CloseHandle(self.handle);
+                }
+                #[cfg(all(test, windows))]
+                if let Some(counters) = self.counters.as_ref() {
+                    test_support::record_dropped(counters);
                 }
             }
         }

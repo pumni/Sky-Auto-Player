@@ -9,9 +9,9 @@ members = [
 
 [workspace.package]
 edition = "2024"
-# MSRV is 1.97; the reproducible production compiler is pinned separately in
-# rust-toolchain.toml at stable Rust 1.98.0.
-rust-version = "1.97"
+# Main tracks the explicitly pinned production compiler; release branches may
+# freeze their own compiler and MSRV policy.
+rust-version = "1.98"
 authors = ["Sky Auto Player Team"]
 
 [profile.release]

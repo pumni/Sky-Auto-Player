@@ -160,17 +160,17 @@ jobs:
       - name: Rust — check
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
 
       - name: Rust — clippy
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Rust — unit tests
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+        run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked
 
       - name: Rust — build wheel
         env:
@@ -221,7 +221,7 @@ jobs:
             --release-dir "dist\Sky-Auto-Player-v$version" --version $version
 
       - name: Native updater security E2E
-        run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features
+        run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features --locked
 
 
   status:

@@ -56,9 +56,9 @@ jobs:
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
-          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
-          cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
+          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked
           uv run --env-file .env python scripts/build_rust_wheel.py
 
       - name: Tests — full

@@ -176,6 +176,7 @@ def main() -> int:
         "maturin",
         "build",
         "--release",
+        "--locked",
         "--manifest-path",
         str(cargo_manifest),
         "--interpreter",
