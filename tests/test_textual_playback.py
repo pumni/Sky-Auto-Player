@@ -2140,3 +2140,80 @@ def test_restore_pending_update_ignores_stale_older_version(monkeypatch) -> None
     cast(Any, app_module.SkyPickerApp._restore_pending_update_indicator)(fake_app)
 
     assert pushed == []
+
+
+def test_restore_pending_update_restores_matching_release_notes(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.config import AppConfig, UpdateSettings
+    from sky_music.domain.update_checker import UpdateInfo
+    from sky_music.infrastructure import update_notice_cache
+    from sky_music.ui.textual_app import app as app_module
+
+    pending = UpdateInfo(
+        latest_version="2.5.0",
+        download_url="",
+        release_notes="## Cached notes",
+        html_url="",
+        published_at="2026-08-22T00:00:00Z",
+    )
+    pushed: list[object] = []
+    fake_app = SimpleNamespace(
+        cfg=AppConfig(update=UpdateSettings(last_notified_version="2.5.0")),
+        _push_update_banner_modal=lambda update: pushed.append(update),
+        _forced_update_refresh_scheduled=False,
+        set_timer=lambda _delay, _callback: None,
+    )
+    monkeypatch.setattr(app_module, "VERSION", "2.4.9")
+    monkeypatch.setattr(update_notice_cache, "load_pending_release", lambda: pending)
+
+    cast(Any, app_module.SkyPickerApp._restore_pending_update_indicator)(fake_app)
+
+    assert len(pushed) == 1
+    assert cast(Any, pushed[0]).release_notes == "## Cached notes"
+
+
+def test_missing_pending_release_cache_forces_refresh(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.config import AppConfig, UpdateSettings
+    from sky_music.infrastructure import update_notice_cache
+    from sky_music.ui.textual_app import app as app_module
+
+    scheduled: list[float] = []
+    fake_app = SimpleNamespace(
+        cfg=AppConfig(update=UpdateSettings(last_notified_version="2.5.0")),
+        _push_update_banner_modal=lambda _update: None,
+        _forced_update_refresh_scheduled=False,
+        set_timer=lambda delay, _callback: scheduled.append(delay),
+    )
+    monkeypatch.setattr(app_module, "VERSION", "2.4.9")
+    monkeypatch.setattr(update_notice_cache, "load_pending_release", lambda: None)
+
+    cast(Any, app_module.SkyPickerApp._restore_pending_update_indicator)(fake_app)
+
+    assert fake_app._forced_update_refresh_scheduled is True
+    assert scheduled == [0.0]
+
+
+def test_skip_clears_release_cache_but_remind_keeps_it(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.infrastructure import update_notice_cache
+    from sky_music.orchestration import update_service
+    from sky_music.ui.textual_app import app as app_module
+
+    skipped: list[str] = []
+    cleared: list[str] = []
+    monkeypatch.setattr(update_service, "record_skip", lambda _cfg, version: skipped.append(version))
+    monkeypatch.setattr(update_notice_cache, "clear_pending_release", lambda version: cleared.append(version))
+    fake_app = SimpleNamespace(cfg=object(), notify=lambda *_args, **_kwargs: None)
+    release = SimpleNamespace(latest_version="2.5.0")
+
+    cast(Any, app_module.SkyPickerApp._handle_update_response)(fake_app, "remind", release)
+    assert skipped == []
+    assert cleared == []
+
+    cast(Any, app_module.SkyPickerApp._handle_update_response)(fake_app, "skip", release)
+    assert skipped == ["2.5.0"]
+    assert cleared == ["2.5.0"]

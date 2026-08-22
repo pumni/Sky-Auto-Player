@@ -12,6 +12,7 @@ use crate::file_replace::{
     remove_owned_tree,
 };
 use crate::manifest::{Manifest, PreserveClass, classify_preserved};
+use crate::progress::{ProgressEvent, ProgressSink, UpdatePhase};
 use crate::{CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION, UPDATER_EXE};
 
 pub const TRANSACTION_DIR: &str = ".sky-update-transaction";
@@ -168,7 +169,11 @@ pub fn transaction_root(install_root: &Path) -> PathBuf {
     install_root.join(TRANSACTION_DIR)
 }
 
-pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Journal> {
+pub fn prepare_journal(
+    install_root: &Path,
+    plan: &TransactionPlan,
+    progress: &dyn ProgressSink,
+) -> Result<Journal> {
     let root = safe_join(install_root, TRANSACTION_DIR)?;
     if root.exists() {
         return Err(UpdaterError::TransactionRecoveryRequired(
@@ -177,7 +182,7 @@ pub fn prepare_journal(install_root: &Path, plan: &TransactionPlan) -> Result<Jo
     }
     fs::create_dir_all(root.join("backup"))
         .map_err(|err| UpdaterError::BackupFailed(err.to_string()))?;
-    let result = prepare_journal_inner(install_root, plan, &root);
+    let result = prepare_journal_inner(install_root, plan, &root, progress);
     if result.is_err() {
         let _ = fs::remove_dir_all(&root);
     }
@@ -188,11 +193,23 @@ fn prepare_journal_inner(
     install_root: &Path,
     plan: &TransactionPlan,
     root: &Path,
+    progress: &dyn ProgressSink,
 ) -> Result<Journal> {
     let mut backups = Vec::new();
+    let backup_total = plan.backup_paths.len() as u64;
+    progress.publish(ProgressEvent {
+        phase: UpdatePhase::BackingUp,
+        current: Some(0),
+        total: Some(backup_total),
+    })?;
     for (index, relative) in plan.backup_paths.iter().enumerate() {
         let source = safe_join(install_root, relative)?;
         if !source.is_file() {
+            progress.publish(ProgressEvent {
+                phase: UpdatePhase::BackingUp,
+                current: Some((index + 1) as u64),
+                total: Some(backup_total),
+            })?;
             continue;
         }
         let backup_relative = format!("backup/{index:08}.bin");
@@ -235,6 +252,11 @@ fn prepare_journal_inner(
                 expected_hash
             },
         });
+        progress.publish(ProgressEvent {
+            phase: UpdatePhase::BackingUp,
+            current: Some((index + 1) as u64),
+            total: Some(backup_total),
+        })?;
     }
     let new_paths = plan
         .files_to_replace
@@ -302,6 +324,7 @@ pub fn apply(
     staging: &Path,
     new_manifest: &Manifest,
     plan: &TransactionPlan,
+    progress: &dyn ProgressSink,
 ) -> Result<TransactionReport> {
     let journal = read_journal(install_root).map_err(|error| match error {
         UpdaterError::Io(source) => io_context(
@@ -318,7 +341,14 @@ pub fn apply(
         ));
     }
     let ordered_payloads = ordered_payload_paths(plan);
+    let install_total = (ordered_payloads.len() + plan.managed_orphans_to_delete.len()) as u64;
+    progress.publish(ProgressEvent {
+        phase: UpdatePhase::Installing,
+        current: Some(0),
+        total: Some(install_total),
+    })?;
     let mut index = 0usize;
+    let mut completed = 0_u64;
     let mut report = TransactionReport::default();
     for (relative, replaces_existing) in ordered_payloads
         .iter()
@@ -334,6 +364,12 @@ pub fn apply(
             index,
         )?;
         merge_replacement_report(&mut report, replacement_report);
+        completed += 1;
+        progress.publish(ProgressEvent {
+            phase: UpdatePhase::Installing,
+            current: Some(completed),
+            total: Some(install_total),
+        })?;
     }
     for relative in &plan.managed_orphans_to_delete {
         let destination = safe_join(install_root, relative)?;
@@ -341,6 +377,12 @@ pub fn apply(
             fs::remove_file(destination)
                 .map_err(|err| UpdaterError::InstallCopyFailed(err.to_string()))?;
         }
+        completed += 1;
+        progress.publish(ProgressEvent {
+            phase: UpdatePhase::Installing,
+            current: Some(completed),
+            total: Some(install_total),
+        })?;
     }
     if let Some((relative, replaces_existing)) = ordered_payloads
         .iter()
@@ -356,7 +398,26 @@ pub fn apply(
             index,
         )?;
         merge_replacement_report(&mut report, replacement_report);
+        completed += 1;
+        progress.publish(ProgressEvent {
+            phase: UpdatePhase::Installing,
+            current: Some(completed),
+            total: Some(install_total),
+        })?;
     }
+    Ok(report)
+}
+
+pub fn verify_and_commit(
+    install_root: &Path,
+    new_manifest: &Manifest,
+    progress: &dyn ProgressSink,
+) -> Result<()> {
+    progress.publish(ProgressEvent {
+        phase: UpdatePhase::VerifyingInstall,
+        current: None,
+        total: None,
+    })?;
     verify_installed_managed(install_root, new_manifest)?;
     let installed_manifest_path = safe_join(install_root, MANIFEST_NAME)
         .map_err(|error| UpdaterError::PostInstallVerifyFailed(error.to_string()))?;
@@ -375,17 +436,27 @@ pub fn apply(
             "installed MANIFEST.json does not match staged manifest".into(),
         ));
     }
-    let mut committed = journal;
+    let mut committed = read_journal(install_root)?;
+    if committed.state != JournalState::Prepared {
+        return Err(UpdaterError::TransactionRecoveryRequired(
+            "transaction is not prepared before commit".into(),
+        ));
+    }
     committed.state = JournalState::Committed;
     let journal_file = safe_join(
         install_root,
         &format!("{TRANSACTION_DIR}/{JOURNAL_FILE_NAME}"),
     )?;
+    progress.publish(ProgressEvent {
+        phase: UpdatePhase::Committing,
+        current: None,
+        total: None,
+    })?;
     write_json_atomic(&journal_file, &committed).map_err(|error| match error {
         UpdaterError::Io(source) => io_context("apply", "commit journal", &journal_file, source),
         other => other,
     })?;
-    Ok(report)
+    Ok(())
 }
 
 fn merge_replacement_report(report: &mut TransactionReport, replacement: ReplacementReport) {
@@ -715,11 +786,23 @@ pub fn remove_manifest_from_set(paths: &mut BTreeSet<String>) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::archive::sha256_bytes;
     use crate::manifest::{ManifestFile, PreserveClass};
+    use crate::progress::{ProgressEvent, ProgressSink, UpdatePhase};
+
+    #[derive(Clone, Default)]
+    struct RecordingProgress(Arc<Mutex<Vec<ProgressEvent>>>);
+
+    impl ProgressSink for RecordingProgress {
+        fn publish(&self, event: ProgressEvent) -> crate::error::Result<()> {
+            self.0.lock().expect("progress lock").push(event);
+            Ok(())
+        }
+    }
 
     fn manifest(version: &str, files: &[&str]) -> Manifest {
         Manifest {
@@ -832,9 +915,68 @@ mod tests {
         .expect("staged manifest");
 
         let plan = build_plan(Some(&old), &new).expect("plan");
-        prepare_journal(&root, &plan).expect("prepare");
-        apply(&root, &staging, &new, &plan).expect("apply");
+        let progress = RecordingProgress::default();
+        prepare_journal(&root, &plan, &progress).expect("prepare");
+        apply(&root, &staging, &new, &plan, &progress).expect("apply");
+        verify_and_commit(&root, &new, &progress).expect("verify and commit");
         cleanup_committed(&root).expect("cleanup");
+
+        let events = progress.0.lock().expect("progress lock").clone();
+        assert_eq!(
+            events,
+            vec![
+                ProgressEvent {
+                    phase: UpdatePhase::BackingUp,
+                    current: Some(0),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::BackingUp,
+                    current: Some(1),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::BackingUp,
+                    current: Some(2),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::BackingUp,
+                    current: Some(3),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::Installing,
+                    current: Some(0),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::Installing,
+                    current: Some(1),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::Installing,
+                    current: Some(2),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::Installing,
+                    current: Some(3),
+                    total: Some(3),
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::VerifyingInstall,
+                    current: None,
+                    total: None,
+                },
+                ProgressEvent {
+                    phase: UpdatePhase::Committing,
+                    current: None,
+                    total: None,
+                },
+            ]
+        );
 
         assert_eq!(
             std::fs::read(root.join(crate::PRIMARY_EXE)).unwrap(),

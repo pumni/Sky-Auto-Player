@@ -33,8 +33,14 @@ pub fn recover_before_update(install_root: &Path) -> Result<()> {
                     "committed install hash verification failed: {err}"
                 ))
             })?;
-            fs::remove_dir_all(root)?;
-            crate::file_replace::cleanup_stale_artifacts(install_root)?;
+            let cleanup = crate::transaction::cleanup_committed(install_root)?;
+            for failure in cleanup.failures {
+                eprintln!(
+                    "committed cleanup deferred: {}: {}",
+                    failure.path.display(),
+                    failure.error
+                );
+            }
             Ok(())
         }
         JournalState::Prepared => rollback_prepared(install_root),
@@ -190,7 +196,9 @@ mod tests {
     use super::*;
     use crate::archive::sha256_bytes;
     use crate::manifest::{Manifest, ManifestFile};
-    use crate::transaction::{build_plan, prepare_journal, transaction_root};
+    use crate::transaction::{
+        build_plan, prepare_journal, read_journal, transaction_root, write_json_atomic,
+    };
     use crate::{APP_NAME, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION};
 
     fn manifest(version: &str, files: &[(&str, &[u8])]) -> Manifest {
@@ -245,7 +253,7 @@ mod tests {
         .expect("staged manifest");
 
         let plan = build_plan(Some(&old), &new).expect("plan");
-        prepare_journal(&root, &plan).expect("journal");
+        prepare_journal(&root, &plan, &crate::progress::NoopProgressSink).expect("journal");
         fs::write(root.join(PRIMARY_EXE), new_app).expect("simulate install");
         fs::write(root.join("new.dll"), b"new dll").expect("simulate add");
         let backup = fs::read_dir(transaction_root(&root).join("backup"))
@@ -276,7 +284,7 @@ mod tests {
         let new = manifest("2.0.0", &[(PRIMARY_EXE, new_app), ("new.dll", b"new dll")]);
 
         let plan = build_plan(Some(&old), &new).expect("plan");
-        prepare_journal(&root, &plan).expect("journal");
+        prepare_journal(&root, &plan, &crate::progress::NoopProgressSink).expect("journal");
         fs::write(root.join(PRIMARY_EXE), new_app).expect("simulate install");
         fs::write(root.join("new.dll"), b"new dll").expect("simulate add");
         let backup = fs::read_dir(transaction_root(&root).join("backup"))
@@ -292,6 +300,48 @@ mod tests {
         assert_eq!(fs::read(root.join("new.dll")).unwrap(), b"new dll");
         assert!(transaction_root(&root).exists());
 
+        fs::remove_dir_all(root).expect("cleanup root");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn committed_recovery_ignores_cleanup_only_access_denied() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let root = temp_root("committed-cleanup-warning");
+        fs::create_dir_all(&root).expect("root");
+        let current = b"current app";
+        fs::write(root.join(PRIMARY_EXE), current).expect("app");
+        let committed_manifest = manifest("2.0.0", &[(PRIMARY_EXE, current)]);
+        fs::write(
+            root.join(MANIFEST_NAME),
+            serde_json::to_vec(&committed_manifest).expect("manifest"),
+        )
+        .expect("manifest file");
+
+        let old = manifest("1.0.0", &[(PRIMARY_EXE, b"old app")]);
+        let plan = build_plan(Some(&old), &committed_manifest).expect("plan");
+        prepare_journal(&root, &plan, &crate::progress::NoopProgressSink).expect("journal");
+        let mut journal = read_journal(&root).expect("prepared journal");
+        journal.state = JournalState::Committed;
+        write_json_atomic(&transaction_root(&root).join("journal.json"), &journal)
+            .expect("committed journal");
+
+        let stale = root.join(".sky-update-locked.bak");
+        fs::write(&stale, b"locked backup").expect("stale artifact");
+        let blocker = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&stale)
+            .expect("delete-blocking handle");
+
+        recover_before_update(&root).expect("cleanup-only failure must be deferred");
+        assert!(!transaction_root(&root).exists());
+        assert!(stale.exists());
+
+        drop(blocker);
+        fs::remove_file(stale).expect("cleanup stale artifact");
         fs::remove_dir_all(root).expect("cleanup root");
     }
 }

@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -57,6 +59,18 @@ def _write_manifest_data(root: Path, data: dict[str, object]) -> None:
     (root / "MANIFEST.json").write_text(json.dumps(data), encoding="utf-8")
 
 
+def _handoff(run_root: Path, *, state: str = "ready", error_code: str = "", message: str = "") -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "state": state,
+        "run_id": run_root.name,
+        "updater_pid": 4711,
+        "target_version": "2.5.0",
+        "error_code": error_code,
+        "message": message,
+    }
+
+
 def test_launch_stages_verified_native_updater(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -84,20 +98,7 @@ def test_launch_stages_verified_native_updater(
     def fake_popen(arguments: list[str], **kwargs: object) -> FakeProcess:
         calls.append((arguments, kwargs))
         run_root = Path(arguments[0]).parent
-        (run_root / "handoff.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "state": "ready",
-                    "run_id": run_root.name,
-                    "updater_pid": FakeProcess.pid,
-                    "target_version": "2.5.0",
-                    "error_code": "",
-                    "message": "",
-                }
-            ),
-            encoding="utf-8",
-        )
+        (run_root / "handoff.json").write_text(json.dumps(_handoff(run_root)), encoding="utf-8")
         return FakeProcess()
 
     monkeypatch.setattr(update_launcher.subprocess, "Popen", fake_popen)
@@ -126,6 +127,167 @@ def test_launch_stages_verified_native_updater(
         "--restart",
     ]
     assert kwargs["shell"] is False
+
+
+def test_launch_returns_already_running_for_duplicate_updater(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "install"
+    root.mkdir()
+    _write_install_manifest(root)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    class FakeProcess:
+        pid = 4711
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("duplicate handoff must not terminate child")
+
+        def wait(self, *, timeout: float) -> None:
+            del timeout
+
+        def kill(self) -> None:
+            raise AssertionError("duplicate handoff must not kill child")
+
+    def fake_popen(arguments: list[str], **_kwargs: object) -> FakeProcess:
+        run_root = Path(arguments[0]).parent
+        (run_root / "handoff.json").write_text(
+            json.dumps(
+                _handoff(
+                    run_root,
+                    state="rejected",
+                    error_code="UPDATE_ALREADY_RUNNING",
+                    message="another updater owns the active state",
+                )
+            ),
+            encoding="utf-8",
+        )
+        return FakeProcess()
+
+    monkeypatch.setattr(update_launcher.subprocess, "Popen", fake_popen)
+    launched = update_launcher.launch_update(_request(root))
+
+    assert launched.status == "already_running"
+
+
+def test_launch_surfaces_rejected_handoff_code_and_bounded_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "install"
+    root.mkdir()
+    _write_install_manifest(root)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    class FakeProcess:
+        pid = 4711
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(arguments: list[str], **_kwargs: object) -> FakeProcess:
+        run_root = Path(arguments[0]).parent
+        (run_root / "handoff.json").write_text(
+            json.dumps(
+                _handoff(
+                    run_root,
+                    state="rejected",
+                    error_code="UI_INITIALIZATION_FAILED",
+                    message="InitCommonControlsEx failed",
+                )
+            ),
+            encoding="utf-8",
+        )
+        return FakeProcess()
+
+    monkeypatch.setattr(update_launcher.subprocess, "Popen", fake_popen)
+    with pytest.raises(update_launcher.UpdateLaunchError) as caught:
+        update_launcher.launch_update(_request(root))
+    assert str(caught.value) == (
+        "native updater rejected startup [UI_INITIALIZATION_FAILED]: "
+        "InitCommonControlsEx failed"
+    )
+
+
+@pytest.mark.parametrize("variant", ["malformed", "pid", "target", "run_id"])
+def test_handoff_parser_rejects_malformed_or_mismatched_identity(
+    tmp_path: Path, variant: str
+) -> None:
+    run_root = tmp_path / ("run-" + "a" * 32)
+    run_root.mkdir()
+    payload = _handoff(run_root)
+    if variant == "malformed":
+        (run_root / "handoff.json").write_text("{not-json", encoding="utf-8")
+    else:
+        if variant == "pid":
+            payload["updater_pid"] = 9999
+        elif variant == "target":
+            payload["target_version"] = "9.9.9"
+        else:
+            payload["run_id"] = "run-" + "b" * 32
+        (run_root / "handoff.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        update_launcher._parse_handoff(
+            run_root / "handoff.json",
+            run_root=run_root,
+            process_pid=4711,
+            target_version="2.5.0",
+        )
+        is None
+    )
+
+
+def test_wait_for_handoff_rejects_child_exit_before_handoff(tmp_path: Path) -> None:
+    run_root = tmp_path / ("run-" + "a" * 32)
+    run_root.mkdir()
+
+    class ExitedProcess:
+        pid = 4711
+
+        def poll(self) -> int:
+            return 1
+
+    with pytest.raises(update_launcher.UpdateLaunchError, match="exited before"):
+        update_launcher._wait_for_handoff(
+            cast(Any, ExitedProcess()), run_root=run_root, target_version="2.5.0"
+        )
+
+
+def test_wait_for_handoff_timeout_terminates_then_kills_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    run_root = tmp_path / ("run-" + "a" * 32)
+    run_root.mkdir()
+    events: list[str] = []
+
+    class HungProcess:
+        pid = 4711
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            events.append("terminate")
+
+        def wait(self, *, timeout: float) -> None:
+            del timeout
+            if events == ["terminate"]:
+                raise subprocess.TimeoutExpired("updater", 2)
+            events.append("wait-after-kill")
+
+        def kill(self) -> None:
+            events.append("kill")
+
+    clock = iter((0.0, 6.0))
+    monkeypatch.setattr(update_launcher.time, "monotonic", lambda: next(clock))
+    with pytest.raises(update_launcher.UpdateLaunchError, match="ready handshake"):
+        update_launcher._wait_for_handoff(
+            cast(Any, HungProcess()), run_root=run_root, target_version="2.5.0"
+        )
+    assert events == ["terminate", "kill", "wait-after-kill"]
 
 
 def test_launch_preflight_failure_does_not_spawn(

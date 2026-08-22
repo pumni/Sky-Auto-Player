@@ -233,7 +233,7 @@ def _parse_handoff(
     run_root: Path,
     process_pid: int,
     target_version: str,
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     try:
         if path.stat().st_size > _MAX_HANDOFF_BYTES:
             return None
@@ -265,7 +265,7 @@ def _parse_handoff(
         or "\x00" in message
     ):
         return None
-    return state, error_code
+    return state, error_code, message
 
 
 def _terminate_after_handshake_timeout(process: subprocess.Popen[bytes]) -> None:
@@ -287,7 +287,7 @@ def _wait_for_handoff(
     *,
     run_root: Path,
     target_version: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     handoff = run_root / "handoff.json"
     deadline = time.monotonic() + HANDOFF_TIMEOUT_S
     while time.monotonic() < deadline:
@@ -298,13 +298,13 @@ def _wait_for_handoff(
             target_version=target_version,
         )
         if parsed is not None:
-            state, error_code = parsed
+            state, error_code, message = parsed
             if state == "ready":
                 return parsed
             if error_code == "UPDATE_ALREADY_RUNNING":
                 return parsed
             raise UpdateLaunchError(
-                f"native updater rejected startup [{error_code or 'UNKNOWN'}]"
+                f"native updater rejected startup [{error_code or 'UNKNOWN'}]: {message}"
             )
         if process.poll() is not None:
             raise UpdateLaunchError("native updater exited before the ready handshake")
@@ -389,7 +389,7 @@ def launch_update(request: UpdateLaunchRequest) -> UpdateLaunchResult:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        state, _error_code = _wait_for_handoff(
+        state, _error_code, _message = _wait_for_handoff(
             process,
             run_root=run_root,
             target_version=request.target_version,

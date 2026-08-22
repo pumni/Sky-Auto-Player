@@ -1216,11 +1216,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 timeout=6,
             )
             if result.cleanup_pending or result.warnings:
-                warning = result.warnings[0] if result.warnings else None
-                detail = warning.message if warning is not None else "temporary updater files remain"
-                suffix = " Cleanup will be retried automatically." if result.cleanup_pending else ""
                 self.notify(
-                    f"The update completed, but cleanup needs attention: {detail}.{suffix}",
+                    "The update completed, but some temporary updater files could not be "
+                    "removed. Cleanup will be retried automatically.",
                     severity="warning",
                     timeout=10,
                 )
@@ -1235,23 +1233,29 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 persist_update_last_notified(self.cfg, "")
         elif result.status == "rolled_back":
             self.notify(
-                f"Update to v{result.target_version} was rolled back: {result.message}",
+                f"Update to v{result.target_version} was rolled back "
+                f"{self._format_update_provenance(result)}: {result.message}",
                 severity="error",
                 timeout=10,
             )
         elif result.status == "failure":
-            details = [f"[{result.error_code or 'UNKNOWN'}]"]
-            if result.phase or result.operation:
-                details.append(f"during {result.phase}/{result.operation}".rstrip("/"))
-            if result.path:
-                details.append(f"at {result.path}")
-            if result.os_error is not None:
-                details.append(f"(Windows error {result.os_error})")
             self.notify(
-                f"Update to v{result.target_version} failed {' '.join(details)}: {result.message}",
+                f"Update to v{result.target_version} failed "
+                f"{self._format_update_provenance(result)}: {result.message}",
                 severity="error",
                 timeout=10,
             )
+
+    @staticmethod
+    def _format_update_provenance(result: Any) -> str:
+        details = [f"[{result.error_code or 'UNKNOWN'}]"]
+        if result.phase or result.operation:
+            details.append(f"during {result.phase}/{result.operation}".rstrip("/"))
+        if result.path:
+            details.append(f"at {result.path}")
+        if result.os_error is not None:
+            details.append(f"(Windows error {result.os_error})")
+        return " ".join(details)
 
     def _open_manual_update_page(self) -> None:
         """Open only the project's fixed official Releases page."""

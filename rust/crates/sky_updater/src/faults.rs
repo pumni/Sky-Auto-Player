@@ -16,6 +16,7 @@ struct FaultSpec {
 struct FaultConfig {
     failures: Vec<FaultSpec>,
     pause_at: Option<String>,
+    fail_restart: bool,
 }
 
 static CONFIG: OnceLock<Mutex<FaultConfig>> = OnceLock::new();
@@ -50,6 +51,7 @@ pub fn configure(fail_at: Option<&str>, pause_at: Option<&str>) -> Result<()> {
     let config = FaultConfig {
         failures,
         pause_at: pause_at.map(str::to_owned),
+        fail_restart: false,
     };
     CONFIG
         .get_or_init(|| Mutex::new(config.clone()))
@@ -57,6 +59,23 @@ pub fn configure(fail_at: Option<&str>, pause_at: Option<&str>) -> Result<()> {
         .map_err(|_| UpdaterError::InstallCopyFailed("fault configuration poisoned".into()))?
         .clone_from(&config);
     Ok(())
+}
+
+pub fn set_restart_failure(enabled: bool) -> Result<()> {
+    let config = CONFIG
+        .get_or_init(|| Mutex::new(FaultConfig::default()))
+        .lock()
+        .map_err(|_| UpdaterError::InstallCopyFailed("fault configuration poisoned".into()))?;
+    let mut config = config;
+    config.fail_restart = enabled;
+    Ok(())
+}
+
+pub fn restart_should_fail() -> bool {
+    CONFIG
+        .get()
+        .and_then(|config| config.lock().ok())
+        .is_some_and(|config| config.fail_restart)
 }
 
 pub fn pause_at(point: &str) {

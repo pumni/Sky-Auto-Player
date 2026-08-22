@@ -4,7 +4,9 @@ param(
     [string]$FromPackage,
     [Parameter(Mandatory = $true)]
     [string]$ToPackage,
-    [string]$GitHubTargetVersion = "3.4.0",
+    [string]$GitHubTargetVersion = "3.4.5",
+    [string]$ExpectedFromVersion = "3.4.4",
+    [string]$ExpectedToVersion = "3.4.5",
     [switch]$KeepEvidence,
     [int]$TimeoutSeconds = 180
 )
@@ -291,7 +293,9 @@ function Start-UpdaterProcess {
         [string]$FailAt,
         [string]$PauseAt,
         [switch]$Restart,
-        [switch]$KeepPaused
+        [switch]$KeepPaused,
+        [switch]$RequireProgressWindow,
+        [switch]$FailRestart
     )
     $run = New-RunDirectory $Candidate
     $updater = Join-Path $run "Sky-Auto-Player-Updater.exe"
@@ -305,6 +309,7 @@ function Start-UpdaterProcess {
         "--channel", "stable"
     )
     if ($Restart) { $arguments += "--restart" }
+    if ($FailRestart) { $arguments += "--fail-restart" }
     if ($ReleaseDir) { $arguments += @("--release-dir", $ReleaseDir) }
     if ($FailAt) { $arguments += @("--fail-at", $FailAt) }
     if ($PauseAt) { $arguments += @("--pause-at", $PauseAt) }
@@ -313,6 +318,9 @@ function Start-UpdaterProcess {
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     if (-not $KeepPaused) {
         Start-Sleep -Milliseconds 1000
+    }
+    if ($RequireProgressWindow -and -not (Wait-ForProgressWindow $process.Id)) {
+        throw "native updater progress window was not visible"
     }
     [pscustomobject]@{
         Process = $process
@@ -332,13 +340,16 @@ function Invoke-Updater {
         [string]$ReleaseDir,
         [string]$FailAt,
         [string]$PauseAt,
-        [switch]$Restart
+        [switch]$Restart,
+        [switch]$RequireProgressWindow,
+        [switch]$FailRestart
     )
     $parent = Start-ParentFixture $Scenario.Install
     $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
     $runInfo = Start-UpdaterProcess -Install $Scenario.Install -Candidate $Candidate `
         -ParentPid $parentPid -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion -ReleaseDir $ReleaseDir `
-        -FailAt $FailAt -PauseAt $PauseAt -Restart:$Restart
+        -FailAt $FailAt -PauseAt $PauseAt -Restart:$Restart `
+        -RequireProgressWindow:$RequireProgressWindow -FailRestart:$FailRestart
     Start-Sleep -Milliseconds 500
     Stop-ProcessIfRunning $parent
     if (-not $runInfo.Process.WaitForExit($TimeoutSeconds * 1000)) {
@@ -359,6 +370,47 @@ function Invoke-Updater {
         Stdout = if (Test-Path $runInfo.Stdout) { Get-Content $runInfo.Stdout -Raw } else { "" }
         Stderr = if (Test-Path $runInfo.Stderr) { Get-Content $runInfo.Stderr -Raw } else { "" }
     }
+}
+
+function Wait-ForProgressWindow {
+    param(
+        [int]$ProcessId,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $process = Get-Process -Id $ProcessId -ErrorAction Stop
+            if ($process.MainWindowTitle -eq "Sky Auto Player Updater") {
+                return $true
+            }
+        } catch { return $false }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
+function Wait-ForEmergencyBackup {
+    param(
+        [string]$Install,
+        [int]$TimeoutSeconds = 45
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $backup = Get-ChildItem -LiteralPath $Install -Filter ".sky-update-*.bak" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "*.reconcile.bak" } |
+            Select-Object -First 1
+        if ($backup) { return $backup.FullName }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $null
+}
+
+function Read-RunHandoff {
+    param([string]$Run)
+    $path = Join-Path $Run "handoff.json"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
 function Assert-RestartObserved {
@@ -514,8 +566,8 @@ try {
     $toRoot = Get-PackageRoot (Resolve-Path $ToPackage).Path (Join-Path $script:SandboxRoot "to-package")
     $fromManifest = Get-ManifestObject $fromRoot
     $toManifest = Get-ManifestObject $toRoot
-    if ($fromManifest.version -ne "3.3.0") { throw "H1 requires a v3.3.0 source package; got $($fromManifest.version)" }
-    if ($toManifest.version -ne "3.4.0") { throw "H1 requires a v3.4.0 target package; got $($toManifest.version)" }
+    if ($fromManifest.version -ne $ExpectedFromVersion) { throw "H1 requires a v$ExpectedFromVersion source package; got $($fromManifest.version)" }
+    if ($toManifest.version -ne $ExpectedToVersion) { throw "H1 requires a v$ExpectedToVersion target package; got $($toManifest.version)" }
 
     $cargoManifest = Join-Path $script:RepoRoot "rust\Cargo.toml"
     & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater --release
@@ -541,7 +593,8 @@ try {
     $syntheticManifest = Get-ManifestObject $syntheticRelease
 
     $scenario = New-Scenario "happy-local" $fromRoot
-    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease -Restart
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease `
+        -Restart -RequireProgressWindow
     if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H1 result was not success" }
     $h1 = Save-ScenarioEvidence "happy-local" $scenario $run $syntheticManifest
     Save-UpdaterLog "happy-local" $scenario
@@ -586,12 +639,133 @@ try {
     $second = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
         -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease
     $second.Process.WaitForExit(15000) | Out-Null
-    $secondStderr = Get-Content $second.Stderr -Raw
+    $secondHandoff = Read-RunHandoff $second.Run
     Stop-ProcessIfRunning $first.Process
-    if ($second.Process.ExitCode -eq 0 -or $secondStderr -notmatch "UPDATE_ALREADY_RUNNING" -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "concurrent updater safety check failed" }
-    [ordered]@{ status = "UPDATE_ALREADY_RUNNING"; exit_code = $second.Process.ExitCode; stderr = $secondStderr } | ConvertTo-Json | Set-Content (Join-Path $script:EvidenceRoot "concurrent-result.json") -Encoding utf8
+    if ($second.Process.ExitCode -ne 0 -or $secondHandoff.state -ne "rejected" -or
+        $secondHandoff.error_code -ne "UPDATE_ALREADY_RUNNING" -or
+        (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "concurrent updater safety check failed" }
+    [ordered]@{ status = $secondHandoff.error_code; state = $secondHandoff.state; exit_code = $second.Process.ExitCode } |
+        ConvertTo-Json | Set-Content (Join-Path $script:EvidenceRoot "concurrent-result.json") -Encoding utf8
     $script:Results.concurrent_blocked = $true
     Save-UpdaterLog "concurrent" $scenario
+
+    $scenario = New-Scenario "active-reopen" $fromRoot
+    $first = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
+        -CurrentVersion $fromManifest.version -TargetVersion $toManifest.version -ReleaseDir $syntheticRelease `
+        -PauseAt "after-lock" -KeepPaused
+    $activePath = Join-Path $scenario.Local "Sky-Auto-Player\update-state\active-update.json"
+    $activeDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if (Test-Path -LiteralPath $activePath -PathType Leaf) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $activeDeadline)
+    if (-not (Test-Path -LiteralPath $activePath -PathType Leaf)) { throw "active state was not created" }
+    $reopenStdout = Join-Path $first.Run "reopen.stdout.txt"
+    $reopenStderr = Join-Path $first.Run "reopen.stderr.txt"
+    $reopened = Start-Process -FilePath (Join-Path $scenario.Install "Sky-Auto-Player.exe") `
+        -WorkingDirectory $scenario.Install -RedirectStandardOutput $reopenStdout `
+        -RedirectStandardError $reopenStderr -PassThru
+    if (-not $reopened.WaitForExit(15000)) {
+        Stop-ProcessIfRunning $reopened
+        Stop-ProcessIfRunning $first.Process
+        throw "reopened app stayed alive while updater was active"
+    }
+    Stop-ProcessIfRunning $first.Process
+    Write-EvidenceJson "active-reopen-result.json" ([ordered]@{
+        startup_guard_exit_code = $reopened.ExitCode
+        active_state_created = $true
+        active_state_owned_by_paused_updater = $true
+    })
+    $script:Results.active_reopen_guard = $true
+    Save-UpdaterLog "active-reopen" $scenario
+
+    $scenario = New-Scenario "precommit-failure" $fromRoot
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease `
+        -FailAt "apply:before-replace:Sky-Auto-Player-Updater.exe"
+    if ($run.Result.status -ne "rolled_back" -or
+        (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) {
+        throw "precommit failure did not produce a clean rolled-back result"
+    }
+    Assert-NoInstallMutation $scenario
+    Assert-PreservedState $scenario
+    Write-EvidenceJson "precommit-failure-result.json" $run.Result
+    $script:Results.precommit_rollback = $true
+    Save-UpdaterLog "precommit-failure" $scenario
+
+    $scenario = New-Scenario "cleanup-access-denied" $fromRoot
+    $parent = Start-ParentFixture $scenario.Install
+    $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
+    $accessRun = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
+        -ParentPid $parentPid -CurrentVersion $fromManifest.version -TargetVersion $toManifest.version `
+        -ReleaseDir $syntheticRelease -PauseAt "before-cleanup:apply:Sky-Auto-Player-Updater.exe" `
+        -Restart -KeepPaused -RequireProgressWindow
+    $backupPath = Wait-ForEmergencyBackup $scenario.Install
+    if (-not $backupPath) {
+        Stop-ProcessIfRunning $accessRun.Process
+        Stop-ProcessIfRunning $parent
+        throw "cleanup AccessDenied fixture did not create an emergency backup"
+    }
+    $deleteBlocker = $null
+    try {
+        # FileShare.Read deliberately omits FILE_SHARE_DELETE. The updater must
+        # surface cleanup_pending while the verified install and restart still
+        # succeed, then retry this exact .bak path after the handle is released.
+        $deleteBlocker = [IO.File]::Open(
+            $backupPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        Stop-ProcessIfRunning $parent
+        if (-not $accessRun.Process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-ProcessIfRunning $accessRun.Process
+            throw "cleanup AccessDenied updater timed out"
+        }
+        $accessResultPath = Join-Path $scenario.Local "Sky-Auto-Player\update-state\last-result.json"
+        $accessResult = Get-Content -LiteralPath $accessResultPath -Raw | ConvertFrom-Json
+        $matchingWarning = @($accessResult.warnings) | Where-Object {
+            $_.path -like "*.sky-update-*.bak" -and $null -ne $_.os_error
+        } | Select-Object -First 1
+        if ($accessResult.status -ne "success" -or -not $accessResult.cleanup_pending -or
+            $null -eq $matchingWarning -or -not (Assert-RestartObserved $scenario.Install)) {
+            throw "cleanup AccessDenied did not preserve success, warning provenance, and restart"
+        }
+        $accessRunResult = [pscustomobject]@{
+            Scenario = $scenario
+            Run = $accessRun.Run
+            ExitCode = $accessRun.Process.ExitCode
+            Result = $accessResult
+            ResultPath = $accessResultPath
+        }
+        Write-EvidenceJson "cleanup-access-denied-handle.json" ([ordered]@{
+            locked_backup = $backupPath
+            warning_path = $matchingWarning.path
+            warning_os_error = $matchingWarning.os_error
+            cleanup_pending = [bool]$accessResult.cleanup_pending
+            status = $accessResult.status
+            restart_verified = $true
+        })
+        $script:Results.cleanup_access_denied = $true
+        Save-ScenarioEvidence "cleanup-access-denied" $scenario $accessRunResult $syntheticManifest | Out-Null
+        Save-UpdaterLog "cleanup-access-denied" $scenario
+    } finally {
+        if ($deleteBlocker) { $deleteBlocker.Dispose() }
+        Stop-RestartedApp $scenario.Install
+    }
+
+    $scenario = New-Scenario "restart-failure" $fromRoot
+    $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $syntheticRelease `
+        -Restart -FailRestart
+    $restartManifest = Get-ManifestObject $scenario.Install
+    if ($run.Result.status -ne "failure" -or $run.Result.error_code -ne "RESTART_FAILED" -or
+        (Test-Path (Join-Path $scenario.Install ".sky-update-transaction")) -or
+        $restartManifest.version -ne $toManifest.version) {
+        throw "restart failure did not preserve the committed install and failure result"
+    }
+    Assert-PreservedState $scenario
+    Write-EvidenceJson "restart-failure-result.json" $run.Result
+    $script:Results.restart_failure_result = $true
+    Save-UpdaterLog "restart-failure" $scenario
 
     $scenario = New-Scenario "rollback-fault" $fromRoot
     $prepared = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
@@ -695,7 +869,11 @@ finally {
         happy_github = if ($script:Results.happy_github) { $script:Results.happy_github.status } else { "FAIL" }
         locked_primary_safe = [bool]$script:Results.locked_primary_safe
         concurrent_blocked = [bool]$script:Results.concurrent_blocked
+        active_reopen_guard = [bool]$script:Results.active_reopen_guard
+        precommit_rollback = [bool]$script:Results.precommit_rollback
         rollback_preserved_updater = [bool]$script:Results.rollback_preserved_updater
+        cleanup_access_denied = [bool]$script:Results.cleanup_access_denied
+        restart_failure_result = [bool]$script:Results.restart_failure_result
         restart_verified = [bool]$script:Results.restart_verified
         crash_recovery = [bool]$script:Results.crash_recovery
         defender_antivirus_enabled_before = if ($script:DefenderBefore) { [bool]$script:DefenderBefore.antivirus_enabled } else { $false }

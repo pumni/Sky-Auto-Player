@@ -11,6 +11,7 @@ widgets are present.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -407,3 +408,139 @@ def test_update_banner_enter_defaults_to_remind_without_launch(
         assert launch_calls == []
 
     _run(_with_app(actions))
+
+
+def test_update_success_cleanup_warning_uses_acceptance_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sky_music.infrastructure.update_runtime import (
+        UpdateRuntimeResult,
+        UpdateRuntimeWarning,
+    )
+
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr(
+        "sky_music.infrastructure.update_runtime.consume_last_result",
+        lambda: UpdateRuntimeResult(
+            status="success",
+            from_version="3.4.4",
+            target_version="3.4.5",
+            timestamp_utc="2026-08-22T00:00:00Z",
+            warnings=(
+                UpdateRuntimeWarning(
+                    code="ARTIFACT_CLEANUP_FAILED",
+                    message="Access is denied",
+                    path=r"C:\install\.sky-update-1.bak",
+                    os_error=32,
+                ),
+            ),
+            cleanup_pending=True,
+        ),
+    )
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        notices: list[str] = []
+        app.notify = lambda message, **_kwargs: notices.append(str(message))  # type: ignore[method-assign]
+        app._report_last_update_result()
+        assert (
+            "The update completed, but some temporary updater files could not be removed. "
+            "Cleanup will be retried automatically."
+        ) in notices
+        await pilot.pause()
+
+    _run(_with_app(actions))
+
+
+def test_rolled_back_update_renders_structured_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sky_music.infrastructure.update_runtime import UpdateRuntimeResult
+
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr(
+        "sky_music.infrastructure.update_runtime.consume_last_result",
+        lambda: UpdateRuntimeResult(
+            status="rolled_back",
+            from_version="3.4.4",
+            target_version="3.4.5",
+            timestamp_utc="2026-08-22T00:00:00Z",
+            error_code="INSTALL_ATOMIC_REPLACE_FAILED",
+            message="replacement failed",
+            phase="apply",
+            operation="replace",
+            path=r"C:\install\Sky-Auto-Player.exe",
+            os_error=5,
+        ),
+    )
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        notices: list[str] = []
+        app.notify = lambda message, **_kwargs: notices.append(str(message))  # type: ignore[method-assign]
+        app._report_last_update_result()
+        assert notices == [
+            "Update to v3.4.5 was rolled back [INSTALL_ATOMIC_REPLACE_FAILED] "
+            "during apply/replace at C:\\install\\Sky-Auto-Player.exe "
+            "(Windows error 5): replacement failed"
+        ]
+        await pilot.pause()
+
+    _run(_with_app(actions))
+
+
+def test_rejected_update_keeps_app_open_and_reports_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.infrastructure.update_launcher import UpdateLaunchError
+
+    app = app_module.SkyPickerApp(initial_dry_run=True)
+    notices: list[str] = []
+    app.notify = lambda message, **_kwargs: notices.append(str(message))  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "sky_music.infrastructure.update_launcher.launch_update",
+        lambda _request: (_ for _ in ()).throw(
+            UpdateLaunchError("native updater rejected startup [UI_INITIALIZATION_FAILED]: InitCommonControlsEx failed")
+        ),
+    )
+
+    app._launch_native_update(SimpleNamespace(latest_version="3.4.5"))
+
+    assert notices == [
+        "Update could not start: native updater rejected startup "
+        "[UI_INITIALIZATION_FAILED]: InitCommonControlsEx failed. Choose Open GitHub Releases "
+        "for manual update."
+    ]
+
+
+def test_duplicate_update_notifies_then_exits_after_delay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.infrastructure.update_launcher import UpdateLaunchResult
+
+    app = app_module.SkyPickerApp(initial_dry_run=True)
+    notices: list[str] = []
+    timers: list[tuple[float, Any]] = []
+    exits: list[bool] = []
+    app.notify = lambda message, **_kwargs: notices.append(str(message))  # type: ignore[method-assign]
+    app.set_timer = lambda delay, callback: timers.append((float(delay), callback))  # type: ignore[method-assign]
+    app.exit = lambda: exits.append(True)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "sky_music.infrastructure.update_launcher.launch_update",
+        lambda _request: UpdateLaunchResult(
+            status="already_running",
+            staged_updater=tmp_path / "Sky-Auto-Player-Updater.exe",
+            run_root=tmp_path / "run",
+            updater_pid=4711,
+        ),
+    )
+
+    app._launch_native_update(SimpleNamespace(latest_version="3.4.5"))
+    assert notices == [
+        "An update is already running. This app window will close so the updater can continue."
+    ]
+    assert [delay for delay, _callback in timers] == [1.0]
+    timers[0][1]()
+    assert exits == [True]

@@ -7,6 +7,7 @@ use sky_updater::archive::sha256_bytes;
 use sky_updater::error::UpdaterError;
 use sky_updater::install::install_verified;
 use sky_updater::manifest::{Manifest, ManifestFile};
+use sky_updater::progress::NoopProgressSink;
 use sky_updater::recovery::rollback_prepared;
 use sky_updater::result::{self, UpdateResult};
 use sky_updater::transaction::{build_plan, cleanup_committed, prepare_journal, transaction_root};
@@ -155,8 +156,14 @@ fn packaged_update_and_injected_failure_rollback_preserve_user_state() {
         .verify_staged(&staging_b)
         .expect("staged B payload");
 
-    install_verified(&install_a, &staging_b, &manifest_b, &manifest_a)
-        .expect("A to B installation");
+    install_verified(
+        &install_a,
+        &staging_b,
+        &manifest_b,
+        &manifest_a,
+        &NoopProgressSink,
+    )
+    .expect("A to B installation");
     assert_files(&install_a, &b_files);
     assert!(
         !install_a.join("old.dll").exists(),
@@ -182,7 +189,7 @@ fn packaged_update_and_injected_failure_rollback_preserve_user_state() {
     write_manifest(&install_rollback, &manifest_a);
 
     let plan = build_plan(Some(&manifest_a), &manifest_b).expect("rollback plan");
-    prepare_journal(&install_rollback, &plan).expect("rollback journal");
+    prepare_journal(&install_rollback, &plan, &NoopProgressSink).expect("rollback journal");
     // Inject the failure after mutation has started: the B files and manifest
     // are present, the old orphan is removed, and recovery must restore A.
     for (path, bytes) in b_files {

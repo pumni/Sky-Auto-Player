@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::error::Result;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UpdatePhase {
     Starting,
@@ -72,14 +74,16 @@ pub struct ProgressEvent {
 }
 
 pub trait ProgressSink: Send + Sync {
-    fn publish(&self, event: ProgressEvent);
+    fn publish(&self, event: ProgressEvent) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoopProgressSink;
 
 impl ProgressSink for NoopProgressSink {
-    fn publish(&self, _event: ProgressEvent) {}
+    fn publish(&self, _event: ProgressEvent) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub type SharedProgressSink = Arc<dyn ProgressSink>;

@@ -99,24 +99,21 @@ pub fn append_log(result: &UpdateResult) -> Result<()> {
             result.timestamp_utc,
             result.from_version,
             result.target_version,
-            bound_message(warning.code.clone()),
+            bounded_log_message(&warning.code),
             warning
                 .phase
                 .as_deref()
-                .map(str::to_owned)
-                .map(bound_message)
+                .map(bounded_log_message)
                 .unwrap_or_default(),
             warning
                 .operation
                 .as_deref()
-                .map(str::to_owned)
-                .map(bound_message)
+                .map(bounded_log_message)
                 .unwrap_or_default(),
             warning
                 .path
                 .as_deref()
-                .map(str::to_owned)
-                .map(bound_message)
+                .map(bounded_log_message)
                 .unwrap_or_default(),
             warning
                 .os_error
@@ -385,7 +382,9 @@ mod tests {
 
     use crate::error::io_context;
 
-    use super::{MAX_MESSAGE_CHARS, bound_message};
+    use super::{
+        MAX_MESSAGE_CHARS, UpdateWarning, bound_message, bound_warnings, bounded_log_message,
+    };
 
     #[test]
     fn bound_message_limits_ascii_to_512_characters() {
@@ -418,5 +417,45 @@ mod tests {
         assert_eq!(result.operation.as_deref(), Some("read file attributes"));
         assert_eq!(result.path.as_deref(), Some(r"C:\install\deep\file.txt"));
         assert_eq!(result.os_error, Some(3));
+    }
+
+    fn warning(index: usize) -> UpdateWarning {
+        UpdateWarning {
+            code: format!("WARNING_{index}"),
+            message: format!("warning {index}"),
+            phase: Some("CleaningUp".into()),
+            operation: Some("remove artifact".into()),
+            path: Some(format!(r"C:\updates\.sky-update-{index}.bak")),
+            os_error: Some(32),
+        }
+    }
+
+    #[test]
+    fn warning_results_keep_seven_entries_and_omit_the_rest() {
+        let bounded = bound_warnings((0..12).map(warning).collect());
+
+        assert_eq!(bounded.len(), 8);
+        assert_eq!(bounded[7].code, "ADDITIONAL_WARNINGS_OMITTED");
+        assert_eq!(bounded[0].code, "WARNING_0");
+    }
+
+    #[test]
+    fn warning_fields_are_unicode_safe_and_bounded() {
+        let mut value = warning(1);
+        value.message = "ế".repeat(600);
+        value.path = Some("é".repeat(600));
+
+        let bounded = bound_warnings(vec![value]);
+        assert_eq!(bounded[0].message.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(bounded[0].message.chars().last(), Some('…'));
+        let path = bounded[0].path.as_deref().expect("path");
+        assert_eq!(path.chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(path.chars().last(), Some('…'));
+    }
+
+    #[test]
+    fn warning_log_fields_escape_quotes_and_newlines() {
+        let bounded = bounded_log_message("path\"with\nline\rbreak");
+        assert_eq!(bounded, "path'with line break");
     }
 }

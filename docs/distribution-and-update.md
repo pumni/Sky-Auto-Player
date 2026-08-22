@@ -275,10 +275,12 @@ and records any detections observed during the run in the evidence bundle. The
 main harness and every updater/app scenario remain non-elevated; only the
 feature-local Defender snapshot helper uses two explicit UAC prompts. Evidence
 records `harness_elevated: false` and `defender_snapshot_elevated: true`. The
-v3.4.5 is the first fixed updater release and is a manual bridge for
-installations whose existing updater predates this transaction hardening;
-those installations must be moved manually to v3.4.5 before native self-update
-is trusted again.
+v3.4.4 → v3.4.5 is still initiated by the v3.4.4 updater. The progress UI and
+lifecycle fixes in v3.4.5 apply only to updates initiated from v3.4.5 onward.
+If the v3.4.4 → v3.4.5 update reports failure or does not restart the app, use
+the canonical ZIP manual bridge. Installations whose existing updater predates
+this transaction hardening must be moved manually to v3.4.5 before native
+self-update is trusted again.
 
 ## 8. Security boundary
 

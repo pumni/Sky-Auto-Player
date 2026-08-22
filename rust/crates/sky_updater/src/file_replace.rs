@@ -199,39 +199,49 @@ pub(crate) fn remove_owned_tree(path: &Path) -> io::Result<()> {
             "refusing to remove a reparse-point directory",
         ));
     }
-    let delays = [50_u64, 100, 200, 400, 800];
-    let mut last_error = None;
-    for (attempt, delay_ms) in delays.iter().enumerate() {
-        match fs::remove_dir_all(path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) if is_retryable_cleanup_error(&error) && attempt < delays.len() - 1 => {
-                clear_readonly_attribute(path);
-                last_error = Some(error);
-                std::thread::sleep(Duration::from_millis(*delay_ms));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Err(last_error.unwrap_or_else(|| io::Error::other("cleanup failed")))
+    retry_cleanup(
+        || fs::remove_dir_all(path),
+        || clear_readonly_attribute(path),
+        std::thread::sleep,
+    )
 }
 
 fn remove_file_with_retry(path: &Path) -> io::Result<()> {
-    let delays = [50_u64, 100, 200, 400, 800];
-    let mut last_error = None;
-    for (attempt, delay_ms) in delays.iter().enumerate() {
-        match fs::remove_file(path) {
+    retry_cleanup(
+        || fs::remove_file(path),
+        || clear_readonly_attribute(path),
+        std::thread::sleep,
+    )
+}
+
+const CLEANUP_RETRY_DELAYS_MS: [u64; 5] = [50, 100, 200, 400, 800];
+
+fn retry_cleanup<Remove, BeforeRetry, Sleep>(
+    mut remove: Remove,
+    mut before_retry: BeforeRetry,
+    mut sleep: Sleep,
+) -> io::Result<()>
+where
+    Remove: FnMut() -> io::Result<()>,
+    BeforeRetry: FnMut(),
+    Sleep: FnMut(Duration),
+{
+    for delay_ms in CLEANUP_RETRY_DELAYS_MS {
+        match remove() {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) if is_retryable_cleanup_error(&error) && attempt < delays.len() - 1 => {
-                clear_readonly_attribute(path);
-                last_error = Some(error);
-                std::thread::sleep(Duration::from_millis(*delay_ms));
+            Err(error) if is_retryable_cleanup_error(&error) => {
+                before_retry();
+                sleep(Duration::from_millis(delay_ms));
             }
             Err(error) => return Err(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| io::Error::other("cleanup failed")))
+    match remove() {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn is_retryable_cleanup_error(error: &io::Error) -> bool {
@@ -377,6 +387,8 @@ pub fn atomic_replace_existing(
     match replacement.commit_existing() {
         Ok(()) => {
             after_replace(phase, &replacement.label)?;
+            #[cfg(feature = "e2e-fault-injection")]
+            crate::faults::pause_at(&format!("before-cleanup:{phase}:{}", replacement.label));
             Ok(replacement.cleanup_after_commit())
         }
         Err(error) => {
@@ -989,5 +1001,69 @@ mod tests {
             );
         }
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn cleanup_retry_uses_initial_attempt_plus_all_five_delays() {
+        let mut attempts = 0_u8;
+        let mut delays = Vec::new();
+
+        let result = retry_cleanup(
+            || {
+                attempts += 1;
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"))
+            },
+            || {},
+            |delay| delays.push(delay.as_millis() as u64),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 6);
+        assert_eq!(delays, vec![50, 100, 200, 400, 800]);
+    }
+
+    #[test]
+    fn cleanup_retry_stops_without_delay_on_non_retryable_error() {
+        let mut attempts = 0_u8;
+        let mut delays = Vec::new();
+
+        let result = retry_cleanup(
+            || {
+                attempts += 1;
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "bad path"))
+            },
+            || {},
+            |delay| delays.push(delay.as_millis() as u64),
+        );
+
+        assert_eq!(
+            result.expect_err("non-retryable error").kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(attempts, 1);
+        assert!(delays.is_empty());
+    }
+
+    #[test]
+    fn cleanup_retry_returns_after_successful_retry() {
+        let mut attempts = 0_u8;
+        let mut delays = Vec::new();
+
+        retry_cleanup(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"))
+                } else {
+                    Ok(())
+                }
+            },
+            || {},
+            |delay| delays.push(delay.as_millis() as u64),
+        )
+        .expect("retry succeeds");
+
+        assert_eq!(attempts, 3);
+        assert_eq!(delays, vec![50, 100]);
     }
 }

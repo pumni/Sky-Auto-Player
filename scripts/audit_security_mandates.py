@@ -81,11 +81,17 @@ ALLOWED_WINDOWS_SYS_MODULES: frozenset[str] = frozenset(
         # inspect another process.
         "Win32::UI::Input",
         "Win32::System::Performance",
+        # The updater's application-owned progress window needs its real
+        # module instance for WNDCLASSW/CreateWindowExW registration.
+        "Win32::System::LibraryLoader",
         # The native acceptance artifact records the local Windows build as a
         # host fingerprint; it does not inspect game state or process memory.
         "Win32::System::SystemInformation",
         "Win32::System::Threading",
         "Win32::UI::Input::KeyboardAndMouse",
+        # The updater progress window uses the standard progress-bar class;
+        # this module does not provide input simulation or process access.
+        "Win32::UI::Controls",
         "Win32::UI::WindowsAndMessaging",
         # The out-of-process updater uses WinHTTP for the explicit GitHub
         # HTTPS allow-list and MoveFileExW for atomic JSON replacement. These

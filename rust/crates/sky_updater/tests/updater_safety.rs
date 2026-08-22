@@ -6,6 +6,7 @@ use sky_updater::archive::sha256_bytes;
 use sky_updater::error::UpdaterError;
 use sky_updater::install::install_verified;
 use sky_updater::manifest::{Manifest, ManifestFile};
+use sky_updater::progress::NoopProgressSink;
 #[cfg(feature = "e2e-fault-injection")]
 use sky_updater::recovery::rollback_prepared;
 use sky_updater::transaction::transaction_root;
@@ -142,7 +143,7 @@ mod fault_regressions {
         fs::create_dir_all(&staging).expect("staging");
         let (old, new, old_files, new_files) = seed_install(&root, &staging);
         let plan = build_plan(Some(&old), &new).expect("plan");
-        prepare_journal(&root, &plan).expect("journal");
+        prepare_journal(&root, &plan, &NoopProgressSink).expect("journal");
         let mut journal = read_journal(&root).expect("journal reads");
         journal.new_paths = vec![
             "README.md".into(),
@@ -211,7 +212,8 @@ mod fault_regressions {
             None,
         )
         .expect("fault config");
-        let error = install_verified(&root, &staging, &new, &old).expect_err("primary apply fault");
+        let error = install_verified(&root, &staging, &new, &old, &NoopProgressSink)
+            .expect_err("primary apply fault");
         assert!(matches!(error, UpdaterError::InstallCopyFailed(_)));
         assert!(transaction_root(&root).exists());
         assert!(root.join(UPDATER_EXE).is_file());
@@ -237,7 +239,7 @@ mod fault_regressions {
         fs::create_dir_all(&staging).expect("staging");
         let (old, new, _, new_files) = seed_install(&root, &staging);
         let plan = build_plan(Some(&old), &new).expect("plan");
-        prepare_journal(&root, &plan).expect("journal");
+        prepare_journal(&root, &plan, &NoopProgressSink).expect("journal");
         for (path, bytes) in new_files {
             write_file(&root, path, bytes);
         }
@@ -296,7 +298,8 @@ fn locked_primary_fails_preflight_without_transaction_or_mutation() {
         )
     };
     assert_ne!(handle, INVALID_HANDLE_VALUE, "lock fixture handle");
-    let error = install_verified(&root, &staging, &new, &old).expect_err("busy primary");
+    let error =
+        install_verified(&root, &staging, &new, &old, &NoopProgressSink).expect_err("busy primary");
     assert!(matches!(error, UpdaterError::InstallTargetBusy { .. }));
     assert!(!transaction_root(&root).exists());
     unsafe { CloseHandle(handle) };

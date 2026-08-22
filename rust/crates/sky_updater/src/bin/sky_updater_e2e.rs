@@ -30,6 +30,7 @@ fn run() -> Result<()> {
     let mut release_dir = None;
     let mut fail_at = None;
     let mut pause_at = None;
+    let mut fail_restart = false;
     let mut values = env::args().skip(1);
     while let Some(argument) = values.next() {
         match argument.as_str() {
@@ -57,6 +58,14 @@ fn run() -> Result<()> {
                 }
                 pause_at = Some(next_value(&mut values, &argument)?);
             }
+            "--fail-restart" => {
+                if fail_restart {
+                    return Err(UpdaterError::InvalidArgument(
+                        "duplicate flag: --fail-restart".into(),
+                    ));
+                }
+                fail_restart = true;
+            }
             other => {
                 standard.push(other.to_owned());
             }
@@ -66,6 +75,7 @@ fn run() -> Result<()> {
         UpdaterError::InvalidArgument("missing required flag: --release-dir".into())
     })?;
     sky_updater::faults::configure(fail_at.as_deref(), pause_at.as_deref())?;
+    sky_updater::faults::set_restart_failure(fail_restart)?;
     let source = LocalReleaseSource::new(&release_dir)?;
     let args = match sky_updater::cli::parse(standard.into_iter())? {
         sky_updater::cli::ParseResult::Args(args) => args,

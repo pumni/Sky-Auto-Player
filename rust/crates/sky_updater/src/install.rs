@@ -4,8 +4,10 @@ use std::path::Path;
 use crate::archive::validate_zip_file;
 use crate::error::{Result, UpdaterError, io_context};
 use crate::manifest::Manifest;
+use crate::progress::ProgressSink;
 use crate::transaction::{
-    TransactionPlan, TransactionReport, apply, build_plan, preflight, prepare_journal, safe_join,
+    TransactionPlan, TransactionReport, apply, build_plan, prepare_journal, safe_join,
+    verify_and_commit,
 };
 use crate::{MANIFEST_NAME, PRIMARY_EXE, UPDATER_EXE};
 
@@ -59,11 +61,18 @@ pub fn install_verified(
     staging: &Path,
     new_manifest: &Manifest,
     old_manifest: &Manifest,
+    progress: &dyn ProgressSink,
 ) -> Result<InstallReport> {
     let plan = build_plan(Some(old_manifest), new_manifest)?;
-    preflight(install_root, &plan)?;
-    prepare_journal(install_root, &plan)?;
-    let transaction = apply(install_root, staging, new_manifest, &plan)?;
+    progress.publish(crate::progress::ProgressEvent {
+        phase: crate::progress::UpdatePhase::Preflight,
+        current: None,
+        total: None,
+    })?;
+    crate::transaction::preflight(install_root, &plan)?;
+    prepare_journal(install_root, &plan, progress)?;
+    let transaction = apply(install_root, staging, new_manifest, &plan, progress)?;
+    verify_and_commit(install_root, new_manifest, progress)?;
     Ok(InstallReport { plan, transaction })
 }
 

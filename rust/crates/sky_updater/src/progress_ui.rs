@@ -238,13 +238,32 @@ mod platform {
     }
 
     fn create_window(state: Arc<Mutex<UiState>>) -> Result<HWND> {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::Controls::{
+            ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx,
+        };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, RegisterClassW, WNDCLASSW,
         };
 
+        let common_controls = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_PROGRESS_CLASS,
+        };
+        if unsafe { InitCommonControlsEx(&common_controls) } == 0 {
+            return Err(UpdaterError::UiInitializationFailed(
+                "InitCommonControlsEx failed".into(),
+            ));
+        }
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        if instance.is_null() {
+            return Err(UpdaterError::UiInitializationFailed(
+                "GetModuleHandleW failed".into(),
+            ));
+        }
         let class = wide("SkyAutoPlayerUpdaterProgress");
         let title = wide("Sky Auto Player Updater");
-        let instance: HINSTANCE = std::ptr::null_mut();
+        let instance: HINSTANCE = instance;
         let window_class = WNDCLASSW {
             style: 0,
             lpfnWndProc: Some(window_proc),
@@ -453,6 +472,7 @@ mod platform {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_child(
         parent: HWND,
         instance: HINSTANCE,
@@ -538,7 +558,12 @@ mod platform {
             return;
         };
         let status = if state.title.is_empty() {
-            state.phase.display_text().into()
+            match (state.phase, state.current, state.total) {
+                (UpdatePhase::BackingUp | UpdatePhase::Installing, Some(current), Some(total)) => {
+                    format!("{} {current} / {total}", state.phase.display_text())
+                }
+                _ => state.phase.display_text().into(),
+            }
         } else {
             state.title.clone()
         };
@@ -592,14 +617,10 @@ mod platform {
         if matches!(
             state.phase,
             UpdatePhase::BackingUp | UpdatePhase::Installing
-        ) {
-            if let (Some(current), Some(total)) = (state.current, state.total) {
-                return if total == 0 {
-                    0
-                } else {
-                    ((current * 100) / total).min(100) as u32
-                };
-            }
+        ) && let (Some(current), Some(total)) = (state.current, state.total)
+        {
+            let percent = current.saturating_mul(100).checked_div(total).unwrap_or(0);
+            return percent.min(100) as u32;
         }
         match state.phase {
             UpdatePhase::Starting => 0,
@@ -628,7 +649,8 @@ mod platform {
 pub use platform::NativeProgressUi;
 
 impl crate::progress::ProgressSink for NativeProgressUi {
-    fn publish(&self, event: crate::progress::ProgressEvent) {
+    fn publish(&self, event: crate::progress::ProgressEvent) -> crate::error::Result<()> {
         self.set_phase(event.phase, event.current, event.total);
+        Ok(())
     }
 }
