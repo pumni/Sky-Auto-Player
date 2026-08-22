@@ -168,17 +168,15 @@ pub fn run_update_with_source<S: ReleaseSource>(args: &UpdaterArgs, source: &S) 
                 return Err(error);
             }
         };
-    handoff::write_ready(&run_root, &args.target_version)?;
     let progress = UpdateProgress {
         ui: &ui,
         active: &active,
-        last_persisted_phase: Mutex::new(None),
+        // ActiveUpdateGuard::create already persisted Starting before the
+        // handoff. Treat that durable write as the initial phase boundary so
+        // READY cannot be followed by a redundant fallible filesystem write.
+        last_persisted_phase: Mutex::new(Some(UpdatePhase::Starting)),
     };
-    progress.publish(ProgressEvent {
-        phase: UpdatePhase::Starting,
-        current: None,
-        total: None,
-    })?;
+    handoff::write_ready(&run_root, &args.target_version)?;
     #[cfg(feature = "e2e-fault-injection")]
     crate::faults::pause_at("after-lock");
     let outcome = execute_update(args, source, &progress, &run_root);
@@ -422,9 +420,19 @@ fn execute_update_inner<S: ReleaseSource>(
         let committed_cleanup = cleanup_committed(&args.install_root)?;
         let run_cleanup = cleanup_run_files(run_root);
         let mut warnings = Vec::new();
+        // cleanup_committed() retries updater-owned stale artifacts after the
+        // transaction is committed. A replacement failure recorded during
+        // apply is only still pending if that exact path survived the later
+        // sweep; do not surface a warning for an artifact already removed.
+        let unresolved_install_cleanup = install
+            .transaction
+            .cleanup_failures
+            .into_iter()
+            .filter(|failure| failure.path.exists())
+            .collect();
         warnings.extend(cleanup_warnings(
             "ARTIFACT_CLEANUP_FAILED",
-            install.transaction.cleanup_failures,
+            unresolved_install_cleanup,
         ));
         for failure in committed_cleanup.failures {
             let code = if failure

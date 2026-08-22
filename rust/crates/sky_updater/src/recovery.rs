@@ -385,7 +385,9 @@ mod tests {
             .expect("delete-blocking handle");
 
         let error = recover_before_update(&root).expect_err("residual root must block update");
-        assert!(matches!(error, UpdaterError::TransactionRecoveryRequired(message) if message.contains("committed transaction cleanup remains pending")));
+        assert!(
+            matches!(error, UpdaterError::TransactionRecoveryRequired(message) if message.contains("committed transaction cleanup remains pending"))
+        );
         assert!(transaction_root(&root).exists());
 
         drop(blocker);

@@ -32,6 +32,7 @@ fn run() -> Result<()> {
     let mut pause_at = None;
     let mut resume_file = None;
     let mut fail_restart = false;
+    let mut cleanup_only = false;
     let handshake_only =
         env::var("SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY").is_ok_and(|value| value == "1");
     let mut values = env::args().skip(1);
@@ -77,6 +78,14 @@ fn run() -> Result<()> {
                 }
                 fail_restart = true;
             }
+            "--cleanup-only" => {
+                if cleanup_only {
+                    return Err(UpdaterError::InvalidArgument(
+                        "duplicate flag: --cleanup-only".into(),
+                    ));
+                }
+                cleanup_only = true;
+            }
             other => {
                 standard.push(other.to_owned());
             }
@@ -94,6 +103,14 @@ fn run() -> Result<()> {
     if handshake_only {
         let run_root = sky_updater::runner::updater_run_root()?;
         return sky_updater::handoff::write_ready(&run_root, &args.target_version);
+    }
+
+    if cleanup_only {
+        let report = sky_updater::file_replace::cleanup_stale_artifacts_report(&args.install_root);
+        if let Some(failure) = report.failures.into_iter().next() {
+            return Err(UpdaterError::Io(failure.error));
+        }
+        return Ok(());
     }
 
     let release_dir = release_dir.ok_or_else(|| {
