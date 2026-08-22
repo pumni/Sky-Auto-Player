@@ -24,14 +24,7 @@ pub struct UpdateLock {
 
 impl UpdateLock {
     pub fn acquire(install_root: &Path) -> Result<Self> {
-        let canonical = install_root
-            .canonicalize()
-            .map_err(|error| UpdaterError::InstallRootInvalid(error.to_string()))?;
-        if !canonical.is_dir() {
-            return Err(UpdaterError::InstallRootInvalid(
-                "install root must be a directory".into(),
-            ));
-        }
+        let identity = install_identity(install_root)?;
         let local_app_data = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
             UpdaterError::InstallRootInvalid("LOCALAPPDATA is unavailable".into())
         })?;
@@ -44,10 +37,6 @@ impl UpdateLock {
             ));
         }
         fs::create_dir_all(&lock_dir)?;
-        let identity = canonical
-            .to_string_lossy()
-            .replace('/', "\\")
-            .to_ascii_lowercase();
         let lock_path = lock_dir.join(format!("{}.lock", sha256_bytes(identity.as_bytes())));
 
         #[cfg(windows)]
@@ -81,6 +70,26 @@ impl UpdateLock {
     pub fn path(&self) -> &Path {
         &self.path_display
     }
+}
+
+/// Return the stable identity shared by the lock and active-update state.
+pub fn install_identity(install_root: &Path) -> Result<String> {
+    let canonical = install_root
+        .canonicalize()
+        .map_err(|error| UpdaterError::InstallRootInvalid(error.to_string()))?;
+    if !canonical.is_dir() {
+        return Err(UpdaterError::InstallRootInvalid(
+            "install root must be a directory".into(),
+        ));
+    }
+    Ok(canonical
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase())
+}
+
+pub fn install_id(install_root: &Path) -> Result<String> {
+    Ok(sha256_bytes(install_identity(install_root)?.as_bytes()))
 }
 
 #[cfg(not(windows))]

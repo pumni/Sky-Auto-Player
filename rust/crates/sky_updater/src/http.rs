@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use crate::error::{Result, UpdaterError};
+use crate::error::{Result, UpdaterError, io_context};
 
 pub const ALLOWED_HOSTS: [&str; 4] = [
     "api.github.com",
@@ -16,10 +16,14 @@ pub trait HttpClient {
 
     fn download_to(&self, url: &str, max_bytes: usize, destination: &Path) -> Result<()> {
         let bytes = self.get(url, max_bytes)?;
-        let mut file = File::create(destination)?;
-        file.write_all(&bytes)?;
-        file.flush()?;
-        file.sync_all()?;
+        let mut file = File::create(destination)
+            .map_err(|error| io_context("download", "create release file", destination, error))?;
+        file.write_all(&bytes)
+            .map_err(|error| io_context("download", "write release file", destination, error))?;
+        file.flush()
+            .map_err(|error| io_context("download", "flush release file", destination, error))?;
+        file.sync_all()
+            .map_err(|error| io_context("download", "sync release file", destination, error))?;
         Ok(())
     }
 }
@@ -66,16 +70,19 @@ impl HttpClient for WinHttpClient {
     }
 
     fn download_to(&self, url: &str, max_bytes: usize, destination: &Path) -> Result<()> {
-        let mut file = File::create(destination)?;
-        request(url, max_bytes, Some(&mut file))?;
-        file.flush()?;
-        file.sync_all()?;
+        let mut file = File::create(destination)
+            .map_err(|error| io_context("download", "create release file", destination, error))?;
+        request(url, max_bytes, Some((&mut file, destination)))?;
+        file.flush()
+            .map_err(|error| io_context("download", "flush release file", destination, error))?;
+        file.sync_all()
+            .map_err(|error| io_context("download", "sync release file", destination, error))?;
         Ok(())
     }
 }
 
 #[cfg(windows)]
-fn request(url: &str, max_bytes: usize, mut sink: Option<&mut File>) -> Result<Vec<u8>> {
+fn request(url: &str, max_bytes: usize, mut sink: Option<(&mut File, &Path)>) -> Result<Vec<u8>> {
     use std::ffi::c_void;
     use windows_sys::Win32::Networking::WinHttp::{
         HTTP_STATUS_MOVED, HTTP_STATUS_PERMANENT_REDIRECT, HTTP_STATUS_REDIRECT,
@@ -195,8 +202,10 @@ fn request(url: &str, max_bytes: usize, mut sink: Option<&mut File>) -> Result<V
                     break;
                 }
                 total = total.saturating_add(read as usize);
-                if let Some(file) = sink.as_deref_mut() {
-                    file.write_all(&buffer[..read as usize])?;
+                if let Some((file, destination)) = sink.as_mut() {
+                    file.write_all(&buffer[..read as usize]).map_err(|error| {
+                        io_context("download", "write release file", destination, error)
+                    })?;
                 } else {
                     output.extend_from_slice(&buffer[..read as usize]);
                 }

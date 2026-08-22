@@ -63,6 +63,8 @@ pub enum UpdaterError {
     RollbackFailed(String),
     #[error("restart failed: {0}")]
     RestartFailed(String),
+    #[error("updater UI initialization failed: {0}")]
+    UiInitializationFailed(String),
     #[error("I/O failure: {0}")]
     Io(#[from] io::Error),
     #[error("I/O failure during {phase}/{operation} at {path}: {source}")]

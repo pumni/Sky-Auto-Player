@@ -29,7 +29,11 @@ The public Windows distribution is intentionally unsigned and portable:
   `https://github.com/pumni/Sky-Auto-Player/releases`.
 - The user-triggered native updater performs the HTTPS download, exact
   SHA256/archive/manifest verification, transactional replacement, rollback,
-  and optional restart. Python never performs those file mutations itself.
+  optional restart, bounded result provenance, and best-effort post-commit
+  cleanup. Python never performs those file mutations itself.
+- The updater establishes its native progress UI, per-install lock, and
+  atomic active-update state before publishing the bounded ready handoff.
+  Python waits for that handoff and keeps the app running on rejection.
 - `rust/crates/sky_updater/` is shipped in the public package and is reachable
   only through the user-triggered update action. It remains fail-closed on
   HTTPS, archive, manifest, and transaction integrity; public binaries are
@@ -124,7 +128,7 @@ Read the matching row **before** touching the area.
 - **SendInput is the only input mechanism.** No `python-keyboard`, `pynput`, `SetWindowsHookEx`, or hooks on any process. Enforced by `scripts/audit_security_mandates.py` in CI. Canonical: `SECURITY.md`.
 - **Migrations of `Sky-Auto-Player.spec` `excludes` are guarded.** Do not add to the `excludes` list without first grepping `src/` for transitive use of the stdlib module. Canonical: `Sky-Auto-Player.spec`.
 - **Committed `docs/*-plan.md` and `perf-baselines/*` are history.** They record what was tried, not what is currently enforced. Normative docs (P2) win. Canonical: `docs/INDEX.md` §0 Hierarchy of Truth.
-- **Public updates are user-triggered and integrity-checked.** Python checks release metadata and patches only its own update-notification state (`update.last_check_ts` and `update.last_notified_version`). The bundled Rust updater downloads, verifies, mutates, rolls back, and optionally restarts; the fixed official GitHub Releases page remains the manual fallback. Canonical: `docs/distribution-and-update.md`.
+- **Public updates are user-triggered and integrity-checked.** Python checks release metadata and patches only its own update-notification state (`update.last_check_ts` and `update.last_notified_version`). The bundled Rust updater establishes native progress/active state, downloads, verifies, mutates, rolls back, reports bounded provenance, performs best-effort post-commit cleanup, and optionally restarts; the fixed official GitHub Releases page remains the manual fallback. Canonical: `docs/distribution-and-update.md`.
 - **The Rust updater is shipped and fail-closed.** It is reachable only from the user-triggered UI action and retains the HTTPS host allow-list (`api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), SHA256/archive/manifest verification, preserve-list, and durable transaction/rollback policy. It does not require Authenticode because public binaries are intentionally unsigned. Canonical: `docs/distribution-and-update.md`, `rust/crates/sky_updater/`.
 - **Release artifacts are a triple.** Every tag-triggered release produces `Sky-Auto-Player-v<ver>.zip` + `Sky-Auto-Player-v<ver>.zip.sha256` + `MANIFEST.json`. The git tag version must equal `pyproject.toml` `[project].version` (without the leading `v`); `build_app --manifest` emits the manifest and `release.yml` enforces the lock. Canonical: `docs/distribution-and-update.md`, `.github/workflows/release.yml`.
 

@@ -66,15 +66,49 @@ def test_launch_stages_verified_native_updater(
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_popen(arguments: list[str], **kwargs: object) -> object:
+    class FakeProcess:
+        pid = 4711
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("ready handshake should not terminate child")
+
+        def wait(self, *, timeout: float) -> None:
+            del timeout
+
+        def kill(self) -> None:
+            raise AssertionError("ready handshake should not kill child")
+
+    def fake_popen(arguments: list[str], **kwargs: object) -> FakeProcess:
         calls.append((arguments, kwargs))
-        return object()
+        run_root = Path(arguments[0]).parent
+        (run_root / "handoff.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "state": "ready",
+                    "run_id": run_root.name,
+                    "updater_pid": FakeProcess.pid,
+                    "target_version": "2.5.0",
+                    "error_code": "",
+                    "message": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return FakeProcess()
 
     monkeypatch.setattr(update_launcher.subprocess, "Popen", fake_popen)
-    copied = update_launcher.launch_update(_request(root))
+    launched = update_launcher.launch_update(_request(root))
 
+    assert isinstance(launched, update_launcher.UpdateLaunchResult)
+    assert launched.status == "ready"
+    copied = launched.staged_updater
     assert copied.name == update_launcher.UPDATER_NAME
     assert copied.read_bytes() == b"updater"
+    assert launched.updater_pid == 4711
     assert len(calls) == 1
     arguments, kwargs = calls[0]
     assert arguments[0] == str(copied)

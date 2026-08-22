@@ -6,7 +6,7 @@ use std::path::{Component, Path};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
-use crate::error::{Result, UpdaterError};
+use crate::error::{Result, UpdaterError, io_context};
 use crate::{
     ZIP_MAX_COMPRESSED_BYTES, ZIP_MAX_ENTRIES, ZIP_MAX_ENTRY_BYTES, ZIP_MAX_UNCOMPRESSED_BYTES,
 };
@@ -150,8 +150,12 @@ pub fn validate_zip(bytes: &[u8]) -> Result<Vec<String>> {
 }
 
 pub fn validate_zip_file(path: &Path) -> Result<Vec<String>> {
-    let compressed_size = fs::metadata(path)?.len();
-    validate_zip_reader(File::open(path)?, compressed_size)
+    let compressed_size = fs::metadata(path)
+        .map_err(|error| io_context("verify archive", "read archive metadata", path, error))?
+        .len();
+    let file = File::open(path)
+        .map_err(|error| io_context("verify archive", "open archive", path, error))?;
+    validate_zip_reader(file, compressed_size)
 }
 
 fn validate_zip_reader<R: Read + Seek>(reader: R, compressed_size: u64) -> Result<Vec<String>> {
@@ -236,7 +240,8 @@ fn windows_path_key(path: &str) -> String {
 
 pub fn extract_zip(bytes: &[u8], staging: &Path) -> Result<()> {
     let expected_paths = validate_zip(bytes)?;
-    fs::create_dir_all(staging)?;
+    fs::create_dir_all(staging)
+        .map_err(|error| io_context("extract", "create staging directory", staging, error))?;
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
         ZipArchive::new(reader).map_err(|err| UpdaterError::ArchiveUnsafe(err.to_string()))?;
@@ -246,24 +251,34 @@ pub fn extract_zip(bytes: &[u8], staging: &Path) -> Result<()> {
             .map_err(|err| UpdaterError::ArchiveUnsafe(err.to_string()))?;
         let destination = staging.join(relative);
         if file.is_dir() || file.name().ends_with('/') {
-            fs::create_dir_all(&destination)?;
+            fs::create_dir_all(&destination).map_err(|error| {
+                io_context("extract", "create child directory", &destination, error)
+            })?;
             continue;
         }
         let parent = destination
             .parent()
             .ok_or_else(|| UpdaterError::ArchiveUnsafe(relative.clone()))?;
-        fs::create_dir_all(parent)?;
-        let mut output = File::create(&destination)?;
-        std::io::copy(&mut file, &mut output)?;
-        output.flush()?;
+        fs::create_dir_all(parent)
+            .map_err(|error| io_context("extract", "create staged parent", parent, error))?;
+        let mut output = File::create(&destination)
+            .map_err(|error| io_context("extract", "create staged file", &destination, error))?;
+        std::io::copy(&mut file, &mut output)
+            .map_err(|error| io_context("extract", "copy archive entry", &destination, error))?;
+        output
+            .flush()
+            .map_err(|error| io_context("extract", "flush staged file", &destination, error))?;
     }
     Ok(())
 }
 
 pub fn extract_zip_file(path: &Path, staging: &Path) -> Result<()> {
     let expected_paths = validate_zip_file(path)?;
-    fs::create_dir_all(staging)?;
-    let mut archive = ZipArchive::new(File::open(path)?)
+    fs::create_dir_all(staging)
+        .map_err(|error| io_context("extract", "create staging directory", staging, error))?;
+    let archive_file = File::open(path)
+        .map_err(|error| io_context("extract", "open release archive", path, error))?;
+    let mut archive = ZipArchive::new(archive_file)
         .map_err(|err| UpdaterError::ArchiveUnsafe(err.to_string()))?;
     for (index, relative) in expected_paths.iter().enumerate() {
         let mut file = archive
@@ -271,16 +286,23 @@ pub fn extract_zip_file(path: &Path, staging: &Path) -> Result<()> {
             .map_err(|err| UpdaterError::ArchiveUnsafe(err.to_string()))?;
         let destination = staging.join(relative);
         if file.is_dir() || file.name().ends_with('/') {
-            fs::create_dir_all(&destination)?;
+            fs::create_dir_all(&destination).map_err(|error| {
+                io_context("extract", "create child directory", &destination, error)
+            })?;
             continue;
         }
         let parent = destination
             .parent()
             .ok_or_else(|| UpdaterError::ArchiveUnsafe(relative.clone()))?;
-        fs::create_dir_all(parent)?;
-        let mut output = File::create(&destination)?;
-        std::io::copy(&mut file, &mut output)?;
-        output.flush()?;
+        fs::create_dir_all(parent)
+            .map_err(|error| io_context("extract", "create staged parent", parent, error))?;
+        let mut output = File::create(&destination)
+            .map_err(|error| io_context("extract", "create staged file", &destination, error))?;
+        std::io::copy(&mut file, &mut output)
+            .map_err(|error| io_context("extract", "copy archive entry", &destination, error))?;
+        output
+            .flush()
+            .map_err(|error| io_context("extract", "flush staged file", &destination, error))?;
     }
     Ok(())
 }

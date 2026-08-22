@@ -9,6 +9,20 @@ use crate::error::{Result, UpdaterError};
 use crate::transaction::write_json_atomic;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpdateWarning {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_error: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateResult {
     pub schema_version: u32,
     pub status: String,
@@ -25,6 +39,14 @@ pub struct UpdateResult {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_error: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<UpdateWarning>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cleanup_pending: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 pub fn result_dir() -> Result<PathBuf> {
@@ -52,7 +74,7 @@ pub fn append_log(result: &UpdateResult) -> Result<()> {
     }
     let code = result.error_code.as_deref().unwrap_or("OK");
     let line = format!(
-        "{} status={} from={} target={} code={} phase={} operation={} path={} os_error={} msg=\"{}\"\n",
+        "{} status={} from={} target={} code={} phase={} operation={} path={} os_error={} warning_count={} cleanup_pending={} msg=\"{}\"\n",
         result.timestamp_utc,
         result.status,
         result.from_version,
@@ -64,15 +86,58 @@ pub fn append_log(result: &UpdateResult) -> Result<()> {
         result
             .os_error
             .map_or(String::new(), |value| value.to_string()),
+        result.warnings.len(),
+        result.cleanup_pending,
         bounded_log_message(result.message.as_deref().unwrap_or("")),
     );
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
     file.flush()?;
+    for warning in &result.warnings {
+        let line = format!(
+            "{} status=warning from={} target={} code={} phase={} operation={} path={} os_error={} msg=\"{}\"\n",
+            result.timestamp_utc,
+            result.from_version,
+            result.target_version,
+            bound_message(warning.code.clone()),
+            warning
+                .phase
+                .as_deref()
+                .map(str::to_owned)
+                .map(bound_message)
+                .unwrap_or_default(),
+            warning
+                .operation
+                .as_deref()
+                .map(str::to_owned)
+                .map(bound_message)
+                .unwrap_or_default(),
+            warning
+                .path
+                .as_deref()
+                .map(str::to_owned)
+                .map(bound_message)
+                .unwrap_or_default(),
+            warning
+                .os_error
+                .map_or(String::new(), |value| value.to_string()),
+            bounded_log_message(&warning.message),
+        );
+        file.write_all(line.as_bytes())?;
+    }
     Ok(())
 }
 
 pub fn success(from: &str, target: &str) -> UpdateResult {
+    success_with_warnings(from, target, Vec::new(), false)
+}
+
+pub fn success_with_warnings(
+    from: &str,
+    target: &str,
+    warnings: Vec<UpdateWarning>,
+    cleanup_pending: bool,
+) -> UpdateResult {
     UpdateResult {
         schema_version: 1,
         status: "success".into(),
@@ -85,6 +150,8 @@ pub fn success(from: &str, target: &str) -> UpdateResult {
         operation: None,
         path: None,
         os_error: None,
+        warnings: bound_warnings(warnings),
+        cleanup_pending,
     }
 }
 
@@ -101,6 +168,8 @@ pub fn dry_run(from: &str, target: &str) -> UpdateResult {
         operation: None,
         path: None,
         os_error: None,
+        warnings: Vec::new(),
+        cleanup_pending: false,
     }
 }
 
@@ -118,7 +187,22 @@ pub fn failure(from: &str, target: &str, error: &UpdaterError) -> UpdateResult {
         operation: details.operation,
         path: details.path,
         os_error: details.os_error,
+        warnings: Vec::new(),
+        cleanup_pending: false,
     }
+}
+
+pub fn failure_with_warnings(
+    from: &str,
+    target: &str,
+    error: &UpdaterError,
+    warnings: Vec<UpdateWarning>,
+    cleanup_pending: bool,
+) -> UpdateResult {
+    let mut result = failure(from, target, error);
+    result.warnings = bound_warnings(warnings);
+    result.cleanup_pending = cleanup_pending;
+    result
 }
 
 pub fn rolled_back(from: &str, target: &str, error: &UpdaterError) -> UpdateResult {
@@ -135,10 +219,16 @@ pub fn rolled_back(from: &str, target: &str, error: &UpdaterError) -> UpdateResu
         operation: details.operation,
         path: details.path,
         os_error: details.os_error,
+        warnings: Vec::new(),
+        cleanup_pending: false,
     }
 }
 
 fn timestamp() -> String {
+    timestamp_utc()
+}
+
+pub(crate) fn timestamp_utc() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
@@ -193,6 +283,7 @@ pub fn error_code(error: &UpdaterError) -> &'static str {
         UpdaterError::PostInstallVerifyFailed(_) => "POST_INSTALL_VERIFY_FAILED",
         UpdaterError::RollbackFailed(_) => "ROLLBACK_FAILED",
         UpdaterError::RestartFailed(_) => "RESTART_FAILED",
+        UpdaterError::UiInitializationFailed(_) => "UI_INITIALIZATION_FAILED",
         UpdaterError::Io(_) => "IO_FAILURE",
         UpdaterError::IoContext { .. } => "IO_FAILURE",
         UpdaterError::Json(_) => "JSON_FAILURE",
@@ -258,6 +349,33 @@ fn bound_message(message: String) -> String {
 
 fn bounded_log_message(message: &str) -> String {
     bound_message(message.to_owned()).replace('"', "'")
+}
+
+const MAX_WARNINGS: usize = 8;
+
+fn bound_warnings(mut warnings: Vec<UpdateWarning>) -> Vec<UpdateWarning> {
+    if warnings.len() <= MAX_WARNINGS {
+        return warnings.drain(..).map(bound_warning).collect::<Vec<_>>();
+    }
+    warnings.truncate(MAX_WARNINGS - 1);
+    warnings.push(UpdateWarning {
+        code: "ADDITIONAL_WARNINGS_OMITTED".into(),
+        message: "Additional updater warnings were omitted from the bounded result.".into(),
+        phase: None,
+        operation: None,
+        path: None,
+        os_error: None,
+    });
+    warnings.into_iter().map(bound_warning).collect()
+}
+
+fn bound_warning(mut warning: UpdateWarning) -> UpdateWarning {
+    warning.code = bound_message(warning.code);
+    warning.message = bound_message(warning.message);
+    warning.phase = warning.phase.map(bound_message);
+    warning.operation = warning.operation.map(bound_message);
+    warning.path = warning.path.map(bound_message);
+    warning
 }
 
 #[cfg(test)]

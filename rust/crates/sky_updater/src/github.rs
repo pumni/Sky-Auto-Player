@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::archive::{parse_sha_sidecar, sha256_bytes, sha256_file};
 use crate::cli::Channel;
-use crate::error::{Result, UpdaterError};
+use crate::error::{Result, UpdaterError, io_context};
 use crate::http::{HttpClient, validate_https_url};
 use crate::manifest::Manifest;
 use crate::{
@@ -102,14 +102,25 @@ pub fn fetch_exact_release<C: HttpClient>(
         ));
     }
     client.download_to(zip_url, ZIP_MAX_COMPRESSED_BYTES as usize, zip_destination)?;
-    if std::fs::metadata(zip_destination)?.len() > ZIP_MAX_COMPRESSED_BYTES {
+    let zip_size = std::fs::metadata(zip_destination)
+        .map_err(|error| io_context("download", "inspect release file", zip_destination, error))?;
+    if zip_size.len() > ZIP_MAX_COMPRESSED_BYTES {
         return Err(UpdaterError::NetworkFailure(
             "ZIP exceeds compressed size bound".into(),
         ));
     }
     let sidecar = client.get(sidecar_url, SIDECAR_MAX_BYTES)?;
     let expected_hash = parse_sha_sidecar(&sidecar, &zip_name)?;
-    if sha256_file(zip_destination)? != expected_hash {
+    let actual_hash = sha256_file(zip_destination).map_err(|error| match error {
+        UpdaterError::Io(source) => io_context(
+            "verify release",
+            "hash release file",
+            zip_destination,
+            source,
+        ),
+        other => other,
+    })?;
+    if actual_hash != expected_hash {
         return Err(UpdaterError::ChecksumMismatch);
     }
     let external_manifest = client.get(manifest_url, MANIFEST_MAX_BYTES)?;

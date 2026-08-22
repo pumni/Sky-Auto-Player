@@ -10,8 +10,10 @@ import secrets
 import shutil
 import subprocess
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from sky_music.domain.update_checker import is_newer, is_prerelease, parse_version
 
@@ -21,6 +23,11 @@ UPDATER_NAME = "Sky-Auto-Player-Updater.exe"
 _RUN_NAME = re.compile(r"^run-[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+_MAX_HANDOFF_BYTES = 8 * 1024
+HANDOFF_POLL_INTERVAL_S = 0.05
+HANDOFF_TIMEOUT_S = 5.0
+HANDOFF_TERMINATE_WAIT_S = 2.0
+_HANDOFF_RUN_NAME = re.compile(r"^run-[0-9a-f]{32}$")
 
 
 class UpdateLaunchError(RuntimeError):
@@ -34,6 +41,23 @@ class UpdateLaunchRequest:
     target_version: str
     channel: str
     restart: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateLaunchResult:
+    status: Literal["ready", "already_running"]
+    staged_updater: Path
+    run_root: Path
+    updater_pid: int
+
+    # Compatibility conveniences for callers that only used the old Path
+    # return value. New code should use ``staged_updater`` explicitly.
+    @property
+    def name(self) -> str:
+        return self.staged_updater.name
+
+    def read_bytes(self) -> bytes:
+        return self.staged_updater.read_bytes()
 
 
 def _local_update_root() -> Path:
@@ -203,6 +227,92 @@ def _new_update_run() -> Path:
     raise UpdateLaunchError("could not allocate a unique native updater run directory")
 
 
+def _parse_handoff(
+    path: Path,
+    *,
+    run_root: Path,
+    process_pid: int,
+    target_version: str,
+) -> tuple[str, str] | None:
+    try:
+        if path.stat().st_size > _MAX_HANDOFF_BYTES:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        return None
+    state = data.get("state")
+    run_id = data.get("run_id")
+    updater_pid = data.get("updater_pid")
+    handoff_target = data.get("target_version")
+    error_code = data.get("error_code", "")
+    message = data.get("message", "")
+    if (
+        state not in {"ready", "rejected"}
+        or not isinstance(run_id, str)
+        or _HANDOFF_RUN_NAME.fullmatch(run_id) is None
+        or run_id != run_root.name
+        or type(updater_pid) is not int
+        or updater_pid != process_pid
+        or not isinstance(handoff_target, str)
+        or handoff_target != target_version
+        or not isinstance(error_code, str)
+        or not isinstance(message, str)
+        or len(error_code) > 128
+        or len(message) > 512
+        or "\x00" in error_code
+        or "\x00" in message
+    ):
+        return None
+    return state, error_code
+
+
+def _terminate_after_handshake_timeout(process: subprocess.Popen[bytes]) -> None:
+    with suppress(OSError):
+        process.terminate()
+    try:
+        process.wait(timeout=HANDOFF_TERMINATE_WAIT_S)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    with suppress(OSError):
+        process.kill()
+    with suppress(OSError, subprocess.TimeoutExpired):
+        process.wait(timeout=HANDOFF_TERMINATE_WAIT_S)
+
+
+def _wait_for_handoff(
+    process: subprocess.Popen[bytes],
+    *,
+    run_root: Path,
+    target_version: str,
+) -> tuple[str, str]:
+    handoff = run_root / "handoff.json"
+    deadline = time.monotonic() + HANDOFF_TIMEOUT_S
+    while time.monotonic() < deadline:
+        parsed = _parse_handoff(
+            handoff,
+            run_root=run_root,
+            process_pid=process.pid,
+            target_version=target_version,
+        )
+        if parsed is not None:
+            state, error_code = parsed
+            if state == "ready":
+                return parsed
+            if error_code == "UPDATE_ALREADY_RUNNING":
+                return parsed
+            raise UpdateLaunchError(
+                f"native updater rejected startup [{error_code or 'UNKNOWN'}]"
+            )
+        if process.poll() is not None:
+            raise UpdateLaunchError("native updater exited before the ready handshake")
+        time.sleep(HANDOFF_POLL_INTERVAL_S)
+    _terminate_after_handshake_timeout(process)
+    raise UpdateLaunchError("native updater did not complete the ready handshake")
+
+
 def cleanup_stale_update_runs(*, max_age_s: int = 7 * 24 * 60 * 60) -> int:
     """Remove only old directories created by this launcher."""
 
@@ -231,8 +341,8 @@ def cleanup_stale_update_runs(*, max_age_s: int = 7 * 24 * 60 * 60) -> int:
     return removed
 
 
-def launch_update(request: UpdateLaunchRequest) -> Path:
-    """Copy the verified updater to an allow-listed run directory and spawn it."""
+def launch_update(request: UpdateLaunchRequest) -> UpdateLaunchResult:
+    """Copy the verified updater, spawn it, and wait for a durable ready handoff."""
 
     _validate_request(request)
     install_root = request.install_root.resolve()
@@ -270,7 +380,7 @@ def launch_update(request: UpdateLaunchRequest) -> Path:
         ]
         if request.restart:
             arguments.append("--restart")
-        subprocess.Popen(
+        process = subprocess.Popen(
             arguments,
             cwd=str(install_root),
             shell=False,
@@ -279,10 +389,27 @@ def launch_update(request: UpdateLaunchRequest) -> Path:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        state, _error_code = _wait_for_handoff(
+            process,
+            run_root=run_root,
+            target_version=request.target_version,
+        )
+        if state == "rejected":
+            return UpdateLaunchResult(
+                status="already_running",
+                staged_updater=staged,
+                run_root=run_root,
+                updater_pid=process.pid,
+            )
     except UpdateLaunchError:
         shutil.rmtree(run_root, ignore_errors=True)
         raise
     except (OSError, StopIteration, KeyError, TypeError) as exc:
         shutil.rmtree(run_root, ignore_errors=True)
         raise UpdateLaunchError(f"could not launch native updater: {exc}") from exc
-    return staged
+    return UpdateLaunchResult(
+        status="ready",
+        staged_updater=staged,
+        run_root=run_root,
+        updater_pid=process.pid,
+    )

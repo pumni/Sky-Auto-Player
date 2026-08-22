@@ -40,22 +40,35 @@ assets are immutable; fixes require a new version.
 
 Python owns update checking, stable/beta selection, the modal, update-notice
 state, and the fixed manual fallback URL. It does not download, extract,
-replace, delete, or restart application files itself.
+replace, delete, or restart application files itself. The native updater owns
+the visible progress window and the durable update lifecycle.
 
 When the user chooses **Update and Restart**, Python first validates the
 currently installed `MANIFEST.json` and the updater's exact size/SHA256. It
 copies the updater into an allow-listed random run directory under
 `%LOCALAPPDATA%\Sky-Auto-Player\update-runs\`, starts it with `shell=False`,
-and exits the UI. The Rust updater then:
+and waits for a bounded ready/rejected handoff at
+`<run_root>\handoff.json`. The ready record is published only after the native
+progress UI, per-install lock, and active-update state are established. Python
+exits the UI only after the ready handshake; a rejected handshake leaves the
+app running. The Rust updater then:
 
 1. waits for the parent app without terminating or injecting into it;
-2. fetches the exact target release over the GitHub HTTPS allow-list;
-3. verifies the ZIP sidecar, release `MANIFEST.json`, archive paths, and every
+2. reports `Fetching`, `Verifying`, `Extracting`, `Preflight`, `Backing up`,
+   `Installing`, `Cleaning up`, and `Restarting` through the native progress UI;
+3. fetches the exact target release over the GitHub HTTPS allow-list;
+4. verifies the ZIP sidecar, release `MANIFEST.json`, archive paths, and every
    staged file before mutation;
-4. prepares and applies a transactional managed-file update while preserving
+5. prepares and applies a transactional managed-file update while preserving
    user-owned paths; and
-5. writes a durable result and restarts the canonical app only after a verified
+6. writes a durable result and restarts the canonical app only after a verified
    success or verified rollback.
+
+The updater writes schema-1 result records with bounded provenance fields
+(`phase`, `operation`, `path`, and `os_error`). Post-commit cleanup is
+best-effort: failures become bounded warnings and `cleanup_pending: true`; they
+never roll back a verified installation. Restart is still attempted after such
+warnings, and the app reports them after consuming the result.
 
 If installation succeeds but automatic restart fails, the new installation is
 kept, `last-result.json` is overwritten with `status: "failure"` and
@@ -76,6 +89,20 @@ work, the updater acquires an exclusive per-install lock at
 The OS handle is held through result persistence and restart. A second updater
 returns `UPDATE_ALREADY_RUNNING` immediately and does not create or touch a
 transaction directory.
+
+The active lifecycle record is bounded and atomic at:
+
+```text
+%LOCALAPPDATA%\Sky-Auto-Player\update-state\active-update.json
+```
+
+It records the canonical install identity, updater PID, run ID, run root, and
+current phase. It is created only after the progress window and lock exist,
+updated at phase boundaries, and removed before the updater exits. On frozen
+Windows startup, Python validates that any active PID is a live canonical
+`Sky-Auto-Player-Updater.exe` inside the expected `update-runs\run-<32 hex>`
+directory; a valid active update makes startup exit cleanly with the bounded
+message `Update already in progress; please wait for it to finish.`
 
 ## 3. Release selection and network
 
@@ -194,6 +221,18 @@ The updater writes a bounded result record to:
 %LOCALAPPDATA%\Sky-Auto-Player\update-state\last-result.json
 ```
 
+The update notice cache is separate from the durable result and is stored at:
+
+```text
+%LOCALAPPDATA%\Sky-Auto-Player\update-state\pending-release.json
+```
+
+It contains only validated release identity and bounded plain-text notes; URLs
+are never persisted. The cache is written atomically and is cleared when the
+user skips the version or a successful update is consumed. A missing or
+mismatched cache triggers a fresh metadata check rather than an empty-notes
+modal.
+
 The app consumes it once on the next start and reports stable statuses such as
 `success`, `rolled_back`, and `failure`, together with a stable error code.
 The error code distinguishes at least `IO_FAILURE`, `JSON_FAILURE`,
@@ -236,10 +275,10 @@ and records any detections observed during the run in the evidence bundle. The
 main harness and every updater/app scenario remain non-elevated; only the
 feature-local Defender snapshot helper uses two explicit UAC prompts. Evidence
 records `harness_elevated: false` and `defender_snapshot_elevated: true`. The
-first fixed updater release is a manual bridge for
+v3.4.5 is the first fixed updater release and is a manual bridge for
 installations whose existing updater predates this transaction hardening;
-those installations must be moved manually to the fixed release before
-native self-update is trusted again.
+those installations must be moved manually to v3.4.5 before native self-update
+is trusted again.
 
 ## 8. Security boundary
 

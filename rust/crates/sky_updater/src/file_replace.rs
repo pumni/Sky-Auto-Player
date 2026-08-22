@@ -8,11 +8,29 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::archive::sha256_file;
 use crate::error::{Result, UpdaterError};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+pub struct CleanupFailure {
+    pub path: PathBuf,
+    pub error: io::Error,
+}
+
+#[derive(Debug, Default)]
+pub struct CleanupReport {
+    pub failures: Vec<CleanupFailure>,
+}
+
+#[derive(Debug, Default)]
+pub struct ReplacementReport {
+    pub deferred_artifacts: Vec<PathBuf>,
+    pub cleanup_failures: Vec<CleanupFailure>,
+}
 
 #[derive(Debug)]
 pub struct PreparedReplacement {
@@ -72,23 +90,57 @@ pub fn probe_new_destination(path: &Path, label: &str) -> Result<()> {
 /// committed or fully recovered transaction.  A killed process can leave an
 /// emergency backup beside its destination after ReplaceFileW has succeeded.
 pub fn cleanup_stale_artifacts(install_root: &Path) -> io::Result<()> {
-    cleanup_stale_artifacts_in(install_root)
+    let report = cleanup_stale_artifacts_report(install_root);
+    if let Some(failure) = report.failures.into_iter().next() {
+        return Err(failure.error);
+    }
+    Ok(())
 }
 
-fn cleanup_stale_artifacts_in(directory: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+pub fn cleanup_stale_artifacts_report(install_root: &Path) -> CleanupReport {
+    let mut report = CleanupReport::default();
+    cleanup_stale_artifacts_in(install_root, &mut report);
+    report
+}
+
+fn cleanup_stale_artifacts_in(directory: &Path, report: &mut CleanupReport) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            record_cleanup_failure(report, directory, error);
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                record_cleanup_failure(report, directory, error);
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                record_cleanup_failure(report, &entry.path(), error);
+                continue;
+            }
+        };
+        if is_reparse_point(&entry.path()).unwrap_or(true) {
+            continue;
+        }
         if file_type.is_file()
             && entry
                 .file_name()
                 .to_str()
                 .is_some_and(is_reserved_artifact_name)
         {
-            fs::remove_file(entry.path())?;
+            if let Err(error) = remove_owned_artifact(&entry.path()) {
+                record_cleanup_failure(report, &entry.path(), error);
+            }
         } else if file_type.is_dir() {
             let path = entry.path();
-            if is_reparse_point(&path)? {
+            if is_reparse_point(&path).unwrap_or(true) {
                 continue;
             }
             let name = entry.file_name();
@@ -97,12 +149,110 @@ fn cleanup_stale_artifacts_in(directory: &Path) -> io::Result<()> {
                 && !name.eq_ignore_ascii_case("logs")
                 && !name.eq_ignore_ascii_case(".sky-update-transaction")
             {
-                cleanup_stale_artifacts_in(&path)?;
+                cleanup_stale_artifacts_in(&path, report);
             }
         }
     }
-    Ok(())
 }
+
+fn record_cleanup_failure(report: &mut CleanupReport, path: &Path, error: io::Error) {
+    if report.failures.len() < 8 {
+        report.failures.push(CleanupFailure {
+            path: path.to_owned(),
+            error,
+        });
+    }
+}
+
+pub fn remove_owned_artifact(path: &Path) -> io::Result<()> {
+    let name = path.file_name().and_then(|value| value.to_str());
+    if !name.is_some_and(is_reserved_artifact_name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path is not an updater-owned artifact",
+        ));
+    }
+    remove_file_with_retry(path)
+}
+
+pub(crate) fn remove_owned_run_file(path: &Path) -> io::Result<()> {
+    if path.file_name().and_then(|value| value.to_str()) != Some("release.zip") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path is not an updater-owned run file",
+        ));
+    }
+    remove_file_with_retry(path)
+}
+
+pub(crate) fn remove_owned_tree(path: &Path) -> io::Result<()> {
+    let name = path.file_name().and_then(|value| value.to_str());
+    if !matches!(name, Some("staging") | Some(".sky-update-transaction")) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path is not an updater-owned directory",
+        ));
+    }
+    if is_reparse_point(path).unwrap_or(true) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to remove a reparse-point directory",
+        ));
+    }
+    let delays = [50_u64, 100, 200, 400, 800];
+    let mut last_error = None;
+    for (attempt, delay_ms) in delays.iter().enumerate() {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if is_retryable_cleanup_error(&error) && attempt < delays.len() - 1 => {
+                clear_readonly_attribute(path);
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(*delay_ms));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("cleanup failed")))
+}
+
+fn remove_file_with_retry(path: &Path) -> io::Result<()> {
+    let delays = [50_u64, 100, 200, 400, 800];
+    let mut last_error = None;
+    for (attempt, delay_ms) in delays.iter().enumerate() {
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if is_retryable_cleanup_error(&error) && attempt < delays.len() - 1 => {
+                clear_readonly_attribute(path);
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(*delay_ms));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("cleanup failed")))
+}
+
+fn is_retryable_cleanup_error(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::PermissionDenied)
+        || matches!(error.raw_os_error(), Some(5 | 32))
+}
+
+#[cfg(windows)]
+fn clear_readonly_attribute(path: &Path) {
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        if permissions.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            let _ = fs::set_permissions(path, permissions);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_readonly_attribute(_path: &Path) {}
 
 #[cfg(windows)]
 fn is_reparse_point(path: &Path) -> io::Result<bool> {
@@ -214,7 +364,7 @@ pub fn atomic_replace_existing(
     replacement: PreparedReplacement,
     phase: &str,
     index: usize,
-) -> Result<()> {
+) -> Result<ReplacementReport> {
     before_replace(phase, index, &replacement.label)?;
     if !replacement.destination.is_file() {
         return Err(atomic_failure(
@@ -227,7 +377,7 @@ pub fn atomic_replace_existing(
     match replacement.commit_existing() {
         Ok(()) => {
             after_replace(phase, &replacement.label)?;
-            Ok(())
+            Ok(replacement.cleanup_after_commit())
         }
         Err(error) => {
             let reconciliation = replacement.reconcile_after_failure();
@@ -244,7 +394,7 @@ pub fn atomic_install_new(
     replacement: PreparedReplacement,
     phase: &str,
     index: usize,
-) -> Result<()> {
+) -> Result<ReplacementReport> {
     before_replace(phase, index, &replacement.label)?;
     if replacement.destination.exists() {
         return Err(atomic_failure(
@@ -253,7 +403,7 @@ pub fn atomic_install_new(
             "new destination appeared before atomic install",
         ));
     }
-    let mut replacement = replacement;
+    let replacement = replacement;
     atomic_move_new(&replacement.temporary, &replacement.destination).map_err(|error| {
         atomic_failure(
             &replacement.label,
@@ -262,9 +412,8 @@ pub fn atomic_install_new(
         )
     })?;
     replacement.verify_destination()?;
-    replacement.cleanup_temporary = true;
-    replacement.cleanup_backup = true;
-    after_replace(phase, &replacement.label)
+    after_replace(phase, &replacement.label)?;
+    Ok(replacement.cleanup_after_commit())
 }
 
 pub fn atomic_restore(
@@ -276,9 +425,9 @@ pub fn atomic_restore(
 ) -> Result<()> {
     let replacement = prepare_restore(source, destination, expected_hash, label)?;
     if replacement.destination.is_file() {
-        atomic_restore_existing(replacement, index)
+        atomic_restore_existing(replacement, index).map(|_| ())
     } else {
-        atomic_restore_new(replacement, index)
+        atomic_restore_new(replacement, index).map(|_| ())
     }
 }
 
@@ -302,7 +451,10 @@ fn prepare_restore(
     })
 }
 
-fn atomic_restore_existing(replacement: PreparedReplacement, index: usize) -> Result<()> {
+fn atomic_restore_existing(
+    replacement: PreparedReplacement,
+    index: usize,
+) -> Result<ReplacementReport> {
     before_replace("rollback", index, &replacement.label).map_err(|error| match error {
         UpdaterError::InstallCopyFailed(message) => UpdaterError::RollbackAtomicReplaceFailed {
             path: replacement.label.clone(),
@@ -315,7 +467,7 @@ fn atomic_restore_existing(replacement: PreparedReplacement, index: usize) -> Re
     match replacement.commit_existing() {
         Ok(()) => {
             after_restore(&replacement.label)?;
-            Ok(())
+            Ok(replacement.cleanup_after_commit())
         }
         Err(error) => {
             let reconciliation = replacement.reconcile_after_failure();
@@ -328,7 +480,7 @@ fn atomic_restore_existing(replacement: PreparedReplacement, index: usize) -> Re
     }
 }
 
-fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<()> {
+fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<ReplacementReport> {
     before_replace("rollback", index, &replacement.label).map_err(|error| match error {
         UpdaterError::InstallCopyFailed(message) => UpdaterError::RollbackAtomicReplaceFailed {
             path: replacement.label.clone(),
@@ -337,7 +489,7 @@ fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<
         },
         other => other,
     })?;
-    let mut replacement = replacement;
+    let replacement = replacement;
     atomic_move_new(&replacement.temporary, &replacement.destination).map_err(|error| {
         UpdaterError::RollbackAtomicReplaceFailed {
             path: replacement.label.clone(),
@@ -352,9 +504,8 @@ fn atomic_restore_new(replacement: PreparedReplacement, index: usize) -> Result<
             message: format!("restored hash verification failed: {error}"),
         }
     })?;
-    replacement.cleanup_temporary = true;
-    replacement.cleanup_backup = true;
-    after_restore(&replacement.label)
+    after_restore(&replacement.label)?;
+    Ok(replacement.cleanup_after_commit())
 }
 
 impl PreparedReplacement {
@@ -367,9 +518,26 @@ impl PreparedReplacement {
         self.verify_destination().map_err(|error| {
             io::Error::other(format!("replacement hash verification failed: {error}"))
         })?;
-        self.cleanup_temporary = true;
-        self.cleanup_backup = true;
         Ok(())
+    }
+
+    fn cleanup_after_commit(mut self) -> ReplacementReport {
+        self.cleanup_temporary = false;
+        self.cleanup_backup = false;
+        let mut report = ReplacementReport::default();
+        for path in [&self.temporary, &self.emergency_backup] {
+            if !path.exists() {
+                continue;
+            }
+            if let Err(error) = remove_owned_artifact(path) {
+                report.cleanup_failures.push(CleanupFailure {
+                    path: path.to_owned(),
+                    error,
+                });
+                report.deferred_artifacts.push(path.to_owned());
+            }
+        }
+        report
     }
 
     fn verify_destination(&self) -> io::Result<()> {

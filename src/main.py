@@ -773,6 +773,19 @@ def main() -> int:
         # Ensure the working directory is the exe's folder so relative paths work
         os.chdir(Path(sys.executable).parent)
 
+        if sys.platform == "win32":
+            from sky_music.infrastructure.update_runtime import (
+                active_update_for_install,
+            )
+
+            active = active_update_for_install(Path(sys.executable).parent)
+            if active is not None:
+                print(
+                    f"Sky Auto Player is currently updating to v{active.target_version} "
+                    f"({active.phase}). The updater window will restart the app automatically."
+                )
+                return 0
+
     # Free-threaded-runtime fail-fast (review of main@7c548527 §3): refuses playback
     # before erecting the UI/backend if the interpreter is not a true GIL-disabled build.
     # Architecture invariant (AGENTS.md): the dispatch loop and the Textual UI thread must

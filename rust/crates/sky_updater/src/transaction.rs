@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{path_is_safe_under, sha256_file, validate_relative_path};
 use crate::error::{Result, UpdaterError, io_context};
-use crate::file_replace::{probe_new_destination, probe_replaceable};
+use crate::file_replace::{
+    CleanupFailure, CleanupReport, ReplacementReport, probe_new_destination, probe_replaceable,
+    remove_owned_tree,
+};
 use crate::manifest::{Manifest, PreserveClass, classify_preserved};
 use crate::{CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION, UPDATER_EXE};
 
@@ -20,6 +23,12 @@ pub struct TransactionPlan {
     pub files_to_add: Vec<String>,
     pub managed_orphans_to_delete: Vec<String>,
     pub backup_paths: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct TransactionReport {
+    pub deferred_artifacts: Vec<PathBuf>,
+    pub cleanup_failures: Vec<CleanupFailure>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -293,7 +302,7 @@ pub fn apply(
     staging: &Path,
     new_manifest: &Manifest,
     plan: &TransactionPlan,
-) -> Result<()> {
+) -> Result<TransactionReport> {
     let journal = read_journal(install_root).map_err(|error| match error {
         UpdaterError::Io(source) => io_context(
             "apply",
@@ -310,12 +319,13 @@ pub fn apply(
     }
     let ordered_payloads = ordered_payload_paths(plan);
     let mut index = 0usize;
+    let mut report = TransactionReport::default();
     for (relative, replaces_existing) in ordered_payloads
         .iter()
         .filter(|(relative, _)| relative != MANIFEST_NAME)
     {
         index += 1;
-        copy_managed_file(
+        let replacement_report = copy_managed_file(
             install_root,
             staging,
             new_manifest,
@@ -323,6 +333,7 @@ pub fn apply(
             *replaces_existing,
             index,
         )?;
+        merge_replacement_report(&mut report, replacement_report);
     }
     for relative in &plan.managed_orphans_to_delete {
         let destination = safe_join(install_root, relative)?;
@@ -336,7 +347,7 @@ pub fn apply(
         .find(|(relative, _)| relative == MANIFEST_NAME)
     {
         index += 1;
-        copy_managed_file(
+        let replacement_report = copy_managed_file(
             install_root,
             staging,
             new_manifest,
@@ -344,6 +355,7 @@ pub fn apply(
             *replaces_existing,
             index,
         )?;
+        merge_replacement_report(&mut report, replacement_report);
     }
     verify_installed_managed(install_root, new_manifest)?;
     let installed_manifest_path = safe_join(install_root, MANIFEST_NAME)
@@ -373,7 +385,14 @@ pub fn apply(
         UpdaterError::Io(source) => io_context("apply", "commit journal", &journal_file, source),
         other => other,
     })?;
-    Ok(())
+    Ok(report)
+}
+
+fn merge_replacement_report(report: &mut TransactionReport, replacement: ReplacementReport) {
+    report
+        .deferred_artifacts
+        .extend(replacement.deferred_artifacts);
+    report.cleanup_failures.extend(replacement.cleanup_failures);
 }
 
 fn copy_managed_file(
@@ -383,7 +402,7 @@ fn copy_managed_file(
     relative: &str,
     replaces_existing: bool,
     index: usize,
-) -> Result<()> {
+) -> Result<ReplacementReport> {
     if classify_preserved(relative) == PreserveClass::Preserved {
         return Err(UpdaterError::InstallCopyFailed(format!(
             "attempted to replace preserved path: {relative}"
@@ -659,20 +678,35 @@ fn is_reparse_point(path: &Path) -> Result<bool> {
     Ok(fs::symlink_metadata(path)?.file_type().is_symlink())
 }
 
-pub fn cleanup_committed(install_root: &Path) -> Result<()> {
+pub fn cleanup_committed(install_root: &Path) -> Result<CleanupReport> {
+    let mut report = CleanupReport::default();
     let root = safe_join(install_root, TRANSACTION_DIR)?;
     if root.exists() {
-        let journal = read_journal(install_root)?;
+        let journal = match read_journal(install_root) {
+            Ok(journal) => journal,
+            Err(error) => {
+                report.failures.push(CleanupFailure {
+                    path: root,
+                    error: io::Error::other(error.to_string()),
+                });
+                return Ok(report);
+            }
+        };
         if journal.state != JournalState::Committed {
             return Err(UpdaterError::TransactionRecoveryRequired(
                 "prepared transaction must be recovered".into(),
             ));
         }
-        fs::remove_dir_all(&root)
-            .map_err(|error| io_context("cleanup", "remove transaction directory", &root, error))?;
+        if let Err(error) = remove_owned_tree(&root) {
+            report.failures.push(CleanupFailure {
+                path: root,
+                error: io::Error::new(error.kind(), error.to_string()),
+            });
+        }
     }
-    crate::file_replace::cleanup_stale_artifacts(install_root)?;
-    Ok(())
+    let stale = crate::file_replace::cleanup_stale_artifacts_report(install_root);
+    report.failures.extend(stale.failures);
+    Ok(report)
 }
 
 pub fn remove_manifest_from_set(paths: &mut BTreeSet<String>) {

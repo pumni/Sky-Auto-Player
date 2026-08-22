@@ -4,15 +4,19 @@
 //! modules contain validation and transaction logic; platform modules only
 //! provide bounded Win32 process/network seams.
 
+pub mod active_state;
 pub mod archive;
 pub mod cli;
 pub mod error;
 pub mod file_replace;
 pub mod github;
+pub mod handoff;
 pub mod http;
 pub mod install;
 pub mod manifest;
 pub mod process;
+pub mod progress;
+pub mod progress_ui;
 pub mod recovery;
 pub mod restart;
 pub mod result;

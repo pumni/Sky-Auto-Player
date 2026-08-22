@@ -1,14 +1,20 @@
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::active_state::ActiveUpdateGuard;
 use crate::archive::extract_zip_file;
 use crate::cli::{self, ParseResult, UpdaterArgs};
 use crate::error::{Result, UpdaterError};
+use crate::file_replace::{
+    CleanupFailure, CleanupReport, remove_owned_run_file, remove_owned_tree,
+};
 use crate::github::{GitHubReleaseSource, ReleaseSource};
+use crate::handoff;
 use crate::install::{inspect_archive, install_verified, installed_manifest, read_staged_manifest};
 use crate::process::wait_for_parent;
+use crate::progress::UpdatePhase;
+use crate::progress_ui::NativeProgressUi;
 use crate::recovery::{has_unresolved_transaction, recover_before_update, rollback_prepared};
 use crate::restart::restart_verified;
 use crate::result;
@@ -22,6 +28,47 @@ const PARENT_WAIT: Duration = Duration::from_secs(30);
 pub struct ExecutionFailure {
     pub error: UpdaterError,
     pub rolled_back: bool,
+}
+
+#[derive(Debug)]
+pub enum UpdateExecutionOutcome {
+    Success(UpdateSuccess),
+    RolledBack(UpdateRollback),
+    Failure(UpdateFailure),
+    DryRun,
+}
+
+#[derive(Debug)]
+pub struct UpdateSuccess {
+    pub warnings: Vec<result::UpdateWarning>,
+    pub cleanup_pending: bool,
+}
+
+#[derive(Debug)]
+pub struct UpdateRollback {
+    pub cause: UpdaterError,
+}
+
+#[derive(Debug)]
+pub struct UpdateFailure {
+    pub error: UpdaterError,
+}
+
+impl From<std::result::Result<(), ExecutionFailure>> for UpdateExecutionOutcome {
+    fn from(value: std::result::Result<(), ExecutionFailure>) -> Self {
+        match value {
+            Ok(()) => Self::Success(UpdateSuccess {
+                warnings: Vec::new(),
+                cleanup_pending: false,
+            }),
+            Err(failure) if failure.rolled_back => Self::RolledBack(UpdateRollback {
+                cause: failure.error,
+            }),
+            Err(failure) => Self::Failure(UpdateFailure {
+                error: failure.error,
+            }),
+        }
+    }
 }
 
 impl From<UpdaterError> for ExecutionFailure {
@@ -51,30 +98,112 @@ where
 }
 
 pub fn run_update_with_source<S: ReleaseSource>(args: &UpdaterArgs, source: &S) -> Result<()> {
+    let run_root = updater_run_root()?;
     // This guard deliberately surrounds parent wait, recovery, network,
     // preflight, transaction, result write, and restart.
-    let _lock = UpdateLock::acquire(&args.install_root)?;
+    let lock = match UpdateLock::acquire(&args.install_root) {
+        Ok(lock) => lock,
+        Err(UpdaterError::UpdateAlreadyRunning) => {
+            handoff::write_rejected(
+                &run_root,
+                &args.target_version,
+                "UPDATE_ALREADY_RUNNING",
+                "another updater is already running",
+            )?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let mut ui = match NativeProgressUi::start(&args.current_version, &args.target_version) {
+        Ok(ui) => ui,
+        Err(error) => {
+            let _ = handoff::write_rejected(
+                &run_root,
+                &args.target_version,
+                "UI_INITIALIZATION_FAILED",
+                &error.to_string(),
+            );
+            drop(lock);
+            return Err(error);
+        }
+    };
+    let active =
+        match ActiveUpdateGuard::create(&args.install_root, &run_root, &args.target_version) {
+            Ok(active) => active,
+            Err(error) => {
+                let _ = handoff::write_rejected(
+                    &run_root,
+                    &args.target_version,
+                    "IO_FAILURE",
+                    &error.to_string(),
+                );
+                return Err(error);
+            }
+        };
+    handoff::write_ready(&run_root, &args.target_version)?;
+    publish(&ui, &active, UpdatePhase::Starting, None, None)?;
     #[cfg(feature = "e2e-fault-injection")]
     crate::faults::pause_at("after-lock");
-    let outcome = execute_update(args, source);
-    finalize_update(args, outcome, restart_verified)
+    let outcome = execute_update(args, source, &ui, &active, &run_root);
+    let terminal = match &outcome {
+        UpdateExecutionOutcome::Failure(failure) => {
+            Some(("Update failed", failure.error.to_string()))
+        }
+        UpdateExecutionOutcome::RolledBack(rollback) => {
+            Some(("Update rolled back", rollback.cause.to_string()))
+        }
+        _ => None,
+    };
+    let was_success = matches!(&outcome, UpdateExecutionOutcome::Success(_));
+    let was_rollback = matches!(&outcome, UpdateExecutionOutcome::RolledBack(_));
+    let result = finalize_update(args, outcome, |root| {
+        active.remove();
+        ui.show_restarting();
+        restart_verified(root)
+    });
+    if let Some((title, message)) = terminal {
+        if was_rollback {
+            ui.show_rolled_back(&message);
+        } else {
+            ui.show_failure(title, &message);
+        }
+        ui.wait_for_user_close();
+    } else if was_success && result.is_err() {
+        ui.show_restart_failure(
+            &result
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        ui.wait_for_user_close();
+    } else if result.is_ok() {
+        ui.close_after_success();
+        ui.wait_for_user_close();
+    }
+    result
 }
 
-pub fn finalize_update<F>(
-    args: &UpdaterArgs,
-    outcome: std::result::Result<(), ExecutionFailure>,
-    restart: F,
-) -> Result<()>
+pub fn finalize_update<F, O>(args: &UpdaterArgs, outcome: O, restart: F) -> Result<()>
 where
     F: FnOnce(&Path) -> Result<()>,
+    O: Into<UpdateExecutionOutcome>,
 {
+    let outcome = outcome.into();
     let record = match &outcome {
-        Ok(()) if args.dry_run => result::dry_run(&args.current_version, &args.target_version),
-        Ok(()) => result::success(&args.current_version, &args.target_version),
-        Err(failure) if failure.rolled_back => {
-            result::rolled_back(&args.current_version, &args.target_version, &failure.error)
+        UpdateExecutionOutcome::DryRun => {
+            result::dry_run(&args.current_version, &args.target_version)
         }
-        Err(failure) => {
+        UpdateExecutionOutcome::Success(success) => result::success_with_warnings(
+            &args.current_version,
+            &args.target_version,
+            success.warnings.clone(),
+            success.cleanup_pending,
+        ),
+        UpdateExecutionOutcome::RolledBack(rollback) => {
+            result::rolled_back(&args.current_version, &args.target_version, &rollback.cause)
+        }
+        UpdateExecutionOutcome::Failure(failure) => {
             result::failure(&args.current_version, &args.target_version, &failure.error)
         }
     };
@@ -87,16 +216,20 @@ where
     }
     let should_restart = args.restart
         && !args.dry_run
-        && (outcome.is_ok()
-            || outcome
-                .as_ref()
-                .err()
-                .is_some_and(|failure| failure.rolled_back));
+        && matches!(
+            outcome,
+            UpdateExecutionOutcome::Success(_) | UpdateExecutionOutcome::RolledBack(_)
+        );
     if should_restart && let Err(restart_error) = restart(&args.install_root) {
         eprintln!("could not restart verified application: {restart_error}");
-        if outcome.is_ok() {
-            let restart_record =
-                result::failure(&args.current_version, &args.target_version, &restart_error);
+        if let UpdateExecutionOutcome::Success(success) = &outcome {
+            let restart_record = result::failure_with_warnings(
+                &args.current_version,
+                &args.target_version,
+                &restart_error,
+                success.warnings.clone(),
+                success.cleanup_pending,
+            );
             if let Err(write_error) = result::write_result(&restart_record) {
                 eprintln!("could not write restart-failure result: {write_error}");
                 return Err(write_error);
@@ -107,14 +240,42 @@ where
             return Err(restart_error);
         }
     }
-    outcome.map_err(|failure| failure.error)
+    match outcome {
+        UpdateExecutionOutcome::Success(_) | UpdateExecutionOutcome::DryRun => Ok(()),
+        UpdateExecutionOutcome::RolledBack(rollback) => Err(rollback.cause),
+        UpdateExecutionOutcome::Failure(failure) => Err(failure.error),
+    }
 }
 
 fn execute_update<S: ReleaseSource>(
     args: &UpdaterArgs,
     source: &S,
-) -> std::result::Result<(), ExecutionFailure> {
+    ui: &NativeProgressUi,
+    active: &ActiveUpdateGuard,
+    run_root: &Path,
+) -> UpdateExecutionOutcome {
+    let result = execute_update_inner(args, source, ui, active, run_root);
+    match result {
+        Ok(_success) if args.dry_run => UpdateExecutionOutcome::DryRun,
+        Ok(success) => UpdateExecutionOutcome::Success(success),
+        Err(failure) if failure.rolled_back => UpdateExecutionOutcome::RolledBack(UpdateRollback {
+            cause: failure.error,
+        }),
+        Err(failure) => UpdateExecutionOutcome::Failure(UpdateFailure {
+            error: failure.error,
+        }),
+    }
+}
+
+fn execute_update_inner<S: ReleaseSource>(
+    args: &UpdaterArgs,
+    source: &S,
+    ui: &NativeProgressUi,
+    active: &ActiveUpdateGuard,
+    run_root: &Path,
+) -> std::result::Result<UpdateSuccess, ExecutionFailure> {
     let primary_exe = safe_join(&args.install_root, crate::PRIMARY_EXE)?;
+    publish(ui, active, UpdatePhase::WaitingForParent, None, None)?;
     wait_for_parent(args.parent_pid, PARENT_WAIT, &primary_exe)?;
     if has_unresolved_transaction(&args.install_root) {
         if args.dry_run {
@@ -130,13 +291,16 @@ fn execute_update<S: ReleaseSource>(
         env::current_exe().map_err(|error| UpdaterError::InstallRootInvalid(error.to_string()))?;
     crate::signature::verify_file(&updater_path)?;
 
-    let run_root = updater_run_root()?;
     let zip_path = run_root.join("release.zip");
     let staging = run_root.join("staging");
-    let execution = (|| -> std::result::Result<(), ExecutionFailure> {
+    let execution = (|| -> std::result::Result<UpdateSuccess, ExecutionFailure> {
+        publish(ui, active, UpdatePhase::FetchingRelease, None, None)?;
         let payload = source.fetch_exact_release(&args.target_version, args.channel, &zip_path)?;
+        publish(ui, active, UpdatePhase::VerifyingRelease, None, None)?;
         inspect_archive(&payload.zip_path)?;
+        publish(ui, active, UpdatePhase::Extracting, None, None)?;
         extract_zip_file(&payload.zip_path, &staging)?;
+        publish(ui, active, UpdatePhase::VerifyingStaging, None, None)?;
         let staged_manifest = read_staged_manifest(&staging, &args.target_version)?;
         if staged_manifest != payload.manifest {
             return Err(UpdaterError::ManifestHashMismatch(
@@ -147,60 +311,125 @@ fn execute_update<S: ReleaseSource>(
         verify_project_files(&staging, &staged_manifest)?;
         let old_manifest = installed_manifest(&args.install_root)?;
         if args.dry_run {
-            return Ok(());
+            return Ok(UpdateSuccess {
+                warnings: Vec::new(),
+                cleanup_pending: false,
+            });
         }
+        publish(ui, active, UpdatePhase::Preflight, None, None)?;
         #[cfg(feature = "e2e-fault-injection")]
         crate::faults::pause_at("before-apply");
-        if let Err(error) = install_verified(
+        publish(ui, active, UpdatePhase::BackingUp, None, None)?;
+        let install = match install_verified(
             &args.install_root,
             &staging,
             &staged_manifest,
             &old_manifest,
         ) {
-            if has_unresolved_transaction(&args.install_root) {
-                if let Err(rollback_error) = rollback_prepared(&args.install_root) {
-                    let combined = match rollback_error {
-                        UpdaterError::RollbackAtomicReplaceFailed {
-                            path,
-                            os_code,
-                            message,
-                        } => UpdaterError::RollbackAtomicReplaceFailed {
-                            path,
-                            os_code,
-                            message: format!("{error}; rollback failed: {message}"),
-                        },
-                        other => UpdaterError::RollbackFailed(format!(
-                            "{error}; rollback failed: {other}"
-                        )),
-                    };
+            Ok(report) => report,
+            Err(error) => {
+                if has_unresolved_transaction(&args.install_root) {
+                    if let Err(rollback_error) = rollback_prepared(&args.install_root) {
+                        let combined = match rollback_error {
+                            UpdaterError::RollbackAtomicReplaceFailed {
+                                path,
+                                os_code,
+                                message,
+                            } => UpdaterError::RollbackAtomicReplaceFailed {
+                                path,
+                                os_code,
+                                message: format!("{error}; rollback failed: {message}"),
+                            },
+                            other => UpdaterError::RollbackFailed(format!(
+                                "{error}; rollback failed: {other}"
+                            )),
+                        };
+                        return Err(ExecutionFailure {
+                            error: combined,
+                            rolled_back: false,
+                        });
+                    }
                     return Err(ExecutionFailure {
-                        error: combined,
-                        rolled_back: false,
+                        error,
+                        rolled_back: true,
                     });
                 }
-                return Err(ExecutionFailure {
-                    error,
-                    rolled_back: true,
-                });
+                return Err(error.into());
             }
-            return Err(error.into());
+        };
+        publish_best_effort(ui, active, UpdatePhase::VerifyingInstall, None, None);
+        publish_best_effort(ui, active, UpdatePhase::Committing, None, None);
+        let committed_cleanup = cleanup_committed(&args.install_root)?;
+        publish_best_effort(ui, active, UpdatePhase::CleaningUp, None, None);
+        let run_cleanup = cleanup_run_files(&run_root);
+        let mut warnings = Vec::new();
+        warnings.extend(cleanup_warnings(
+            "ARTIFACT_CLEANUP_FAILED",
+            install.transaction.cleanup_failures,
+        ));
+        for failure in committed_cleanup.failures {
+            let code = if failure
+                .path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.starts_with(".sky-update-"))
+            {
+                "ARTIFACT_CLEANUP_FAILED"
+            } else {
+                "COMMITTED_TRANSACTION_CLEANUP_FAILED"
+            };
+            warnings.extend(cleanup_warnings(code, vec![failure]));
         }
-        cleanup_committed(&args.install_root)?;
-        Ok(())
+        warnings.extend(cleanup_warnings("RUN_CLEANUP_FAILED", run_cleanup.failures));
+        Ok(UpdateSuccess {
+            cleanup_pending: !warnings.is_empty(),
+            warnings,
+        })
     })();
-    let cleanup = cleanup_run_files(&run_root);
     match execution {
-        Ok(()) => {
-            cleanup?;
-            Ok(())
-        }
-        Err(error) => {
-            if let Err(cleanup_error) = cleanup {
-                eprintln!("could not clean updater run directory: {cleanup_error}");
-            }
-            Err(error)
-        }
+        Ok(success) => Ok(success),
+        Err(error) => Err(error),
     }
+}
+
+fn publish(
+    ui: &NativeProgressUi,
+    active: &ActiveUpdateGuard,
+    phase: UpdatePhase,
+    current: Option<u64>,
+    total: Option<u64>,
+) -> Result<()> {
+    active.set_phase(phase)?;
+    ui.set_phase(phase, current, total);
+    Ok(())
+}
+
+fn publish_best_effort(
+    ui: &NativeProgressUi,
+    active: &ActiveUpdateGuard,
+    phase: UpdatePhase,
+    current: Option<u64>,
+    total: Option<u64>,
+) {
+    let _ = active.set_phase(phase);
+    ui.set_phase(phase, current, total);
+}
+
+fn cleanup_warnings(code: &str, failures: Vec<CleanupFailure>) -> Vec<result::UpdateWarning> {
+    failures
+        .into_iter()
+        .map(|failure| result::UpdateWarning {
+            code: code.into(),
+            message: failure.error.to_string(),
+            phase: Some("cleanup".into()),
+            operation: Some("remove updater-owned artifact".into()),
+            path: Some(failure.path.display().to_string()),
+            os_error: failure
+                .error
+                .raw_os_error()
+                .map(|value| value.unsigned_abs()),
+        })
+        .collect()
 }
 
 pub fn updater_run_root() -> Result<PathBuf> {
@@ -254,16 +483,21 @@ pub fn updater_run_root() -> Result<PathBuf> {
     Ok(run_root)
 }
 
-fn cleanup_run_files(run_root: &Path) -> Result<()> {
+fn cleanup_run_files(run_root: &Path) -> CleanupReport {
+    let mut report = CleanupReport::default();
     for name in ["release.zip", "staging"] {
         let path = run_root.join(name);
         if path.is_dir() {
-            fs::remove_dir_all(path)?;
+            if let Err(error) = remove_owned_tree(&path) {
+                report.failures.push(CleanupFailure { path, error });
+            }
         } else if path.is_file() {
-            fs::remove_file(path)?;
+            if let Err(error) = remove_owned_run_file(&path) {
+                report.failures.push(CleanupFailure { path, error });
+            }
         }
     }
-    Ok(())
+    report
 }
 
 fn print_help() {

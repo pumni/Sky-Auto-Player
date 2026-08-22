@@ -149,6 +149,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         self._update_available_version: str | None = None
         self._version_indicator_applied = False
+        self._forced_update_refresh_scheduled = False
 
     def _init_params(
         self,
@@ -225,7 +226,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         # and avoids a network hit on metered connections the instant the
         # picker is interactive. The 24h throttle in ``should_auto_check``
         # still gates the actual fetch.
-        self.set_timer(3.0, self.check_for_updates_worker)
+        if not self._forced_update_refresh_scheduled:
+            self.set_timer(3.0, self.check_for_updates_worker)
 
     def _set_version_indicator(self) -> None:
         """Show current version in the app bar header."""
@@ -1072,7 +1074,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         if result.update is not None:
             from sky_music.config import persist_update_last_notified
+            from sky_music.infrastructure.update_notice_cache import (
+                save_pending_release,
+            )
+
             persist_update_last_notified(self.cfg, result.update.latest_version)
+            save_pending_release(result.update)
             self.call_from_thread(self._push_update_banner_modal, result.update)
         elif result.error is None and force:
             self.call_from_thread(
@@ -1108,15 +1115,27 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def _restore_pending_update_indicator(self) -> None:
         notified = self.cfg.update.last_notified_version
         from sky_music.domain.update_checker import UpdateInfo, is_newer
+        from sky_music.infrastructure.update_notice_cache import (
+            clear_pending_release,
+            load_pending_release,
+        )
+
         if notified and is_newer(notified, VERSION):
-            mock_update = UpdateInfo(
-                latest_version=notified,
-                download_url="",
-                release_notes="",
-                html_url="",
-                published_at=""
-            )
-            self._push_update_banner_modal(mock_update)
+            pending = load_pending_release()
+            if pending is not None and pending.latest_version == notified:
+                cached_update = UpdateInfo(
+                    latest_version=pending.latest_version,
+                    download_url="",
+                    release_notes=pending.release_notes,
+                    html_url="",
+                    published_at=pending.published_at,
+                )
+                self._push_update_banner_modal(cached_update)
+                return
+            self._forced_update_refresh_scheduled = True
+            self.set_timer(0.0, lambda: self.check_for_updates_worker(force=True))
+        elif notified:
+            clear_pending_release(notified)
 
     def _clear_pending_update_indicator(self) -> None:
         self._update_available_version = None
@@ -1130,6 +1149,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         from sky_music.orchestration.update_service import record_skip
         if response == "skip":
             record_skip(self.cfg, release.latest_version)
+            from sky_music.infrastructure.update_notice_cache import (
+                clear_pending_release,
+            )
+
+            clear_pending_release(release.latest_version)
             self.notify(f"Skipped version {release.latest_version}", timeout=3)
         elif response == "update":
             self._launch_native_update(release)
@@ -1144,6 +1168,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         from sky_music.infrastructure.update_launcher import (
             UpdateLaunchError,
             UpdateLaunchRequest,
+            UpdateLaunchResult,
             launch_update,
         )
 
@@ -1152,7 +1177,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         else:
             install_root = Path(__file__).resolve().parents[4]
         try:
-            launch_update(
+            launch_result = launch_update(
                 UpdateLaunchRequest(
                     install_root=install_root,
                     current_version=VERSION,
@@ -1168,7 +1193,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 timeout=10,
             )
             return
-        self.notify("Update started. Sky Auto Player will restart when it completes.", timeout=6)
+        if isinstance(launch_result, UpdateLaunchResult) and launch_result.status == "already_running":
+            self.notify(
+                "An update is already running. This app window will close so the updater can continue.",
+                severity="information",
+                timeout=1.0,
+            )
+            self.set_timer(1.0, self.exit)
+            return
         self.exit()
 
     def _report_last_update_result(self) -> None:
@@ -1183,6 +1215,24 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 severity="information",
                 timeout=6,
             )
+            if result.cleanup_pending or result.warnings:
+                warning = result.warnings[0] if result.warnings else None
+                detail = warning.message if warning is not None else "temporary updater files remain"
+                suffix = " Cleanup will be retried automatically." if result.cleanup_pending else ""
+                self.notify(
+                    f"The update completed, but cleanup needs attention: {detail}.{suffix}",
+                    severity="warning",
+                    timeout=10,
+                )
+            from sky_music.config import persist_update_last_notified
+            from sky_music.domain.update_checker import is_newer
+            from sky_music.infrastructure.update_notice_cache import (
+                clear_pending_release,
+            )
+
+            if not is_newer(result.target_version, VERSION):
+                clear_pending_release(result.target_version)
+                persist_update_last_notified(self.cfg, "")
         elif result.status == "rolled_back":
             self.notify(
                 f"Update to v{result.target_version} was rolled back: {result.message}",
@@ -1190,8 +1240,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 timeout=10,
             )
         elif result.status == "failure":
+            details = [f"[{result.error_code or 'UNKNOWN'}]"]
+            if result.phase or result.operation:
+                details.append(f"during {result.phase}/{result.operation}".rstrip("/"))
+            if result.path:
+                details.append(f"at {result.path}")
+            if result.os_error is not None:
+                details.append(f"(Windows error {result.os_error})")
             self.notify(
-                f"Update to v{result.target_version} failed: {result.message}",
+                f"Update to v{result.target_version} failed {' '.join(details)}: {result.message}",
                 severity="error",
                 timeout=10,
             )

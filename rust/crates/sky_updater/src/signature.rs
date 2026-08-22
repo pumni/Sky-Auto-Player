@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::archive::sha256_file;
-use crate::error::{Result, UpdaterError};
+use crate::error::{Result, UpdaterError, io_context};
 use crate::manifest::Manifest;
 use crate::{PRIMARY_EXE, UPDATER_EXE};
 
@@ -25,10 +25,23 @@ pub fn project_owned_files(root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn collect_project_pyds(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in std::fs::read_dir(root)
+        .map_err(|error| io_context("verify staging", "read project directory", root, error))?
+    {
+        let entry = entry.map_err(|error| {
+            io_context(
+                "verify staging",
+                "read project directory entry",
+                root,
+                error,
+            )
+        })?;
         let path = entry.path();
-        if entry.file_type()?.is_symlink() {
+        if entry
+            .file_type()
+            .map_err(|error| io_context("verify staging", "read project entry type", &path, error))?
+            .is_symlink()
+        {
             return Err(UpdaterError::ManifestInvalid(format!(
                 "symlink under _internal: {}",
                 path.display()
@@ -95,11 +108,18 @@ pub fn verify_project_files(root: &Path, manifest: &Manifest) -> Result<()> {
                     "project-owned file is absent from manifest: {relative}"
                 ))
             })?;
-        let metadata = fs::metadata(&path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|error| io_context("verify staging", "read project metadata", &path, error))?;
         if metadata.len() != entry.size {
             return Err(UpdaterError::ManifestHashMismatch(relative));
         }
-        if sha256_file(&path)? != entry.sha256.to_ascii_lowercase() {
+        let actual = sha256_file(&path).map_err(|error| match error {
+            UpdaterError::Io(source) => {
+                io_context("verify staging", "hash project file", &path, source)
+            }
+            other => other,
+        })?;
+        if actual != entry.sha256.to_ascii_lowercase() {
             return Err(UpdaterError::ManifestHashMismatch(relative));
         }
     }
