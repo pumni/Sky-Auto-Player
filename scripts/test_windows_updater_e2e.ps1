@@ -10,6 +10,7 @@ param(
     [string]$SyntheticTargetVersion = "3.4.6",
     [switch]$RunGitHubSmoke,
     [switch]$KeepEvidence,
+    [switch]$SelfTestResultPolling,
     [int]$TimeoutSeconds = 180
 )
 
@@ -377,6 +378,8 @@ function Wait-ForUpdaterResult {
     param(
         [object]$Scenario,
         [object]$RunInfo,
+        [string]$ExpectedStatus,
+        [string]$ExpectedErrorCode,
         [int]$TimeoutSeconds = 45
     )
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -384,10 +387,19 @@ function Wait-ForUpdaterResult {
         $observed = Read-UpdaterResult $Scenario
         if ($observed) {
             $RunInfo.Process.Refresh()
-            return [pscustomobject]@{
-                Result = $observed.Result
-                ResultPath = $observed.ResultPath
-                ProcessAliveAfterResult = -not $RunInfo.Process.HasExited
+            $statusMatches = [string]::IsNullOrEmpty($ExpectedStatus) -or
+                [string]$observed.Result.status -eq $ExpectedStatus
+            $errorMatches = [string]::IsNullOrEmpty($ExpectedErrorCode) -or
+                [string]$observed.Result.error_code -eq $ExpectedErrorCode
+            if ($statusMatches -and $errorMatches) {
+                return [pscustomobject]@{
+                    Result = $observed.Result
+                    ResultPath = $observed.ResultPath
+                    ProcessAliveAfterResult = -not $RunInfo.Process.HasExited
+                }
+            }
+            if ($RunInfo.Process.HasExited) {
+                throw "updater exited with an unexpected result: status=$($observed.Result.status), code=$($observed.Result.error_code)"
             }
         }
         if ($RunInfo.Process.HasExited) { break }
@@ -418,6 +430,8 @@ function Invoke-UpdaterExpectTerminal {
         [string]$TargetVersion,
         [string]$ReleaseDir,
         [string]$FailAt,
+        [string]$ExpectedStatus,
+        [string]$ExpectedErrorCode,
         [switch]$Restart,
         [switch]$FailRestart
     )
@@ -428,7 +442,7 @@ function Invoke-UpdaterExpectTerminal {
         -ReleaseDir $ReleaseDir -FailAt $FailAt -Restart:$Restart `
         -RequireProgressWindow -FailRestart:$FailRestart
     Stop-ProcessIfRunning $parent
-    $observed = Wait-ForUpdaterResult $Scenario $runInfo
+    $observed = Wait-ForUpdaterResult $Scenario $runInfo $ExpectedStatus $ExpectedErrorCode
     if (-not $observed.ProcessAliveAfterResult) {
         throw "terminal updater exited before its result window could be inspected"
     }
@@ -577,11 +591,12 @@ function Get-CanonicalAppProcesses {
 function Wait-ForPrimaryEmergencyBackup {
     param(
         [object]$Scenario,
-        [string]$SourcePrimary,
+        [string]$ExpectedOriginalFilename,
+        [string]$ExpectedFileVersion,
+        [string]$ExpectedProductVersion,
+        [string]$ExpectedSha256,
         [int]$TimeoutSeconds = 45
     )
-    $sourceInfo = (Get-Item -LiteralPath $SourcePrimary).VersionInfo
-    $sourceHash = (Get-FileHash -LiteralPath $SourcePrimary -Algorithm SHA256).Hash.ToLowerInvariant()
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         $candidates = @(Get-ChildItem -LiteralPath $Scenario.Install -Filter ".sky-update-*.bak" -File -ErrorAction SilentlyContinue |
@@ -589,17 +604,17 @@ function Wait-ForPrimaryEmergencyBackup {
         foreach ($candidate in $candidates) {
             $info = $candidate.VersionInfo
             $hash = (Get-FileHash -LiteralPath $candidate.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($info.OriginalFilename -eq "Sky-Auto-Player.exe" -and
-                $info.FileVersion -eq $sourceInfo.FileVersion -and
-                $info.ProductVersion -eq $sourceInfo.ProductVersion -and
-                $hash -eq $sourceHash) {
+            if ($info.OriginalFilename -eq $ExpectedOriginalFilename -and
+                $info.FileVersion -eq $ExpectedFileVersion -and
+                $info.ProductVersion -eq $ExpectedProductVersion -and
+                $hash -eq $ExpectedSha256) {
                 return [pscustomobject]@{
                     Path = $candidate.FullName
                     OriginalFilename = [string]$info.OriginalFilename
                     FileVersion = [string]$info.FileVersion
                     ProductVersion = [string]$info.ProductVersion
                     Sha256 = $hash
-                    SourceSha256 = $sourceHash
+                    SourceSha256 = $ExpectedSha256
                 }
             }
         }
@@ -752,11 +767,11 @@ function Assert-CanonicalSuccess {
     }
     $restarted = Wait-ForExactlyOneRestartedApp $Scenario.Install $Run.ParentPid
     if ($null -eq $restarted) {
-        throw "canonical success did not produce exactly one restarted primary process"
+        throw "canonical success did not produce exactly one live restarted primary process"
     }
     $processes = @(Get-CanonicalAppProcesses $Scenario.Install)
     if ($processes.Count -ne 1 -or $processes[0].Id -ne $restarted.Id) {
-        throw "canonical success observed more than one primary process"
+        throw "canonical success observed more than one live primary process"
     }
     return $restarted
 }
@@ -813,6 +828,70 @@ function Build-CorruptSidecarRelease {
 function Record-Failure {
     param([string]$Name, [object]$ErrorRecord)
     $script:Results[$Name] = [ordered]@{ status = "FAIL"; error = $ErrorRecord.ToString() }
+}
+
+function Invoke-ResultPollingSelfTest {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ("sky-updater-result-polling-" + [guid]::NewGuid().ToString("N"))
+    $local = Join-Path $root "localappdata"
+    $state = Join-Path $local "Sky-Auto-Player\update-state"
+    $resultPath = Join-Path $state "last-result.json"
+    $finalPath = Join-Path $root "final-result.json"
+    $writerScript = Join-Path $root "write-final-result.ps1"
+    $holderScript = Join-Path $root "hold-process.ps1"
+    $writer = $null
+    $holder = $null
+    try {
+        New-Item -ItemType Directory -Path $state -Force | Out-Null
+        [IO.File]::WriteAllText($resultPath, '{"status":"success","error_code":null}')
+        [IO.File]::WriteAllText($finalPath, '{"status":"failure","error_code":"RESTART_FAILED"}')
+        [IO.File]::WriteAllText($writerScript, @'
+param([string]$ResultPath, [string]$FinalPath)
+Start-Sleep -Milliseconds 250
+Copy-Item -LiteralPath $FinalPath -Destination $ResultPath -Force
+'@)
+        [IO.File]::WriteAllText($holderScript, @'
+param([int]$Seconds)
+Start-Sleep -Seconds $Seconds
+'@)
+        $hostPath = [Environment]::ProcessPath
+        if ([string]::IsNullOrWhiteSpace($hostPath)) {
+            throw "could not determine the current PowerShell host path"
+        }
+        $writerArguments = @(
+            "-NoProfile", "-File", $writerScript, "-ResultPath", $resultPath, "-FinalPath", $finalPath
+        )
+        $writerLine = ($writerArguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " "
+        $writer = Start-Process -FilePath $hostPath -ArgumentList $writerLine -WindowStyle Hidden -PassThru
+        $holderArguments = @("-NoProfile", "-File", $holderScript, "-Seconds", "3")
+        $holderLine = ($holderArguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " "
+        $holder = Start-Process -FilePath $hostPath -ArgumentList $holderLine -WindowStyle Hidden -PassThru
+        $scenario = [pscustomobject]@{ Name = "result-polling-self-test"; Local = $local }
+        $runInfo = [pscustomobject]@{ Process = $holder }
+        $observed = Wait-ForUpdaterResult $scenario $runInfo "failure" "RESTART_FAILED" 5
+        if ($observed.Result.status -ne "failure" -or
+            $observed.Result.error_code -ne "RESTART_FAILED" -or
+            -not $observed.ProcessAliveAfterResult) {
+            throw "result polling self-test accepted the wrong result"
+        }
+    }
+    finally {
+        Stop-ProcessIfRunning $writer
+        Stop-ProcessIfRunning $holder
+        if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+if ($SelfTestResultPolling) {
+    try {
+        Invoke-ResultPollingSelfTest
+        exit 0
+    }
+    catch {
+        Write-Error $_
+        exit 1
+    }
 }
 
 try {
@@ -880,7 +959,7 @@ try {
         packaged_updater_sha256 = $candidateHashes.packaged_updater
         installed_updater_sha256 = $installedUpdaterHash
         restarted_pid = $canonicalRestart.Id
-        exactly_one_restart = $true
+        exactly_one_live_restart_process = $true
         active_state_removed = $true
         transaction_removed = $true
         reserved_artifacts_removed = $true
@@ -890,7 +969,7 @@ try {
         installed_updater_sha256 = $installedUpdaterHash
         restarted_pid = $canonicalRestart.Id
         restart_verified = $true
-        exactly_one_restart = $true
+        exactly_one_live_restart_process = $true
         active_state_removed = $true
         transaction_removed = $true
         reserved_artifacts_removed = $true
@@ -992,7 +1071,8 @@ try {
     $scenario = New-Scenario "locked-primary" $fromRoot
     $primaryLock = [IO.File]::Open((Join-Path $scenario.Install "Sky-Auto-Player.exe"), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     try {
-        $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $syntheticRelease
+        $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $syntheticRelease `
+            -ExpectedStatus "failure" -ExpectedErrorCode "INSTALL_TARGET_BUSY"
     } finally {
         $primaryLock.Dispose()
     }
@@ -1004,7 +1084,8 @@ try {
     Save-UpdaterLog "locked-primary" $scenario
 
     $scenario = New-Scenario "integrity-failure" $fromRoot
-    $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $corruptSidecarRelease
+    $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $corruptSidecarRelease `
+        -ExpectedStatus "failure" -ExpectedErrorCode "CHECKSUM_MISMATCH"
     if ($run.Result.status -ne "failure" -or $run.Result.error_code -ne "CHECKSUM_MISMATCH" -or
         -not $run.TerminalWindowHeld -or (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) {
         throw "corrupt sidecar did not produce a held integrity failure before mutation"
@@ -1102,7 +1183,8 @@ try {
 
     $scenario = New-Scenario "precommit-failure" $fromRoot
     $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $syntheticRelease `
-        -FailAt "apply:before-replace:Sky-Auto-Player-Updater.exe"
+        -FailAt "apply:before-replace:Sky-Auto-Player-Updater.exe" `
+        -ExpectedStatus "rolled_back" -ExpectedErrorCode "ROLLED_BACK"
     if ($run.Result.status -ne "rolled_back" -or
         (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) {
         throw "precommit failure did not produce a clean rolled-back result"
@@ -1114,6 +1196,10 @@ try {
     Save-UpdaterLog "precommit-failure" $scenario
 
     $scenario = New-Scenario "cleanup-access-denied" $fromRoot
+    $oldPrimaryPath = Join-Path $scenario.Install "Sky-Auto-Player.exe"
+    $oldPrimaryVersionInfo = (Get-Item -LiteralPath $oldPrimaryPath).VersionInfo
+    $oldPrimaryHash = (Get-FileHash -LiteralPath $oldPrimaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $installedPrimaryPath = $oldPrimaryPath
     $parent = Start-ParentFixture $scenario.Install
     $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
     $cleanupResume = Join-Path $scenario.Root "cleanup-resume.signal"
@@ -1126,8 +1212,11 @@ try {
     # create the emergency backup. Stop it immediately after ready/progress;
     # waiting for .bak before this point would deadlock the acceptance path.
     Stop-ProcessIfRunning $parent
-    $sourcePrimary = Join-Path $scenario.Install "Sky-Auto-Player.exe"
-    $backup = Wait-ForPrimaryEmergencyBackup $scenario $sourcePrimary
+    $backup = Wait-ForPrimaryEmergencyBackup $scenario `
+        -ExpectedOriginalFilename "Sky-Auto-Player.exe" `
+        -ExpectedFileVersion $oldPrimaryVersionInfo.FileVersion `
+        -ExpectedProductVersion $oldPrimaryVersionInfo.ProductVersion `
+        -ExpectedSha256 $oldPrimaryHash
     if (-not $backup) {
         Stop-ProcessIfRunning $accessRun.Process
         throw "cleanup AccessDenied fixture did not create a forensic Sky-Auto-Player.exe backup"
@@ -1159,7 +1248,7 @@ try {
             $_.path -eq $backupPath -and $_.os_error -in @(5, 32)
         } | Select-Object -First 1
         $targetPrimaryHash = ($syntheticManifest.files | Where-Object { $_.path -eq "Sky-Auto-Player.exe" }).sha256
-        $installedPrimaryHash = (Get-FileHash -LiteralPath $sourcePrimary -Algorithm SHA256).Hash.ToLowerInvariant()
+        $installedPrimaryHash = (Get-FileHash -LiteralPath $installedPrimaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($accessResult.status -ne "success" -or -not $accessResult.cleanup_pending -or
             $null -eq $matchingWarning -or $installedPrimaryHash -ne $targetPrimaryHash -or
             -not (Assert-RestartObserved $scenario.Install) -or -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
@@ -1194,7 +1283,7 @@ try {
         Stop-ProcessIfRunning $cleanupRetry.Process
         throw "released forensic backup was not removed by the later best-effort cleanup cycle"
     }
-    $primaryAfterRetry = (Get-FileHash -LiteralPath $sourcePrimary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $primaryAfterRetry = (Get-FileHash -LiteralPath $installedPrimaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($primaryAfterRetry -ne $targetPrimaryHash) { throw "later cleanup cycle changed managed primary bytes" }
     Write-EvidenceJson "cleanup-access-denied-result.json" ([ordered]@{
         status = "PASS"
@@ -1205,6 +1294,7 @@ try {
 
     $scenario = New-Scenario "restart-failure" $fromRoot
     $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $syntheticRelease `
+        -ExpectedStatus "failure" -ExpectedErrorCode "RESTART_FAILED" `
         -Restart -FailRestart
     $restartManifest = Get-ManifestObject $scenario.Install
     if ($run.Result.status -ne "failure" -or $run.Result.error_code -ne "RESTART_FAILED" -or
@@ -1225,7 +1315,8 @@ try {
     Stop-ProcessIfRunning $prepared.Process
     if (-not $preparedJournal) { throw "rollback fault fixture did not leave Prepared journal" }
     $run = Invoke-UpdaterExpectTerminal $scenario $e2eCandidate $fromManifest.version $syntheticManifest.version $syntheticRelease `
-        -FailAt "rollback:after-restore:Sky-Auto-Player-Updater.exe"
+        -FailAt "rollback:after-restore:Sky-Auto-Player-Updater.exe" `
+        -ExpectedStatus "failure" -ExpectedErrorCode "ROLLBACK_ATOMIC_REPLACE_FAILED"
     if ($run.Result.error_code -ne "ROLLBACK_ATOMIC_REPLACE_FAILED" -or -not (Test-Path (Join-Path $scenario.Install ".sky-update-transaction"))) { throw "rollback fault safety check failed" }
     if (-not (Test-Path (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe"))) { throw "rollback fault removed updater" }
     $rollbackUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
