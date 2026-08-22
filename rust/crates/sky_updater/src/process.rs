@@ -66,11 +66,19 @@ fn verify_parent_image(
     expected_executable: &Path,
 ) -> Result<()> {
     use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     let mut buffer = [0u16; 32_768];
     let mut length = buffer.len() as u32;
     if unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } == 0 {
+        // The parent may terminate after OpenProcess succeeds but before its
+        // image is queried. A signaled handle proves that this is the bounded
+        // parent-exit race; a live handle still fails closed on query errors.
+        if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
         return Err(UpdaterError::NetworkFailure(
             "could not query parent process image".into(),
         ));
