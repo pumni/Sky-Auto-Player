@@ -544,3 +544,28 @@ def test_duplicate_update_notifies_then_exits_after_delay(
     assert [delay for delay, _callback in timers] == [1.0]
     timers[0][1]()
     assert exits == [True]
+
+
+def test_ready_update_exits_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.infrastructure.update_launcher import UpdateLaunchResult
+
+    app = app_module.SkyPickerApp(initial_dry_run=True)
+    exits: list[bool] = []
+    app.exit = lambda: exits.append(True)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "sky_music.infrastructure.update_launcher.launch_update",
+        lambda _request: UpdateLaunchResult(
+            status="ready",
+            staged_updater=tmp_path / "Sky-Auto-Player-Updater.exe",
+            run_root=tmp_path / "run",
+            updater_pid=4711,
+        ),
+    )
+
+    app._launch_native_update(SimpleNamespace(latest_version="3.4.5"))
+
+    assert exits == [True]

@@ -1,5 +1,6 @@
 //! Deterministic fault hooks for the separately built E2E binary only.
 
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -16,12 +17,17 @@ struct FaultSpec {
 struct FaultConfig {
     failures: Vec<FaultSpec>,
     pause_at: Option<String>,
+    resume_file: Option<String>,
     fail_restart: bool,
 }
 
 static CONFIG: OnceLock<Mutex<FaultConfig>> = OnceLock::new();
 
-pub fn configure(fail_at: Option<&str>, pause_at: Option<&str>) -> Result<()> {
+pub fn configure(
+    fail_at: Option<&str>,
+    pause_at: Option<&str>,
+    resume_file: Option<&Path>,
+) -> Result<()> {
     let mut failures = Vec::new();
     if let Some(specs) = fail_at {
         for spec in specs.split(',') {
@@ -51,6 +57,7 @@ pub fn configure(fail_at: Option<&str>, pause_at: Option<&str>) -> Result<()> {
     let config = FaultConfig {
         failures,
         pause_at: pause_at.map(str::to_owned),
+        resume_file: resume_file.map(|path| path.display().to_string()),
         fail_restart: false,
     };
     CONFIG
@@ -84,7 +91,17 @@ pub fn pause_at(point: &str) {
         .and_then(|config| config.lock().ok())
         .is_some_and(|config| config.pause_at.as_deref() == Some(point));
     if should_pause {
-        std::thread::sleep(Duration::from_secs(30));
+        let resume_file = CONFIG
+            .get()
+            .and_then(|config| config.lock().ok())
+            .and_then(|config| config.resume_file.clone());
+        if let Some(path) = resume_file {
+            while !Path::new(&path).is_file() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        } else {
+            std::thread::sleep(Duration::from_secs(30));
+        }
     }
 }
 

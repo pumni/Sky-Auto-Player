@@ -30,7 +30,10 @@ fn run() -> Result<()> {
     let mut release_dir = None;
     let mut fail_at = None;
     let mut pause_at = None;
+    let mut resume_file = None;
     let mut fail_restart = false;
+    let handshake_only =
+        env::var("SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY").is_ok_and(|value| value == "1");
     let mut values = env::args().skip(1);
     while let Some(argument) = values.next() {
         match argument.as_str() {
@@ -58,6 +61,14 @@ fn run() -> Result<()> {
                 }
                 pause_at = Some(next_value(&mut values, &argument)?);
             }
+            "--resume-file" => {
+                if resume_file.is_some() {
+                    return Err(UpdaterError::InvalidArgument(
+                        "duplicate flag: --resume-file".into(),
+                    ));
+                }
+                resume_file = Some(PathBuf::from(next_value(&mut values, &argument)?));
+            }
             "--fail-restart" => {
                 if fail_restart {
                     return Err(UpdaterError::InvalidArgument(
@@ -71,12 +82,6 @@ fn run() -> Result<()> {
             }
         }
     }
-    let release_dir = release_dir.ok_or_else(|| {
-        UpdaterError::InvalidArgument("missing required flag: --release-dir".into())
-    })?;
-    sky_updater::faults::configure(fail_at.as_deref(), pause_at.as_deref())?;
-    sky_updater::faults::set_restart_failure(fail_restart)?;
-    let source = LocalReleaseSource::new(&release_dir)?;
     let args = match sky_updater::cli::parse(standard.into_iter())? {
         sky_updater::cli::ParseResult::Args(args) => args,
         sky_updater::cli::ParseResult::Help | sky_updater::cli::ParseResult::Version => {
@@ -85,6 +90,22 @@ fn run() -> Result<()> {
             ));
         }
     };
+
+    if handshake_only {
+        let run_root = sky_updater::runner::updater_run_root()?;
+        return sky_updater::handoff::write_ready(&run_root, &args.target_version);
+    }
+
+    let release_dir = release_dir.ok_or_else(|| {
+        UpdaterError::InvalidArgument("missing required flag: --release-dir".into())
+    })?;
+    sky_updater::faults::configure(
+        fail_at.as_deref(),
+        pause_at.as_deref(),
+        resume_file.as_deref(),
+    )?;
+    sky_updater::faults::set_restart_failure(fail_restart)?;
+    let source = LocalReleaseSource::new(&release_dir)?;
     run_update_with_source(&args, &source)
 }
 

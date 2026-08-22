@@ -7,6 +7,7 @@ param(
     [string]$GitHubTargetVersion = "3.4.5",
     [string]$ExpectedFromVersion = "3.4.4",
     [string]$ExpectedToVersion = "3.4.5",
+    [switch]$RunGitHubSmoke,
     [switch]$KeepEvidence,
     [int]$TimeoutSeconds = 180
 )
@@ -292,6 +293,7 @@ function Start-UpdaterProcess {
         [uint32]$ParentPid = 1,
         [string]$FailAt,
         [string]$PauseAt,
+        [string]$ResumeFile,
         [switch]$Restart,
         [switch]$KeepPaused,
         [switch]$RequireProgressWindow,
@@ -313,6 +315,7 @@ function Start-UpdaterProcess {
     if ($ReleaseDir) { $arguments += @("--release-dir", $ReleaseDir) }
     if ($FailAt) { $arguments += @("--fail-at", $FailAt) }
     if ($PauseAt) { $arguments += @("--pause-at", $PauseAt) }
+    if ($ResumeFile) { $arguments += @("--resume-file", $ResumeFile) }
     $argumentLine = (($arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " ")
     $process = Start-Process -FilePath $updater -ArgumentList $argumentLine -WorkingDirectory $Install `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
@@ -604,15 +607,53 @@ try {
     $script:Results.happy_local = [ordered]@{ status = "PASS"; installed_updater_sha256 = $installedUpdaterHash; restart_verified = $true; transaction_removed = $true }
     Stop-RestartedApp $scenario.Install
 
-    $scenario = New-Scenario "happy-github" $fromRoot
-    $run = Invoke-Updater $scenario $productionCandidate $fromManifest.version $GitHubTargetVersion $null -Restart
-    if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H2 result was not success" }
-    $h2Manifest = Get-ManifestObject $scenario.Install
-    $h2 = Save-ScenarioEvidence "happy-github" $scenario $run $h2Manifest
-    Save-UpdaterLog "happy-github" $scenario
-    if (-not $h2.restart_verified) { throw "H2 restart was not observed" }
-    $script:Results.happy_github = [ordered]@{ status = "PASS"; target_version = $h2Manifest.version; restart_verified = $true; transaction_removed = $true }
-    Stop-RestartedApp $scenario.Install
+    if ($RunGitHubSmoke) {
+        $scenario = New-Scenario "happy-github" $fromRoot
+        $run = Invoke-Updater $scenario $productionCandidate $fromManifest.version $GitHubTargetVersion $null -Restart
+        if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) { throw "H2 result was not success" }
+        $h2Manifest = Get-ManifestObject $scenario.Install
+        $h2 = Save-ScenarioEvidence "happy-github" $scenario $run $h2Manifest
+        Save-UpdaterLog "happy-github" $scenario
+        if (-not $h2.restart_verified) { throw "H2 restart was not observed" }
+        $script:Results.happy_github = [ordered]@{ status = "PASS"; target_version = $h2Manifest.version; restart_verified = $true; transaction_removed = $true }
+        Stop-RestartedApp $scenario.Install
+    } else {
+        # H2 requires a published, non-draft GitHub release. It is a
+        # post-publish smoke test and must not gate pre-release local acceptance.
+        $script:Results.happy_github = [ordered]@{
+            status = "NOT_RUN"
+            reason = "post-publish GitHub smoke is disabled for pre-release acceptance"
+        }
+        Write-EvidenceJson "happy-github-result.json" $script:Results.happy_github
+    }
+
+    $scenario = New-Scenario "one-click-launcher" $fromRoot
+    Copy-Item -LiteralPath $e2eCandidate `
+        -Destination (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Force
+    Save-ManifestWithCurrentHashes $scenario.Install
+    $previousHandshakeMode = $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY
+    $previousOneClickRoot = $env:SKY_ONE_CLICK_INSTALL_ROOT
+    $previousOneClickCurrent = $env:SKY_ONE_CLICK_CURRENT_VERSION
+    $previousOneClickTarget = $env:SKY_ONE_CLICK_TARGET_VERSION
+    try {
+        $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY = "1"
+        $env:SKY_ONE_CLICK_INSTALL_ROOT = $scenario.Install
+        $env:SKY_ONE_CLICK_CURRENT_VERSION = $fromManifest.version
+        $env:SKY_ONE_CLICK_TARGET_VERSION = $toManifest.version
+        & uv run --env-file .env python -m pytest tests/test_windows_one_click_launcher.py -q
+        if ($LASTEXITCODE -ne 0) { throw "real Python one-click launcher acceptance failed" }
+    } finally {
+        $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY = $previousHandshakeMode
+        $env:SKY_ONE_CLICK_INSTALL_ROOT = $previousOneClickRoot
+        $env:SKY_ONE_CLICK_CURRENT_VERSION = $previousOneClickCurrent
+        $env:SKY_ONE_CLICK_TARGET_VERSION = $previousOneClickTarget
+    }
+    Write-EvidenceJson "one-click-launcher-result.json" ([ordered]@{
+        status = "PASS"
+        boundary = "python launch_update -> native ready handoff"
+        app_exit_unit_test = "tests/test_textual_update_modals.py::test_ready_update_exits_exactly_once"
+    })
+    $script:Results.one_click_launcher = $true
 
     $scenario = New-Scenario "locked-primary" $fromRoot
     $primaryLock = [IO.File]::Open((Join-Path $scenario.Install "Sky-Auto-Player.exe"), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
@@ -670,9 +711,19 @@ try {
         Stop-ProcessIfRunning $first.Process
         throw "reopened app stayed alive while updater was active"
     }
+    $reopenOutput = if (Test-Path -LiteralPath $reopenStdout) {
+        Get-Content -LiteralPath $reopenStdout -Raw
+    } else { "" }
+    if ($reopened.ExitCode -ne 0 -or
+        $reopenOutput -notmatch "Sky Auto Player is currently updating to v" -or
+        $reopenOutput -notmatch "The updater window will restart the app automatically") {
+        Stop-ProcessIfRunning $first.Process
+        throw "reopened app did not exit cleanly through the active-update startup guard"
+    }
     Stop-ProcessIfRunning $first.Process
     Write-EvidenceJson "active-reopen-result.json" ([ordered]@{
         startup_guard_exit_code = $reopened.ExitCode
+        startup_guard_output = $reopenOutput.Trim()
         active_state_created = $true
         active_state_owned_by_paused_updater = $true
     })
@@ -698,11 +749,15 @@ try {
     $accessRun = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate `
         -ParentPid $parentPid -CurrentVersion $fromManifest.version -TargetVersion $toManifest.version `
         -ReleaseDir $syntheticRelease -PauseAt "before-cleanup:apply:Sky-Auto-Player-Updater.exe" `
+        -ResumeFile (Join-Path $scenario.Root "cleanup-resume.signal") `
         -Restart -KeepPaused -RequireProgressWindow
+    # The production updater waits for the real parent to exit before it can
+    # create the emergency backup. Stop it immediately after ready/progress;
+    # waiting for .bak before this point would deadlock the acceptance path.
+    Stop-ProcessIfRunning $parent
     $backupPath = Wait-ForEmergencyBackup $scenario.Install
     if (-not $backupPath) {
         Stop-ProcessIfRunning $accessRun.Process
-        Stop-ProcessIfRunning $parent
         throw "cleanup AccessDenied fixture did not create an emergency backup"
     }
     $deleteBlocker = $null
@@ -716,7 +771,7 @@ try {
             [IO.FileAccess]::Read,
             [IO.FileShare]::Read
         )
-        Stop-ProcessIfRunning $parent
+        [IO.File]::WriteAllText((Join-Path $scenario.Root "cleanup-resume.signal"), "resume`r`n")
         if (-not $accessRun.Process.WaitForExit($TimeoutSeconds * 1000)) {
             Stop-ProcessIfRunning $accessRun.Process
             throw "cleanup AccessDenied updater timed out"
@@ -866,7 +921,8 @@ finally {
     Write-EvidenceJson "summary.json" ([ordered]@{
         overall = $script:Results.overall
         happy_local = if ($script:Results.happy_local) { $script:Results.happy_local.status } else { "FAIL" }
-        happy_github = if ($script:Results.happy_github) { $script:Results.happy_github.status } else { "FAIL" }
+        happy_github = if ($script:Results.happy_github) { $script:Results.happy_github.status } else { "NOT_RUN" }
+        one_click_launcher = [bool]$script:Results.one_click_launcher
         locked_primary_safe = [bool]$script:Results.locked_primary_safe
         concurrent_blocked = [bool]$script:Results.concurrent_blocked
         active_reopen_guard = [bool]$script:Results.active_reopen_guard

@@ -41,6 +41,12 @@ pub fn recover_before_update(install_root: &Path) -> Result<()> {
                     failure.error
                 );
             }
+            if root.exists() {
+                return Err(UpdaterError::TransactionRecoveryRequired(
+                    "committed transaction cleanup remains pending; refusing to start a new update"
+                        .into(),
+                ));
+            }
             Ok(())
         }
         JournalState::Prepared => rollback_prepared(install_root),
@@ -328,7 +334,7 @@ mod tests {
         write_json_atomic(&transaction_root(&root).join("journal.json"), &journal)
             .expect("committed journal");
 
-        let stale = root.join(".sky-update-locked.bak");
+        let stale = root.join(".sky-update-123-456.bak");
         fs::write(&stale, b"locked backup").expect("stale artifact");
         let blocker = fs::OpenOptions::new()
             .read(true)
@@ -342,6 +348,47 @@ mod tests {
 
         drop(blocker);
         fs::remove_file(stale).expect("cleanup stale artifact");
+        fs::remove_dir_all(root).expect("cleanup root");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn committed_recovery_rejects_residual_transaction_root_before_new_update() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let root = temp_root("committed-root-residual");
+        fs::create_dir_all(&root).expect("root");
+        let current = b"current app";
+        fs::write(root.join(PRIMARY_EXE), current).expect("app");
+        let committed_manifest = manifest("2.0.0", &[(PRIMARY_EXE, current)]);
+        fs::write(
+            root.join(MANIFEST_NAME),
+            serde_json::to_vec(&committed_manifest).expect("manifest"),
+        )
+        .expect("manifest file");
+
+        let old = manifest("1.0.0", &[(PRIMARY_EXE, b"old app")]);
+        let plan = build_plan(Some(&old), &committed_manifest).expect("plan");
+        prepare_journal(&root, &plan, &crate::progress::NoopProgressSink).expect("journal");
+        let mut journal = read_journal(&root).expect("prepared journal");
+        journal.state = JournalState::Committed;
+        write_json_atomic(&transaction_root(&root).join("journal.json"), &journal)
+            .expect("committed journal");
+
+        let locked = transaction_root(&root).join("locked.tmp");
+        fs::write(&locked, b"locked transaction material").expect("locked material");
+        let blocker = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&locked)
+            .expect("delete-blocking handle");
+
+        let error = recover_before_update(&root).expect_err("residual root must block update");
+        assert!(matches!(error, UpdaterError::TransactionRecoveryRequired(message) if message.contains("committed transaction cleanup remains pending")));
+        assert!(transaction_root(&root).exists());
+
+        drop(blocker);
         fs::remove_dir_all(root).expect("cleanup root");
     }
 }

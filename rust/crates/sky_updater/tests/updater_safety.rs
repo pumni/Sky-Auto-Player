@@ -167,8 +167,12 @@ mod fault_regressions {
         // partially applied installation.
         write_manifest(&root, &new);
 
-        faults::configure(Some("rollback:before-replace:Sky-Auto-Player.exe"), None)
-            .expect("fault config");
+        faults::configure(
+            Some("rollback:before-replace:Sky-Auto-Player.exe"),
+            None,
+            None,
+        )
+        .expect("fault config");
         let error = rollback_prepared(&root).expect_err("primary restore fault");
         assert!(matches!(
             error,
@@ -184,7 +188,7 @@ mod fault_regressions {
         );
         assert!(transaction_root(&root).exists());
 
-        faults::configure(None, None).expect("clear fault");
+        faults::configure(None, None, None).expect("clear fault");
         rollback_prepared(&root).expect("second recovery");
         for (path, bytes) in old_files {
             assert_eq!(
@@ -210,6 +214,7 @@ mod fault_regressions {
         faults::configure(
             Some("apply:after-replace:Sky-Auto-Player-Updater.exe"),
             None,
+            None,
         )
         .expect("fault config");
         let error = install_verified(&root, &staging, &new, &old, &NoopProgressSink)
@@ -217,7 +222,7 @@ mod fault_regressions {
         assert!(matches!(error, UpdaterError::InstallCopyFailed(_)));
         assert!(transaction_root(&root).exists());
         assert!(root.join(UPDATER_EXE).is_file());
-        faults::configure(None, None).expect("clear fault");
+        faults::configure(None, None, None).expect("clear fault");
         rollback_prepared(&root).expect("rollback");
         for (path, bytes) in old_files {
             assert_eq!(
@@ -248,6 +253,7 @@ mod fault_regressions {
         faults::configure(
             Some("rollback:after-restore:Sky-Auto-Player-Updater.exe"),
             None,
+            None,
         )
         .expect("fault config");
         assert!(rollback_prepared(&root).is_err());
@@ -257,7 +263,7 @@ mod fault_regressions {
         );
         assert!(root.join(PRIMARY_EXE).is_file());
         assert!(transaction_root(&root).exists());
-        faults::configure(None, None).expect("clear fault");
+        faults::configure(None, None, None).expect("clear fault");
         rollback_prepared(&root).expect("recovery after injected fault");
         assert!(!transaction_root(&root).exists());
         fs::remove_dir_all(root).expect("cleanup");

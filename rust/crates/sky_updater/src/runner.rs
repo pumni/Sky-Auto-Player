@@ -1,5 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::active_state::ActiveUpdateGuard;
@@ -27,11 +28,25 @@ const PARENT_WAIT: Duration = Duration::from_secs(30);
 struct UpdateProgress<'a> {
     ui: &'a NativeProgressUi,
     active: &'a ActiveUpdateGuard,
+    last_persisted_phase: Mutex<Option<UpdatePhase>>,
 }
 
 impl ProgressSink for UpdateProgress<'_> {
     fn publish(&self, event: ProgressEvent) -> Result<()> {
-        self.active.set_phase(event.phase)?;
+        // Counters are UI telemetry, not active-state boundaries. Persisting
+        // active-update.json for every managed file would turn a large update
+        // into hundreds of read/flush/replace operations and make a transient
+        // state-file contention fail the transaction. Keep the durable state
+        // at phase boundaries while still rendering every counter.
+        let mut last_phase = self
+            .last_persisted_phase
+            .lock()
+            .map_err(|_| UpdaterError::Io(std::io::Error::other("progress phase lock poisoned")))?;
+        if *last_phase != Some(event.phase) {
+            self.active.set_phase(event.phase)?;
+            *last_phase = Some(event.phase);
+        }
+        drop(last_phase);
         self.ui.set_phase(event.phase, event.current, event.total);
         Ok(())
     }
@@ -157,6 +172,7 @@ pub fn run_update_with_source<S: ReleaseSource>(args: &UpdaterArgs, source: &S) 
     let progress = UpdateProgress {
         ui: &ui,
         active: &active,
+        last_persisted_phase: Mutex::new(None),
     };
     progress.publish(ProgressEvent {
         phase: UpdatePhase::Starting,

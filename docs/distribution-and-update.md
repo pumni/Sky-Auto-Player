@@ -102,7 +102,8 @@ updated at phase boundaries, and removed before the updater exits. On frozen
 Windows startup, Python validates that any active PID is a live canonical
 `Sky-Auto-Player-Updater.exe` inside the expected `update-runs\run-<32 hex>`
 directory; a valid active update makes startup exit cleanly with the bounded
-message `Update already in progress; please wait for it to finish.`
+output `Sky Auto Player is currently updating to vX (Phase). The updater window
+will restart the app automatically.`
 
 ## 3. Release selection and network
 
