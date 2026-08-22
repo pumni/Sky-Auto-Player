@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from sky_music.infrastructure import update_runtime
@@ -10,6 +11,11 @@ from sky_music.platform.win32 import process_state
 
 def _install_id(root: Path) -> str:
     normalized = str(root.resolve()).replace("/", "\\").lower()
+    if os.name == "nt" and not normalized.startswith("\\\\?\\"):
+        if normalized.startswith("\\\\"):
+            normalized = "\\\\?\\UNC\\" + normalized[2:]
+        else:
+            normalized = "\\\\?\\" + normalized
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -55,6 +61,21 @@ def test_live_canonical_updater_is_active(monkeypatch, tmp_path: Path) -> None:
     assert active is not None
     assert active.target_version == "3.4.5"
     assert state_path.exists()
+
+
+def test_install_id_matches_windows_verbatim_canonical_identity(tmp_path: Path) -> None:
+    install = tmp_path / "install"
+    install.mkdir()
+    normalized = str(install.resolve()).replace("/", "\\")
+    if os.name == "nt" and not normalized.startswith("\\\\?\\"):
+        if normalized.startswith("\\\\"):
+            normalized = "\\\\?\\UNC\\" + normalized[2:]
+        else:
+            normalized = "\\\\?\\" + normalized
+
+    expected = hashlib.sha256(normalized.lower().encode("utf-8")).hexdigest()
+
+    assert update_runtime._install_id(install) == expected
 
 
 def test_dead_or_noncanonical_updater_state_is_removed(monkeypatch, tmp_path: Path) -> None:

@@ -630,6 +630,60 @@ function Read-RunHandoff {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
+function Wait-ForReadyHandoff {
+    param(
+        [object]$RunInfo,
+        [string]$TargetVersion,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $RunInfo.Process.Refresh()
+        if ($RunInfo.Process.HasExited) {
+            throw "updater exited before READY handoff was published"
+        }
+        $handoff = $null
+        try {
+            $handoff = Read-RunHandoff $RunInfo.Run
+        } catch {
+            # Atomic handoff publication may race this observation. Retry until
+            # the bounded READY deadline instead of treating an early read as a
+            # lifecycle failure.
+        }
+        if ($handoff -and $handoff.state -eq "ready" -and
+            $handoff.updater_pid -eq $RunInfo.Process.Id -and
+            $handoff.target_version -eq $TargetVersion) {
+            return $handoff
+        }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "updater did not publish matching READY handoff within $TimeoutSeconds seconds"
+}
+
+function Wait-ForActiveUpdateState {
+    param(
+        [object]$RunInfo,
+        [string]$Path,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $RunInfo.Process.Refresh()
+        if ($RunInfo.Process.HasExited) {
+            throw "updater exited before active-update state was published"
+        }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+            } catch {
+                # Retry if the observation overlaps an atomic state update.
+            }
+        }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "updater did not publish active-update state within $TimeoutSeconds seconds"
+}
+
 function Assert-RestartObserved {
     param([string]$Install)
     $primary = [IO.Path]::GetFullPath((Join-Path $Install "Sky-Auto-Player.exe"))
@@ -1030,14 +1084,8 @@ try {
         -CurrentVersion $fromManifest.version -TargetVersion $syntheticManifest.version `
         -ReleaseDir $syntheticRelease -PauseAt "after-lock" -ResumeFile $readyResume `
         -KeepPaused -RequireProgressWindow
-    $readyHandoff = Read-RunHandoff $readyRun.Run
+    $readyHandoff = Wait-ForReadyHandoff -RunInfo $readyRun -TargetVersion $syntheticManifest.version
     $readyActivePath = Join-Path $scenario.Local "Sky-Auto-Player\update-state\active-update.json"
-    if (-not $readyHandoff -or $readyHandoff.state -ne "ready" -or
-        $readyHandoff.updater_pid -ne $readyRun.Process.Id -or
-        $readyHandoff.target_version -ne $syntheticManifest.version) {
-        Stop-ProcessIfRunning $readyRun.Process
-        throw "ready-visible handoff identity check failed"
-    }
     if (-not (Test-Path -LiteralPath $readyActivePath -PathType Leaf)) {
         Stop-ProcessIfRunning $readyRun.Process
         throw "ready-visible active state is missing"
@@ -1107,7 +1155,8 @@ try {
         if ($lockFiles.Count -gt 0) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $lockDeadline)
-    $activeBeforeDuplicate = Get-Content -LiteralPath (Join-Path $scenario.Local "Sky-Auto-Player\update-state\active-update.json") -Raw | ConvertFrom-Json
+    $activeBeforeDuplicate = Wait-ForActiveUpdateState -RunInfo $first `
+        -Path (Join-Path $scenario.Local "Sky-Auto-Player\update-state\active-update.json")
     $second = Start-UpdaterProcess -Install $scenario.Install -Candidate $e2eCandidate -CurrentVersion $fromManifest.version `
         -TargetVersion $syntheticManifest.version -ReleaseDir $syntheticRelease
     $second.Process.WaitForExit(15000) | Out-Null

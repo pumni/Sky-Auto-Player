@@ -90,6 +90,10 @@ The OS handle is held through result persistence and restart. A second updater
 returns `UPDATE_ALREADY_RUNNING` immediately and does not create or touch a
 transaction directory.
 
+The canonical-root hash uses the Windows verbatim canonical form (`\\?\` for
+drive paths and `\\?\UNC\` for UNC paths) so the Rust updater's lock/active
+identity and Python's frozen-startup validation derive the same `install_id`.
+
 The active lifecycle record is bounded and atomic at:
 
 ```text

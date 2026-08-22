@@ -211,10 +211,22 @@ def _parse_result(data: object) -> UpdateRuntimeResult | None:
     )
 
 
-def _install_id(install_root: Path) -> str | None:
+def _canonical_install_identity(install_root: Path) -> str | None:
     try:
-        canonical = str(install_root.resolve(strict=True)).replace("/", "\\").lower()
+        canonical = str(install_root.resolve(strict=True)).replace("/", "\\")
     except OSError:
+        return None
+    if os.name == "nt" and not canonical.startswith("\\\\?\\"):
+        if canonical.startswith("\\\\"):
+            canonical = "\\\\?\\UNC\\" + canonical[2:]
+        else:
+            canonical = "\\\\?\\" + canonical
+    return canonical.lower()
+
+
+def _install_id(install_root: Path) -> str | None:
+    canonical = _canonical_install_identity(install_root)
+    if canonical is None:
         return None
     import hashlib
 
