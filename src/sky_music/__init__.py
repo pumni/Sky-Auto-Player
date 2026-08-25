@@ -12,11 +12,14 @@ Resolution order:
   3. ``"0.0.0-dev"`` — sentinel for bare checkouts without metadata; makes
      every release compare as newer (safe degradation: prompts the user to
      install a real build rather than silently suppressing updates).
+
+``importlib.metadata`` is imported inside the fallback branch only: its
+import chain (zipfile/shutil/bz2) is measurable on every launch, and both
+frozen builds and post-build source checkouts resolve via ``_version.py``
+without ever reaching the fallback.
 """
 
 from __future__ import annotations
-
-import importlib.metadata
 
 __all__ = ["__version__"]
 
@@ -32,6 +35,8 @@ def _resolve_version() -> str:
             return _v
     except ImportError:
         pass
+    import importlib.metadata
+
     try:
         return importlib.metadata.version("sky-auto-player")
     except Exception:
