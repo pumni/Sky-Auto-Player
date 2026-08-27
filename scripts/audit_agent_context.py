@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTEXT_BUDGETS: dict[str, int] = {
     "AGENTS.md": 10_000,
     "CLAUDE.md": 2_500,
+    "CONTRIBUTING.md": 10_000,
     "docs/INDEX.md": 8_000,
     "docs/README.md": 5_000,
     ".github/PULL_REQUEST_TEMPLATE.md": 5_000,
