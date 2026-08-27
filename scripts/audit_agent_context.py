@@ -11,19 +11,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 CONTEXT_BUDGETS: dict[str, int] = {
-    "AGENTS.md": 10_000,
-    "CLAUDE.md": 2_500,
-    "CONTRIBUTING.md": 10_000,
-    "docs/INDEX.md": 8_000,
-    "docs/README.md": 5_000,
-    ".github/PULL_REQUEST_TEMPLATE.md": 5_000,
-    ".github/ISSUE_TEMPLATE/bug_report.md": 5_000,
-    ".github/ISSUE_TEMPLATE/feature_request.md": 3_000,
-    ".github/ISSUE_TEMPLATE/config.yml": 2_000,
+    "AGENTS.md": 7_000,
+    "CLAUDE.md": 1_500,
+    "CONTRIBUTING.md": 6_000,
+    "docs/INDEX.md": 5_000,
+    "docs/README.md": 3_000,
+    ".github/PULL_REQUEST_TEMPLATE.md": 3_000,
+    ".github/ISSUE_TEMPLATE/bug_report.md": 3_000,
+    ".github/ISSUE_TEMPLATE/feature_request.md": 2_000,
+    ".github/ISSUE_TEMPLATE/config.yml": 1_500,
 }
 
 RETIRED_PATHS: tuple[str, ...] = (
+    ".agent",
     ".claude",
+    ".codex",
+    ".cursor",
     "docs/archive",
     "docs/plan",
     "docs/rust-dispatch-migration",
@@ -33,6 +36,7 @@ RETIRED_PATHS: tuple[str, ...] = (
     "docs/2026-08-rust-core-consolidation-plan.md",
     "docs/dispatch-chord-timing-residual-review-2026-07-23.md",
     ".github/ISSUE_TEMPLATE/security_p0.md",
+    ".github/copilot-instructions.md",
 )
 
 CONTROL_SURFACES: tuple[str, ...] = tuple(CONTEXT_BUDGETS)
@@ -40,6 +44,15 @@ SECURITY_OWNED_SURFACES: tuple[str, ...] = (
     "scripts/audit_security_mandates.py",
     ".config/security_audit_baseline.json",
     ".github/workflows/release.yml",
+)
+NESTED_CONTEXT_ROOTS: tuple[str, ...] = (
+    "src",
+    "rust",
+    "tests",
+    "scripts",
+    "docs",
+    ".github",
+    "site",
 )
 FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
     "priority stack",
@@ -52,10 +65,25 @@ FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
     "read every plan",
     "preload all",
 )
+FORBIDDEN_DOC_NAME_MARKERS: tuple[str, ...] = (
+    "handoff",
+    "coding_agent",
+    "ai_coding",
+)
 
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _is_plan_name(path: Path) -> bool:
+    stem = path.stem.lower().replace("_", "-")
+    return (
+        stem == "plan"
+        or stem.startswith("plan-")
+        or stem.endswith("-plan")
+        or "-plan-" in stem
+    )
 
 
 def main() -> int:
@@ -76,16 +104,42 @@ def main() -> int:
         if (ROOT / path).exists()
     )
 
+    for root_name in NESTED_CONTEXT_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for guide_name in ("AGENTS.md", "CLAUDE.md"):
+            failures.extend(
+                f"nested agent authority is forbidden: {path.relative_to(ROOT)}"
+                for path in base.rglob(guide_name)
+            )
+
     docs = ROOT / "docs"
     if docs.is_dir():
         failures.extend(
-            f"top-level implementation plan must live in Git history: {path.relative_to(ROOT)}"
-            for path in docs.glob("*plan*.md")
+            f"plan/archive directory must live in Git history: {path.relative_to(ROOT)}"
+            for path in docs.rglob("*")
+            if path.is_dir() and path.name.lower() in {"plan", "plans", "archive", "archives"}
         )
-        failures.extend(
-            f"active agent handoff document is forbidden: {path.relative_to(ROOT)}"
-            for path in docs.rglob("*HANDOFF*.md")
-        )
+
+        for path in docs.rglob("*.md"):
+            lowered_name = path.name.lower()
+            if _is_plan_name(path):
+                failures.append(
+                    f"implementation plan must live in Git history: {path.relative_to(ROOT)}"
+                )
+            if any(marker in lowered_name for marker in FORBIDDEN_DOC_NAME_MARKERS):
+                failures.append(
+                    f"agent handoff/runbook document is forbidden: {path.relative_to(ROOT)}"
+                )
+
+        for path in docs.glob("*.md"):
+            lowered = path.read_text(encoding="utf-8").lower()
+            failures.extend(
+                f"{path.relative_to(ROOT)} contains retired instruction choreography: {phrase!r}"
+                for phrase in FORBIDDEN_CHOREOGRAPHY
+                if phrase in lowered
+            )
 
     for path in CONTROL_SURFACES:
         target = ROOT / path
