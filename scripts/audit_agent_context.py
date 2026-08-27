@@ -34,6 +34,11 @@ RETIRED_PATHS: tuple[str, ...] = (
 )
 
 CONTROL_SURFACES: tuple[str, ...] = tuple(CONTEXT_BUDGETS)
+SECURITY_OWNED_SURFACES: tuple[str, ...] = (
+    "scripts/audit_security_mandates.py",
+    ".config/security_audit_baseline.json",
+    ".github/workflows/release.yml",
+)
 FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
     "priority stack",
     "altitude table",
@@ -104,9 +109,11 @@ def main() -> int:
     if claude.is_file() and "AGENTS.md" not in _read("CLAUDE.md"):
         failures.append("CLAUDE.md must remain a thin adapter to AGENTS.md")
 
-    security_audit = ROOT / "scripts" / "audit_security_mandates.py"
-    if security_audit.is_file() and "AGENTS.md P0" in security_audit.read_text(encoding="utf-8"):
-        failures.append("security audit must be owned by SECURITY.md, not AGENTS.md P0 wording")
+    failures.extend(
+        f"{path} still derives security authority from AGENTS.md P0 wording"
+        for path in SECURITY_OWNED_SURFACES
+        if (ROOT / path).is_file() and "agents.md p0" in _read(path).lower()
+    )
 
     if failures:
         print("Agent-context audit failed:")
