@@ -142,6 +142,7 @@ frozen plan
   -> prepare immutable packet before the precision handoff
   -> worker-owned QPC spin across the authored target
   -> final command/control, target, and foreground proof
+  -> cheap program-owned control/target/focus atomic revalidation
   -> final_policy_qpc sample and lease admission
   -> sender SetLastError(0), true pre_call_qpc sample, and Down-only cutoff
   -> one packetized SendInput call
@@ -153,10 +154,11 @@ frozen plan
 ```
 
 The worker-owned target crossing happens before final policy admission. The
-worker's `final_policy_qpc` is the policy/lease evidence sample. The trusted
-prepared sender then resolves the fixed payload pointer and length, resets
-thread-local Win32 error state, takes the true `pre_call_qpc` immediately
-before the syscall, and applies the Down-only cutoff against that sample.
+worker's `final_policy_qpc` is the post-revalidation policy/lease evidence
+sample. The trusted prepared sender then resolves the fixed payload pointer
+and length, resets thread-local Win32 error state, takes the true
+`pre_call_qpc` immediately before the syscall, and applies the Down-only
+cutoff against that sample.
 The sender performs no target wait or policy recheck after receiving the
 prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract

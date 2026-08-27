@@ -8,9 +8,9 @@ use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     WorkerResources, WorkerRuntime, WorkerTimingState, final_control_admission_at,
-    final_control_precheck, final_down_target_admission, focus_matches, load_target_stamp,
-    record_final_gate_rejection, record_sendinput_pre_call_lateness, signed_ticks_to_us,
-    suspend_live_input, target_stamp_still_current, trace_kind_for_packet_kind,
+    final_control_precheck, final_down_target_admission, focus_matches, handle_final_focus_loss,
+    load_target_stamp, record_final_gate_rejection, record_sendinput_pre_call_lateness,
+    signed_ticks_to_us, suspend_live_input, target_stamp_still_current, trace_kind_for_packet_kind,
     wait_to_precision_boundary,
 };
 use super::DownBoundaryAdmission;
@@ -530,11 +530,15 @@ fn finalize_authored_down_admission(
             focus_active,
             target_hwnd,
             target_generation,
+            #[cfg(any(test, feature = "test-support"))]
+            post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
+            #[cfg(any(test, feature = "test-support"))]
+            post_focus_control_signals: Some(control_signals),
         }) {
             DownAdmission::Allowed => {}
             DownAdmission::FocusLost => {
                 record_final_gate_rejection(local_metrics, FinalGateRejection::Focus);
-                let result = handle_final_focus_loss(
+                handle_final_focus_loss(
                     qpc_clock,
                     backend,
                     coordinator,
@@ -542,18 +546,16 @@ fn finalize_authored_down_admission(
                     runtime,
                     target_hwnd,
                     progress_clock,
+                )?;
+                runtime
+                    .production_forensics
+                    .observe_lifecycle(ObserverLifecycle::ResetAll);
+                super::observation::enqueue_lifecycle(
+                    observer,
+                    ObserverLifecycle::ResetAll,
+                    local_metrics,
                 );
-                if result.is_ok() {
-                    runtime
-                        .production_forensics
-                        .observe_lifecycle(ObserverLifecycle::ResetAll);
-                    super::observation::enqueue_lifecycle(
-                        observer,
-                        ObserverLifecycle::ResetAll,
-                        local_metrics,
-                    );
-                }
-                return result;
+                return Ok(AdmissionOutcome::FocusLost);
             }
             DownAdmission::TargetChanged => {
                 runtime.verified_target = None;
@@ -563,9 +565,11 @@ fn finalize_authored_down_admission(
             }
         }
     }
+    if !final_atomic_revalidation(control_signals, runtime, local_metrics) {
+        return Ok(AdmissionOutcome::ControlRejected);
+    }
     #[cfg(any(test, feature = "test-support"))]
     let final_policy_qpc = if test_direct_boundary {
-        // Tests supply a frozen exact-boundary target to avoid waiter jitter.
         physical_target_qpc
     } else {
         qpc_clock.now().map_err(|error| {
@@ -592,36 +596,23 @@ fn finalize_authored_down_admission(
         final_policy_qpc,
     })
 }
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_final_focus_loss(
-    qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    clock_state: &mut PlaybackClockState,
+
+fn final_atomic_revalidation(
+    control_signals: FinalControlSignals<'_>,
     runtime: &mut WorkerRuntime,
-    target_hwnd: &AtomicIsize,
-    progress_clock: &SharedProgressClock,
-) -> Result<AdmissionOutcome, DispatchStep> {
-    runtime.verified_target = None;
-    if !runtime.musical_physical_commit_started {
-        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+    local_metrics: &mut WorkerMetricsLocal,
+) -> bool {
+    if matches!(
+        final_control_precheck(control_signals),
+        FinalControlAdmission::Allowed
+    ) {
+        return true;
     }
-    let focus_ticks = qpc_clock
-        .now()
-        .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
-    suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
-        .map_err(|error| DispatchStep::Terminate(format!("focus suspension failed: {error}")))?;
-    clock_state
-        .enter_pause(PauseReason::Focus, focus_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "playback clock failure after final focus check: {error}"
-            ))
-        })?;
-    progress_clock.publish(clock_state);
-    runtime.focus_restore_started_ticks = None;
-    Ok(AdmissionOutcome::FocusLost)
+    runtime.verified_target = None;
+    record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
+    false
 }
+
 #[allow(clippy::too_many_arguments)]
 fn record_down_send_outcome(
     view: &AuthoredBatchView,

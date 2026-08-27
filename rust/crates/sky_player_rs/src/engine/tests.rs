@@ -2015,6 +2015,8 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
         focus_active: &focus_active,
         target_hwnd: &target,
         target_generation: &generation,
+        post_focus_race_hook: None,
+        post_focus_control_signals: None,
     });
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 }
@@ -2036,6 +2038,8 @@ fn final_down_admission_rejects_target_change_before_send() {
             focus_active: &focus_active,
             target_hwnd: &target,
             target_generation: &generation,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
         }),
         DownAdmission::TargetChanged
     );
@@ -2059,6 +2063,8 @@ fn final_down_target_admission_checks_target_before_focus() {
             focus_active: &focus_active,
             target_hwnd: &target,
             target_generation: &generation,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
         }),
         DownAdmission::FocusLost
     );
@@ -2083,6 +2089,8 @@ fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
         focus_active: &focus_active,
         target_hwnd: &target_hwnd,
         target_generation: &target_generation,
+        post_focus_race_hook: None,
+        post_focus_control_signals: None,
     });
     assert_eq!(final_admission, DownAdmission::FocusLost);
 
@@ -3046,6 +3054,45 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+}
+
+#[test]
+fn authored_down_post_foreground_revalidation_blocks_atomic_races() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    for race in ["target", "control"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.config.focus.require_focus = true;
+        let calls = harness.configure_send_counter();
+        harness.advance_playback_time_us(100_000);
+        let plan = harness.plan_current_dispatch();
+        harness.set_post_focus_revalidation_race_hook(move |_, hwnd, generation, quit, _, _, _| {
+            match race {
+                "target" => {
+                    hwnd.store(456, Ordering::Release);
+                    generation.fetch_add(1, Ordering::AcqRel);
+                }
+                "control" => quit.store(true, Ordering::Release),
+                _ => unreachable!("post-focus race table"),
+            }
+        });
+
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+
+        assert!(matches!(step, super::worker::DispatchStep::Continue));
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{race} sent Down");
+        assert_eq!(
+            harness.local_metrics.final_gate_target_changes,
+            u64::from(race == "target")
+        );
+        assert_eq!(
+            harness.local_metrics.final_gate_control_rejections,
+            u64::from(race == "control")
+        );
+    }
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
 #[test]
@@ -5880,6 +5927,8 @@ fn invariant_mismatch_prevents_sender_invocation() {
         focus_active: &focus_active,
         target_hwnd: &target,
         target_generation: &generation,
+        post_focus_race_hook: None,
+        post_focus_control_signals: None,
     });
 
     assert_eq!(admission, DownAdmission::TargetChanged);

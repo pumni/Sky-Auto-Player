@@ -172,6 +172,10 @@ impl Samples {
         *self.failure_reasons.entry(reason.into()).or_default() += 1;
     }
 
+    fn record_observation_failure(&mut self, reason: impl Into<String>) {
+        *self.failure_reasons.entry(reason.into()).or_default() += 1;
+    }
+
     fn record_step_failure(&mut self, step: &DispatchStep) {
         let reason = match step {
             DispatchStep::TerminateStatic(reason)
@@ -201,6 +205,19 @@ fn quantile<T: Copy + Ord>(values: &mut [T], numerator: usize, denominator: usiz
 
 fn elapsed_ns(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn cpu_duty_percent(
+    cpu_started_us: u64,
+    cpu_finished_us: u64,
+    wall_started: Instant,
+) -> Option<f64> {
+    let cpu_elapsed_us = cpu_finished_us.checked_sub(cpu_started_us)?;
+    let wall_elapsed_us = u64::try_from(wall_started.elapsed().as_micros()).ok()?;
+    if cpu_finished_us == 0 || wall_elapsed_us == 0 {
+        return None;
+    }
+    Some(cpu_elapsed_us as f64 * 100.0 / wall_elapsed_us as f64)
 }
 
 fn observer_ab_iterations() -> usize {
@@ -510,16 +527,20 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
             ));
         }
         DispatchObservation::Wait(wait) => {
-            panic!("benchmark handoff queued an unexpected wait observation: {wait:?}")
+            let _ = wait;
+            samples.record_observation_failure("unexpected_wait_observation");
         }
         DispatchObservation::StaleMetadata(value) => {
-            panic!("benchmark handoff queued unexpected stale metadata: {value:?}")
+            let _ = value;
+            samples.record_observation_failure("unexpected_stale_metadata_observation");
         }
         DispatchObservation::BlockedUnfocused(value) => {
-            panic!("benchmark handoff queued unexpected blocked observation: {value:?}")
+            let _ = value;
+            samples.record_observation_failure("unexpected_blocked_focus_observation");
         }
         DispatchObservation::Lifecycle(value) => {
-            panic!("benchmark handoff queued unexpected lifecycle observation: {value:?}")
+            let _ = value;
+            samples.record_observation_failure("unexpected_lifecycle_observation");
         }
     }
 }
@@ -868,6 +889,8 @@ fn phase_a_sender_only_report() -> serde_json::Value {
 fn phase_a_production_matrix_report() -> serde_json::Value {
     let mode = build_wait_mode("production_boundary", true, true, true);
     let benchmark_mode = BenchmarkMode::PhaseAProductionBoundary;
+    let mode_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     let mut scenarios = serde_json::Map::new();
     for key_count in [1, 5, 15] {
         scenarios.insert(
@@ -894,6 +917,7 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
             ),
         );
     }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     serde_json::json!({
         "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
@@ -902,16 +926,17 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         "effective_spin_threshold_us": mode.effective_spin_threshold_us,
         "sender_start_timestamp_source": "mock transport QPC sampled at its immediate callback boundary; production native sender samples inside the SendInput envelope",
         "transport": "deterministic packet emitter with immediate QPC start and completion samples",
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(cpu_started_us, cpu_finished_us, mode_started),
         "scenarios": scenarios,
         "iterations": iterations(),
     })
 }
 
 fn summarize(mut samples: Samples) -> serde_json::Value {
-    assert_eq!(
-        samples.dispatch_start_error_us.len(),
-        samples.observation_count,
-        "every collected observation must have one start-error sample"
+    assert!(
+        samples.dispatch_start_error_us.len() <= samples.observation_count,
+        "timing samples cannot exceed collected observations"
     );
     assert_eq!(
         samples.physical_dispatches + samples.non_dispatches,
@@ -1096,6 +1121,8 @@ fn main() {
             build_fixed_wait_mode("fixed_spin_1500us", 1_500),
         ];
         for mode in modes {
+            let mode_started = Instant::now();
+            let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
             let mut scenarios = serde_json::Map::new();
             scenarios.insert(
                 "down_only_1".to_string(),
@@ -1139,6 +1166,7 @@ fn main() {
                     ),
                 );
             }
+            let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
             mode_reports.insert(
                 mode.name.to_string(),
                 json!({
@@ -1150,6 +1178,8 @@ fn main() {
                     "mmcss_mode": "off_test_guard",
                     "priority_mode": "off_test_guard",
                     "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
+                    "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+                    "process_cpu_duty_percent": cpu_duty_percent(cpu_started_us, cpu_finished_us, mode_started),
                     "iterations": iterations(),
                     "scenarios": scenarios,
                 }),

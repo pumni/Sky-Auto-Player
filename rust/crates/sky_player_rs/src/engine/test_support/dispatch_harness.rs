@@ -1040,6 +1040,26 @@ impl ProductionDispatchTestHarness {
         self.runtime.final_gate_race_hook = Some(Arc::new(hook));
     }
 
+    /// Inject a deterministic mutation after fresh foreground proof and
+    /// before the cheap final atomic revalidation. This is test-only evidence
+    /// for the post-focus TOCTOU seam.
+    pub fn set_post_focus_revalidation_race_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(
+                &AtomicBool,
+                &AtomicIsize,
+                &AtomicU64,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
+    }
+
     /// Run the production wait boundary and direct frozen-plan dispatch path.
     pub fn wait_and_dispatch_current_plan(
         &mut self,

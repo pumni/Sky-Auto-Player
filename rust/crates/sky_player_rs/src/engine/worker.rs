@@ -28,8 +28,8 @@ pub(crate) use admission::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, ensure_preflight_for_target, final_control_admission_at,
     final_control_precheck, final_down_target_admission, focus_matches, focus_matches_hwnd,
-    load_target_stamp, record_final_gate_rejection, target_stamp_still_current,
-    trace_kind_for_packet_kind,
+    handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
+    target_stamp_still_current, trace_kind_for_packet_kind,
 };
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
@@ -46,8 +46,6 @@ use control::{
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch::drain_one_observer;
-#[cfg(test)]
-pub(crate) use dispatch::handle_final_focus_loss;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PhysicalBoundaryStamp,
@@ -263,6 +261,8 @@ pub(crate) struct WorkerRuntime {
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     /// Musical Down admission state. Up-only safety sends never mutate this

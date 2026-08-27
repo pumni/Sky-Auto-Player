@@ -16,7 +16,7 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_policy_qpc` | Worker-owned QPC sample used to evaluate final control and lease policy after target/focus proof. |
+| `final_policy_qpc` | Worker-owned QPC sample taken after final control/target/focus checks and used directly for lease evaluation; those predicates are not evaluated at the timestamp itself. |
 | `pre_call_qpc` | True sender-owned QPC sample taken after payload resolution and immediately before `SendInput`; only the Down late-grace cutoff comparison follows it. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
@@ -355,16 +355,19 @@ The final physical path is ordered and fail-closed:
 3. Recheck command/control, the stamped target, and foreground focus (Down
    only) after target crossing. A rejection records a bounded final-gate
    diagnostic and performs no packet syscall.
-4. Take `final_policy_qpc` after target/focus/control proof and use it for the
-   final lease admission.
-5. Enter the trusted prepared sender. It resets Win32 last-error state, takes
+4. Recheck the program-owned control, target stamp, and focus atomics after
+   the foreground query. This is a cheap revalidation and does not issue a
+   second foreground query.
+5. Take `final_policy_qpc` after those checks and use it for the final lease
+   admission.
+6. Enter the trusted prepared sender. It resets Win32 last-error state, takes
    the true `pre_call_qpc` after payload resolution, checks the Down-only
    late-grace cutoff against that sample, and immediately performs one
    packetized `SendInput` call. It does not wait, spin, or redo
    control/focus/target admission.
-6. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
-7. Commit coordinator ownership using the confirmed transport result.
-8. Enqueue one bounded raw observation and return to orchestration.
+7. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
+8. Commit coordinator ownership using the confirmed transport result.
+9. Enqueue one bounded raw observation and return to orchestration.
 
 The transport sends Up entries before Down entries in one call. Partial Down or
 mixed integrity loss is never blindly retried. A skipped key that the
@@ -392,9 +395,10 @@ the frozen plan and replan; they never dispatch a stale plan.
 
 The final precision loop performs the QPC target comparison and bounded
 interrupt-generation polling. It does not inspect lease state, focus, or
-commands. The worker then performs the final control/target/focus proof and
-records `final_policy_qpc` for lease admission. The trusted sender samples the
-true `pre_call_qpc` after payload resolution and immediately before the
+commands. The worker then performs the final control/target/focus proof, runs
+one cheap atomic revalidation of the program-owned state, and records
+`final_policy_qpc` for lease admission. The trusted sender samples the true
+`pre_call_qpc` after payload resolution and immediately before the
 cutoff/`SendInput` pair, closing the worker-to-syscall preemption window. It
 uses the same materialized session margin; it does not compute a new
 threshold.

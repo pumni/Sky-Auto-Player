@@ -180,8 +180,6 @@ pub(crate) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
-#[cfg(test)]
-pub(crate) use authored::handle_final_focus_loss;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]

@@ -49,9 +49,10 @@ Song file
 The worker has one physical timing contract. The authored/effective timeline
 deadline is not advanced by a learned send-cost lead. It prepares the packet,
 crosses the absolute authored target with the one bounded precision spin, then
-performs final command/control, target, and focus checks. It records a
-worker-owned `final_policy_qpc`, evaluates the lease against that sample,
-and passes the prepared packet to the trusted Win32 sender.
+performs final command/control, target, and focus checks. It repeats the
+program-owned control/target/focus atomic checks without a second foreground
+query, records a worker-owned `final_policy_qpc`, evaluates the lease against
+that sample, and passes the prepared packet to the trusted Win32 sender.
 The sender resets Win32 last-error state, takes the true `pre_call_qpc` after
 payload resolution, and performs only the Down late-grace cutoff comparison
 before the single `SendInput` call; Up-only safety release has no Down cutoff.

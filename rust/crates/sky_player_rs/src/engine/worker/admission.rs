@@ -1,10 +1,12 @@
+use super::super::{PlaybackClockState, QpcClock, RuntimeDispatchCoordinator};
+use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, focus_gate_matches};
+use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
+use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
-#[cfg(test)]
-use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -148,6 +150,10 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) focus_active: &'a AtomicBool,
     pub(crate) target_hwnd: &'a AtomicIsize,
     pub(crate) target_generation: &'a AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) post_focus_race_hook: Option<&'a super::super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) post_focus_control_signals: Option<FinalControlSignals<'a>>,
 }
 
 /// Classify lease state from the one authoritative start sample.
@@ -232,7 +238,63 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     ) {
         return DownAdmission::FocusLost;
     }
+    #[cfg(any(test, feature = "test-support"))]
+    if let (Some(hook), Some(control)) = (
+        target.post_focus_race_hook,
+        target.post_focus_control_signals,
+    ) {
+        hook(
+            target.focus_active,
+            target.target_hwnd,
+            target.target_generation,
+            control.quit_requested,
+            control.skip_requested,
+            control.panic_requested,
+            control.desired_pause,
+        );
+    }
+    if !target_stamp_still_current(
+        target.target_hwnd,
+        target.target_generation,
+        target.expected,
+    ) {
+        return DownAdmission::TargetChanged;
+    }
+    if !focus_matches(target.require_focus, target.focus_active) {
+        return DownAdmission::FocusLost;
+    }
     DownAdmission::Allowed
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_final_focus_loss(
+    qpc_clock: QpcClock,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut super::WorkerRuntime,
+    target_hwnd: &AtomicIsize,
+    progress_clock: &SharedProgressClock,
+) -> Result<(), DispatchStep> {
+    runtime.verified_target = None;
+    if !runtime.musical_physical_commit_started {
+        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
+    }
+    let focus_ticks = qpc_clock
+        .now()
+        .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
+    super::suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
+        .map_err(|error| DispatchStep::Terminate(format!("focus suspension failed: {error}")))?;
+    clock_state
+        .enter_pause(PauseReason::Focus, focus_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "playback clock failure after final focus check: {error}"
+            ))
+        })?;
+    progress_clock.publish(clock_state);
+    runtime.focus_restore_started_ticks = None;
+    Ok(())
 }
 
 pub(crate) fn ensure_preflight_for_target(
