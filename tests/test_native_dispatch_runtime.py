@@ -56,6 +56,11 @@ def _live(status: str, *, finished: bool, paused: bool = False) -> SimpleNamespa
         sendinput_path_degraded=False,
         core_post_send_degraded=False,
         wait_path_degraded=False,
+        final_gate_control_rejections=0,
+        final_gate_target_changes=0,
+        final_gate_focus_losses=0,
+        final_gate_lease_expirations=0,
+        final_gate_cutoff_misses=0,
         status=status,
         backend_health=health,
     )

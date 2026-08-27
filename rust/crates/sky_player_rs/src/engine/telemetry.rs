@@ -64,7 +64,7 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: TimelineTicks,
     /// Final target/focus/control proof, sampled before the pre-call sender
     /// boundary.
-    pub(crate) final_proof_ticks: Option<TimelineTicks>,
+    pub(crate) final_policy_ticks: Option<TimelineTicks>,
     /// Compatibility output `send_started_ticks` is sourced from this
     /// prepared-sender pre-call boundary.
     pub(crate) pre_call_ticks: Option<TimelineTicks>,
@@ -103,7 +103,7 @@ impl RtTraceRecord {
         timing: TraceTiming,
         delivery: TraceDelivery,
     ) -> Result<Self, TimeArithmeticError> {
-        let _final_proof_ticks = timing.final_proof_ticks;
+        let _final_policy_ticks = timing.final_policy_ticks;
         if delivery.sent > delivery.requested
             || delivery.skipped > delivery.requested
             || delivery.sent.saturating_add(delivery.skipped) > delivery.requested
@@ -364,7 +364,7 @@ mod tests {
                 authored_ticks: TimelineTicks::ZERO,
                 effective_deadline_ticks: TimelineTicks::ZERO,
                 wake_ticks: TimelineTicks::ZERO,
-                final_proof_ticks: Some(TimelineTicks::from_raw(1)),
+                final_policy_ticks: Some(TimelineTicks::from_raw(1)),
                 pre_call_ticks: Some(TimelineTicks::from_raw(1)),
                 sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
                 completion_residual_us: 0,
@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_semantics_names_the_pre_call_boundary_without_extra_qpc() {
+    fn timing_semantics_names_the_true_pre_call_boundary() {
         let semantics = super::TimingSemantics::default();
         assert_eq!(
             semantics.sender_start_boundary,

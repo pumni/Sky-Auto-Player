@@ -81,13 +81,13 @@ pub struct DownTraceObservation {
 
 /// Raw QPC boundaries for the two-stage dispatch handoff. The admission wake
 /// is optional because a dispatch may be intentionally admitted at or after
-/// its guard boundary; a target crossing exists only when the precision waiter
-/// actually ran.
+/// its guard boundary. Test-support direct-boundary dispatch may provide a
+/// deterministic synthetic crossing without running the precision waiter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,
     pub target_crossing_qpc: QpcTicks,
-    pub final_proof_qpc: QpcTicks,
+    pub final_policy_qpc: QpcTicks,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,7 +95,7 @@ pub struct DownObservation {
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
     pub physical_target_qpc: QpcTicks,
-    pub final_proof_qpc: QpcTicks,
+    pub final_policy_qpc: QpcTicks,
     pub pre_call_qpc: QpcTicks,
     pub sendinput_completion_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
@@ -250,7 +250,7 @@ pub struct UpTraceObservation {
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub final_proof_ticks: Option<TimelineTicks>,
+    pub final_policy_ticks: Option<TimelineTicks>,
     pub sendinput_completion_ticks: Option<TimelineTicks>,
     pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
@@ -262,7 +262,7 @@ pub struct UpTraceObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
     pub physical_target_qpc: QpcTicks,
-    pub final_proof_qpc: QpcTicks,
+    pub final_policy_qpc: QpcTicks,
     #[allow(dead_code)]
     pub pre_call_qpc: QpcTicks,
     pub sendinput_completion_qpc: QpcTicks,
@@ -294,7 +294,7 @@ pub(super) fn record_down_send_telemetry(
     dispatch_start_error_ticks: i64,
     completion_error_ticks: i64,
     authored_completion_error_ticks: i64,
-    final_proof_ticks: Option<TimelineTicks>,
+    final_policy_ticks: Option<TimelineTicks>,
     pre_call_ticks: Option<TimelineTicks>,
     sendinput_completion_ticks: Option<TimelineTicks>,
     wake_ticks: TimelineTicks,
@@ -342,7 +342,7 @@ pub(super) fn record_down_send_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
-                final_proof_ticks,
+                final_policy_ticks,
                 pre_call_ticks,
                 sendinput_completion_ticks,
                 completion_residual_us,
@@ -415,7 +415,7 @@ pub(super) fn record_release_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
-                final_proof_ticks: trace.final_proof_ticks,
+                final_policy_ticks: trace.final_policy_ticks,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: trace.sendinput_completion_ticks,
                 completion_residual_us,

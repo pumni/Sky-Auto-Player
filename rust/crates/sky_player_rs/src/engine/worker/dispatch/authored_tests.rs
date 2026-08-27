@@ -74,8 +74,8 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .find("final_down_target_admission")
         .expect("final target/focus gate");
     let pre_call = finalizer
-        .find("let pre_call_qpc")
-        .expect("authoritative pre-call timestamp");
+        .find("let final_policy_qpc")
+        .expect("final policy timestamp");
     assert!(crossing < control);
     assert!(control < target);
     assert!(target < pre_call);
@@ -84,7 +84,7 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .split("fn record_down_send_outcome")
         .nth(1)
         .expect("authored sender handoff");
-    assert!(sender.contains("send_prepared_physical_packet_with_start_and_cutoff"));
+    assert!(sender.contains("send_prepared_physical_packet_at_final_boundary"));
     assert!(!sender.contains("send_prepared_physical_packet_at_target_with_cutoff"));
 }
 

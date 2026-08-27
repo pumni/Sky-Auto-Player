@@ -49,6 +49,7 @@ fn custom_emitter_without_probe_never_synthesizes_held() {
 fn test_send_transaction_status_exhaustive_match() {
     let statuses = [
         SendTransactionStatus::Complete,
+        SendTransactionStatus::PreparationRejected,
         SendTransactionStatus::ZeroProgress,
         SendTransactionStatus::PartialProgress,
         SendTransactionStatus::IntegrityLost,
@@ -59,6 +60,7 @@ fn test_send_transaction_status_exhaustive_match() {
     for status in statuses {
         match status {
             SendTransactionStatus::Complete => {}
+            SendTransactionStatus::PreparationRejected => {}
             SendTransactionStatus::ZeroProgress => {}
             SendTransactionStatus::PartialProgress => {}
             SendTransactionStatus::IntegrityLost => {}

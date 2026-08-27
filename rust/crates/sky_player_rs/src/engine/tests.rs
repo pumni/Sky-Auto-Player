@@ -2981,6 +2981,74 @@ fn authored_up_only_is_not_blocked_by_target_change() {
 }
 
 #[test]
+fn authored_down_final_control_races_never_reach_transport() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for command in ["pause", "quit", "skip", "panic"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let calls = harness.configure_send_counter();
+        harness.advance_playback_time_us(100_000);
+        let plan = harness.plan_current_dispatch();
+        harness.set_final_gate_race_hook(move |_, _, _, quit, skip, panic, pause| match command {
+            "pause" => pause.store(true, Ordering::Release),
+            "quit" => quit.store(true, Ordering::Release),
+            "skip" => skip.store(true, Ordering::Release),
+            "panic" => panic.store(true, Ordering::Release),
+            _ => unreachable!("control race table"),
+        });
+
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+
+        assert!(!matches!(step, super::worker::DispatchStep::Dispatched));
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{command} sent Down");
+        assert_eq!(harness.local_metrics.final_gate_control_rejections, 1);
+    }
+}
+
+#[test]
+fn authored_down_target_change_after_crossing_never_reaches_transport() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.set_final_gate_race_hook(|_, hwnd, generation, _, _, _, _| {
+        hwnd.store(456, Ordering::Release);
+        generation.fetch_add(1, Ordering::AcqRel);
+    });
+
+    let step = harness.dispatch_at_plan_target_for_test(&plan);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.local_metrics.final_gate_target_changes, 1);
+}
+
+#[test]
+fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.config.focus.require_focus = true;
+    let calls = harness.configure_send_counter();
+    harness.advance_playback_time_us(100_000);
+    let plan = harness.plan_current_dispatch();
+    harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _| {
+        focus.store(false, Ordering::Release);
+    });
+
+    let step = harness.dispatch_at_plan_target_for_test(&plan);
+
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::TerminateStatic("focus_lost_during_preroll")
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+}
+
+#[test]
 fn frozen_plan_dispatch_is_total_and_sends_at_most_once() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -4018,7 +4086,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
-            final_proof_ticks: Some(TimelineTicks::from_raw(20)),
+            final_policy_ticks: Some(TimelineTicks::from_raw(20)),
             pre_call_ticks: Some(TimelineTicks::from_raw(22)),
             sendinput_completion_ticks: Some(TimelineTicks::from_raw(25)),
             completion_residual_us: 5,
@@ -4067,7 +4135,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_proof_ticks: None,
+            final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,
             completion_residual_us: 0,
@@ -4105,7 +4173,7 @@ fn native_summary_ignores_non_backend_trace() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_proof_ticks: None,
+            final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,
             completion_residual_us: 0,

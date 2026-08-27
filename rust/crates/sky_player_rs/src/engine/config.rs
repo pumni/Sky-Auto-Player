@@ -24,6 +24,20 @@ use super::FaultInjectionScript;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &AtomicIsize, &AtomicU64) + Send + Sync>;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type FinalGateRaceHook = Arc<
+    dyn Fn(
+            &AtomicBool,
+            &AtomicIsize,
+            &AtomicU64,
+            &AtomicBool,
+            &AtomicBool,
+            &AtomicBool,
+            &AtomicBool,
+        ) + Send
+        + Sync,
+>;
+
 /// Deliberate session profiles. The profile owns backend/policy selection so
 /// callers do not compose a contradictory matrix of booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

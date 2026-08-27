@@ -3,6 +3,7 @@ use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
 use super::super::packet::send_prepared_physical_packet_once_at_target_with_cutoff;
+#[cfg(any(test, feature = "test-support"))]
 use super::super::packet::send_prepared_physical_packet_once_with_start_and_cutoff;
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
@@ -180,7 +181,8 @@ impl TrackedKeyState {
                 self.active_mask &= !to_send_mask;
                 self.possibly_active_mask |= to_send_mask;
             }
-            SendTransactionStatus::ZeroProgress
+            SendTransactionStatus::PreparationRejected
+            | SendTransactionStatus::ZeroProgress
             | SendTransactionStatus::DeadlineMissedBeforeSend
             | SendTransactionStatus::ClockFailureBeforeSend => {
                 self.possibly_active_mask &= !to_send_mask;
@@ -593,6 +595,28 @@ impl TrackedKeyState {
         )
     }
 
+    /// Final authored boundary sender. Production always samples the true
+    /// pre-call QPC inside the immediate prepared sender; test support may
+    /// inject a deterministic start sample without changing that path.
+    pub fn send_prepared_physical_packet_at_final_boundary(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        latest_allowed_down_qpc: Option<QpcTicks>,
+        test_started_ticks: Option<QpcTicks>,
+    ) -> SendTransactionOutcome {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(test_started_ticks) = test_started_ticks {
+            return self.send_prepared_physical_packet_with_start_and_cutoff(
+                prepared,
+                test_started_ticks,
+                latest_allowed_down_qpc,
+            );
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = test_started_ticks;
+        self.send_prepared_physical_packet_with_cutoff(prepared, latest_allowed_down_qpc)
+    }
+
     /// Send a trusted borrowed prepared packet and enforce an optional
     /// Down-only hard cutoff against the sender's authoritative QPC sample.
     pub fn send_prepared_physical_packet_view_with_cutoff(
@@ -693,6 +717,16 @@ impl TrackedKeyState {
                     .saturating_add(u64::from(packet.down_mask.count_ones()));
                 self.last_error = Some(format!(
                     "physical packet made zero progress: {} events requested",
+                    packet.event_count()
+                ));
+            }
+            SendTransactionStatus::PreparationRejected => {
+                self.chords_rejected = self.chords_rejected.saturating_add(1);
+                self.authored_keys_rejected = self
+                    .authored_keys_rejected
+                    .saturating_add(u64::from(packet.down_mask.count_ones()));
+                self.last_error = Some(format!(
+                    "physical packet rejected before SendInput: {} events requested",
                     packet.event_count()
                 ));
             }

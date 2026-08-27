@@ -343,7 +343,7 @@ fn send_once(
 
 pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionOutcome {
     SendTransactionOutcome {
-        status: SendTransactionStatus::ZeroProgress,
+        status: SendTransactionStatus::PreparationRejected,
         evidence: SendEvidence {
             requested_mask: packet.up_mask | packet.down_mask,
             confirmed_mask: 0,
@@ -352,10 +352,10 @@ pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionO
             attempts: 0,
             zero_progress_retries: 0,
             retry_reason: PacketRetryReason::None,
-            first_win32_error: Some(87),
-            last_win32_error: Some(87),
-            started_ticks: Some(QpcTicks::ZERO),
-            completed_ticks: Some(QpcTicks::ZERO),
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: None,
+            completed_ticks: None,
             timing_error: None,
         },
     }
@@ -497,11 +497,17 @@ fn send_once_prepared_view(
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
 
         let requested = prepared.event_count();
         let length = usize::from(prepared.event_count());
+        let inputs = prepared.inputs.as_ptr();
+        let cb_size =
+            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
+        // Reset the thread-local error before the final correctness sample so
+        // short insertion evidence cannot inherit an unrelated prior error.
+        unsafe { SetLastError(0) };
         let started_ticks = match supplied_started_ticks {
             Some(ticks) => ticks,
             None => match clock.now() {
@@ -512,15 +518,8 @@ fn send_once_prepared_view(
         if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
             return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
         }
-        let inserted = unsafe {
-            SendInput(
-                length as u32,
-                prepared.inputs.as_ptr(),
-                std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>()
-                    as i32,
-            )
-        }
-        .min(length as u32) as u8;
+        let inserted =
+            unsafe { SendInput(length as u32, inputs, cb_size) }.min(length as u32) as u8;
         let error = if usize::from(inserted) < length {
             unsafe { GetLastError() }
         } else {
@@ -715,26 +714,10 @@ fn send_physical_packet_once_impl(
     packet: PhysicalPacket,
     mut send_one: impl FnMut(PhysicalPacket) -> PacketSendAttempt,
 ) -> SendTransactionOutcome {
-    let requested_mask = packet.up_mask | packet.down_mask;
     if !valid_packet(packet) || packet.event_count() == 0 {
-        return SendTransactionOutcome {
-            status: SendTransactionStatus::ZeroProgress,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask: 0,
-                skipped_mask: 0,
-                first_inserted: 0,
-                attempts: 0,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: Some(87),
-                last_win32_error: Some(87),
-                started_ticks: Some(QpcTicks::ZERO),
-                completed_ticks: Some(QpcTicks::ZERO),
-                timing_error: None,
-            },
-        };
+        return invalid_packet_outcome(packet);
     }
+    let requested_mask = packet.up_mask | packet.down_mask;
 
     let first = match send_one(packet) {
         PacketSendAttempt::Outcome(res) => res,
@@ -813,8 +796,8 @@ fn send_physical_packet_once_impl(
 /// masks or recount events after the caller's final QPC sample.
 ///
 /// In the production path `started_ticks` is `None`, so the authoritative
-/// `pre_call_qpc` is sampled here, after the prepared payload length and
-/// pointer have been resolved and immediately before `SendInput`. Test
+/// `pre_call_qpc` is sampled here, after the prepared payload length, pointer,
+/// and ABI size have been resolved and immediately before `SendInput`. Test
 /// support may provide a controlled timestamp without changing production
 /// behavior.
 fn send_prepared_physical_packet_once_impl(
@@ -845,26 +828,10 @@ fn send_physical_packet_retry_policy_impl(
     packet: PhysicalPacket,
     mut send_one: impl FnMut(PhysicalPacket) -> PacketSendAttempt,
 ) -> SendTransactionOutcome {
-    let requested_mask = packet.up_mask | packet.down_mask;
     if !valid_packet(packet) || packet.event_count() == 0 {
-        return SendTransactionOutcome {
-            status: SendTransactionStatus::ZeroProgress,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask: 0,
-                skipped_mask: 0,
-                first_inserted: 0,
-                attempts: 0,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: Some(87),
-                last_win32_error: Some(87),
-                started_ticks: Some(QpcTicks::ZERO),
-                completed_ticks: Some(QpcTicks::ZERO),
-                timing_error: None,
-            },
-        };
+        return invalid_packet_outcome(packet);
     }
+    let requested_mask = packet.up_mask | packet.down_mask;
 
     let first = match send_one(packet) {
         PacketSendAttempt::Outcome(res) => res,
@@ -1325,6 +1292,27 @@ mod tests {
     }
 
     #[test]
+    fn immediate_sender_samples_true_pre_call_after_payload_resolution() {
+        let source = include_str!("packet.rs");
+        let body = source
+            .split("fn send_once_prepared_view(")
+            .nth(1)
+            .expect("immediate prepared sender")
+            .split("/// One low-level")
+            .next()
+            .expect("immediate prepared sender body");
+        let payload = body.find("let inputs = prepared.inputs.as_ptr").unwrap();
+        let reset = body.find("SetLastError(0)").unwrap();
+        let pre_call = body.find("let started_ticks").unwrap();
+        let cutoff = body.find("latest_allowed_down_qpc.is_some_and").unwrap();
+        let syscall = body.find("SendInput(").unwrap();
+        assert!(payload < reset);
+        assert!(reset < pre_call);
+        assert!(pre_call < cutoff);
+        assert!(cutoff < syscall);
+    }
+
+    #[test]
     fn caller_owned_start_path_does_not_reopen_target_crossing() {
         let source = include_str!("packet.rs");
         let body = source
@@ -1579,9 +1567,12 @@ mod tests {
             PhysicalPacket::new(FULL_INSTRUMENT_MASK | (1 << 15), 0),
             clock,
         );
-        assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
+        assert_eq!(outcome.status, SendTransactionStatus::PreparationRejected);
         assert_eq!(outcome.evidence.attempts, 0);
-        assert_eq!(outcome.evidence.first_win32_error, Some(87));
+        assert_eq!(outcome.evidence.first_win32_error, None);
+        assert_eq!(outcome.evidence.last_win32_error, None);
+        assert_eq!(outcome.evidence.started_ticks, None);
+        assert_eq!(outcome.evidence.completed_ticks, None);
     }
 
     #[cfg(windows)]

@@ -65,6 +65,8 @@ pub enum PacketRetryReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendTransactionStatus {
     Complete,
+    /// Packet validation failed before any Win32 syscall was attempted.
+    PreparationRejected,
     ZeroProgress,
     PartialProgress,
     IntegrityLost,

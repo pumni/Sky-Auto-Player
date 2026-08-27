@@ -142,8 +142,8 @@ frozen plan
   -> prepare immutable packet before the precision handoff
   -> worker-owned QPC spin across the authored target
   -> final command/control, target, and foreground proof
-  -> one authoritative pre_call_qpc sample and lease admission
-  -> Down-only cutoff check against that supplied sample
+  -> final_policy_qpc sample and lease admission
+  -> sender SetLastError(0), true pre_call_qpc sample, and Down-only cutoff
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
@@ -153,12 +153,12 @@ frozen plan
 ```
 
 The worker-owned target crossing happens before final policy admission. The
-supplied `pre_call_qpc` sample is taken after those final checks and is the
-physical pre-call boundary, not a Windows syscall-entry or game-receipt
-timestamp. `final_proof_qpc` is a compatibility alias for the same sample.
-The trusted prepared sender performs no target wait or policy recheck after
-receiving it; it only enforces the Down-only cutoff immediately before the
-syscall.
+worker's `final_policy_qpc` is the policy/lease evidence sample. The trusted
+prepared sender then resolves the fixed payload pointer and length, resets
+thread-local Win32 error state, takes the true `pre_call_qpc` immediately
+before the syscall, and applies the Down-only cutoff against that sample.
+The sender performs no target wait or policy recheck after receiving the
+prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract
 a learned send cost from the target. Completion is used for diagnostics and
 ownership evidence only; it does not create a completion-relative hold floor.

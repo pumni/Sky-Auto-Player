@@ -49,19 +49,20 @@ Song file
 The worker has one physical timing contract. The authored/effective timeline
 deadline is not advanced by a learned send-cost lead. It prepares the packet,
 crosses the absolute authored target with the one bounded precision spin, then
-performs final command/control, target, and focus checks. It takes one
-authoritative `pre_call_qpc`, evaluates the lease against that same sample,
-and passes it to the trusted Win32 sender.
-After that sample, a Down-bearing packet may perform only the session
-down-late grace cutoff comparison before the single `SendInput` call; Up-only
-safety release has no Down cutoff. The sender does not wait or resample QPC.
+performs final command/control, target, and focus checks. It records a
+worker-owned `final_policy_qpc`, evaluates the lease against that sample,
+and passes the prepared packet to the trusted Win32 sender.
+The sender resets Win32 last-error state, takes the true `pre_call_qpc` after
+payload resolution, and performs only the Down late-grace cutoff comparison
+before the single `SendInput` call; Up-only safety release has no Down cutoff.
+The sender does not wait or re-open policy admission.
 It then returns `sendinput_completion_qpc`. Completion is used as sender-side
 ownership/diagnostic evidence only; it is not used for physical-hold
 feasibility, subtracted from future authored timestamps, or used as a healthy
 release floor.
 The compatibility `send_started_ticks` and `send_completed_ticks` fields refer
-to `pre_call_qpc` and `sendinput_completion_qpc`; they do not cause an
-additional production QPC sample.
+to the true sender `pre_call_qpc` and `sendinput_completion_qpc`; the worker's
+separate `final_policy_qpc` remains policy evidence.
 
 Timing evidence has four distinct boundaries: the authored target, sender
 pre-call QPC, SendInput completion QPC, and game observation. The application

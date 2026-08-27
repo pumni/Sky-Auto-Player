@@ -150,8 +150,8 @@ struct Samples {
     commit_freeze_calls_per_plan: Vec<u64>,
     admission_wake_to_precision_wake_us: Vec<i64>,
     target_crossing_error_us: Vec<i64>,
-    target_crossing_to_final_gate_us: Vec<i64>,
-    final_proof_to_pre_call_us: Vec<i64>,
+    target_crossing_to_final_policy_us: Vec<i64>,
+    final_policy_to_true_pre_call_us: Vec<i64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
     completion_to_rt_ready_us: Vec<i64>,
@@ -407,15 +407,17 @@ fn record_precision_handoff(
         handoff.target_crossing_qpc,
         physical_target_qpc,
     ));
-    samples.target_crossing_to_final_gate_us.push(signed_qpc_us(
-        qpc_clock,
-        handoff.final_proof_qpc,
-        handoff.target_crossing_qpc,
-    ));
-    samples.final_proof_to_pre_call_us.push(signed_qpc_us(
+    samples
+        .target_crossing_to_final_policy_us
+        .push(signed_qpc_us(
+            qpc_clock,
+            handoff.final_policy_qpc,
+            handoff.target_crossing_qpc,
+        ));
+    samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
         qpc_clock,
         pre_call_qpc,
-        handoff.final_proof_qpc,
+        handoff.final_policy_qpc,
     ));
     if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
         samples.completion_to_rt_ready_us.push(signed_qpc_us(
@@ -893,13 +895,13 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         );
     }
     serde_json::json!({
-        "scope": "Phase-A acceptance production sender boundary; full coordinator dispatch/admission/commit path; waiter scheduling excluded",
+        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
         "effective_spin_threshold_us": mode.effective_spin_threshold_us,
-        "sender_start_timestamp_source": "caller-owned frozen target crossing; production pre-call sender with test_started_ticks=None",
-        "transport": "deterministic packet emitter with QPC completion sample",
+        "sender_start_timestamp_source": "mock transport QPC sampled at its immediate callback boundary; production native sender samples inside the SendInput envelope",
+        "transport": "deterministic packet emitter with immediate QPC start and completion samples",
         "scenarios": scenarios,
         "iterations": iterations(),
     })
@@ -968,10 +970,10 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             samples.admission_wake_to_precision_wake_us,
         ),
         "target_crossing_error_us": signed_summary(samples.target_crossing_error_us),
-        "target_crossing_to_final_gate_us": signed_summary(
-            samples.target_crossing_to_final_gate_us,
+        "target_crossing_to_final_policy_us": signed_summary(
+            samples.target_crossing_to_final_policy_us,
         ),
-        "final_proof_to_pre_call_us": signed_summary(samples.final_proof_to_pre_call_us),
+        "final_policy_to_true_pre_call_us": signed_summary(samples.final_policy_to_true_pre_call_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
         "completion_error_us_diagnostic": {
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
@@ -1185,7 +1187,7 @@ fn main() {
             (BenchmarkScope::Full, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen caller-owned crossing QPC and the production sender performs the immediate pre-call SendInput attempt; waiter scheduling is excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen crossing QPC and the mock transport records an immediate sender-boundary QPC; waiter scheduling and the real SendInput syscall are excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),

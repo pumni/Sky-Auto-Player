@@ -16,8 +16,8 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_proof_qpc` | Compatibility name for the authoritative QPC sample taken after target/focus/control/lease proof and before the prepared sender call. |
-| `pre_call_qpc` | Authoritative QPC sample taken by the worker after final policy proof and passed to the prepared sender; only the Down late-grace cutoff comparison may follow it before `SendInput`. |
+| `final_policy_qpc` | Worker-owned QPC sample used to evaluate final control and lease policy after target/focus proof. |
+| `pre_call_qpc` | True sender-owned QPC sample taken after payload resolution and immediately before `SendInput`; only the Down late-grace cutoff comparison follows it. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
@@ -355,12 +355,12 @@ The final physical path is ordered and fail-closed:
 3. Recheck command/control, the stamped target, and foreground focus (Down
    only) after target crossing. A rejection records a bounded final-gate
    diagnostic and performs no packet syscall.
-4. Take one authoritative `pre_call_qpc` after every final policy check,
-   including the lease check. `final_proof_qpc` is a compatibility diagnostic
-   alias for this same sample.
-5. Enter the trusted prepared sender. It checks the Down-only late-grace
-   cutoff against that supplied sample and immediately performs one
-   packetized `SendInput` call. It does not wait, spin, re-read QPC, or redo
+4. Take `final_policy_qpc` after target/focus/control proof and use it for the
+   final lease admission.
+5. Enter the trusted prepared sender. It resets Win32 last-error state, takes
+   the true `pre_call_qpc` after payload resolution, checks the Down-only
+   late-grace cutoff against that sample, and immediately performs one
+   packetized `SendInput` call. It does not wait, spin, or redo
    control/focus/target admission.
 6. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
 7. Commit coordinator ownership using the confirmed transport result.
@@ -390,21 +390,22 @@ is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
-The final precision loop performs only the QPC target comparison and
-`spin_loop`; it does not poll interrupt generation, lease state, focus, or
-commands. The worker then performs the final control/target/focus proof. The
-trusted sender performs the Down cutoff predicate against the worker-supplied
-authoritative `pre_call_qpc`, closing the preemption window without adding
-another clock sample or adaptive controller. The trusted sender uses the same
-materialized session margin; it does not re-read microseconds or compute a new
+The final precision loop performs the QPC target comparison and bounded
+interrupt-generation polling. It does not inspect lease state, focus, or
+commands. The worker then performs the final control/target/focus proof and
+records `final_policy_qpc` for lease admission. The trusted sender samples the
+true `pre_call_qpc` after payload resolution and immediately before the
+cutoff/`SendInput` pair, closing the worker-to-syscall preemption window. It
+uses the same materialized session margin; it does not compute a new
 threshold.
 
-The handoff benchmark reports `target_crossing_to_final_gate_us` for the
-worker-owned target crossing through the final gate. The retained
-`final_proof_to_pre_call_us` compatibility field is expected to be zero for
-the production handoff because `final_proof_qpc` aliases the supplied
-`pre_call_qpc`. The outer admission wait's `WaitResult.spin_ticks` is not final
-sender spin; it belongs to the earlier `T - 2,000 µs` admission stage.
+The handoff benchmark reports `target_crossing_to_final_policy_us` for the
+worker-owned target crossing through final policy admission and
+`final_policy_to_true_pre_call_us` for the remaining worker-to-sender gap.
+That second interval is expected to be small but non-zero on a preempted
+worker, and is now measured rather than hidden by timestamp aliasing. The
+outer admission wait's `WaitResult.spin_ticks` is not final sender spin; it
+belongs to the earlier `T - 2,000 µs` admission stage.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the precision
@@ -449,9 +450,9 @@ forensics scalars do not alter the native telemetry schema or dispatch path.
 
 The authoritative sender-side metrics are:
 
-- `final_proof_qpc`, `pre_call_qpc`, and `sendinput_completion_qpc`;
+- `final_policy_qpc`, true `pre_call_qpc`, and `sendinput_completion_qpc`;
 - diagnostic-only `precision_handoff` evidence carrying the admission wake
-  (when present), precision-wait wake, and final-proof QPC boundaries;
+  (when present), precision-wait wake, and final-policy QPC boundaries;
 - signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
   as the primary pre-call timing metric; it is not a syscall-entry or game-
   receipt timestamp;
@@ -481,9 +482,9 @@ feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
 
 The serialized `send_started_ticks`, `send_completed_ticks`, and
 `send_duration_us` names remain compatibility aliases for older Python/API
-callers. They map to `pre_call_qpc`, `sendinput_completion_qpc`, and
-`pre_call_to_completion`; production does not take a second QPC sample to
-preserve the old names.
+callers. They map to the true sender `pre_call_qpc`,
+`sendinput_completion_qpc`, and `pre_call_to_completion`; the separate
+`final_policy_qpc` remains policy evidence and is not used as the sender start.
 The optional `dispatch_ready_qpc`, `precision_handoff`, and
 `core_post_send_duration_us` fields are diagnostic-only and are not sampled by
 the production sender. `precision_handoff` reuses the precision waiter's raw

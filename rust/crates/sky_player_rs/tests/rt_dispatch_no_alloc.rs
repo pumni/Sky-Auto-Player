@@ -109,7 +109,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         epoch_qpc: QpcTicks::ZERO,
         allow_pre_epoch_startup_dispatch: false,
         physical_target_qpc: QpcTicks::ZERO,
-        final_proof_qpc: QpcTicks::ZERO,
+        final_policy_qpc: QpcTicks::ZERO,
         pre_call_qpc: QpcTicks::ZERO,
         sendinput_completion_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
@@ -135,7 +135,7 @@ fn down_observation(n: u64) -> DispatchObservation {
 fn up_observation(n: u64) -> DispatchObservation {
     DispatchObservation::Up(UpObservation {
         physical_target_qpc: QpcTicks::ZERO,
-        final_proof_qpc: QpcTicks::ZERO,
+        final_policy_qpc: QpcTicks::ZERO,
         pre_call_qpc: QpcTicks::ZERO,
         sendinput_completion_qpc: QpcTicks::ZERO,
         dispatch_ready_qpc: Some(QpcTicks::ZERO),
@@ -160,7 +160,7 @@ fn up_observation(n: u64) -> DispatchObservation {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_proof_ticks: Some(TimelineTicks::ZERO),
+            final_policy_ticks: Some(TimelineTicks::ZERO),
             sendinput_completion_ticks: Some(TimelineTicks::ZERO),
             dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,

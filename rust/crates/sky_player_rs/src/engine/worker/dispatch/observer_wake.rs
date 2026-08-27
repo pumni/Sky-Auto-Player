@@ -3,7 +3,7 @@ use sky_dispatch_win32::clock::QpcTicks;
 
 pub(crate) fn take_deadline_wake_qpc(
     runtime: &mut WorkerRuntime,
-    _final_proof_qpc: QpcTicks,
+    _final_policy_qpc: QpcTicks,
 ) -> Option<QpcTicks> {
     runtime.last_dispatch_deadline_wake_qpc.take()
 }

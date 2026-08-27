@@ -1,14 +1,17 @@
 use super::super::super::{
     ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
-    TRACE_KIND_DOWN, TRACE_KIND_UP, TimelineTicks, TrackedKeyState,
+    TimelineTicks, TrackedKeyState,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::super::invoke_final_gate_race_hook;
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     WorkerResources, WorkerRuntime, WorkerTimingState, final_control_admission_at,
     final_control_precheck, final_down_target_admission, focus_matches, load_target_stamp,
     record_final_gate_rejection, record_sendinput_pre_call_lateness, signed_ticks_to_us,
-    suspend_live_input, target_stamp_still_current, wait_to_precision_boundary,
+    suspend_live_input, target_stamp_still_current, trace_kind_for_packet_kind,
+    wait_to_precision_boundary,
 };
 use super::DownBoundaryAdmission;
 use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
@@ -20,7 +23,6 @@ use super::recovery::{
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
-use crate::engine::telemetry::TRACE_KIND_MIXED;
 use sky_dispatch_core::clock::PauseReason;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 #[allow(clippy::too_many_arguments)]
@@ -242,6 +244,8 @@ fn commit_down_send_outcome(
         &admission,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
+        #[cfg(not(any(test, feature = "test-support")))]
+        None,
         observer,
     )
 }
@@ -249,7 +253,7 @@ pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
         target_crossing_qpc: Option<QpcTicks>,
-        final_proof_qpc: QpcTicks,
+        final_policy_qpc: QpcTicks,
     },
     Guarded {
         trace_kind: u8,
@@ -290,7 +294,7 @@ fn admit_authored_down(
     lease_timeout_ticks: DurationTicks,
     observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
-    let trace_kind = trace_kind_for_view(view);
+    let trace_kind = trace_kind_for_packet_kind(view.prepared_batch.packet_kind);
     let has_down_events = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if !runtime.musical_physical_commit_started {
@@ -453,7 +457,7 @@ fn finalize_authored_down_admission(
         #[cfg(any(test, feature = "test-support"))]
         {
             if test_direct_boundary {
-                None
+                Some(physical_target_qpc)
             } else {
                 match wait_to_precision_boundary(
                     qpc_clock,
@@ -488,6 +492,17 @@ fn finalize_authored_down_admission(
             )
         }
     };
+    #[cfg(any(test, feature = "test-support"))]
+    invoke_final_gate_race_hook(
+        runtime.final_gate_race_hook.as_ref(),
+        focus_active,
+        target_hwnd,
+        target_generation,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+    );
     let control_signals = FinalControlSignals {
         quit_requested,
         skip_requested,
@@ -549,22 +564,23 @@ fn finalize_authored_down_admission(
         }
     }
     #[cfg(any(test, feature = "test-support"))]
-    let pre_call_qpc = if test_direct_boundary {
+    let final_policy_qpc = if test_direct_boundary {
         // Tests supply a frozen exact-boundary target to avoid waiter jitter.
         physical_target_qpc
     } else {
         qpc_clock.now().map_err(|error| {
-            DispatchStep::Terminate(format!("QPC pre-call boundary failure: {error:?}"))
+            DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))
         })?
     };
     #[cfg(not(any(test, feature = "test-support")))]
-    let pre_call_qpc = qpc_clock.now().map_err(|error| {
-        DispatchStep::Terminate(format!("QPC pre-call boundary failure: {error:?}"))
+    let final_policy_qpc = qpc_clock.now().map_err(|error| {
+        DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))
     })?;
     let lease_admission =
-        final_control_admission_at(pre_call_qpc, lease_timeout_ticks, control_signals).map_err(
-            |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
-        )?;
+        final_control_admission_at(final_policy_qpc, lease_timeout_ticks, control_signals)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
+            })?;
     if !matches!(lease_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
         record_final_gate_rejection(local_metrics, FinalGateRejection::Lease);
@@ -573,7 +589,7 @@ fn finalize_authored_down_admission(
     Ok(AdmissionOutcome::Allowed {
         trace_kind,
         target_crossing_qpc,
-        final_proof_qpc: pre_call_qpc,
+        final_policy_qpc,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -606,13 +622,6 @@ pub(crate) fn handle_final_focus_loss(
     runtime.focus_restore_started_ticks = None;
     Ok(AdmissionOutcome::FocusLost)
 }
-fn trace_kind_for_view(view: &AuthoredBatchView) -> u8 {
-    match view.prepared_batch.packet_kind {
-        sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
-        sky_dispatch_core::model::PhysicalPacketKind::DownOnly => TRACE_KIND_DOWN,
-        sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
-    }
-}
 #[allow(clippy::too_many_arguments)]
 fn record_down_send_outcome(
     view: &AuthoredBatchView,
@@ -630,13 +639,13 @@ fn record_down_send_outcome(
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
     admission: &AdmissionOutcome,
-    #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
+    test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         trace_kind,
         target_crossing_qpc,
-        final_proof_qpc,
+        final_policy_qpc,
     } = admission
     else {
         return DispatchStep::Continue;
@@ -658,14 +667,10 @@ fn record_down_send_outcome(
         hook.mark_first_physical_send_started();
     }
     debug_assert_eq!(prepared_packet.packet(), packet);
-    #[cfg(any(test, feature = "test-support"))]
-    let authoritative_pre_call_qpc = test_now_ticks.unwrap_or(*final_proof_qpc);
-    #[cfg(not(any(test, feature = "test-support")))]
-    let authoritative_pre_call_qpc = *final_proof_qpc;
-    let result = backend.send_prepared_physical_packet_with_start_and_cutoff(
+    let result = backend.send_prepared_physical_packet_at_final_boundary(
         prepared_packet,
-        authoritative_pre_call_qpc,
         latest_allowed_down_qpc,
+        test_now_ticks,
     );
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
@@ -755,7 +760,7 @@ fn record_down_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         *target_crossing_qpc,
-        *final_proof_qpc,
+        *final_policy_qpc,
         trace_kind,
         result_success,
         result.status,
@@ -784,7 +789,7 @@ fn finalize_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
     target_crossing_qpc: Option<QpcTicks>,
-    final_proof_qpc: QpcTicks,
+    final_policy_qpc: QpcTicks,
     trace_kind: u8,
     result_success: bool,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
@@ -806,7 +811,7 @@ fn finalize_down_send_outcome(
         qpc_clock,
         physical_target_qpc,
         target_crossing_qpc,
-        final_proof_qpc,
+        final_policy_qpc,
         coordinator,
         health,
         timing,

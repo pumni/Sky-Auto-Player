@@ -1020,6 +1020,26 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.set_force_preflight_failure(flag);
     }
 
+    /// Inject a deterministic mutation immediately after worker target
+    /// crossing and before the final control/target/focus gate. This is a
+    /// runtime integration seam, not a production synchronization path.
+    pub fn set_final_gate_race_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(
+                &AtomicBool,
+                &AtomicIsize,
+                &AtomicU64,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.runtime.final_gate_race_hook = Some(Arc::new(hook));
+    }
+
     /// Run the production wait boundary and direct frozen-plan dispatch path.
     pub fn wait_and_dispatch_current_plan(
         &mut self,
@@ -1326,12 +1346,9 @@ impl ProductionDispatchTestHarness {
         self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(target))
     }
 
-    /// Invoke the coordinator dispatch boundary while leaving the sender's
-    /// authoritative crossing sample to the production packet primitive.
-    ///
-    /// The direct-boundary flag only removes the test wait. The frozen target
-    /// is used as the caller-owned crossing/pre-call sample, while the
-    /// production sender still performs only the immediate SendInput attempt.
+    /// Invoke the coordinator dispatch boundary at a frozen crossing. The
+    /// test transport records its own immediate QPC sample for sender timing;
+    /// production builds take that sample inside the native sender.
     pub fn dispatch_at_phase_a_production_boundary_for_test(
         &mut self,
         plan: &NextDispatchPlan,
@@ -1345,6 +1362,7 @@ impl ProductionDispatchTestHarness {
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
             let requested_mask = packet.up_mask | packet.down_mask;
+            let started_ticks = clock.now().expect("production-boundary pre-call QPC");
             let completed_ticks = clock.now().expect("production-boundary completion QPC");
             SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -1358,7 +1376,7 @@ impl ProductionDispatchTestHarness {
                     retry_reason: PacketRetryReason::None,
                     first_win32_error: None,
                     last_win32_error: None,
-                    started_ticks: None,
+                    started_ticks: Some(started_ticks),
                     completed_ticks: Some(completed_ticks),
                     timing_error: None,
                 },

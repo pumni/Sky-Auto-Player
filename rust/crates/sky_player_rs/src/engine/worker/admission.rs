@@ -1,5 +1,7 @@
 use super::{TrackedKeyState, focus_gate_matches};
-use crate::engine::telemetry::WorkerMetricsLocal;
+use crate::engine::telemetry::{
+    TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
+};
 use sky_dispatch_core::time::DurationTicks;
 #[cfg(test)]
 use sky_dispatch_win32::clock::QpcClock;
@@ -19,6 +21,31 @@ pub(crate) enum FinalGateRejection {
     Target,
     Focus,
     Lease,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_final_gate_race_hook(
+    hook: Option<&super::super::config::FinalGateRaceHook>,
+    focus_active: &AtomicBool,
+    target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    desired_pause: &AtomicBool,
+) {
+    if let Some(hook) = hook {
+        hook(
+            focus_active,
+            target_hwnd,
+            target_generation,
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+        );
+    }
 }
 
 pub(crate) fn record_final_gate_rejection(
@@ -43,6 +70,16 @@ pub(crate) fn record_final_gate_rejection(
             local_metrics.final_gate_lease_expirations =
                 local_metrics.final_gate_lease_expirations.saturating_add(1)
         }
+    }
+}
+
+pub(crate) fn trace_kind_for_packet_kind(
+    packet_kind: sky_dispatch_core::model::PhysicalPacketKind,
+) -> u8 {
+    match packet_kind {
+        sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
+        sky_dispatch_core::model::PhysicalPacketKind::DownOnly => TRACE_KIND_DOWN,
+        sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
     }
 }
 
@@ -146,11 +183,11 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
 }
 
 pub(crate) fn final_control_admission_at(
-    final_proof_qpc: QpcTicks,
+    final_policy_qpc: QpcTicks,
     lease_timeout_ticks: DurationTicks,
     signals: FinalControlSignals<'_>,
 ) -> Result<FinalControlAdmission, QpcError> {
-    classify_final_control(final_proof_qpc, lease_timeout_ticks, signals)
+    classify_final_control(final_policy_qpc, lease_timeout_ticks, signals)
 }
 
 /// Compatibility wrapper for test seams and non-physical callers. Production

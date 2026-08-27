@@ -51,19 +51,19 @@ pub(crate) fn publisher_down_send_outcome(
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
     let requested_packet = view.packet_masks;
-    let final_proof_qpc = timing_proof.final_proof_qpc;
+    let final_policy_qpc = timing_proof.final_policy_qpc;
     let pre_call_qpc = timing_proof.pre_call_qpc;
     let sendinput_completion_qpc = timing_proof.sendinput_completion_qpc;
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
-    let wake_qpc = take_deadline_wake_qpc(runtime, final_proof_qpc);
+    let wake_qpc = take_deadline_wake_qpc(runtime, final_policy_qpc);
     let precision_handoff =
         timing_proof
             .target_crossing_qpc
             .map(|target_crossing_qpc| PrecisionHandoffEvidence {
                 admission_wake_qpc: wake_qpc,
                 target_crossing_qpc,
-                final_proof_qpc,
+                final_policy_qpc,
             });
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
@@ -89,7 +89,7 @@ pub(crate) fn publisher_down_send_outcome(
             epoch_qpc: timing_proof.epoch_qpc,
             allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
             physical_target_qpc,
-            final_proof_qpc,
+            final_policy_qpc,
             pre_call_qpc,
             sendinput_completion_qpc,
             dispatch_ready_qpc,
@@ -171,7 +171,7 @@ fn drain_stale_metadata_observation(
                 authored_ticks: observation.effective_scheduled_ticks,
                 effective_deadline_ticks: observation.effective_scheduled_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                final_proof_ticks: None,
+                final_policy_ticks: None,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: None,
                 completion_residual_us: 0,
@@ -214,7 +214,7 @@ fn drain_blocked_unfocused_observation(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                final_proof_ticks: None,
+                final_policy_ticks: None,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: None,
                 completion_residual_us: 0,
@@ -462,8 +462,8 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
-    let final_proof_effective_ticks =
-        down_effective_ticks(observation, observation.final_proof_qpc)?;
+    let final_policy_effective_ticks =
+        down_effective_ticks(observation, observation.final_policy_qpc)?;
     let pre_call_effective_ticks = down_effective_ticks(observation, observation.pre_call_qpc)?;
     let completed_effective_ticks =
         down_effective_ticks(observation, observation.sendinput_completion_qpc)?;
@@ -471,7 +471,7 @@ pub(crate) fn drain_down_send_outcome(
         .wake_qpc
         .map(|qpc| down_effective_ticks(observation, qpc))
         .transpose()?
-        .unwrap_or(final_proof_effective_ticks);
+        .unwrap_or(final_policy_effective_ticks);
     let completed_effective_us = qpc_clock
         .timeline_to_us(completed_effective_ticks)
         .map_err(|error| {
@@ -511,7 +511,7 @@ pub(crate) fn drain_down_send_outcome(
         .wake_qpc
         .and_then(|wake| {
             observation
-                .final_proof_qpc
+                .final_policy_qpc
                 .checked_duration_since(wake)
                 .ok()
         })
@@ -607,7 +607,7 @@ pub(crate) fn drain_down_send_outcome(
         dispatch_start_error_ticks,
         completion_error_ticks,
         authored_completion_error_ticks,
-        Some(final_proof_effective_ticks),
+        Some(final_policy_effective_ticks),
         Some(pre_call_effective_ticks),
         Some(completed_effective_ticks),
         wake_ticks,
@@ -726,7 +726,7 @@ pub(crate) fn drain_up_send_outcome(
         .wake_qpc
         .and_then(|wake| {
             observation
-                .final_proof_qpc
+                .final_policy_qpc
                 .checked_duration_since(wake)
                 .ok()
         })

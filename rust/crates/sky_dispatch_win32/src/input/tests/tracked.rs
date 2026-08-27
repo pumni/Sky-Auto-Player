@@ -18,6 +18,26 @@ fn same_key_retrigger_packet_is_rejected_at_preparation_boundary() {
     );
 }
 
+#[test]
+fn invalid_packet_is_no_syscall_and_not_sendinput_zero_progress() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_emitter = Arc::clone(&calls);
+    let mut state = TrackedKeyState::with_packet_emitter(move |_packet| {
+        calls_for_emitter.fetch_add(1, Ordering::Relaxed);
+        panic!("invalid packet reached packet emitter");
+    });
+
+    let outcome = state.send_physical_packet(PhysicalPacket::new(0b001, 0b001));
+
+    assert_eq!(outcome.status, SendTransactionStatus::PreparationRejected);
+    assert_eq!(outcome.evidence.attempts, 0);
+    assert_eq!(outcome.evidence.first_win32_error, None);
+    assert_eq!(outcome.evidence.last_win32_error, None);
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(state.sendinput_zero_progress_failures, 0);
+    assert_eq!(state.chords_rejected, 1);
+}
+
 fn prepared_success_emitter(
     calls: Arc<AtomicUsize>,
 ) -> impl Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync + 'static {
