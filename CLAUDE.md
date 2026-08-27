@@ -4,8 +4,8 @@ Use `@AGENTS.md` as the shared repository contract. Do not create Claude-specifi
 it.
 
 Start from the task and relevant source/tests. Use `docs/INDEX.md` to retrieve current documentation
-only when it is needed. Historical rationale lives in Git history or explicitly archived evidence and
-should not enter the working context unless the task calls for it.
+only when it is needed. Historical plans and implementation rationale live in Git history and should
+not enter the working context unless the task genuinely needs them.
 
 For broad exploration, an isolated subagent is useful when it keeps raw search output out of the main
 context. Return only verified paths, facts, risks, decisions needed, and recommended next actions.

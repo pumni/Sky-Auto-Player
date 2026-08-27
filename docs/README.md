@@ -18,12 +18,12 @@ relevant source/direct tests, and open only the matching current documents.
 | `rust-toolchain-policy.md` | Rust toolchain policy |
 | `INDEX.md` | Context/documentation router |
 
-## Historical evidence
+## Bounded evidence and history
 
-`archive/`, `perf-baselines/`, and historical release evidence are not startup context and are not
-repository instructions. Consult them only when a current task needs that evidence. Completed plans,
-migration playbooks, and implementation choreography are retained in Git history rather than kept in
-the active documentation tree.
+`perf-baselines/`, `releases/`, and relevant ADRs are on-demand evidence, not startup context and not
+repository-wide instructions. Completed plans, migration playbooks, superseded audits, implementation
+briefs, and obsolete choreography are retained in Git history rather than kept in the active
+documentation tree.
 
 Durable architectural decisions belong in `adr/` or the current reference documents above. Do not
 turn this directory into a generated context pack or duplicate active architecture across

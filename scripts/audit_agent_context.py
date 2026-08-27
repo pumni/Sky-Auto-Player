@@ -24,9 +24,11 @@ CONTEXT_BUDGETS: dict[str, int] = {
 
 RETIRED_PATHS: tuple[str, ...] = (
     ".claude",
+    "docs/archive",
     "docs/plan",
     "docs/rust-dispatch-migration",
     "docs/PORTING_GUIDE.md",
+    "docs/rust-migration-plan.md",
     "docs/2026-08-01-rust-overhaul-plan.md",
     "docs/2026-08-rust-core-consolidation-plan.md",
     "docs/dispatch-chord-timing-residual-review-2026-07-23.md",
@@ -83,7 +85,6 @@ def main() -> int:
         failures.extend(
             f"active agent handoff document is forbidden: {path.relative_to(ROOT)}"
             for path in docs.rglob("*HANDOFF*.md")
-            if "archive" not in path.parts
         )
 
     for path in CONTROL_SURFACES:

@@ -13,7 +13,8 @@ When sources disagree, prefer current observable evidence in this order:
 4. **Current documentation below** — explanatory contracts that must be updated when intentional
    code changes make them inaccurate.
 
-Historical plans, audit reports, issue text, and archived documents do not override these sources.
+Historical plans, audit reports, issue text, and obsolete implementation notes do not override these
+sources.
 
 ## Active architecture and behavior
 
@@ -51,17 +52,16 @@ Use `static`, `tests`, or `rust` as an optional group during focused development
 Windows timing acceptance, release, and benchmark scripts are specialized evidence paths; use them
 when a task touches those boundaries.
 
-## Decisions and historical evidence
+## Decisions and bounded evidence
 
 - `docs/adr/` contains explicit architecture decision records. Consult an ADR only when the task
   touches the decision it records.
 - `docs/releases/` contains release-specific acceptance/history, not startup context.
 - `docs/perf-baselines/` contains named performance evidence. A baseline is evidence for the
   environment and revision it records, not a universal instruction.
-- `docs/archive/` contains explicitly retained historical material and is never active authority.
-- Completed implementation plans and migration playbooks are retained by Git history instead of the
-  active documentation tree. Use `git log`, `git show`, or repository history only when historical
-  rationale is actually needed.
+- Completed implementation plans, migration playbooks, superseded audits, and implementation briefs
+  live in Git history instead of the active documentation tree. Use `git log`, `git show`, or
+  repository history only when historical rationale is actually needed.
 
 ## Documentation maintenance
 
