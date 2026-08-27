@@ -17,6 +17,9 @@ CONTEXT_BUDGETS: dict[str, int] = {
     "docs/INDEX.md": 8_000,
     "docs/README.md": 5_000,
     ".github/PULL_REQUEST_TEMPLATE.md": 5_000,
+    ".github/ISSUE_TEMPLATE/bug_report.md": 5_000,
+    ".github/ISSUE_TEMPLATE/feature_request.md": 3_000,
+    ".github/ISSUE_TEMPLATE/config.yml": 2_000,
 }
 
 RETIRED_PATHS: tuple[str, ...] = (
@@ -27,6 +30,7 @@ RETIRED_PATHS: tuple[str, ...] = (
     "docs/2026-08-01-rust-overhaul-plan.md",
     "docs/2026-08-rust-core-consolidation-plan.md",
     "docs/dispatch-chord-timing-residual-review-2026-07-23.md",
+    ".github/ISSUE_TEMPLATE/security_p0.md",
 )
 
 CONTROL_SURFACES: tuple[str, ...] = tuple(CONTEXT_BUDGETS)
@@ -35,6 +39,7 @@ FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
     "altitude table",
     "coding_agent_handoff",
     "coding agent handoff",
+    "agents.md p0",
     "<security_mandates>",
     "porting_guide.md",
     "read every plan",
