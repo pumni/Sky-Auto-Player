@@ -1,78 +1,74 @@
-# Sky Auto Player Documentation Map
+# Sky Auto Player Documentation Router
 
-This index defines the structure and hierarchy of truth for the Sky Auto Player project documentation.
+Use this page to find the smallest current document set needed for a task. Do not treat this index as
+an instruction bundle to preload.
 
-## 0. Hierarchy of Truth (Evidence Hierarchy)
-1. **Observed Game Behavior** (onsets/audio captured in-game) — wins over everything.
-2. **Deterministic Native Telemetry** (Rust session and frozen vectors) — wins over "experience/intuition".
-3. **Current Codebase** (`src/`) — wins over description in any document.
-4. **Documentation** — only interpretive; if a document conflicts with 1, 2, or 3, it is OUTDATED/INCORRECT and must be updated.
+## Evidence hierarchy
 
-> [!NOTE]
-> [AGENTS.md](../AGENTS.md) remains the single source of truth for project rules.
+When sources disagree, prefer current observable evidence in this order:
 
----
+1. **Observed game behavior** — captured onsets/audio and reproducible behavior.
+2. **Deterministic native telemetry and frozen test vectors** — measured implementation evidence.
+3. **Current source, direct tests, enforced configuration, and CI checks** — the executable codebase.
+4. **Active documentation below** — explanatory contracts that must be updated when the code changes
+   intentionally.
 
-## 1. Canonical Documents
-These files represent the current system state and contracts:
-* [timing-principles.md](timing-principles.md) — Timing domains, same-key feasibility limits, authored hold materialization, fixed precision boundaries, and deferred observation.
-* [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Current Rust-only RT session contract, QPC timing, focus gate, cleanup invariants, live snapshot, and final report.
-* [architecture.md](architecture.md) — Explains the 4-layer DDD codebase and the Python application / Rust native dispatch boundary.
-* [hold-frame-model.md](hold-frame-model.md) — Explicit hold-frame choices, FPS selection, and materialization formulas.
-* [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
-* [distribution-and-update.md](distribution-and-update.md) — Canonical unsigned portable distribution, user-triggered native update flow with manual fallback, exact manifest/SHA/provenance contract, and release assets (tracks the `pyproject.toml` `[project].version`).
-* [rust-toolchain-policy.md](rust-toolchain-policy.md) — Current Rust compiler pin, MSRV, edition, target, lockfile, upgrade, branch-freeze, and qualification policy.
-* [releases/v3.0.0-acceptance.md](releases/v3.0.0-acceptance.md) — Exact-SHA acceptance evidence for the v3.0.0 release candidate.
+Historical plans, audit reports, baselines, issue text, and archived documents do not override these
+sources.
 
----
+## Active architecture and behavior
 
-## 2. Active References & Experiments
-* [plan/sky-auto-player-clean-self-update-plan/00_README_VI.md](plan/sky-auto-player-clean-self-update-plan/00_README_VI.md) — Historical updater implementation notes; the normative public contract is the unsigned native-updater model in [distribution-and-update.md](distribution-and-update.md).
-* [adr/ADR-0001-packetized-native-input-dispatch.md](adr/ADR-0001-packetized-native-input-dispatch.md) — Accepted phased implementation status for packetized native dispatch; production worker migration remains pending.
-* [plan/2026-08-08_pages-geo-seo-growth-plan.md](plan/2026-08-08_pages-geo-seo-growth-plan.md) — **Implemented (2026-08-08).** SEO/GEO growth architecture for the GitHub Pages marketing site. Shipped: entity-disambiguated @graph schema (WebSite + SoftwareApplication), affiliation disclaimer, sync-version prebuild hook, verify-seo CI hard gate, guides content collection (12 guides × 2 locales), GuideLayout with Article + BreadcrumbList JSON-LD, EN/VI guide hub pages, llms.txt update. 18 canonical routes, 0 errors/0 warnings across verify:dist + verify:seo. Does NOT touch `src/`, `rust/`, or any application code. P0 security mandates unchanged.
-* [plan/2026-07-26_pages-indexing-runbook-plan.md](plan/2026-07-26_pages-indexing-runbook-plan.md) — **Status: PROPOSED, under implementation.** Residual deployment/indexing improvements after the shipped SEO plan. Migrates Pages workflow to GitHub Actions with a strict artifact allowlist while keeping the canonical update documentation intact. `AGENTS.md` and normative architecture docs remain authoritative.
-* [plan/2026-07-28_chatgpt-review-followup-refactor-plan.md](plan/2026-07-28_chatgpt-review-followup-refactor-plan.md) — **Implemented (2026-07-28).** Addresses the follow-up review comments from ChatGPT on the `main` branch: fast-path single-pending pop, HUD visible lateness correction, counter routing via DirectProgressSink, test matrix updates, fixed `pre_send_spin_us` cold budget usage, and created the required 3.14t `pytest-benchmark` scaffolding for future sender-side hot-path optimizations (`bench_backend_result_normalization`, `bench_counter_aggregation`, `bench_pop_due_pending`, `bench_dispatch_send_pedantic`).
-* [plan/2026-07-24_github-pages-seo-best-practice-plan.md](plan/2026-07-24_github-pages-seo-best-practice-plan.md) — **Implemented (Phases 0–6 shipped, 2026-07-25).** Hardened the GitHub Pages marketing surface for modern SEO, Core Web Vitals, and i18n hreflang parity. Shipped: OG banner 1200×630 (fixed 404), `.nojekyll`, deleted `lighthouse-report.html`, rewrote `robots.txt` with tight allow-list, hero LCP `fetchpriority="high"`, removed `navigator.language` auto-redirect, FAQ linked from nav + footer (EN + VI), single `FAQPage` JSON-LD ownership (faq.html / vi/faq.html only; home uses `subjectOf` reference), `SoftwareApplication` upgraded (version 2.4.2, image, MultimediaApplication, Windows 10/11), `og:locale` added, render-blocking Google Fonts removed (system stack), created `docs/vi/faq.html` (VI FAQ with FAQPage + BreadcrumbList JSON-LD), fixed hreflang matrix (4-URL reciprocal), rewrote `sitemap.xml`, updated `llms.txt`. All 4 JSON-LD blocks validated. Does **not** touch `src/`, installer, SendInput, or release packaging. Residual: `og-banner.jpg` ~565 KB (cap 500 KB; compress when ImageMagick available).
-* [plan/2026-07-24_rename-update-cutover-v2.4.2-plan.md](plan/2026-07-24_rename-update-cutover-v2.4.2-plan.md) — **Historical (superseded by the clean native-updater cutover).** This records the former rename bridge and legacy update path; it is not an active compatibility contract. The current release contract is the canonical ZIP, SHA256 sidecar, and `MANIFEST.json` described in `docs/distribution-and-update.md`.
-* [plan/2026-07-25_dispatch-timestamp-fidelity-and-runtime-efficiency-refactor-plan.md](plan/2026-07-25_dispatch-timestamp-fidelity-and-runtime-efficiency-refactor-plan.md) — **Status: PROPOSED, under independent reviewer acceptance (2026-07-25).** Phased refactor for the dispatch timestamp fidelity + runtime-efficiency surface — addresses F1–F13 (mixed-clock-domain cold-guard / warmup placement before long blocking wait / completion-timestamp not sampled at native return / hot-path set allocation / per-dispatch progress locking / dispatch-thread CSV flush on hard-cap race / stale relative waitable-timer arming / `auto` priority fallback to `TIME_CRITICAL` / incidental-atomicity claims under free-threaded Python). Acceptance packet at [plan/2026-07-25_dispatch-timestamp-fidelity-acceptance.md](plan/2026-07-25_dispatch-timestamp-fidelity-acceptance.md). Normative docs (`docs/rt-dispatch-architecture.md`, `docs/timing-principles.md`) updated; **Phase 6 (same-key frame visibility) honestly reported as `AWAITING EVIDENCE`** per plan §13. P0/security surfaces untouched; free-threaded + SendInput-only invariants preserved.
-* [plan/2026-07-23_dispatch-chord-timing-residual-improvement-plan.md](plan/2026-07-23_dispatch-chord-timing-residual-improvement-plan.md) — Historical implementation evidence for chord lifecycle, shutdown, cache, wait, and warmup fixes; normative timing behavior is defined by the current hold-frame model and timing principles.
-* [plan/2026-07-23_dispatch-core-correctness-hardening-plan.md](plan/2026-07-23_dispatch-core-correctness-hardening-plan.md) — **Implemented (Phases 1-9 shipped).** Consumes [dispatch-core-code-audit-2026-07-22.md](dispatch-core-code-audit-2026-07-22.md): AI-safe phased fixes for H1 focus-first-down gate, H3 degraded command wait, H4 supervisor join, H5 event ctypes prototypes, H6 boundary validation, M1 warmup-vs-pending, M2 lead snapshot honesty, M4/M5 wiring. **H2 rejected** (completion-anchor + equality same-key drop is design-correct; see plan §3.2). Order: correctness/safety before timing hygiene before resource thrift. **Do not merge phases; every fix starts with a failing test.**
-* [2026-07-18_accuracy-refinement-and-fps-ux-plan.md](2026-07-18_accuracy-refinement-and-fps-ux-plan.md) — Historical implementation evidence for user-declared FPS guidance and non-blocking advisories; current wording uses explicit hold selection.
-* [2026-07-18_core-send-accuracy-full-overhaul-plan.md](2026-07-18_core-send-accuracy-full-overhaul-plan.md) — **Implemented (Phases A–I + K shipped, 2026-07-18).** Full core send-path overhaul: metric honesty + `timing_semantics` schema hardening (Phase B); FPS/`sub_60fps_frame_notes` schema + tests (Phase C partial — **residual advisory UX continued in** [accuracy-refinement-and-fps-ux-plan](2026-07-18_accuracy-refinement-and-fps-ux-plan.md)); cross-session EMA lead cache for cold-start (Phase D); idle-gap core warmup hook (Phase E); `min_hold_margin` device-cache productization + `runtime_options` transparency (Phase F); doctor UIPI text + focus-before-start regression test (Phase G); mid-song spin re-probe with kill switch + telemetry (Phase H); hot-path retry verified clean (Phase I). Phase J (game-observed WASAPI) gated on human approval. **Priority: timestamp/registration accuracy over default CPU thrift.**
-* [2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md](2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md) — **Implemented (Phases 0–4 shipped, 2026-07-16).** Unified SendInput abort lifecycle (`_abort_input_safe` + focus dual-release), pre-down focus gate via runtime `FocusSignal`, partial-send outcome hygiene (`partial_note_on`), and timestamp fidelity verification (lead cache / cold-start). **Residual:** Phase 5 §5.1 doctor preflight (shipped as Phase G of the 2026-07-18 overhaul) and optional Phase 6 WASAPI measurement — absorbed by the 2026-07-18 core-send accuracy overhaul plan (Phases G / J). See the plan's §2.4 status snapshot and §11.1 as-built decisions for divergences. Supersedes archive keyboard plan focus strategy where it conflicts.
-* [2026-07-18_distribution-mpv-pattern-plan.md](2026-07-18_distribution-mpv-pattern-plan.md) — **Historical (superseded).** It records the former script-based updater; the native Rust updater and current release triple are defined by `docs/distribution-and-update.md`.
-* [archive/2026-07_ram-memory-hygiene-plan.md](archive/2026-07_ram-memory-hygiene-plan.md) — RAM/telemetry hygiene (surgical; not scheduler/SendInput rewrite).
-* [archive/core-dispatch-hygiene-and-tail-latency-plan.md](archive/core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
-* [archive/main-path-cleanup-and-build-quality-plan.md](archive/main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
-* [archive/2026-06_wasapi-loopback-measurement-plan.md](archive/2026-06_wasapi-loopback-measurement-plan.md) — After-send WASAPI loopback measurement (validation companion to Phase 6 of the SendInput lifecycle plan).
-* [2026-07_core-dispatch-refactor-and-isolation-plan.md](2026-07_core-dispatch-refactor-and-isolation-plan.md) — **Implemented (Phases 0–6).** Phased refactor from the 2026-07-16 core review. Phase 0 harness + Phase 1 correctness (A1/A2/A6a/A6b) + Phase 2 hot-path (A3/A4/unfocused hook) + Phase 3 CPU floors (A5) + Phase 4 structural isolation (`orchestration/core/` package + boundary test) + Phase 5 Rust-plan alignment + Phase 6 docs. See plan §12 for the as-built table and divergence notes.
-* [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md) — **Rust-only production dispatch.** Historical migration notes are retained for context; the active binary has no Python rollback backend or backend-selection environment flag.
-* [rust-migration-plan.md](rust-migration-plan.md) — **Superseded proposal.** Replaced by [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md). Preserved as historical reference.
-* [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
-  * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
-  * **O10.6:** Focus restore grace safety margin (`focus_restore_grace_us`).
+- [architecture.md](architecture.md) — Python/Rust layering, dependency direction, and component
+  ownership.
+- [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — current native real-time dispatch
+  contract and runtime boundary.
+- [timing-principles.md](timing-principles.md) — timing semantics, targets, measurement domains, and
+  fail-closed behavior.
+- [hold-frame-model.md](hold-frame-model.md) — user-selected FPS and authored hold materialization.
 
----
+For implementation work, read the relevant source and direct tests alongside the matching document;
+do not read every architecture page by default.
 
-## 3. Historical Archives (`docs/archive/`)
-These files contain completed refactor plans, historic audits, and legacy design documents. They are read-only and include warning stamps specifying discrepancies with the current codebase.
-* `keyboard-reliability-and-safety-plan.md` — Older deliverability/safety proposal; **focus KEYUP strategy and partial-send notes partially superseded** by `2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md` (§2.3 dual-release, G5 no late note-on retry). Watchdog/hotkey ideas may still be useful historical context.
-* `2026-06_rt-pipeline-extreme-optimization-plan.md` — Completed 7-phase RT pipeline optimization plan (adaptive lead, priority ladder, event waits, engine decomposition) with outcome stamps.
-* `2026-06_background-worker-lifecycle-refactor-brief.md` — Implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
-* `2026-06_background-worker-lifecycle-hardening-plan.md` — Hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
-* `2026-06_completion-anchor-refactor-plan.md` — Implementation plan for completion-anchor.
-* `2026-06_runtime-hold-refactor-plan.md` — Historical scheduler anchor and runtime hold discussion.
-* `2026-06_timing-architecture-audit.md` — Audit that justified the removal of dead knobs.
-* `2026-06_floor-removal-three-profile-plan.md` — Decision details on moving to pure frame holds.
-* `2026-06_hold-min-hold-unification-plan.md` — Deriving normal hold directly from min_hold.
-* `2026-06_down-hold-up-scheduling-audit.md` — Legacy audit of scheduler state transitions.
-* `2026-06_scheduler-core-architecture-plan.md` — Early architecture ideas for scheduler changes.
-* `2026-06_realtime-sender-thread-refactor-plan.md` — Introduction of the real-time sender thread.
-* `2026-06_play-input-architecture-refactor-plan.md` — Original input dispatch flow audit.
-* `2026-06_playback-flow-hardening-plan.md` — Initial hardening proposal.
-* `2026-06_playback-input-investigation-2026-06-06.md` — Investigation of missing notes and FPS toggles (findings folded into Principles §6).
-* `2026-06_timing-guard-binding-audit.md` — Legacy audit of timing guard threads.
-* `2026-06_ui-overhaul-textual-plan.md` — Textual UI plan (Live).
-* `2026-06_remove-classic-ui-plan.md` — Plan for removing the legacy classic UI (Completed).
-* `2026-06_timing-experiments.md` — Full history of experiments (O1 - O10.4).
-* `2026-06_docs-cleanup-plan.md` — Meta-plan for documentation cleanup.
+## Security, distribution, and toolchain
+
+- [../SECURITY.md](../SECURITY.md) — canonical security policy and disclosure process.
+- [distribution-and-update.md](distribution-and-update.md) — public package, native updater,
+  integrity/provenance, rollback, and release contract.
+- [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
+
+Build and release implementation details also live in `src/build_app.py`, `Sky-Auto-Player.spec`,
+`.github/workflows/`, and their direct tests. Treat those executable surfaces as current-state
+evidence rather than duplicating them into agent instructions.
+
+## Development and verification
+
+The repository-level verification entry point is:
+
+```powershell
+uv run python scripts/check.py
+```
+
+Use `static`, `tests`, or `rust` as an optional group during focused development. Packaging,
+Windows timing acceptance, release, and benchmark scripts are specialized evidence paths; use them
+when a task touches those boundaries.
+
+## Decisions and historical evidence
+
+- `docs/adr/` contains explicit architecture decision records. Consult an ADR when the current task
+  touches the decision it records.
+- `docs/releases/` contains release-specific acceptance/history, not startup context.
+- `docs/perf-baselines/` contains named performance evidence. A baseline is evidence for the
+  environment and revision it records, not a universal instruction.
+- `docs/plan/`, top-level dated plan/review documents, and `docs/archive/` are historical working
+  material. They may describe superseded code or implementation choreography and are **not active
+  repository authority** unless the current human task explicitly adopts one.
+
+Do not maintain a catalog of every historical plan here. Use repository search or Git history when a
+current investigation genuinely requires historical rationale.
+
+## Documentation maintenance
+
+Keep active docs about the current system, keep this router concise, and move obsolete explanatory
+material out of the active path instead of adding warnings and more routing layers. A new agent or
+context framework is not a documentation substitute; source, tests, focused docs, and executable
+verification are the default context system.

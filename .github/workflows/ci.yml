@@ -75,7 +75,7 @@ jobs:
                 relevant=true
                 break
                 ;;
-              windows_version_info.txt|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)
+              windows_version_info.txt|AGENTS.md|CLAUDE.md|SECURITY.md|docs/INDEX.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)
                 relevant=true
                 break
                 ;;
@@ -108,17 +108,8 @@ jobs:
         with:
           run-runtime-audit: "false"
 
-      - name: Lint — ruff
-        run: uv run ruff check .
-
-      - name: Types — pyright
-        run: uv run pyright
-
-      - name: Security — AGENTS.md P0 audit
-        run: uv run --env-file .env python scripts/audit_security_mandates.py
-
-      - name: Rust architecture — enforced boundaries
-        run: uv run python scripts/check_rust_architecture.py --enforce
+      - name: Repository verification — static
+        run: uv run python scripts/check.py static
 
   validate:
     name: Windows compatibility and unit tests
@@ -152,25 +143,10 @@ jobs:
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
 
-      - name: Rust — format
+      - name: Repository verification — Rust
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-
-      - name: Rust — check
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
-
-      - name: Rust — clippy
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
-
-      - name: Rust — unit tests
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked
+        run: uv run python scripts/check.py rust
 
       - name: Rust — build wheel
         env:
@@ -178,9 +154,9 @@ jobs:
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
 
-      - name: Tests — unit (skip slow benchmarks)
+      - name: Repository verification — Python tests
         # Run windows-marked tests when present; skip only wall-clock `slow`.
-        run: uv run pytest -m "not slow"
+        run: uv run python scripts/check.py tests
 
   packaged:
     name: Packaged frozen unsigned app smoke
@@ -240,9 +216,8 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features --locked
 
-
   status:
-    name: Sky Auto Player — full altitude gate
+    name: Sky Auto Player — required CI gate
     if: always()
     needs: [changes, static, validate, packaged]
     runs-on: ubuntu-latest

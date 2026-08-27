@@ -1,32 +1,31 @@
-## Summary
+## Outcome
 
-<!-- One paragraph: what this PR does and why. -->
+What changed, and what user/repository outcome does it produce?
 
-## Validation (altitude table)
+## Scope
 
-Apply the narrowest gate that matches your change scope per `AGENTS.md` §Validation. Mark each entry you'll run:
+What areas were intentionally touched? Call out any intentional behavior, architecture, security, or
+release-contract change.
 
-- [ ] `uv run ruff check .`
-- [ ] `uv run pyright`
-- [ ] `uv run pytest -m "<markers>"`
-- [ ] `uv run --env-file .env python scripts/audit_security_mandates.py`
-- [ ] `uv run --env-file .env python scripts/audit_free_threaded_wheels.py`
-- [ ] `uv run --env-file .env python -m build_app` (only if `Sky-Auto-Player.spec` / `src/build_app.py` changed)
+## Evidence
 
-## AGENTS.md priority stack
+List the checks or observations that directly support the change.
 
-- [ ] I read `AGENTS.md` Priority Stack (P0 security → P1 enforced config → P2 local evidence → P3 task intent). My change does not violate any rule above `P3`.
-- [ ] If my change touched a `PORTING_GUIDE.md §6` boundary, I confirmed `AGENTS.md` still wins.
-- [ ] I did not introduce new dependencies unless I justified them in the PR description.
+- `command` → result
 
-## Change scope
+## Risk
 
-<!-- Surgical, focused, no broad rewrites. List the files touched and the rationale per file. -->
+Describe meaningful behavioral, security, timing, packaging, or release risks and how they are
+bounded. Write `None identified` when appropriate rather than inventing ceremony.
 
-## Tests
+## Specialized verification
 
-<!-- New tests added? Existing tests updated? Targeted refactors covered? -->
+Record any Windows, packaged-build, timing/latency, benchmark, updater, or manual evidence required
+by the changed boundary. If none applies, say so.
 
-## Risk and rollback
+## Checklist
 
-<!-- How risky is this? How do we revert if it breaks? -->
+- [ ] Intentional behavior/contract changes are documented where current active docs would otherwise become inaccurate.
+- [ ] Relevant repository checks pass, or exceptions are explained above.
+- [ ] Security-sensitive changes preserve the canonical `SECURITY.md` boundary.
+- [ ] The final diff contains no unrelated churn.

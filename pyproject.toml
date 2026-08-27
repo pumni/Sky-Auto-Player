@@ -111,7 +111,7 @@ ignore = [
 "tests/*" = ["ARG", "SIM115"]  # test fixtures: unused params, contextlib patterns
 
 [tool.pytest.ini_options]
-# Mirrors the altitude table in AGENTS.md. Markers let CI select narrow slices:
+# Markers let local and CI verification select narrow slices:
 # `pytest -m scheduler` for scheduler-only runs, `pytest -m "not slow"` for fast lanes.
 testpaths   = ["tests"]
 addopts     = "--basetemp=.pytest_tmp -ra --strict-markers"
