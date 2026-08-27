@@ -34,7 +34,9 @@ def test_release_workflow_is_unsigned_but_keeps_integrity_gates() -> None:
     ):
         assert forbidden not in workflow
     for required in (
-        "scripts/audit_security_mandates.py",
+        "uv run python scripts/check.py static",
+        "uv run python scripts/check.py rust",
+        "uv run python scripts/check.py tests-full",
         "scripts/build_pyinstaller_bootloader.ps1",
         "scripts/verify_release_manifest.py",
         "actions/attest-build-provenance@",
