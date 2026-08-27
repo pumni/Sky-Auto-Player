@@ -56,8 +56,14 @@ pub mod dispatch_primitives {
     pub use super::worker::{NextDispatchPlan, PreparationCounts};
 
     /// Production timing policy constants shared by diagnostic benchmarks.
+    pub const PRODUCTION_MIN_SPIN_THRESHOLD_US: u64 = super::config::MIN_CALIBRATED_SPIN_US;
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
     pub const LEGACY_ADAPTIVE_SPIN_FLOOR_US: u64 = 700;
+
+    /// Apply the frozen production calibration policy to benchmark wake stats.
+    pub fn calibrated_spin_threshold_us(stats: sky_dispatch_win32::wait::WakeErrorStats) -> u64 {
+        super::worker::calibrated_spin_threshold_us(stats)
+    }
 
     /// Derive the retired adaptive policy for A/B diagnostics only. It is not
     /// part of the production worker configuration or control path.

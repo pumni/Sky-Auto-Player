@@ -81,13 +81,13 @@ pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use timing::derive_spin_threshold_us;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
     deadline_target_ticks, exact_sender_durations,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::{calibrated_spin_threshold_us, derive_spin_threshold_us};
 pub(crate) use timing::{
     lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,

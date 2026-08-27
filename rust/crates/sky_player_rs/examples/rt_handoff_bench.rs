@@ -1050,9 +1050,7 @@ fn build_wait_mode(
         .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
-        sky_player_rs::engine::dispatch_primitives::legacy_adaptive_spin_threshold_us(
-            startup_wake_error.p95_us,
-        )
+        sky_player_rs::engine::dispatch_primitives::calibrated_spin_threshold_us(startup_wake_error)
     } else if event_wait_enabled {
         sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US
     } else {
@@ -1173,7 +1171,7 @@ fn main() {
                     "waitable_timer_enabled": mode.waitable_timer_enabled,
                     "event_wait_enabled": mode.event_wait_enabled,
                     "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-                    "spin_floor_us": sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US,
+                    "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
                     "effective_spin_threshold_us": mode.effective_spin_threshold_us,
                     "mmcss_mode": "off_test_guard",
                     "priority_mode": "off_test_guard",
