@@ -1,7 +1,7 @@
 """Repository-owned verification entry point.
 
-Keep the command surface small: agents, contributors, and CI select a verification group instead of
-copying command matrices into prompts or documentation. Specialized packaging, release, Windows
+Keep the command surface small: agents, contributors, CI, and release workflows select a verification
+group instead of copying command matrices into prompts or YAML. Specialized packaging, Windows
 latency, and benchmark evidence stays in its dedicated scripts/workflows.
 """
 from __future__ import annotations
@@ -45,6 +45,12 @@ GROUPS: dict[str, tuple[Check, ...]] = {
         Check(
             "Python tests (non-slow)",
             (sys.executable, "-m", "pytest", "-m", "not slow"),
+        ),
+    ),
+    "tests-full": (
+        Check(
+            "Python tests (full)",
+            (sys.executable, "-m", "pytest"),
         ),
     ),
     "rust": (
@@ -116,7 +122,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="*",
         choices=tuple(GROUPS),
         metavar="GROUP",
-        help="verification group(s): static, tests, rust; omit to run all",
+        help="verification group(s): static, tests, tests-full, rust; omit to run normal checks",
     )
     return parser.parse_args(argv)
 
