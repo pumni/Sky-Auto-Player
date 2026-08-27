@@ -298,11 +298,13 @@ admission remains authoritative after that result and may still reject
 `SendInput`.
 
 Production calibration runs once during worker startup: six bounded wake
-samples are used when at least 20 ms remains before the startup readiness
-deadline. The threshold is `clamp(max(p99, robust) + 50 µs, 250 µs, 1,000
-µs)`; a skipped or failed probe uses the 1,000 µs fallback. The chosen value is
-frozen for the session. Calibration changes waiting cost only: it never changes
-an authored target and never introduces a dispatch lead.
+samples are used only when the full 20 ms probe budget plus the 2 ms startup
+readiness reserve fits before the startup readiness deadline. Each sample is
+also checked against that bounded probe deadline. The threshold is
+`clamp(max(p99, robust) + 50 µs, 250 µs, 1,000 µs)`; a skipped or failed probe
+uses the 1,000 µs fallback. The chosen value is frozen for the session.
+Calibration changes waiting cost only: it never changes an authored target and
+never introduces a dispatch lead.
 
 The final precision spin performs only its QPC target/down-late-grace comparison and
 `spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions

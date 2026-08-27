@@ -343,6 +343,21 @@ impl HybridWaiter {
         interrupt: &OwnedEvent,
         samples: usize,
     ) -> Option<WakeErrorStats> {
+        self.probe_wake_error_stats_until(qpc_clock, interrupt, samples, None)
+    }
+
+    /// Probe wake error while refusing to cross an optional startup deadline.
+    ///
+    /// The deadline is checked before arming every sample and after every
+    /// wake. This lets optional startup calibration yield to readiness work
+    /// instead of consuming the entire startup correctness budget.
+    pub fn probe_wake_error_stats_until(
+        &self,
+        qpc_clock: QpcClock,
+        interrupt: &OwnedEvent,
+        samples: usize,
+        deadline_ticks: Option<crate::clock::QpcTicks>,
+    ) -> Option<WakeErrorStats> {
         if samples == 0 {
             return None;
         }
@@ -354,6 +369,9 @@ impl HybridWaiter {
                     .ok()?,
                 Err(_) => return None,
             };
+            if deadline_ticks.is_some_and(|deadline| target_ticks > deadline) {
+                return None;
+            }
             match self
                 .wait_until_ticks_with_metrics_typed(
                     qpc_clock,
@@ -370,6 +388,9 @@ impl HybridWaiter {
                 Ok(ticks) => ticks,
                 Err(_) => return None,
             };
+            if deadline_ticks.is_some_and(|deadline| now_ticks > deadline) {
+                return None;
+            }
             let elapsed = now_ticks.checked_duration_since(target_ticks).ok()?;
             errors.push(qpc_clock.duration_to_us(elapsed).ok()?);
         }

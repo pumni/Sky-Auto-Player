@@ -58,6 +58,11 @@ pub mod dispatch_primitives {
     /// Production timing policy constants shared by diagnostic benchmarks.
     pub const PRODUCTION_MIN_SPIN_THRESHOLD_US: u64 = super::config::MIN_CALIBRATED_SPIN_US;
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
+    pub const PRODUCTION_CALIBRATION_SAMPLES: usize = super::config::CALIBRATION_SAMPLES;
+    pub const PRODUCTION_CALIBRATION_BUDGET_US: u64 =
+        super::config::CALIBRATION_MAX_STARTUP_BUDGET_US;
+    pub const PRODUCTION_STARTUP_READINESS_RESERVE_US: u64 =
+        super::config::STARTUP_READINESS_RESERVE_US;
     pub const LEGACY_ADAPTIVE_SPIN_FLOOR_US: u64 = 700;
 
     /// Apply the frozen production calibration policy to benchmark wake stats.

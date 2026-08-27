@@ -28,7 +28,6 @@ use std::time::Instant;
 const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
-const WAKE_PROBE_SAMPLES: usize = 32;
 
 fn due_us() -> u64 {
     std::env::var("RT_HANDOFF_BENCH_DUE_US")
@@ -923,6 +922,11 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+        "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
+        "calibration_samples": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+        "calibration_budget_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
+        "startup_readiness_reserve_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
+        "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
         "effective_spin_threshold_us": mode.effective_spin_threshold_us,
         "sender_start_timestamp_source": "mock transport QPC sampled at its immediate callback boundary; production native sender samples inside the SendInput envelope",
         "transport": "deterministic packet emitter with immediate QPC start and completion samples",
@@ -1047,7 +1051,11 @@ fn build_wait_mode(
     let waiter = HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
-        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
+        .probe_wake_error_stats(
+            qpc_clock,
+            &interrupt,
+            sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+        )
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
         sky_player_rs::engine::dispatch_primitives::calibrated_spin_threshold_us(startup_wake_error)
@@ -1071,7 +1079,11 @@ fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode
     let waiter = HybridWaiter::with_options(true, true);
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
-        .probe_wake_error_stats(qpc_clock, &interrupt, WAKE_PROBE_SAMPLES)
+        .probe_wake_error_stats(
+            qpc_clock,
+            &interrupt,
+            sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+        )
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     WaitMode {
         name,
@@ -1172,6 +1184,9 @@ fn main() {
                     "event_wait_enabled": mode.event_wait_enabled,
                     "adaptive_spin_enabled": mode.adaptive_spin_enabled,
                     "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
+                    "calibration_samples": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+                    "calibration_budget_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
+                    "startup_readiness_reserve_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
                     "effective_spin_threshold_us": mode.effective_spin_threshold_us,
                     "mmcss_mode": "off_test_guard",
                     "priority_mode": "off_test_guard",

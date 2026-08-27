@@ -84,6 +84,19 @@ mod tests {
     }
 
     #[test]
+    fn wake_probe_respects_a_deadline_before_arming_the_next_sample() {
+        let event = OwnedEvent::new_auto_reset().expect("event");
+        let waiter = HybridWaiter::new();
+        let qpc_clock = crate::clock::QpcClock::initialize().expect("QPC clock");
+        let now = qpc_clock.now().expect("QPC sample");
+
+        assert_eq!(
+            waiter.probe_wake_error_stats_until(qpc_clock, &event, 1, Some(now)),
+            None
+        );
+    }
+
+    #[test]
     fn already_due_target_beats_a_pending_interrupt() {
         let event = OwnedEvent::new_auto_reset().expect("event");
         assert!(event.signal());

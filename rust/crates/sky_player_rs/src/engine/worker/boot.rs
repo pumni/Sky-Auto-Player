@@ -48,18 +48,42 @@ fn startup_wake_probe(
     let budget_ticks = qpc_clock
         .duration_from_us(CALIBRATION_MAX_STARTUP_BUDGET_US)
         .ok()?;
-    let remaining_ticks = startup_deadline_ticks
+    let readiness_reserve_ticks = qpc_clock
+        .duration_from_us(STARTUP_READINESS_RESERVE_US)
+        .ok()?;
+    let probe_deadline_ticks = startup_probe_deadline(
+        initial_now_ticks,
+        startup_deadline_ticks,
+        budget_ticks,
+        readiness_reserve_ticks,
+    )?;
+    waiter.probe_wake_error_stats_until(
+        qpc_clock,
+        interrupt,
+        CALIBRATION_SAMPLES,
+        Some(probe_deadline_ticks),
+    )
+}
+
+fn startup_probe_deadline(
+    initial_now_ticks: QpcTicks,
+    startup_deadline_ticks: QpcTicks,
+    calibration_budget_ticks: DurationTicks,
+    readiness_reserve_ticks: DurationTicks,
+) -> Option<QpcTicks> {
+    let readiness_deadline_ticks = QpcTicks::from_raw(
+        startup_deadline_ticks
+            .as_u64()
+            .checked_sub(readiness_reserve_ticks.as_u64())?,
+    );
+    let budget_deadline_ticks = initial_now_ticks
+        .checked_add_duration(calibration_budget_ticks)
+        .ok()?;
+    let probe_deadline_ticks = budget_deadline_ticks.min(readiness_deadline_ticks);
+    let available_ticks = probe_deadline_ticks
         .checked_duration_since(initial_now_ticks)
         .ok()?;
-    if remaining_ticks < budget_ticks {
-        return None;
-    }
-    let stats = waiter.probe_wake_error_stats(qpc_clock, interrupt, CALIBRATION_SAMPLES)?;
-    let completed_ticks = qpc_clock.now().ok()?;
-    let probe_elapsed_ticks = completed_ticks
-        .checked_duration_since(initial_now_ticks)
-        .ok()?;
-    (probe_elapsed_ticks <= budget_ticks).then_some(stats)
+    (available_ticks >= calibration_budget_ticks).then_some(probe_deadline_ticks)
 }
 
 /// Assembles the worker's admission state: backend, coordinator,
@@ -592,8 +616,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_production_wait_backend;
+    use super::{startup_probe_deadline, validate_production_wait_backend};
     use crate::engine::WaitOptions;
+    use sky_dispatch_core::time::DurationTicks;
+    use sky_dispatch_win32::clock::QpcTicks;
     use sky_dispatch_win32::wait::WaitFailure;
 
     fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions {
@@ -638,6 +664,47 @@ mod tests {
                 Some(WaitFailure::TimerCreate { win32_error: 5 }),
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn calibration_skips_when_only_probe_budget_without_readiness_reserve_remains() {
+        let initial_now = QpcTicks::from_raw(100_000);
+        let calibration_budget = DurationTicks::from_raw(20_000);
+        let readiness_reserve = DurationTicks::from_raw(2_000);
+
+        assert_eq!(
+            startup_probe_deadline(
+                initial_now,
+                QpcTicks::from_raw(120_000),
+                calibration_budget,
+                readiness_reserve,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn calibration_deadline_preserves_viable_startup_readiness() {
+        let initial_now = QpcTicks::from_raw(100_000);
+        let calibration_budget = DurationTicks::from_raw(20_000);
+        let readiness_reserve = DurationTicks::from_raw(2_000);
+        let startup_deadline = QpcTicks::from_raw(125_000);
+
+        let probe_deadline = startup_probe_deadline(
+            initial_now,
+            startup_deadline,
+            calibration_budget,
+            readiness_reserve,
+        )
+        .expect("calibration has a full budget and readiness reserve");
+
+        assert_eq!(probe_deadline, QpcTicks::from_raw(120_000));
+        assert!(
+            startup_deadline
+                .checked_duration_since(probe_deadline)
+                .expect("probe precedes startup deadline")
+                >= readiness_reserve
         );
     }
 }
