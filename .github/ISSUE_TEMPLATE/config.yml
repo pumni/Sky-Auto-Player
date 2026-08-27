@@ -2,10 +2,10 @@ blank_issues_enabled: false
 contact_links:
   - name: Sky Auto Player docs
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/docs
-    about: Architecture, timing, tuning presets, porting guide.
+    about: Current architecture, timing, distribution, and toolchain references.
   - name: Sky Auto Player releases
     url: https://github.com/pumni/Sky-Auto-Player/releases
-    about: Stable builds, change logs, Windows binaries.
+    about: Stable builds, change logs, and Windows binaries.
   - name: Security disclosure (private)
-    url: mailto:security@pumni.dev
-    about: Email-only channel for P0 violations or exploit-grade findings.
+    url: mailto:pumni.dev@gmail.com
+    about: Private channel for vulnerability-grade or security-boundary findings; see SECURITY.md.
