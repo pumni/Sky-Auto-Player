@@ -175,6 +175,11 @@ class ProgressRenderer:
         missed_down_boundaries: int = 0,
         missed_down_keys: int = 0,
         missed_hard_late_boundaries: int = 0,
+        final_gate_control_rejections: int = 0,
+        final_gate_target_changes: int = 0,
+        final_gate_focus_losses: int = 0,
+        final_gate_lease_expirations: int = 0,
+        final_gate_cutoff_misses: int = 0,
         late_authorized_boundaries: int = 0,
         force: bool = False,
         input_path_degraded: bool = False,
@@ -353,6 +358,18 @@ class ProgressRenderer:
         if status in status_descriptions:
             status_line = status_descriptions[status]
         elif self.verbose:
+            final_gate_rejections = (
+                final_gate_control_rejections
+                + final_gate_target_changes
+                + final_gate_focus_losses
+                + final_gate_lease_expirations
+                + final_gate_cutoff_misses
+            )
+            final_gate_parts = (
+                ["  ·  final-gate:", str(final_gate_rejections)]
+                if final_gate_rejections > 0
+                else []
+            )
             status_line = Text.assemble(
                 "backend ", backend_status_text,
                 "  ·  late >2ms:", str(self.late_2ms),
@@ -362,6 +379,7 @@ class ProgressRenderer:
                 "  ·  missed:", str(missed_down_boundaries),
                 " · hard:", str(missed_hard_late_boundaries),
                 " · late-ok:", str(late_authorized_boundaries),
+                *final_gate_parts,
                 *dropped_parts,
             )
         else:

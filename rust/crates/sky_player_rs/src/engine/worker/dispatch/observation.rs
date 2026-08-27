@@ -79,14 +79,14 @@ pub struct DownTraceObservation {
     pub effective_deadline_ticks: TimelineTicks,
 }
 
-/// Raw QPC boundaries for the two-stage dispatch handoff.  The admission wake
+/// Raw QPC boundaries for the two-stage dispatch handoff. The admission wake
 /// is optional because a dispatch may be intentionally admitted at or after
-/// its guard boundary; a precision wake exists only when the precision waiter
+/// its guard boundary; a target crossing exists only when the precision waiter
 /// actually ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,
-    pub precision_wake_qpc: QpcTicks,
+    pub target_crossing_qpc: QpcTicks,
     pub final_proof_qpc: QpcTicks,
 }
 

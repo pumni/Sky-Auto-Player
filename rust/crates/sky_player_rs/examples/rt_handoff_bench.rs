@@ -149,8 +149,8 @@ struct Samples {
     view_packet_calls_per_plan: Vec<u64>,
     commit_freeze_calls_per_plan: Vec<u64>,
     admission_wake_to_precision_wake_us: Vec<i64>,
-    precision_wake_error_us: Vec<i64>,
-    precision_wake_to_final_proof_us: Vec<i64>,
+    target_crossing_error_us: Vec<i64>,
+    target_crossing_to_final_gate_us: Vec<i64>,
     final_proof_to_pre_call_us: Vec<i64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
@@ -385,7 +385,6 @@ fn record_precision_handoff(
     samples: &mut Samples,
     handoff: Option<PrecisionHandoffEvidence>,
     physical_target_qpc: QpcTicks,
-    precision_threshold_us: u64,
     pre_call_qpc: QpcTicks,
     sendinput_completion_qpc: QpcTicks,
     dispatch_ready_qpc: Option<QpcTicks>,
@@ -399,27 +398,19 @@ fn record_precision_handoff(
             .admission_wake_to_precision_wake_us
             .push(signed_qpc_us(
                 qpc_clock,
-                handoff.precision_wake_qpc,
+                handoff.target_crossing_qpc,
                 admission_wake_qpc,
             ));
     }
-    let precision_threshold_ticks = qpc_clock
-        .duration_from_us(precision_threshold_us)
-        .expect("precision threshold conversion");
-    let precision_target_qpc = QpcTicks::from_raw(
-        physical_target_qpc
-            .as_u64()
-            .saturating_sub(precision_threshold_ticks.as_u64()),
-    );
-    samples.precision_wake_error_us.push(signed_qpc_us(
+    samples.target_crossing_error_us.push(signed_qpc_us(
         qpc_clock,
-        handoff.precision_wake_qpc,
-        precision_target_qpc,
+        handoff.target_crossing_qpc,
+        physical_target_qpc,
     ));
-    samples.precision_wake_to_final_proof_us.push(signed_qpc_us(
+    samples.target_crossing_to_final_gate_us.push(signed_qpc_us(
         qpc_clock,
         handoff.final_proof_qpc,
-        handoff.precision_wake_qpc,
+        handoff.target_crossing_qpc,
     ));
     samples.final_proof_to_pre_call_us.push(signed_qpc_us(
         qpc_clock,
@@ -435,11 +426,7 @@ fn record_precision_handoff(
     }
 }
 
-fn add_observation(
-    samples: &mut Samples,
-    observation: DispatchObservation,
-    precision_threshold_us: u64,
-) {
+fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
     let qpc_clock = QpcClock::initialize().expect("QPC");
     match observation {
         DispatchObservation::Down(value) => {
@@ -447,7 +434,6 @@ fn add_observation(
                 samples,
                 value.precision_handoff,
                 value.physical_target_qpc,
-                precision_threshold_us,
                 value.pre_call_qpc,
                 value.sendinput_completion_qpc,
                 value.dispatch_ready_qpc,
@@ -492,7 +478,6 @@ fn add_observation(
                 samples,
                 value.precision_handoff,
                 value.physical_target_qpc,
-                precision_threshold_us,
                 value.pre_call_qpc,
                 value.sendinput_completion_qpc,
                 value.dispatch_ready_qpc,
@@ -658,16 +643,12 @@ fn wait_and_dispatch_or_record(
     }
 }
 
-fn drain_observations(
-    harness: &mut ProductionDispatchTestHarness,
-    samples: &mut Samples,
-    precision_threshold_us: u64,
-) {
+fn drain_observations(harness: &mut ProductionDispatchTestHarness, samples: &mut Samples) {
     let mut count = 0;
     while let Some(observation) = harness.pop_observation() {
         count += 1;
         samples.observation_count += 1;
-        add_observation(samples, observation, precision_threshold_us);
+        add_observation(samples, observation);
     }
     if count != 1 {
         samples.observation_gaps += 1;
@@ -710,7 +691,7 @@ fn run_down(
             continue;
         }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
+        drain_observations(&mut harness, &mut samples);
     }
     Ok(samples)
 }
@@ -763,7 +744,7 @@ fn run_up(
             continue;
         }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
+        drain_observations(&mut harness, &mut samples);
     }
     Ok(samples)
 }
@@ -809,7 +790,7 @@ fn run_mixed(
             continue;
         }
         samples.physical_dispatches += 1;
-        drain_observations(&mut harness, &mut samples, mode.effective_spin_threshold_us);
+        drain_observations(&mut harness, &mut samples);
     }
     Ok(samples)
 }
@@ -902,7 +883,7 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
             ),
         );
     }
-    for event_count in [2, 10, 30] {
+    for event_count in [2, 10, 14] {
         scenarios.insert(
             format!("mixed_{event_count}"),
             summarize(
@@ -917,7 +898,7 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
         "effective_spin_threshold_us": mode.effective_spin_threshold_us,
-        "sender_start_timestamp_source": "production fused target-crossing primitive; test_started_ticks=None",
+        "sender_start_timestamp_source": "caller-owned frozen target crossing; production pre-call sender with test_started_ticks=None",
         "transport": "deterministic packet emitter with QPC completion sample",
         "scenarios": scenarios,
         "iterations": iterations(),
@@ -986,9 +967,9 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "admission_wake_to_precision_wake_us": signed_summary(
             samples.admission_wake_to_precision_wake_us,
         ),
-        "precision_wake_error_us": signed_summary(samples.precision_wake_error_us),
-        "precision_wake_to_final_proof_us": signed_summary(
-            samples.precision_wake_to_final_proof_us,
+        "target_crossing_error_us": signed_summary(samples.target_crossing_error_us),
+        "target_crossing_to_final_gate_us": signed_summary(
+            samples.target_crossing_to_final_gate_us,
         ),
         "final_proof_to_pre_call_us": signed_summary(samples.final_proof_to_pre_call_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
@@ -1110,6 +1091,7 @@ fn main() {
             build_fixed_wait_mode("fixed_spin_400us", 400),
             build_fixed_wait_mode("fixed_spin_700us", 700),
             build_fixed_wait_mode("fixed_spin_1000us", 1_000),
+            build_fixed_wait_mode("fixed_spin_1500us", 1_500),
         ];
         for mode in modes {
             let mut scenarios = serde_json::Map::new();
@@ -1146,7 +1128,7 @@ fn main() {
                     ),
                 );
             }
-            for event_count in [2, 10, 30] {
+            for event_count in [2, 10, 14] {
                 scenarios.insert(
                     format!("mixed_{event_count}"),
                     summarize(
@@ -1203,7 +1185,7 @@ fn main() {
             (BenchmarkScope::Full, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; the production target-aware sender owns the crossing QPC with test_started_ticks=None; waiter scheduling is excluded by a test-only direct boundary; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen caller-owned crossing QPC and the production sender performs the immediate pre-call SendInput attempt; waiter scheduling is excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),

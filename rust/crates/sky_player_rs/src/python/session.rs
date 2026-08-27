@@ -292,6 +292,17 @@ impl NativeDispatchSessionPy {
             "missed_hard_late_boundaries",
             snap.missed_hard_late_boundaries,
         )?;
+        dict.set_item(
+            "final_gate_control_rejections",
+            snap.final_gate_control_rejections,
+        )?;
+        dict.set_item("final_gate_target_changes", snap.final_gate_target_changes)?;
+        dict.set_item("final_gate_focus_losses", snap.final_gate_focus_losses)?;
+        dict.set_item(
+            "final_gate_lease_expirations",
+            snap.final_gate_lease_expirations,
+        )?;
+        dict.set_item("final_gate_cutoff_misses", snap.final_gate_cutoff_misses)?;
         dict.set_item("hold_pair_samples", snap.hold_pair_samples)?;
         dict.set_item("min_pre_call_hold_us", snap.min_pre_call_hold_us)?;
         dict.set_item("min_completion_hold_us", snap.min_completion_hold_us)?;

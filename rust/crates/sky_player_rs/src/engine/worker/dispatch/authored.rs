@@ -3,12 +3,12 @@ use super::super::super::{
     TRACE_KIND_DOWN, TRACE_KIND_UP, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
-    DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
-    TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
-    WorkerRuntime, WorkerTimingState, final_control_admission_at, final_control_precheck,
-    final_down_target_admission, focus_matches, load_target_stamp,
-    record_sendinput_pre_call_lateness, signed_ticks_to_us, suspend_live_input,
-    target_stamp_still_current, wait_to_precision_boundary,
+    DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
+    FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
+    WorkerResources, WorkerRuntime, WorkerTimingState, final_control_admission_at,
+    final_control_precheck, final_down_target_admission, focus_matches, load_target_stamp,
+    record_final_gate_rejection, record_sendinput_pre_call_lateness, signed_ticks_to_us,
+    suspend_live_input, target_stamp_still_current, wait_to_precision_boundary,
 };
 use super::DownBoundaryAdmission;
 use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
@@ -248,7 +248,7 @@ fn commit_down_send_outcome(
 pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
-        precision_wake_qpc: Option<QpcTicks>,
+        target_crossing_qpc: Option<QpcTicks>,
         final_proof_qpc: QpcTicks,
     },
     Guarded {
@@ -393,13 +393,7 @@ fn admit_authored_down(
         desired_pause,
         supervisor_heartbeat_ticks,
     };
-    let control_admission = final_control_precheck(FinalControlSignals {
-        quit_requested,
-        skip_requested,
-        panic_requested,
-        desired_pause,
-        supervisor_heartbeat_ticks,
-    });
+    let control_admission = final_control_precheck(control_signals);
     if !matches!(control_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::ControlRejected);
@@ -453,7 +447,7 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    let precision_wake_qpc = if down_admission.is_missed() || down_admission.is_late_rescue() {
+    let target_crossing_qpc = if down_admission.is_missed() || down_admission.is_late_rescue() {
         None
     } else {
         #[cfg(any(test, feature = "test-support"))]
@@ -469,7 +463,7 @@ fn finalize_authored_down_admission(
                     timing,
                     local_metrics,
                 ) {
-                    Ok(result) => Some(result.wake_qpc),
+                    Ok(result) => Some(result.target_crossing_qpc),
                     Err(step) => {
                         return match step {
                             DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
@@ -490,7 +484,7 @@ fn finalize_authored_down_admission(
                     timing,
                     local_metrics,
                 )?
-                .wake_qpc,
+                .target_crossing_qpc,
             )
         }
     };
@@ -501,15 +495,10 @@ fn finalize_authored_down_admission(
         desired_pause,
         supervisor_heartbeat_ticks,
     };
-    let control_admission = final_control_precheck(FinalControlSignals {
-        quit_requested,
-        skip_requested,
-        panic_requested,
-        desired_pause,
-        supervisor_heartbeat_ticks,
-    });
+    let control_admission = final_control_precheck(control_signals);
     if !matches!(control_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
+        record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
         return Ok(AdmissionOutcome::ControlRejected);
     }
     let view_has_down = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
@@ -529,6 +518,7 @@ fn finalize_authored_down_admission(
         }) {
             DownAdmission::Allowed => {}
             DownAdmission::FocusLost => {
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Focus);
                 let result = handle_final_focus_loss(
                     qpc_clock,
                     backend,
@@ -553,35 +543,37 @@ fn finalize_authored_down_admission(
             DownAdmission::TargetChanged => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Target);
                 return Ok(AdmissionOutcome::TargetChanged);
             }
         }
     }
     #[cfg(any(test, feature = "test-support"))]
-    let final_proof_qpc = if test_direct_boundary {
+    let pre_call_qpc = if test_direct_boundary {
         // Tests supply a frozen exact-boundary target to avoid waiter jitter.
         physical_target_qpc
     } else {
         qpc_clock.now().map_err(|error| {
-            DispatchStep::Terminate(format!("QPC final proof failure: {error:?}"))
+            DispatchStep::Terminate(format!("QPC pre-call boundary failure: {error:?}"))
         })?
     };
     #[cfg(not(any(test, feature = "test-support")))]
-    let final_proof_qpc = qpc_clock
-        .now()
-        .map_err(|error| DispatchStep::Terminate(format!("QPC final proof failure: {error:?}")))?;
+    let pre_call_qpc = qpc_clock.now().map_err(|error| {
+        DispatchStep::Terminate(format!("QPC pre-call boundary failure: {error:?}"))
+    })?;
     let lease_admission =
-        final_control_admission_at(final_proof_qpc, lease_timeout_ticks, control_signals).map_err(
+        final_control_admission_at(pre_call_qpc, lease_timeout_ticks, control_signals).map_err(
             |error| DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}")),
         )?;
     if !matches!(lease_admission, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
+        record_final_gate_rejection(local_metrics, FinalGateRejection::Lease);
         return Ok(AdmissionOutcome::ControlRejected);
     }
     Ok(AdmissionOutcome::Allowed {
         trace_kind,
-        precision_wake_qpc,
-        final_proof_qpc,
+        target_crossing_qpc,
+        final_proof_qpc: pre_call_qpc,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -643,7 +635,7 @@ fn record_down_send_outcome(
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         trace_kind,
-        precision_wake_qpc,
+        target_crossing_qpc,
         final_proof_qpc,
     } = admission
     else {
@@ -665,17 +657,15 @@ fn record_down_send_outcome(
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
     }
-    #[cfg(any(test, feature = "test-support"))]
-    let backend_test_started_ticks = test_now_ticks;
-    #[cfg(not(any(test, feature = "test-support")))]
-    let backend_test_started_ticks = None;
     debug_assert_eq!(prepared_packet.packet(), packet);
-    let result = backend.send_prepared_physical_packet_at_target_with_cutoff(
+    #[cfg(any(test, feature = "test-support"))]
+    let authoritative_pre_call_qpc = test_now_ticks.unwrap_or(*final_proof_qpc);
+    #[cfg(not(any(test, feature = "test-support")))]
+    let authoritative_pre_call_qpc = *final_proof_qpc;
+    let result = backend.send_prepared_physical_packet_with_start_and_cutoff(
         prepared_packet,
-        qpc_clock,
-        physical_target_qpc,
+        authoritative_pre_call_qpc,
         latest_allowed_down_qpc,
-        backend_test_started_ticks,
     );
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
@@ -706,6 +696,8 @@ fn record_down_send_outcome(
         sky_dispatch_win32::input::SendTransactionStatus::DeadlineMissedBeforeSend
     ) && view.packet_masks.down_mask != 0
     {
+        local_metrics.final_gate_cutoff_misses =
+            local_metrics.final_gate_cutoff_misses.saturating_add(1);
         record_rescue_send(local_metrics, down_admission, true);
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
@@ -762,7 +754,7 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
-        *precision_wake_qpc,
+        *target_crossing_qpc,
         *final_proof_qpc,
         trace_kind,
         result_success,
@@ -791,7 +783,7 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
-    precision_wake_qpc: Option<QpcTicks>,
+    target_crossing_qpc: Option<QpcTicks>,
     final_proof_qpc: QpcTicks,
     trace_kind: u8,
     result_success: bool,
@@ -813,7 +805,7 @@ fn finalize_down_send_outcome(
         runtime,
         qpc_clock,
         physical_target_qpc,
-        precision_wake_qpc,
+        target_crossing_qpc,
         final_proof_qpc,
         coordinator,
         health,

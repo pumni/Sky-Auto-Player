@@ -16,8 +16,8 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_proof_qpc` | QPC sample after final target/focus/control proof and before the final spin. It authorizes the frozen plan but is not a syscall-entry timestamp. |
-| `pre_call_qpc` | Authoritative QPC sample taken inside the trusted prepared sender after payload resolution; only the Down late-grace cutoff comparison may follow it before `SendInput`. |
+| `final_proof_qpc` | Compatibility name for the authoritative QPC sample taken after target/focus/control/lease proof and before the prepared sender call. |
+| `pre_call_qpc` | Authoritative QPC sample taken by the worker after final policy proof and passed to the prepared sender; only the Down late-grace cutoff comparison may follow it before `SendInput`. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
@@ -348,19 +348,20 @@ terminate a started production session.
 
 The final physical path is ordered and fail-closed:
 
-1. Recheck command, target generation, focus (Down only), and the prepared
-   packet against the current coordinator state.
-2. Take the final target/focus/control proof QPC `final_proof_qpc`.
-3. Evaluate the lease using that proof sample.
-4. Spin to the authored physical target. The final spin rejects a Down-bearing
-   packet that is already beyond its session down-late grace cutoff; Up-only safety release
-   remains exempt. In started Production, that typed Down miss is committed
-   without a Down syscall instead of being retried or made fatal.
-5. Enter the trusted prepared sender and take the authoritative `pre_call_qpc`
-   after payload pointer/length resolution. Recheck the same Down late-grace cutoff
-   against that exact sample so a preemption between the outer spin and the
-   syscall cannot late-send a Down. No second QPC sample or control work is
-   inserted between this check and `SendInput`.
+1. Prepare and validate the immutable packet before the precision handoff.
+2. The worker-owned precision waiter crosses the absolute authored physical
+   target with the one bounded QPC spin. It returns the crossing sample; it
+   does not change the target.
+3. Recheck command/control, the stamped target, and foreground focus (Down
+   only) after target crossing. A rejection records a bounded final-gate
+   diagnostic and performs no packet syscall.
+4. Take one authoritative `pre_call_qpc` after every final policy check,
+   including the lease check. `final_proof_qpc` is a compatibility diagnostic
+   alias for this same sample.
+5. Enter the trusted prepared sender. It checks the Down-only late-grace
+   cutoff against that supplied sample and immediately performs one
+   packetized `SendInput` call. It does not wait, spin, re-read QPC, or redo
+   control/focus/target admission.
 6. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
 7. Commit coordinator ownership using the confirmed transport result.
 8. Enqueue one bounded raw observation and return to orchestration.
@@ -389,31 +390,33 @@ is kept separate from the absolute physical target.
 Interrupts, lease-only wakes, focus changes, and command transitions invalidate
 the frozen plan and replan; they never dispatch a stale plan.
 
-The final spin loop performs only the QPC target/down-late-grace comparison and
+The final precision loop performs only the QPC target comparison and
 `spin_loop`; it does not poll interrupt generation, lease state, focus, or
-commands. Those invalidation decisions happen before the final proof and
-precision stage. The session down-late grace cutoff is checked in the same bounded QPC loop
-for Down-bearing packets; Up-only safety release remains exempt. The trusted
-sender repeats only that cutoff predicate against its authoritative
-`pre_call_qpc`, closing the preemption window without adding another clock
-sample or adaptive controller. The trusted sender uses the same materialized
-session margin; it does not re-read microseconds or compute a new threshold.
+commands. The worker then performs the final control/target/focus proof. The
+trusted sender performs the Down cutoff predicate against the worker-supplied
+authoritative `pre_call_qpc`, closing the preemption window without adding
+another clock sample or adaptive controller. The trusted sender uses the same
+materialized session margin; it does not re-read microseconds or compute a new
+threshold.
 
-The handoff benchmark reports `final_proof_to_pre_call_us` as the authoritative
-diagnostic envelope for the precision proof through the prepared sender. It does
-not label the outer admission wait's `WaitResult.spin_ticks` as final sender
-spin; that wait belongs to the earlier `T - 2,000 µs` admission stage.
+The handoff benchmark reports `target_crossing_to_final_gate_us` for the
+worker-owned target crossing through the final gate. The retained
+`final_proof_to_pre_call_us` compatibility field is expected to be zero for
+the production handoff because `final_proof_qpc` aliases the supplied
+`pre_call_qpc`. The outer admission wait's `WaitResult.spin_ticks` is not final
+sender spin; it belongs to the earlier `T - 2,000 µs` admission stage.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
-target remains in the future. Once `QPC_now >= physical_target`, the waiter
-returns `Deadline`, including when an interrupt wake and the target race. The
-final command, target, focus, and lease admission remains authoritative and can
-still reject the physical send. A same-boundary `Continue` or replan does not
-erase an exact Down authorization; a different boundary or epoch does. Kernel
-`wait_result.is_some()` is timing transport evidence, not the authority for
-musical authorization. Production admission requires both the high-resolution
-waitable timer and event wait; a missing timer or any runtime wait failure is
-terminal rather than a silent sleep-based fallback.
+target remains in the future. Once `QPC_now >= physical_target`, the precision
+waiter returns `Deadline`, including when an interrupt wake and the target race.
+The final command, target, focus, and lease admission remains authoritative and
+can still reject the physical send after that crossing. A same-boundary
+`Continue` or replan does not erase an exact Down authorization; a different
+boundary or epoch does. Kernel `wait_result.is_some()` is timing transport
+evidence, not the authority for musical authorization. Production admission
+requires both the high-resolution waitable timer and event wait; a missing
+timer or any runtime wait failure is terminal rather than a silent sleep-based
+fallback.
 
 MMCSS Games/High and power-throttling opt-out remain scoped scheduling aids.
 TimeCritical is not the default. No wait or priority choice changes the

@@ -46,6 +46,10 @@ impl std::fmt::Debug for PreparedPhysicalPacket {
 
 impl PreparedPhysicalPacket {
     pub fn try_new(packet: PhysicalPacket) -> Result<Self, PacketPreparationError> {
+        let overlap_mask = packet.up_mask & packet.down_mask;
+        if overlap_mask != 0 {
+            return Err(PacketPreparationError::OverlappingDirections { overlap_mask });
+        }
         if !valid_packet(packet) {
             return Err(PacketPreparationError::InvalidMask);
         }
@@ -290,7 +294,8 @@ const UP_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX
 
 #[inline]
 fn valid_packet(packet: PhysicalPacket) -> bool {
-    packet.up_mask & !FULL_INSTRUMENT_MASK == 0
+    packet.up_mask & packet.down_mask == 0
+        && packet.up_mask & !FULL_INSTRUMENT_MASK == 0
         && packet.down_mask & !FULL_INSTRUMENT_MASK == 0
         && usize::from(packet.event_count()) <= MAX_PACKET_EVENTS
 }
@@ -333,6 +338,26 @@ fn send_once(
         Err(PreparedSendFailure::DeadlineMissed { .. }) => {
             unreachable!("prepared send cutoff is disabled for generic packets")
         }
+    }
+}
+
+pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionOutcome {
+    SendTransactionOutcome {
+        status: SendTransactionStatus::ZeroProgress,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask | packet.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts: 0,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: Some(87),
+            last_win32_error: Some(87),
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            timing_error: None,
+        },
     }
 }
 
@@ -1004,6 +1029,9 @@ pub fn send_physical_packet_once_with_clock(
     packet: PhysicalPacket,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
+    if packet.event_count() == 0 || !valid_packet(packet) {
+        return invalid_packet_outcome(packet);
+    }
     send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock, None))
 }
 
@@ -1014,6 +1042,9 @@ pub fn send_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
+    if packet.event_count() == 0 || !valid_packet(packet) {
+        return invalid_packet_outcome(packet);
+    }
     send_physical_packet_once_impl(packet, |packet| {
         run_send_attempt(packet, clock, Some(started_ticks))
     })
@@ -1294,6 +1325,21 @@ mod tests {
     }
 
     #[test]
+    fn caller_owned_start_path_does_not_reopen_target_crossing() {
+        let source = include_str!("packet.rs");
+        let body = source
+            .split("pub fn send_prepared_physical_packet_once_with_start_and_cutoff")
+            .nth(1)
+            .expect("caller-owned start sender")
+            .split("/// One trusted borrowed prepared-packet attempt")
+            .next()
+            .expect("caller-owned start sender body");
+        assert!(body.contains("send_prepared_physical_packet_once_impl"));
+        assert!(!body.contains("at_target"));
+        assert!(!body.contains("physical_target_qpc"));
+    }
+
+    #[test]
     fn target_crossing_sample_is_reused_without_a_second_pre_call_read() {
         let prepared =
             PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001)).expect("prepared");
@@ -1504,21 +1550,15 @@ mod tests {
     }
 
     #[test]
-    fn full_capacity_mixed_recovery_view_contains_fifteen_up_events() {
-        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(
-            FULL_INSTRUMENT_MASK,
-            FULL_INSTRUMENT_MASK,
-        ))
-        .expect("full mixed packet prepares");
+    fn maximum_valid_mixed_recovery_view_contains_all_up_events() {
+        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x01ff, 0x7e00))
+            .expect("full mixed packet prepares");
         let recovery = prepared.up_recovery_view().expect("full mixed Up prefix");
 
-        assert_eq!(
-            recovery.packet(),
-            PhysicalPacket::new(FULL_INSTRUMENT_MASK, 0)
-        );
-        assert_eq!(recovery.packet().event_count(), 15);
+        assert_eq!(recovery.packet(), PhysicalPacket::new(0x01ff, 0));
+        assert_eq!(recovery.packet().event_count(), 9);
         #[cfg(windows)]
-        assert_eq!(prepared.initialized_inputs().len(), MAX_PACKET_EVENTS);
+        assert_eq!(prepared.initialized_inputs().len(), 15);
     }
 
     #[test]
@@ -1607,9 +1647,10 @@ mod tests {
 
     #[test]
     fn every_mixed_insertion_prefix_fails_closed_without_retry() {
-        let packet = PhysicalPacket::new(FULL_INSTRUMENT_MASK, FULL_INSTRUMENT_MASK);
+        let packet = PhysicalPacket::new(0x01ff, 0x7e00);
         let requested = packet.event_count();
-        assert_eq!(requested, MAX_PACKET_EVENTS as u8);
+        assert_eq!(requested, 15);
+        let requested_mask = packet.up_mask | packet.down_mask;
 
         for inserted in 1..requested {
             let mut calls = 0;
@@ -1623,7 +1664,7 @@ mod tests {
             assert_eq!(outcome.evidence.first_inserted, inserted);
             assert_eq!(outcome.evidence.attempts, 1);
             assert_eq!(outcome.evidence.confirmed_mask, 0);
-            assert_eq!(outcome.evidence.requested_mask, FULL_INSTRUMENT_MASK);
+            assert_eq!(outcome.evidence.requested_mask, requested_mask);
         }
 
         let mut calls = 0;
@@ -1633,7 +1674,20 @@ mod tests {
         });
         assert_eq!(calls, 1);
         assert_eq!(complete.status, SendTransactionStatus::Complete);
-        assert_eq!(complete.evidence.confirmed_mask, FULL_INSTRUMENT_MASK);
+        assert_eq!(complete.evidence.confirmed_mask, requested_mask);
+    }
+
+    #[test]
+    fn prepared_packet_rejects_overlapping_directions() {
+        let error = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0b001))
+            .expect_err("same-key Up+Down packet must be rejected");
+        assert_eq!(
+            error,
+            PacketPreparationError::OverlappingDirections {
+                overlap_mask: 0b001
+            }
+        );
+        assert!(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0b010)).is_ok());
     }
 
     #[test]

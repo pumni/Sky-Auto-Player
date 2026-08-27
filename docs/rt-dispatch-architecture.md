@@ -139,11 +139,11 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 
 ```text
 frozen plan
-  -> fresh command/target/lease checks
-  -> Down target + foreground validation when required
-  -> final_proof_qpc target/focus/control proof
-  -> lease admission using that proof sample
-  -> QPC spin to the authored target and one pre_call_qpc sample
+  -> prepare immutable packet before the precision handoff
+  -> worker-owned QPC spin across the authored target
+  -> final command/control, target, and foreground proof
+  -> one authoritative pre_call_qpc sample and lease admission
+  -> Down-only cutoff check against that supplied sample
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
@@ -152,8 +152,13 @@ frozen plan
   -> diagnostic-only bounded observation enqueue
 ```
 
-The supplied `pre_call_qpc` sample is the physical pre-call boundary, not a
-Windows syscall-entry or game-receipt timestamp.
+The worker-owned target crossing happens before final policy admission. The
+supplied `pre_call_qpc` sample is taken after those final checks and is the
+physical pre-call boundary, not a Windows syscall-entry or game-receipt
+timestamp. `final_proof_qpc` is a compatibility alias for the same sample.
+The trusted prepared sender performs no target wait or policy recheck after
+receiving it; it only enforces the Down-only cutoff immediately before the
+syscall.
 The transport reports `sendinput_completion_qpc`; production does not subtract
 a learned send cost from the target. Completion is used for diagnostics and
 ownership evidence only; it does not create a completion-relative hold floor.

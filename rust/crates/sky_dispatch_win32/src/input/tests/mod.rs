@@ -350,6 +350,22 @@ fn tracked_note_off_uses_one_send_attempt_without_retry() {
 }
 
 #[test]
+fn single_send_note_off_reports_partial_progress_without_retry_reason_ambiguity() {
+    let emitted = super::up_transaction::emit_up_once_with(&[0x15, 0x16, 0x17], |codes, key_up| {
+        assert!(key_up);
+        scripted_result(codes.len(), 1, 0)
+    });
+
+    assert_eq!(emitted.status, SendTransactionStatus::IntegrityLost);
+    assert_eq!(emitted.evidence.attempts, 1);
+    assert_eq!(emitted.evidence.zero_progress_retries, 0);
+    assert_eq!(
+        emitted.evidence.retry_reason,
+        PacketRetryReason::PartialProgress { inserted_count: 1 }
+    );
+}
+
+#[test]
 fn instrument_scan_codes_are_the_physical_allowlist() {
     assert_eq!(
         PHYSICAL_INSTRUMENT_SCAN_CODES,

@@ -23,10 +23,10 @@ mod wait;
 #[cfg(test)]
 pub(crate) use admission::final_control_admission_with_lease;
 pub(crate) use admission::{
-    DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals, TargetStamp,
-    ensure_preflight_for_target, final_control_admission_at, final_control_precheck,
-    final_down_target_admission, focus_matches, focus_matches_hwnd, load_target_stamp,
-    target_stamp_still_current,
+    DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
+    FinalTargetSignals, TargetStamp, ensure_preflight_for_target, final_control_admission_at,
+    final_control_precheck, final_down_target_admission, focus_matches, focus_matches_hwnd,
+    load_target_stamp, record_final_gate_rejection, target_stamp_still_current,
 };
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,

@@ -82,7 +82,7 @@ mod tests {
                     timing_error: None,
                 },
             });
-        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b01, 0b11));
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b01, 0b10));
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(state.active_mask, 0);
         assert_eq!(state.possibly_active_mask, 0b11);

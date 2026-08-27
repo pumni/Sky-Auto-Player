@@ -477,9 +477,9 @@ impl ProductionDispatchTestHarness {
         harness
     }
 
-    /// Build a retrigger packet with `event_count` physical INPUT events at
-    /// one deadline (half Up, half Down). Initial owners are dispatched during
-    /// setup so the measured packet is genuinely Mixed.
+    /// Build a mixed packet with `event_count` physical INPUT events at one
+    /// deadline (half Up, half Down). The two directions use disjoint scan
+    /// codes because a physical key cannot be requested in both directions.
     pub fn new_mixed_events(event_count: usize) -> Self {
         Self::new_mixed_events_with_gap(event_count, 1_000)
     }
@@ -491,31 +491,32 @@ impl ProductionDispatchTestHarness {
 
     pub fn try_new_mixed_events_with_gap(event_count: usize, gap_us: u64) -> Result<Self, String> {
         assert!(
-            event_count.is_multiple_of(2) && (2..=30).contains(&event_count),
-            "mixed event count must be an even value in 2..=30"
+            event_count.is_multiple_of(2) && (2..=15).contains(&event_count),
+            "mixed event count must be an even value in 2..=15"
         );
         let key_count = event_count / 2;
-        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
+        let up_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
+        let down_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[key_count..event_count].to_vec();
         let mut actions = Vec::with_capacity(1 + event_count);
         actions.push(KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
             scheduled_us: 0,
-            scan_codes: scan_codes.clone().into(),
+            scan_codes: up_scan_codes.clone().into(),
             reason: "bench-seed".into(),
         });
         actions.push(KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
             scheduled_us: gap_us,
-            scan_codes: scan_codes.clone().into(),
+            scan_codes: up_scan_codes.into(),
             reason: "bench-up".into(),
         });
         actions.push(KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
             scheduled_us: gap_us,
-            scan_codes: scan_codes.into(),
+            scan_codes: down_scan_codes.into(),
             reason: "bench-down".into(),
         });
         let mut harness = Self::create_harness(&actions);
@@ -1328,9 +1329,9 @@ impl ProductionDispatchTestHarness {
     /// Invoke the coordinator dispatch boundary while leaving the sender's
     /// authoritative crossing sample to the production packet primitive.
     ///
-    /// The direct-boundary flag only removes the test wait; it must not inject
-    /// `started_ticks`, otherwise a Phase-A A/B run would measure the
-    /// controlled-start seam instead of the fused target-aware sender.
+    /// The direct-boundary flag only removes the test wait. The frozen target
+    /// is used as the caller-owned crossing/pre-call sample, while the
+    /// production sender still performs only the immediate SendInput attempt.
     pub fn dispatch_at_phase_a_production_boundary_for_test(
         &mut self,
         plan: &NextDispatchPlan,

@@ -23,6 +23,7 @@ pub struct PhysicalPacket {
 pub enum PacketPreparationError {
     Empty,
     InvalidMask,
+    OverlappingDirections { overlap_mask: u16 },
 }
 
 impl fmt::Display for PacketPreparationError {
@@ -32,6 +33,10 @@ impl fmt::Display for PacketPreparationError {
             Self::InvalidMask => {
                 formatter.write_str("physical packet contains an invalid key mask")
             }
+            Self::OverlappingDirections { overlap_mask } => write!(
+                formatter,
+                "physical packet contains keys present in both directions: 0x{overlap_mask:04x}"
+            ),
         }
     }
 }

@@ -137,6 +137,8 @@ def test_progress_renderer_surfaces_missed_note_counters(monkeypatch) -> None:
         missed_down_boundaries=2,
         missed_hard_late_boundaries=2,
         late_authorized_boundaries=4,
+        final_gate_focus_losses=2,
+        final_gate_cutoff_misses=1,
     )
     verbose_output = StringIO()
     assert verbose._live is not None
@@ -144,4 +146,5 @@ def test_progress_renderer_surfaces_missed_note_counters(monkeypatch) -> None:
     assert "missed:2" in verbose_output.getvalue()
     assert "hard:2" in verbose_output.getvalue()
     assert "late-ok:4" in verbose_output.getvalue()
+    assert "final-gate:3" in verbose_output.getvalue()
     verbose.finish()

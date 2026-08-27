@@ -188,6 +188,10 @@ where
             zero_progress_retries: 0,
             retry_reason: if inserted == 0 {
                 PacketRetryReason::ZeroProgress
+            } else if inserted < n {
+                PacketRetryReason::PartialProgress {
+                    inserted_count: inserted as u8,
+                }
             } else {
                 PacketRetryReason::None
             },

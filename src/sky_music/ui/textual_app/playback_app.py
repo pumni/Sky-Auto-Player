@@ -81,6 +81,11 @@ class PlaybackSnapshot:
     missed_down_boundaries: int = 0
     missed_down_keys: int = 0
     missed_hard_late_boundaries: int = 0
+    final_gate_control_rejections: int = 0
+    final_gate_target_changes: int = 0
+    final_gate_focus_losses: int = 0
+    final_gate_lease_expirations: int = 0
+    final_gate_cutoff_misses: int = 0
     late_authorized_boundaries: int = 0
     input_path_degraded: bool = False
     sendinput_path_degraded: bool = False
@@ -143,6 +148,11 @@ class SnapshotRenderer:
         missed_down_boundaries: int = 0,
         missed_down_keys: int = 0,
         missed_hard_late_boundaries: int = 0,
+        final_gate_control_rejections: int = 0,
+        final_gate_target_changes: int = 0,
+        final_gate_focus_losses: int = 0,
+        final_gate_lease_expirations: int = 0,
+        final_gate_cutoff_misses: int = 0,
         late_authorized_boundaries: int = 0,
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
@@ -165,6 +175,11 @@ class SnapshotRenderer:
                 missed_down_boundaries=int(missed_down_boundaries),
                 missed_down_keys=int(missed_down_keys),
                 missed_hard_late_boundaries=int(missed_hard_late_boundaries),
+                final_gate_control_rejections=int(final_gate_control_rejections),
+                final_gate_target_changes=int(final_gate_target_changes),
+                final_gate_focus_losses=int(final_gate_focus_losses),
+                final_gate_lease_expirations=int(final_gate_lease_expirations),
+                final_gate_cutoff_misses=int(final_gate_cutoff_misses),
                 late_authorized_boundaries=int(late_authorized_boundaries),
                 input_path_degraded=input_path_degraded,
                 sendinput_path_degraded=sendinput_path_degraded,
@@ -742,6 +757,17 @@ class PlaybackCard(Static):
         )
         missed_down = snap.missed_down_boundaries if snap is not None else 0
         missed_keys = snap.missed_down_keys if snap is not None else 0
+        final_gate_rejections = sum(
+            (
+                snap.final_gate_control_rejections,
+                snap.final_gate_target_changes,
+                snap.final_gate_focus_losses,
+                snap.final_gate_lease_expirations,
+                snap.final_gate_cutoff_misses,
+            )
+            if snap is not None
+            else (0, 0, 0, 0, 0)
+        )
         if missed_keys > 0 and not self.debug_mode:
             body.append(f"{yellow}missed notes: {missed_keys}{_ANSI_RESET}")
         backend = (
@@ -767,6 +793,11 @@ class PlaybackCard(Static):
                 f">10ms:{view.timing.late_10ms}  ·  active keys: {view.backend.active_keys}{dropped_suffix}  ·  "
                 f"missed:{missed_down} · hard:{snap.missed_hard_late_boundaries if snap is not None else 0} · "
                 f"late-ok:{snap.late_authorized_boundaries if snap is not None else 0}"
+                + (
+                    f" · final-gate:{final_gate_rejections}"
+                    if final_gate_rejections > 0
+                    else ""
+                )
             )
         else:
             status_line = (
@@ -1165,6 +1196,15 @@ class PlaybackScreen(Screen[str]):
             warn_widget.update("")
             warn_widget.styles.display = "none"
 
+        final_gate_rejections = sum(
+            (
+                snap.final_gate_control_rejections,
+                snap.final_gate_target_changes,
+                snap.final_gate_focus_losses,
+                snap.final_gate_lease_expirations,
+                snap.final_gate_cutoff_misses,
+            )
+        )
         if self.debug_mode:
             stats = self.renderer.debug_stats()
             
@@ -1187,6 +1227,8 @@ class PlaybackScreen(Screen[str]):
                 f"σ(onset) {stats.sigma_onset_ms:.1f}ms · missed:{snap.missed_down_boundaries} · "
                 f"hard:{snap.missed_hard_late_boundaries} · late-ok:{snap.late_authorized_boundaries}"
             )
+            if final_gate_rejections > 0:
+                lateness_str += f" · final-gate:{final_gate_rejections}"
             self.query_one("#debug-lateness", Static).update(lateness_str)
             
             # Line 3: Timing: {fps}fps ({frame_us}us) · hold/min {hold}/{min}us · {hold_label} {tempo}×

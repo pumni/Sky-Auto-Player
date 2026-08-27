@@ -58,6 +58,55 @@ fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
 }
 
 #[test]
+fn final_gate_precedes_the_authoritative_pre_call_boundary() {
+    let source = include_str!("authored.rs");
+    let finalizer = source
+        .split("fn finalize_authored_down_admission")
+        .nth(1)
+        .expect("authored finalizer");
+    let crossing = finalizer
+        .find("wait_to_precision_boundary")
+        .expect("worker-owned target crossing");
+    let control = finalizer
+        .find("let control_admission")
+        .expect("final control gate");
+    let target = finalizer
+        .find("final_down_target_admission")
+        .expect("final target/focus gate");
+    let pre_call = finalizer
+        .find("let pre_call_qpc")
+        .expect("authoritative pre-call timestamp");
+    assert!(crossing < control);
+    assert!(control < target);
+    assert!(target < pre_call);
+
+    let sender = source
+        .split("fn record_down_send_outcome")
+        .nth(1)
+        .expect("authored sender handoff");
+    assert!(sender.contains("send_prepared_physical_packet_with_start_and_cutoff"));
+    assert!(!sender.contains("send_prepared_physical_packet_at_target_with_cutoff"));
+}
+
+#[test]
+fn final_gate_rejection_counters_are_worker_local_and_reason_specific() {
+    let mut metrics = WorkerMetricsLocal::default();
+    for reason in [
+        FinalGateRejection::Control,
+        FinalGateRejection::Target,
+        FinalGateRejection::Focus,
+        FinalGateRejection::Lease,
+    ] {
+        super::record_final_gate_rejection(&mut metrics, reason);
+    }
+    assert_eq!(metrics.final_gate_control_rejections, 1);
+    assert_eq!(metrics.final_gate_target_changes, 1);
+    assert_eq!(metrics.final_gate_focus_losses, 1);
+    assert_eq!(metrics.final_gate_lease_expirations, 1);
+    assert_eq!(metrics.final_gate_cutoff_misses, 0);
+}
+
+#[test]
 fn anchored_target_math_supports_explicit_offset() {
     let anchor = QpcTicks::from_raw(10_000);
     let lead = DurationTicks::from_raw(500);

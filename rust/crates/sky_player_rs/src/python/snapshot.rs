@@ -155,6 +155,16 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) missed_hard_late_boundaries: u64,
     #[pyo3(get)]
+    pub(super) final_gate_control_rejections: u64,
+    #[pyo3(get)]
+    pub(super) final_gate_target_changes: u64,
+    #[pyo3(get)]
+    pub(super) final_gate_focus_losses: u64,
+    #[pyo3(get)]
+    pub(super) final_gate_lease_expirations: u64,
+    #[pyo3(get)]
+    pub(super) final_gate_cutoff_misses: u64,
+    #[pyo3(get)]
     pub(super) late_authorized_boundaries: u64,
     #[pyo3(get)]
     pub(super) deadline_authorization_reuses: u64,
@@ -280,6 +290,11 @@ impl ProgressSnapshotPy {
             missed_down_keys: snapshot.missed_down_keys,
             missed_backlog_boundaries: snapshot.missed_backlog_boundaries,
             missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
+            final_gate_control_rejections: snapshot.final_gate_control_rejections,
+            final_gate_target_changes: snapshot.final_gate_target_changes,
+            final_gate_focus_losses: snapshot.final_gate_focus_losses,
+            final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+            final_gate_cutoff_misses: snapshot.final_gate_cutoff_misses,
             late_authorized_boundaries: snapshot.late_authorized_boundaries,
             deadline_authorization_reuses: snapshot.deadline_authorization_reuses,
             late_discovery_rescue_attempts: snapshot.late_discovery_rescue_attempts,

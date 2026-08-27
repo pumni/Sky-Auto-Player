@@ -349,7 +349,7 @@ fn prepare_up_recovery_descriptor(packet: PhysicalPacket) -> RecoveryDescriptor 
 pub(crate) struct DownSendTiming {
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
-    pub(crate) precision_wake_qpc: Option<QpcTicks>,
+    pub(crate) target_crossing_qpc: Option<QpcTicks>,
     pub(crate) final_proof_qpc: QpcTicks,
     pub(crate) pre_call_qpc: QpcTicks,
     pub(crate) sendinput_completion_qpc: QpcTicks,
@@ -489,7 +489,7 @@ pub(crate) fn interpret_down_send_timing(
     runtime: &mut WorkerRuntime,
     _qpc_clock: QpcClock,
     physical_target_qpc: QpcTicks,
-    precision_wake_qpc: Option<QpcTicks>,
+    target_crossing_qpc: Option<QpcTicks>,
     final_proof_qpc: QpcTicks,
     coordinator: &mut RuntimeDispatchCoordinator,
     _health: &WorkerHealthState,
@@ -579,7 +579,7 @@ pub(crate) fn interpret_down_send_timing(
     Ok(DownSendTiming {
         epoch_qpc: clock_state.epoch,
         allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
-        precision_wake_qpc,
+        target_crossing_qpc,
         final_proof_qpc,
         pre_call_qpc,
         sendinput_completion_qpc,

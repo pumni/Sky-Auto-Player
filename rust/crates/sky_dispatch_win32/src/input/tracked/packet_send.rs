@@ -3,10 +3,10 @@ use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
 use super::super::packet::send_prepared_physical_packet_once_at_target_with_cutoff;
-#[cfg(any(test, feature = "test-support"))]
 use super::super::packet::send_prepared_physical_packet_once_with_start_and_cutoff;
 use super::super::packet::{
-    PreparedPacketView, PreparedPhysicalPacket, send_physical_packet_once_with_start,
+    PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
+    send_physical_packet_once_with_start,
 };
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
@@ -18,7 +18,6 @@ use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
 
-#[cfg(any(test, feature = "test-support"))]
 fn deadline_missed_before_send_outcome(
     packet: PhysicalPacket,
     started_ticks: QpcTicks,
@@ -264,6 +263,10 @@ impl TrackedKeyState {
         packet: PhysicalPacket,
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
+        if let Err(error) = PreparedPhysicalPacket::try_new(packet) {
+            self.last_error = Some(format!("physical packet preparation failed: {error}"));
+            return self.apply_packet_outcome(packet, invalid_packet_outcome(packet));
+        }
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -325,7 +328,6 @@ impl TrackedKeyState {
     /// Send a packet whose fixed Win32 payload was built before the precision
     /// boundary.  State reconciliation remains identical to the legacy packet
     /// wrapper; only payload construction moves out of the final path.
-    #[cfg(any(test, feature = "test-support"))]
     pub fn send_prepared_physical_packet_with_start(
         &mut self,
         prepared: &PreparedPhysicalPacket,
@@ -334,9 +336,8 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_with_start_and_cutoff(prepared, started_ticks, None)
     }
 
-    /// Test-support prepared send with a caller-controlled authoritative start
+    /// Send a prepared packet with a caller-controlled authoritative start
     /// timestamp and the same pre-syscall Down cutoff as production.
-    #[cfg(any(test, feature = "test-support"))]
     pub fn send_prepared_physical_packet_with_start_and_cutoff(
         &mut self,
         prepared: &PreparedPhysicalPacket,
@@ -350,9 +351,8 @@ impl TrackedKeyState {
         )
     }
 
-    /// Test-support prepared borrowed-view send with a caller-controlled
+    /// Send a prepared borrowed-view packet with a caller-controlled
     /// authoritative start timestamp and the same pre-syscall Down cutoff.
-    #[cfg(any(test, feature = "test-support"))]
     pub fn send_prepared_physical_packet_view_with_start_and_cutoff(
         &mut self,
         prepared: PreparedPacketView<'_>,
@@ -546,9 +546,9 @@ impl TrackedKeyState {
         self.apply_packet_outcome(packet, outcome)
     }
 
-    /// Phase-A benchmark seam: candidate uses the fused target-aware sender
-    /// while the exact baseline worktree provides the legacy start-timestamp
-    /// sender under the same test-support API.
+    /// Phase-A benchmark seam: the direct test boundary supplies a controlled
+    /// caller-owned crossing sample while retaining the production sender's
+    /// immediate one-attempt path.
     #[cfg(any(test, feature = "test-support"))]
     pub fn send_phase_a_benchmark_boundary(
         &mut self,

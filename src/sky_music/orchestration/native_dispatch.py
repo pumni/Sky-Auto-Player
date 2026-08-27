@@ -74,6 +74,11 @@ class NativeProgressSnapshotProtocol(Protocol):
     missed_down_boundaries: int
     missed_down_keys: int
     missed_hard_late_boundaries: int
+    final_gate_control_rejections: int
+    final_gate_target_changes: int
+    final_gate_focus_losses: int
+    final_gate_lease_expirations: int
+    final_gate_cutoff_misses: int
     late_authorized_boundaries: int
     max_completion_error_us: int
     late_2ms: int
@@ -444,6 +449,11 @@ class RustDispatchRuntime:
                         missed_down_boundaries=int(live.missed_down_boundaries),
                         missed_down_keys=int(live.missed_down_keys),
                         missed_hard_late_boundaries=int(live.missed_hard_late_boundaries),
+                        final_gate_control_rejections=int(live.final_gate_control_rejections),
+                        final_gate_target_changes=int(live.final_gate_target_changes),
+                        final_gate_focus_losses=int(live.final_gate_focus_losses),
+                        final_gate_lease_expirations=int(live.final_gate_lease_expirations),
+                        final_gate_cutoff_misses=int(live.final_gate_cutoff_misses),
                         late_authorized_boundaries=int(live.late_authorized_boundaries),
                         input_path_degraded=live.input_path_degraded,
                         sendinput_path_degraded=live.sendinput_path_degraded,

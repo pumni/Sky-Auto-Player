@@ -75,6 +75,13 @@ pub struct WorkerMetricsLocal {
     pub missed_down_keys: u64,
     pub missed_backlog_boundaries: u64,
     pub missed_hard_late_boundaries: u64,
+    /// Final authored Down admission rejections observed after target
+    /// crossing and before the authoritative SendInput timestamp.
+    pub final_gate_control_rejections: u64,
+    pub final_gate_target_changes: u64,
+    pub final_gate_focus_losses: u64,
+    pub final_gate_lease_expirations: u64,
+    pub final_gate_cutoff_misses: u64,
     pub late_authorized_boundaries: u64,
     pub deadline_authorization_reuses: u64,
     pub late_discovery_rescue_attempts: u64,

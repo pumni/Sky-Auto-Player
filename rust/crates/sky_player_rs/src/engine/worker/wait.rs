@@ -8,7 +8,9 @@ use std::sync::atomic::AtomicU64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PrecisionWaitResult {
-    pub(crate) wake_qpc: QpcTicks,
+    /// QPC sample at which the waiter crossed the authored physical target.
+    /// The worker owns this crossing before final policy admission.
+    pub(crate) target_crossing_qpc: QpcTicks,
     pub(crate) spin_ticks: DurationTicks,
 }
 
@@ -20,15 +22,10 @@ pub(crate) fn wait_to_precision_boundary(
     timing: &WorkerTimingState,
     local_metrics: &mut WorkerMetricsLocal,
 ) -> Result<PrecisionWaitResult, super::DispatchStep> {
-    let spin_target_qpc = QpcTicks::from_raw(
-        physical_target_qpc
-            .as_u64()
-            .saturating_sub(timing.effective_spin_threshold_ticks.as_u64()),
-    );
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
-        spin_target_qpc,
-        DurationTicks::ZERO,
+        physical_target_qpc,
+        timing.effective_spin_threshold_ticks,
         interrupt,
     );
     match wait_result.outcome {
@@ -39,7 +36,7 @@ pub(crate) fn wait_to_precision_boundary(
                 ));
             };
             Ok(PrecisionWaitResult {
-                wake_qpc,
+                target_crossing_qpc: wake_qpc,
                 spin_ticks: wait_result.spin_ticks,
             })
         }
@@ -250,6 +247,21 @@ mod tests {
             .expect("admission wait implementation");
         assert!(body.contains("DurationTicks::ZERO"));
         assert!(!body.contains("effective_spin_threshold_ticks"));
+    }
+
+    #[test]
+    fn precision_wait_crosses_the_physical_target_with_the_bounded_spin() {
+        let source = include_str!("wait.rs");
+        let body = source
+            .split("pub(crate) fn wait_to_precision_boundary")
+            .nth(1)
+            .expect("precision wait implementation")
+            .split("pub(crate) enum WaitBoundary")
+            .next()
+            .expect("precision wait body");
+        assert!(body.contains("physical_target_qpc"));
+        assert!(body.contains("timing.effective_spin_threshold_ticks"));
+        assert!(!body.contains("saturating_sub(timing.effective_spin_threshold_ticks"));
     }
 
     #[test]

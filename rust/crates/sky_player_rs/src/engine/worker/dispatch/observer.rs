@@ -59,10 +59,10 @@ pub(crate) fn publisher_down_send_outcome(
     let wake_qpc = take_deadline_wake_qpc(runtime, final_proof_qpc);
     let precision_handoff =
         timing_proof
-            .precision_wake_qpc
-            .map(|precision_wake_qpc| PrecisionHandoffEvidence {
+            .target_crossing_qpc
+            .map(|target_crossing_qpc| PrecisionHandoffEvidence {
                 admission_wake_qpc: wake_qpc,
-                precision_wake_qpc,
+                target_crossing_qpc,
                 final_proof_qpc,
             });
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {

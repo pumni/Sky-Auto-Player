@@ -1,4 +1,5 @@
 use super::{TrackedKeyState, focus_gate_matches};
+use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::DurationTicks;
 #[cfg(test)]
 use sky_dispatch_win32::clock::QpcClock;
@@ -10,6 +11,39 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 pub(crate) struct TargetStamp {
     pub(crate) hwnd: isize,
     pub(crate) generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FinalGateRejection {
+    Control,
+    Target,
+    Focus,
+    Lease,
+}
+
+pub(crate) fn record_final_gate_rejection(
+    local_metrics: &mut WorkerMetricsLocal,
+    reason: FinalGateRejection,
+) {
+    match reason {
+        FinalGateRejection::Control => {
+            local_metrics.final_gate_control_rejections = local_metrics
+                .final_gate_control_rejections
+                .saturating_add(1)
+        }
+        FinalGateRejection::Target => {
+            local_metrics.final_gate_target_changes =
+                local_metrics.final_gate_target_changes.saturating_add(1)
+        }
+        FinalGateRejection::Focus => {
+            local_metrics.final_gate_focus_losses =
+                local_metrics.final_gate_focus_losses.saturating_add(1)
+        }
+        FinalGateRejection::Lease => {
+            local_metrics.final_gate_lease_expirations =
+                local_metrics.final_gate_lease_expirations.saturating_add(1)
+        }
+    }
 }
 
 pub(crate) fn load_target_stamp(
@@ -62,6 +96,7 @@ pub(crate) enum FinalControlAdmission {
     LeaseExpired,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FinalControlSignals<'a> {
     pub(crate) quit_requested: &'a AtomicBool,
     pub(crate) skip_requested: &'a AtomicBool,

@@ -11,6 +11,17 @@ that the game sampled the transition. `require_focus=true` is a safety profile
 with a final foreground-verification cost, so the two focus modes are not
 promised identical latency.
 
+For a physical boundary, Python/native preparation materializes and validates
+one immutable packet before the precision handoff. The worker's single bounded
+QPC spin crosses the absolute authored target, then runs the final
+command/control, target, focus, and lease gates. Only after those gates does it
+take the authoritative `pre_call_qpc` and pass that sample to the prepared
+sender. The sender performs no further wait or target spin: it checks the
+Down-only cutoff and makes one `SendInput` call. Up entries precede Down entries;
+an overlapping Up/Down mask is rejected during preparation. A partial Up is
+reported with partial-progress evidence but is never silently retried by this
+single-send primitive.
+
 For a selected ratio and FPS, Python first materializes the requested hold:
 
 ```text
