@@ -125,5 +125,4 @@ norecursedirs = [
     "golden_schedules",
     "perf-baselines",
     ".tmp",
-    ".claude",
 ]
