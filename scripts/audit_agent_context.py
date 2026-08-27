@@ -6,6 +6,7 @@ Historical implementation choreography belongs in Git history, not the active co
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,13 @@ RETIRED_PATHS: tuple[str, ...] = (
     ".claude",
     ".codex",
     ".cursor",
+    ".windsurf",
+    ".cursorrules",
+    ".windsurfrules",
+    "GEMINI.md",
+    "COPILOT.md",
+    "site/AGENTS.md",
+    "site/CLAUDE.md",
     "docs/archive",
     "docs/plan",
     "docs/rust-dispatch-migration",
@@ -45,7 +53,7 @@ SECURITY_OWNED_SURFACES: tuple[str, ...] = (
     ".config/security_audit_baseline.json",
     ".github/workflows/release.yml",
 )
-NESTED_CONTEXT_ROOTS: tuple[str, ...] = (
+SCAN_ROOTS: tuple[str, ...] = (
     "src",
     "rust",
     "tests",
@@ -53,6 +61,30 @@ NESTED_CONTEXT_ROOTS: tuple[str, ...] = (
     "docs",
     ".github",
     "site",
+)
+GENERATED_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".venv",
+        ".astro",
+        ".cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "coverage",
+    }
+)
+SHADOW_GUIDE_NAMES: frozenset[str] = frozenset(
+    {
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "COPILOT.md",
+    }
 )
 FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
     "priority stack",
@@ -67,13 +99,22 @@ FORBIDDEN_CHOREOGRAPHY: tuple[str, ...] = (
 )
 FORBIDDEN_DOC_NAME_MARKERS: tuple[str, ...] = (
     "handoff",
-    "coding_agent",
-    "ai_coding",
+    "coding-agent",
+    "ai-coding",
 )
 
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _walk_tracked_surface(base: Path):
+    """Walk source-like directories while pruning generated dependency/build trees."""
+    for current_root, dirs, files in os.walk(base):
+        dirs[:] = [name for name in dirs if name not in GENERATED_DIR_NAMES]
+        current = Path(current_root)
+        for name in files:
+            yield current / name
 
 
 def _is_plan_name(path: Path) -> bool:
@@ -104,15 +145,15 @@ def main() -> int:
         if (ROOT / path).exists()
     )
 
-    for root_name in NESTED_CONTEXT_ROOTS:
+    for root_name in SCAN_ROOTS:
         base = ROOT / root_name
         if not base.is_dir():
             continue
-        for guide_name in ("AGENTS.md", "CLAUDE.md"):
-            failures.extend(
-                f"nested agent authority is forbidden: {path.relative_to(ROOT)}"
-                for path in base.rglob(guide_name)
-            )
+        failures.extend(
+            f"nested agent authority is forbidden: {path.relative_to(ROOT)}"
+            for path in _walk_tracked_surface(base)
+            if path.name in SHADOW_GUIDE_NAMES
+        )
 
     docs = ROOT / "docs"
     if docs.is_dir():
@@ -123,12 +164,12 @@ def main() -> int:
         )
 
         for path in docs.rglob("*.md"):
-            lowered_name = path.name.lower()
+            normalized_name = path.name.lower().replace("_", "-")
             if _is_plan_name(path):
                 failures.append(
                     f"implementation plan must live in Git history: {path.relative_to(ROOT)}"
                 )
-            if any(marker in lowered_name for marker in FORBIDDEN_DOC_NAME_MARKERS):
+            if any(marker in normalized_name for marker in FORBIDDEN_DOC_NAME_MARKERS):
                 failures.append(
                     f"agent handoff/runbook document is forbidden: {path.relative_to(ROOT)}"
                 )
