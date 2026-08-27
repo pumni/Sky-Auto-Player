@@ -18,16 +18,16 @@ relevant source/direct tests, and open only the matching current documents.
 | `rust-toolchain-policy.md` | Rust toolchain policy |
 | `INDEX.md` | Context/documentation router |
 
-## Historical material
+## Historical evidence
 
-`plan/`, `archive/`, `perf-baselines/`, dated reviews/plans, and historical release evidence are not
-startup context and are not repository instructions. They exist to preserve investigation or
-measurement history and may describe superseded code. Consult them only when a current task needs
-that history; use Git history when the historical file itself has been retired.
+`archive/`, `perf-baselines/`, and historical release evidence are not startup context and are not
+repository instructions. Consult them only when a current task needs that evidence. Completed plans,
+migration playbooks, and implementation choreography are retained in Git history rather than kept in
+the active documentation tree.
 
-Do not turn this directory into a generated context pack or duplicate active architecture across
-agent-specific documents. Keep current docs focused and route to source/tests for implementation
-detail.
+Durable architectural decisions belong in `adr/` or the current reference documents above. Do not
+turn this directory into a generated context pack or duplicate active architecture across
+agent-specific documents.
 
 ## Website history
 

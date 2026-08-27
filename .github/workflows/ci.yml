@@ -75,7 +75,7 @@ jobs:
                 relevant=true
                 break
                 ;;
-              windows_version_info.txt|AGENTS.md|CLAUDE.md|SECURITY.md|docs/INDEX.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)
+              windows_version_info.txt|AGENTS.md|CLAUDE.md|SECURITY.md|docs/INDEX.md|docs/README.md|.github/PULL_REQUEST_TEMPLATE.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)
                 relevant=true
                 break
                 ;;

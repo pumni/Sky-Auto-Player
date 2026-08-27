@@ -1,7 +1,7 @@
 # Sky Auto Player Documentation Router
 
-Use this page to find the smallest current document set needed for a task. Do not treat this index as
-an instruction bundle to preload.
+Use this page to find the smallest current document set needed for a task. It is a router, not a
+bundle to load in full.
 
 ## Evidence hierarchy
 
@@ -10,11 +10,10 @@ When sources disagree, prefer current observable evidence in this order:
 1. **Observed game behavior** — captured onsets/audio and reproducible behavior.
 2. **Deterministic native telemetry and frozen test vectors** — measured implementation evidence.
 3. **Current source, direct tests, enforced configuration, and CI checks** — the executable codebase.
-4. **Active documentation below** — explanatory contracts that must be updated when the code changes
-   intentionally.
+4. **Current documentation below** — explanatory contracts that must be updated when intentional
+   code changes make them inaccurate.
 
-Historical plans, audit reports, baselines, issue text, and archived documents do not override these
-sources.
+Historical plans, audit reports, issue text, and archived documents do not override these sources.
 
 ## Active architecture and behavior
 
@@ -26,8 +25,8 @@ sources.
   fail-closed behavior.
 - [hold-frame-model.md](hold-frame-model.md) — user-selected FPS and authored hold materialization.
 
-For implementation work, read the relevant source and direct tests alongside the matching document;
-do not read every architecture page by default.
+For implementation work, read relevant source and direct tests alongside the matching document. Do
+not open every architecture page by default.
 
 ## Security, distribution, and toolchain
 
@@ -37,8 +36,8 @@ do not read every architecture page by default.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 
 Build and release implementation details also live in `src/build_app.py`, `Sky-Auto-Player.spec`,
-`.github/workflows/`, and their direct tests. Treat those executable surfaces as current-state
-evidence rather than duplicating them into agent instructions.
+`.github/workflows/`, and their direct tests. Those executable surfaces are current-state evidence;
+do not duplicate their command matrices into agent instructions.
 
 ## Development and verification
 
@@ -54,21 +53,18 @@ when a task touches those boundaries.
 
 ## Decisions and historical evidence
 
-- `docs/adr/` contains explicit architecture decision records. Consult an ADR when the current task
+- `docs/adr/` contains explicit architecture decision records. Consult an ADR only when the task
   touches the decision it records.
 - `docs/releases/` contains release-specific acceptance/history, not startup context.
 - `docs/perf-baselines/` contains named performance evidence. A baseline is evidence for the
   environment and revision it records, not a universal instruction.
-- `docs/plan/`, top-level dated plan/review documents, and `docs/archive/` are historical working
-  material. They may describe superseded code or implementation choreography and are **not active
-  repository authority** unless the current human task explicitly adopts one.
-
-Do not maintain a catalog of every historical plan here. Use repository search or Git history when a
-current investigation genuinely requires historical rationale.
+- `docs/archive/` contains explicitly retained historical material and is never active authority.
+- Completed implementation plans and migration playbooks are retained by Git history instead of the
+  active documentation tree. Use `git log`, `git show`, or repository history only when historical
+  rationale is actually needed.
 
 ## Documentation maintenance
 
-Keep active docs about the current system, keep this router concise, and move obsolete explanatory
-material out of the active path instead of adding warnings and more routing layers. A new agent or
-context framework is not a documentation substitute; source, tests, focused docs, and executable
-verification are the default context system.
+Keep active docs about the current system. Convert durable decisions into ADRs or current architecture
+contracts; retire completed plans to Git history rather than accumulating prompt-shaped working notes.
+Keep this router concise and prefer source/tests/executable checks over additional routing layers.

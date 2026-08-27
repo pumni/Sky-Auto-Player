@@ -29,6 +29,10 @@ GROUPS: dict[str, tuple[Check, ...]] = {
         Check("ruff", ("ruff", "check", ".")),
         Check("pyright", ("pyright",)),
         Check(
+            "agent context",
+            (sys.executable, "scripts/audit_agent_context.py"),
+        ),
+        Check(
             "security mandates",
             (sys.executable, "scripts/audit_security_mandates.py"),
         ),
