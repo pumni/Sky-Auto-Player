@@ -12,8 +12,9 @@ with a final foreground-verification cost, so the two focus modes are not
 promised identical latency.
 
 For a physical boundary, Python/native preparation materializes and validates
-one immutable packet before the precision handoff. The worker's single bounded
-QPC spin crosses the absolute authored target, then runs the final
+one immutable packet before the direct target wait. The worker's single
+interruptible hybrid wait and bounded QPC spin cross the absolute authored
+target, then run the final
 command/control, target, and focus gates, repeats the program-owned atomic
 checks, and evaluates the lease. The worker records `final_policy_qpc` for
 lease admission. The prepared sender then takes the true `pre_call_qpc`

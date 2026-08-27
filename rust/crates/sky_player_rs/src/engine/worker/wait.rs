@@ -84,7 +84,7 @@ pub struct WaitObservation {
 
 pub(crate) struct WaitDeadline {
     pub(crate) physical_target_qpc: Option<QpcTicks>,
-    pub(crate) admission_guard_ticks: DurationTicks,
+    pub(crate) spin_threshold_ticks: DurationTicks,
     pub(crate) qpc_clock: QpcClock,
 }
 
@@ -139,7 +139,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     } = context;
     let WaitDeadline {
         physical_target_qpc,
-        admission_guard_ticks,
+        spin_threshold_ticks,
         qpc_clock,
         ..
     } = deadline;
@@ -158,11 +158,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         Some(target) => target,
         None => return WaitBoundary::Exit,
     };
-    let target_qpc = QpcTicks::from_raw(
-        physical_target_qpc
-            .as_u64()
-            .saturating_sub(admission_guard_ticks.as_u64()),
-    );
+    let target_qpc = physical_target_qpc;
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -190,9 +186,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         bounded_target,
-        // Admission is a low-occupancy wait to T - guard. The only busy-spin
-        // in production is the final authored precision stage.
-        DurationTicks::ZERO,
+        spin_threshold_ticks,
         interrupt,
     );
     match wait_result.outcome {
@@ -239,14 +233,14 @@ mod tests {
     use std::sync::atomic::AtomicU64;
 
     #[test]
-    fn admission_wait_has_no_busy_spin_threshold() {
+    fn physical_wait_uses_the_frozen_precision_spin_threshold() {
         let source = include_str!("wait.rs");
         let body = source
             .split("pub(crate) fn wait_for_next_boundary")
             .nth(1)
             .expect("admission wait implementation");
-        assert!(body.contains("DurationTicks::ZERO"));
-        assert!(!body.contains("effective_spin_threshold_ticks"));
+        assert!(body.contains("physical_target_qpc"));
+        assert!(body.contains("spin_threshold_ticks"));
     }
 
     #[test]
@@ -335,7 +329,7 @@ mod tests {
                         .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
                         .expect("target"),
                 ),
-                admission_guard_ticks: DurationTicks::ZERO,
+                spin_threshold_ticks: DurationTicks::from_raw(1),
                 qpc_clock,
             },
             timing: WaitTiming {

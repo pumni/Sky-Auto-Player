@@ -269,7 +269,7 @@ impl HybridWaiter {
                     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
                     use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
-                    // The timer wakes the worker at the precision handoff;
+                    // The timer wakes the worker near the authored target;
                     // final QPC/control admission still decides whether to
                     // dispatch when both handles are ready.
                     let handles = [timer.raw_handle(), interrupt.raw_handle()];

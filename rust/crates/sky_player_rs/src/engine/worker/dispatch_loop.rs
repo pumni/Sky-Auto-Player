@@ -107,8 +107,8 @@ fn stale_metadata_effective_now(
     }
 }
 
-/// Dispatch the work represented by one immutable plan.  This helper is used
-/// for both an already-due plan and a successful blocking deadline wake, so a
+/// Dispatch the work represented by one immutable plan. This helper is used
+/// for both an already-due plan and a successful direct target wake, so a
 /// normal timer wake never re-enters general orchestration before transport.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_due_from_plan(
@@ -134,6 +134,7 @@ pub(crate) fn dispatch_due_from_plan(
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: Option<&super::dispatch::PendingObservationQueue>,
+    boundary_crossing_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     allow_pre_deadline: bool,
     #[cfg(any(test, feature = "test-support"))] test_physical_target_qpc: Option<
         sky_dispatch_win32::clock::QpcTicks,
@@ -158,7 +159,6 @@ pub(crate) fn dispatch_due_from_plan(
         return super::DispatchStep::NoWork;
     }
     /* stale authored metadata is drained by the outer global metadata phase */
-    let startup_target_selected = false;
     #[cfg(any(test, feature = "test-support"))]
     let test_direct_boundary = test_physical_target_qpc.is_some();
     let candidate_target_qpc = {
@@ -191,6 +191,8 @@ pub(crate) fn dispatch_due_from_plan(
         }
         Err(error) => return super::DispatchStep::Terminate(error),
     };
+    let boundary_crossing_qpc =
+        boundary_crossing_qpc.or_else(|| (physical_target_qpc <= now_ticks).then_some(now_ticks));
 
     let boundary = physical_boundary_stamp(plan, physical_target_qpc);
     #[cfg(any(test, feature = "test-support"))]
@@ -252,11 +254,11 @@ pub(crate) fn dispatch_due_from_plan(
             now_ticks,
             physical_target_qpc,
             down_admission,
-            startup_target_selected,
             focus_loss_fault,
             interrupt,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            boundary_crossing_qpc,
             #[cfg(any(test, feature = "test-support"))]
             test_direct_boundary,
             #[cfg(any(test, feature = "test-support"))]
@@ -879,6 +881,7 @@ pub(super) fn dispatch(
                 interrupt,
                 &shared.publication.progress_clock,
                 core.observer.pending.as_ref(),
+                None,
                 false,
                 #[cfg(any(test, feature = "test-support"))]
                 None,
@@ -913,11 +916,11 @@ pub(super) fn dispatch(
             match wait_for_next_boundary(WaitBoundaryInput {
                 deadline: WaitDeadline {
                     physical_target_qpc: dispatch_plan.physical_target_qpc(),
-                    admission_guard_ticks: if matches!(
+                    spin_threshold_ticks: if matches!(
                         dispatch_plan,
                         super::planning::NextDispatchPlan::Physical(_)
                     ) {
-                        timing.admission_guard_ticks
+                        timing.effective_spin_threshold_ticks
                     } else {
                         DurationTicks::ZERO
                     },
@@ -1003,6 +1006,7 @@ pub(super) fn dispatch(
                         interrupt,
                         &shared.publication.progress_clock,
                         core.observer.pending.as_ref(),
+                        Some(dispatch_qpc),
                         true,
                         #[cfg(any(test, feature = "test-support"))]
                         None,

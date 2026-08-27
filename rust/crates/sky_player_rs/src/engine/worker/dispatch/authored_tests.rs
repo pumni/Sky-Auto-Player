@@ -65,8 +65,9 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .nth(1)
         .expect("authored finalizer");
     let crossing = finalizer
-        .find("wait_to_precision_boundary")
-        .expect("worker-owned target crossing");
+        .find("let target_crossing_qpc")
+        .expect("target crossing handoff");
+    assert!(!finalizer.contains("wait_to_precision_boundary"));
     let control = finalizer
         .find("let control_admission")
         .expect("final control gate");

@@ -2,13 +2,17 @@ use super::telemetry::TelemetryMode;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::mmcss::PriorityMode;
 
-pub(crate) const DEFAULT_ADMISSION_GUARD_US: u64 = 2_000;
+pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
+pub(crate) const MIN_CALIBRATED_SPIN_US: u64 = 250;
+pub(crate) const CALIBRATION_SAFETY_MARGIN_US: u64 = 50;
+pub(crate) const CALIBRATION_SAMPLES: usize = 6;
+pub(crate) const CALIBRATION_MAX_STARTUP_BUDGET_US: u64 = 20_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 
 pub(crate) fn validate_timing_constants() -> Result<(), String> {
-    if DEFAULT_ADMISSION_GUARD_US <= DEFAULT_SPIN_THRESHOLD_US {
-        return Err("admission guard must be greater than spin threshold".to_string());
+    if STARTUP_READINESS_RESERVE_US <= DEFAULT_SPIN_THRESHOLD_US {
+        return Err("startup readiness reserve must be greater than spin threshold".to_string());
     }
     Ok(())
 }
@@ -204,8 +208,7 @@ pub(crate) struct WaitOptions {
     pub(crate) enable_waitable_timer: bool,
     pub(crate) enable_event_wait: bool,
     pub(crate) supervisor_lease_timeout_us: u64,
-    /// Test-only early handoff margin. Production always uses the fixed
-    /// `DEFAULT_SPIN_THRESHOLD_US` value; this seam keeps mock-session tests
+    /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
     #[cfg(any(test, feature = "test-support"))]
@@ -223,11 +226,12 @@ pub(crate) struct PriorityOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SPIN_THRESHOLD_US, DispatchProfile};
+    use super::{DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US};
 
     #[test]
-    fn production_wait_policy_uses_fixed_spin_threshold() {
+    fn production_wait_policy_has_bounded_spin_threshold() {
         assert_eq!(DEFAULT_SPIN_THRESHOLD_US, 1_000);
+        assert_eq!(MIN_CALIBRATED_SPIN_US, 250);
         assert!(super::validate_timing_constants().is_ok());
     }
 

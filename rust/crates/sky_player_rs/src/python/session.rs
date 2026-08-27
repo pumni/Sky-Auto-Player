@@ -1,5 +1,5 @@
 use super::conversion::*;
-use super::snapshot::ProgressSnapshotPy;
+use super::snapshot::{PollSnapshotPy, ProgressSnapshotPy};
 use super::*;
 use crate::engine::{
     DispatchProfile, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
@@ -594,6 +594,10 @@ impl NativeDispatchSessionPy {
         ProgressSnapshotPy::from_snapshot(&self.session.snapshot_lite())
     }
 
+    fn poll_state(&self) -> PollSnapshotPy {
+        PollSnapshotPy::from_snapshot(self.session.poll_state())
+    }
+
     fn session_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let report = PyDict::new(py);
         report.set_item("snapshot", self.snapshot(py)?)?;
@@ -771,7 +775,8 @@ impl TestDispatchSessionPy {
                 #[cfg(any(test, feature = "test-support"))]
                 // Test-support sessions use a fixed, test-only precision
                 // margin so correctness fixtures do not become host-wake
-                // latency probes. Production keeps its locked 1000 us value.
+                // latency probes. Production calibrates this margin once at
+                // startup and falls back to 1000 us when calibration fails.
                 test_spin_threshold_us: Some(20_000),
             },
             telemetry: TelemetryOptions {
@@ -862,6 +867,10 @@ impl TestDispatchSessionPy {
             effective_config: EffectiveSessionConfig::default(),
         }
         .snapshot(py)
+    }
+
+    fn poll_state(&self) -> PollSnapshotPy {
+        PollSnapshotPy::from_snapshot(self.session.poll_state())
     }
 
     #[pyo3(signature = (timeout_ms = StrictU64(5000)))]

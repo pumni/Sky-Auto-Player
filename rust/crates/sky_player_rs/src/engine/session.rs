@@ -5,6 +5,7 @@ use super::shared::{
 use super::worker::Worker;
 use super::*;
 use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, validate_timing_constants};
+use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
@@ -158,29 +159,28 @@ impl NativeDispatchSession {
         })
     }
 
-    fn playback_projection(&self) -> (u64, bool) {
+    fn live_projection(&self) -> ((u64, bool), u64) {
         let metrics_paused = self
             .shared
             .publication
             .metrics
             .is_paused
             .load(Ordering::Relaxed);
-        let Some(anchor) = self.shared.publication.progress_clock.load() else {
-            return (0, metrics_paused);
-        };
-        let exposed_paused = anchor.paused && !anchor.frozen;
+        let anchor = self.shared.publication.progress_clock.load();
+        let exposed_paused = anchor
+            .map(|value| value.paused && !value.frozen)
+            .unwrap_or(metrics_paused);
         let Ok(qpc_clock) = QpcClock::initialize() else {
-            return (0, exposed_paused);
+            return ((0, exposed_paused), 0);
         };
-        let now_qpc = if anchor.paused {
-            anchor.epoch_qpc
-        } else {
-            match qpc_clock.now() {
-                Ok(now) => now,
-                Err(_) => return (0, exposed_paused),
-            }
+        let Ok(now_qpc) = qpc_clock.now() else {
+            return ((0, exposed_paused), 0);
         };
-        (anchor.elapsed_us(now_qpc, qpc_clock), exposed_paused)
+        let elapsed_us = anchor
+            .map(|value| value.elapsed_us(now_qpc, qpc_clock))
+            .unwrap_or_default();
+        let pre_roll_remaining_us = self.pre_roll_remaining_at(now_qpc, qpc_clock);
+        ((elapsed_us, exposed_paused), pre_roll_remaining_us)
     }
 
     pub fn arm(&self, requested_pre_roll_us: u64) -> Result<(), String> {
@@ -336,28 +336,16 @@ impl NativeDispatchSession {
         self.shared.publication.pre_roll_us.load(Ordering::Acquire)
     }
 
-    fn pre_roll_remaining_us(&self) -> u64 {
+    fn pre_roll_remaining_at(&self, now: QpcTicks, clock: QpcClock) -> u64 {
         let epoch_raw = self.shared.publication.epoch_qpc.load(Ordering::Acquire);
         if epoch_raw == 0 {
             return 0;
         }
-        let Ok(clock) = QpcClock::initialize() else {
-            return 0;
-        };
-        let Ok(now) = clock.now() else {
-            return 0;
-        };
         let epoch = QpcTicks::from_raw(epoch_raw);
         let Ok(remaining) = epoch.checked_duration_since(now) else {
             return 0;
         };
         clock.duration_to_us(remaining).unwrap_or_default()
-    }
-
-    fn is_preroll(&self, lifecycle: u8) -> bool {
-        lifecycle == LIFECYCLE_RUNNING
-            && self.shared.publication.armed.load(Ordering::Acquire)
-            && self.pre_roll_remaining_us() > 0
     }
 
     fn signal_worker(&self) -> Result<(), String> {
@@ -527,25 +515,32 @@ impl NativeDispatchSession {
         );
     }
 
-    pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
-        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let (elapsed_us, paused) = self.playback_projection();
-        let pre_roll_remaining_us = self.pre_roll_remaining_us();
-        let outcome = self
-            .shared
-            .lifecycle
-            .terminal_outcome
-            .load(Ordering::Acquire);
-        let status = match lifecycle {
-            LIFECYCLE_NEW => "ready",
-            LIFECYCLE_RUNNING if self.is_preroll(lifecycle) => "preroll",
-            LIFECYCLE_RUNNING if paused => "paused",
-            LIFECYCLE_RUNNING => "playing",
-            LIFECYCLE_FINISHED => match outcome {
-                OUTCOME_ERROR => "error",
-                OUTCOME_QUIT => "quit",
-                OUTCOME_SKIPPED => "skipped",
-                _ => "finished",
+    fn poll_status(
+        &self,
+        lifecycle: u8,
+        paused: bool,
+        pre_roll_remaining_us: u64,
+    ) -> EnginePollStatus {
+        match lifecycle {
+            LIFECYCLE_NEW => EnginePollStatus::Ready,
+            LIFECYCLE_RUNNING
+                if self.shared.publication.armed.load(Ordering::Acquire)
+                    && pre_roll_remaining_us > 0 =>
+            {
+                EnginePollStatus::Preroll
+            }
+            LIFECYCLE_RUNNING if paused => EnginePollStatus::Paused,
+            LIFECYCLE_RUNNING => EnginePollStatus::Playing,
+            LIFECYCLE_FINISHED => match self
+                .shared
+                .lifecycle
+                .terminal_outcome
+                .load(Ordering::Acquire)
+            {
+                OUTCOME_ERROR => EnginePollStatus::Error,
+                OUTCOME_QUIT => EnginePollStatus::Quit,
+                OUTCOME_SKIPPED => EnginePollStatus::Skipped,
+                _ => EnginePollStatus::Finished,
             },
             LIFECYCLE_POISONED
                 if self
@@ -555,11 +550,36 @@ impl NativeDispatchSession {
                     .panicked
                     .load(Ordering::Acquire) =>
             {
-                "panicked"
+                EnginePollStatus::Panicked
             }
-            LIFECYCLE_POISONED => "poisoned",
-            _ => "invalid",
-        };
+            LIFECYCLE_POISONED => EnginePollStatus::Poisoned,
+            _ => EnginePollStatus::Invalid,
+        }
+    }
+
+    /// Return only lifecycle/progress state needed by the supervisor loop.
+    ///
+    /// In particular, this function must not load `SharedMetrics::snapshot`:
+    /// diagnostic counters and recent latency samples belong to the slower
+    /// HUD snapshot and terminal report paths.
+    pub fn poll_state(&self) -> EnginePollSnapshot {
+        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
+        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
+        EnginePollSnapshot {
+            elapsed_us,
+            pre_roll_remaining_us,
+            is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
+            is_paused: paused,
+            status: self.poll_status(lifecycle, paused, pre_roll_remaining_us),
+        }
+    }
+
+    pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
+        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
+        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
+        let status = self
+            .poll_status(lifecycle, paused, pre_roll_remaining_us)
+            .as_str();
         let local = self.shared.publication.metrics.snapshot.load();
         EngineProgressSnapshot {
             elapsed_us,
@@ -684,37 +704,10 @@ impl NativeDispatchSession {
 
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let (elapsed_us, paused) = self.playback_projection();
-        let pre_roll_remaining_us = self.pre_roll_remaining_us();
-        let outcome = self
-            .shared
-            .lifecycle
-            .terminal_outcome
-            .load(Ordering::Acquire);
-        let status = match lifecycle {
-            LIFECYCLE_NEW => "ready",
-            LIFECYCLE_RUNNING if self.is_preroll(lifecycle) => "preroll",
-            LIFECYCLE_RUNNING if paused => "paused",
-            LIFECYCLE_RUNNING => "playing",
-            LIFECYCLE_FINISHED => match outcome {
-                OUTCOME_ERROR => "error",
-                OUTCOME_QUIT => "quit",
-                OUTCOME_SKIPPED => "skipped",
-                _ => "finished",
-            },
-            LIFECYCLE_POISONED
-                if self
-                    .shared
-                    .publication
-                    .metrics
-                    .panicked
-                    .load(Ordering::Acquire) =>
-            {
-                "panicked"
-            }
-            LIFECYCLE_POISONED => "poisoned",
-            _ => "invalid",
-        };
+        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
+        let status = self
+            .poll_status(lifecycle, paused, pre_roll_remaining_us)
+            .as_str();
         let local = self.shared.publication.metrics.snapshot.load();
         let startup_ready = self
             .shared

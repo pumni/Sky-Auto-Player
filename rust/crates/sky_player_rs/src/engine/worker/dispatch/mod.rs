@@ -111,11 +111,13 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) down_admission: DownBoundaryAdmission,
-    pub(crate) startup_target_selected: bool,
     pub(crate) focus_loss_fault: bool,
     pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
+    /// QPC sample returned by the direct target wait. When present, the
+    /// final admission gate reuses it instead of entering a second wait.
+    pub(crate) boundary_crossing_qpc: Option<QpcTicks>,
     /// Test-only direct-boundary admission for frozen-plan correctness tests.
     /// This field and its branch are absent from production builds.
     #[cfg(any(test, feature = "test-support"))]

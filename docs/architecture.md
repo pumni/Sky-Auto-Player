@@ -238,9 +238,9 @@ active packet plus a pump-thread barrier handler
 that explicitly removes already-queued `WM_INPUT` messages with an input-range
 filter before publishing completion prevents stale receipts from aliasing the
 next packet. The tagged
-calibration INPUT array is prepared before the `T - 700 µs` precision handoff;
-the wait layer uses zero spin and the shared fused sender owns the final target
-crossing. Each direction has four authoritative QPC boundaries: absolute
+calibration INPUT array is prepared before the direct physical target wait;
+the wait layer performs the single bounded target crossing and the shared fused
+sender owns the final policy/pre-call boundary. Each direction has four authoritative QPC boundaries: absolute
 target, fused sender crossing, SendInput completion, and first receipt. For each key it computes direct signed
 total hold shrink `(up_target - down_target) - (up_receipt - down_receipt)`;
 scheduler, SendInput, and delivery shrink are diagnostics that must sum to that

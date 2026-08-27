@@ -348,10 +348,10 @@ terminate a started production session.
 
 The final physical path is ordered and fail-closed:
 
-1. Prepare and validate the immutable packet before the precision handoff.
-2. The worker-owned precision waiter crosses the absolute authored physical
-   target with the one bounded QPC spin. It returns the crossing sample; it
-   does not change the target.
+1. Prepare and validate the immutable packet before the target wait.
+2. One interruptible lease-bounded hybrid waiter crosses the absolute authored
+   physical target with the frozen bounded QPC spin. It returns the crossing
+   sample; it does not change the target.
 3. Recheck command/control, the stamped target, and foreground focus (Down
    only) after target crossing. A rejection records a bounded final-gate
    diagnostic and performs no packet syscall.
@@ -385,13 +385,19 @@ authorization.
 
 ## 5. Wait, wake, and spin
 
-The production wait path is a high-resolution waitable timer to the
-`T - 2,000 µs` admission boundary with zero waiter spin. The only production
-busy-spin is the final authored precision stage, fixed at `1,000 µs`; no adaptive
-probe, EMA, PID, or runtime threshold controller is allowed. Timer/wake guard
-is kept separate from the absolute physical target.
-Interrupts, lease-only wakes, focus changes, and command transitions invalidate
-the frozen plan and replan; they never dispatch a stale plan.
+The production wait path uses one high-resolution waitable timer and event
+interruption directly to the absolute physical target. There is no per-note
+`T - 2,000 µs` admission wake and no second precision wait. The waiter sleeps
+until the remaining target interval reaches the frozen startup-calibrated
+threshold, then performs the bounded QPC spin to the target. Interrupts,
+lease-only wakes, focus changes, and command transitions invalidate the frozen
+plan and replan; they never dispatch a stale plan.
+
+Production startup calibration uses six wake samples when at least 20 ms remains
+before the startup readiness deadline. It derives
+`clamp(max(p99, robust) + 50 µs, 250 µs, 1,000 µs)`. Probe failure or insufficient
+startup budget uses the 1,000 µs fallback. This value is frozen for the session;
+it changes waiting cost only, never authored timestamps and never dispatch lead.
 
 The final precision loop performs the QPC target comparison and bounded
 interrupt-generation polling. It does not inspect lease state, focus, or
@@ -407,9 +413,9 @@ The handoff benchmark reports `target_crossing_to_final_policy_us` for the
 worker-owned target crossing through final policy admission and
 `final_policy_to_true_pre_call_us` for the remaining worker-to-sender gap.
 That second interval is expected to be small but non-zero on a preempted
-worker, and is now measured rather than hidden by timestamp aliasing. The
-outer admission wait's `WaitResult.spin_ticks` is not final sender spin; it
-belongs to the earlier `T - 2,000 µs` admission stage.
+worker, and is now measured rather than hidden by timestamp aliasing.
+`WaitResult.spin_ticks` records the bounded spin in the single direct target
+wait.
 
 At the wait layer, an interrupt can invalidate a plan only while the physical
 target remains in the future. Once `QPC_now >= physical_target`, the precision
@@ -455,8 +461,8 @@ forensics scalars do not alter the native telemetry schema or dispatch path.
 The authoritative sender-side metrics are:
 
 - `final_policy_qpc`, true `pre_call_qpc`, and `sendinput_completion_qpc`;
-- diagnostic-only `precision_handoff` evidence carrying the admission wake
-  (when present), precision-wait wake, and final-policy QPC boundaries;
+  - diagnostic-only `precision_handoff` evidence carrying the direct target
+  wait wake (when present), target-crossing, and final-policy QPC boundaries;
 - signed `dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc`
   as the primary pre-call timing metric; it is not a syscall-entry or game-
   receipt timestamp;

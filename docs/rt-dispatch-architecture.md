@@ -139,8 +139,9 @@ Down adds the target/focus checks; Up-only never uses the focus gate.
 
 ```text
 frozen plan
-  -> prepare immutable packet before the precision handoff
-  -> worker-owned QPC spin across the authored target
+  -> prepare immutable packet before the target wait
+  -> one interruptible hybrid wait to the authored target
+  -> worker-owned bounded QPC spin across the target
   -> final command/control, target, and foreground proof
   -> cheap program-owned control/target/focus atomic revalidation
   -> final_policy_qpc sample and lease admission
@@ -283,18 +284,25 @@ while Up-only safety releases remain exempt.
 
 ## 5. Wait and interrupt ordering
 
-The worker uses a high-resolution waitable timer and event interruption to the
-`T - 2,000 µs` admission boundary with zero waiter spin. The final authored
-precision stage has a bounded QPC spin fixed at `1,000 µs` in production. A timer guard may wake early;
-the final QPC deadline gate
-decides whether to wait again or enter the physical path. A wake that is only
-for lease, command, focus, pause, or interrupt replans and cannot dispatch the
-old plan. The timer is first in the Windows multi-wait handle array so a
+For a future physical plan, the worker uses one high-resolution waitable timer
+and event-interruptible hybrid wait directly to the absolute physical target.
+The waiter sleeps while the target is farther away than the frozen spin
+threshold, then performs the bounded QPC spin until the target. There is no
+per-note `T - guard` admission wake and no second precision wait. A lease-only,
+command, focus, pause, or interrupt wake replans and cannot dispatch the old
+plan. The timer is first in the Windows multi-wait handle array so a
 simultaneous timer/event wake enters the QPC classification path. Before the
 physical target, an interrupt returns `Interrupted`; once QPC reaches the
 target, the waiter returns `Deadline`. Final command, target, focus, and lease
 admission remains authoritative after that result and may still reject
 `SendInput`.
+
+Production calibration runs once during worker startup: six bounded wake
+samples are used when at least 20 ms remains before the startup readiness
+deadline. The threshold is `clamp(max(p99, robust) + 50 µs, 250 µs, 1,000
+µs)`; a skipped or failed probe uses the 1,000 µs fallback. The chosen value is
+frozen for the session. Calibration changes waiting cost only: it never changes
+an authored target and never introduces a dispatch lead.
 
 The final precision spin performs only its QPC target/down-late-grace comparison and
 `spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
@@ -304,9 +312,9 @@ authoritative and cannot be bypassed by an event.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
-the precision wait result likewise preserves its raw deadline wake QPC for
-diagnostic handoff evidence. Neither path takes a redundant QPC sample or
-reconstructs the physical target from wake time.
+the same sample is reused as target-crossing evidence for the final gate.
+Neither path reconstructs the physical target from wake time or enters a
+redundant physical wait.
 
 MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
 TimeCritical is not the default and priority setup failure is reported rather
@@ -316,10 +324,11 @@ than silently changing the timing contract.
 
 Startup establishes the playback epoch and waits for the first physical target
 using the same target formula as steady state. There is no adaptive startup
-lead and no startup estimator sample. The first physical call still performs
+lead. It may run the bounded startup wake probe described above, but that probe
+only selects the frozen wait threshold. The first physical call still performs
 the complete final control/lease/target gate. Stale metadata may be committed
-before physical work, but it cannot run after the final precision handoff on
-the physical call stack.
+before physical work, but it cannot run after the final target wait on the
+physical call stack.
 
 The worker may project a pre-epoch deadline for control-loop wake/replan
 bookkeeping, but it never calls `SendInput` before the authoritative physical

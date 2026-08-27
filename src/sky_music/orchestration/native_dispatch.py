@@ -33,6 +33,19 @@ from sky_music.orchestration.native_models import (
 
 FOCUS_PLATFORM_ERRORS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
 
+SUPERVISOR_TICK_S = 0.020
+FOCUS_REFRESH_S = 0.020
+HEARTBEAT_S = 0.200
+HUD_REFRESH_S = 0.100
+
+
+def _advance_deadline(deadline: float, now: float, interval: float) -> float:
+    """Advance one cadence without creating a catch-up burst after a stall."""
+    deadline += interval
+    if deadline <= now:
+        return now + interval
+    return deadline
+
 
 class NativeBackendHealthProtocol(Protocol):
     @property
@@ -111,6 +124,14 @@ class NativeProgressSnapshotProtocol(Protocol):
 
 class NativeFocusHintProtocol(Protocol):
     def set_focus_hint(self, active: bool) -> None: ...
+
+
+class NativePollStateProtocol(Protocol):
+    elapsed_us: int
+    pre_roll_remaining_us: int
+    is_finished: bool
+    is_paused: bool
+    status: str
 
 
 class RustDispatchRuntime:
@@ -280,7 +301,7 @@ class RustDispatchRuntime:
     def _handle_command(self, command: str | None) -> str | None:
         def terminal_race_is_done() -> bool:
             try:
-                return bool(self._session.snapshot_lite().is_finished)
+                return bool(self._session.poll_state().is_finished)
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 return False
 
@@ -349,7 +370,7 @@ class RustDispatchRuntime:
 
     def _native_is_finished(self) -> bool:
         try:
-            return bool(self._session.snapshot_lite().is_finished)
+            return bool(self._session.poll_state().is_finished)
         except (AttributeError, RuntimeError, TypeError, ValueError):
             return False
 
@@ -358,10 +379,12 @@ class RustDispatchRuntime:
         started = False
         joined = False
         requested_outcome: str | None = None
-        live: NativeProgressSnapshotProtocol
+        poll: NativePollStateProtocol
         latest: dict[str, Any] = {}
         report: dict[str, Any] | None = None
         next_render_at = 0.0
+        next_focus_at = 0.0
+        next_heartbeat_at = 0.0
         try:
             if self._controls is not None:
                 start_controls = getattr(self._controls, "start", None)
@@ -372,30 +395,46 @@ class RustDispatchRuntime:
             self._session.arm(self._pre_roll_us)  # type: ignore[attr-defined]
             started = True
 
-            live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
-            initial_status = parse_native_session_status(str(live.status))
+            poll = cast(NativePollStateProtocol, self._session.poll_state())
+            initial_status = parse_native_session_status(str(poll.status))
             if initial_status == NativeSessionStatus.PLAYING:
                 self._has_played = True
+            now = time.monotonic()
+            next_focus_at = now + FOCUS_REFRESH_S
+            next_heartbeat_at = now
 
             while True:
-                if live.is_finished:
+                if poll.is_finished:
                     break
-                native_status = parse_native_session_status(str(live.status))
+                native_status = parse_native_session_status(str(poll.status))
                 if native_status not in LIVE_NATIVE_STATUSES:
                     raise NativeDispatchError(
                         f"unexpected live native session status: {native_status}"
                     )
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
-                self._publish_focus()
-                self._session.heartbeat()
-                live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
-                native_status = parse_native_session_status(str(live.status))
+                now = time.monotonic()
+                if now >= next_focus_at:
+                    self._publish_focus()
+                    next_focus_at = _advance_deadline(
+                        next_focus_at,
+                        now,
+                        FOCUS_REFRESH_S,
+                    )
+                if now >= next_heartbeat_at:
+                    self._session.heartbeat()
+                    next_heartbeat_at = _advance_deadline(
+                        next_heartbeat_at,
+                        now,
+                        HEARTBEAT_S,
+                    )
+                poll = cast(NativePollStateProtocol, self._session.poll_state())
+                native_status = parse_native_session_status(str(poll.status))
                 if native_status == NativeSessionStatus.PLAYING:
                     self._has_played = True
 
-                now = time.monotonic()
                 if self._renderer is not None and now >= next_render_at:
+                    live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
                     if hasattr(self._renderer, "update_counters_batch"):
                         self._renderer.update_counters_batch(
                             ProgressCounters(
@@ -465,7 +504,11 @@ class RustDispatchRuntime:
                         recovered_partial_up_retries=live.recovered_partial_up_retries,
                         backend_health=self._health(live.backend_health),
                     )
-                    next_render_at = now + (1.0 / 30.0)
+                    next_render_at = _advance_deadline(
+                        next_render_at,
+                        now,
+                        HUD_REFRESH_S,
+                    )
                 time.sleep(self._sleep_s)
 
             joined = self._join_owned()

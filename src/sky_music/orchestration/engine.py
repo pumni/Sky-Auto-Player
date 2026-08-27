@@ -19,6 +19,7 @@ from sky_music.infrastructure.focus import (
     Win32SkyFocusGuard,
 )
 from sky_music.orchestration.native_dispatch import (
+    SUPERVISOR_TICK_S,
     NativeDispatchError,
     RustDispatchRuntime,
 )
@@ -156,7 +157,7 @@ class PlaybackEngine:
             focus_guard=self.focus_guard,
             controls=self.controls,
             renderer=self.renderer,
-            poll_s=0.01,
+            poll_s=SUPERVISOR_TICK_S,
             telemetry_enabled=self.telemetry.enabled,
         )
         try:

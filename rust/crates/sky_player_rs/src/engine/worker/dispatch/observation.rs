@@ -79,10 +79,11 @@ pub struct DownTraceObservation {
     pub effective_deadline_ticks: TimelineTicks,
 }
 
-/// Raw QPC boundaries for the two-stage dispatch handoff. The admission wake
-/// is optional because a dispatch may be intentionally admitted at or after
-/// its guard boundary. Test-support direct-boundary dispatch may provide a
-/// deterministic synthetic crossing without running the precision waiter.
+/// Raw QPC boundaries for the physical dispatch handoff. The optional wake
+/// field is retained for diagnostic/report compatibility; normal production
+/// dispatch now has one direct target wait and uses the same wake as the
+/// target crossing. Test-support direct-boundary dispatch may provide a
+/// deterministic synthetic crossing without running the waiter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,

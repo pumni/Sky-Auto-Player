@@ -50,11 +50,11 @@ pub(crate) fn dispatch_authored_packet(
         now_ticks,
         physical_target_qpc,
         down_admission,
-        startup_target_selected,
         focus_loss_fault,
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         #[cfg(any(test, feature = "test-support"))]
@@ -98,12 +98,12 @@ pub(crate) fn dispatch_authored_packet(
         now_ticks,
         physical_target_qpc,
         down_admission,
-        startup_target_selected,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
         interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         #[cfg(any(test, feature = "test-support"))]
@@ -136,12 +136,12 @@ fn commit_down_send_outcome(
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
-    _startup_target_selected: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
     observer: Option<&PendingObservationQueue>,
@@ -203,6 +203,7 @@ fn commit_down_send_outcome(
         down_admission,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
+        boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         admission,
@@ -264,6 +265,40 @@ pub(crate) enum AdmissionOutcome {
     TargetChanged,
     ControlRejected,
 }
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_target_crossing_qpc(
+    down_admission: DownBoundaryAdmission,
+    boundary_crossing_qpc: Option<QpcTicks>,
+    physical_target_qpc: QpcTicks,
+    qpc_clock: QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    timing: &WorkerTimingState,
+    local_metrics: &mut WorkerMetricsLocal,
+    #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
+) -> Result<Option<QpcTicks>, DispatchStep> {
+    if down_admission.is_missed() || down_admission.is_late_rescue() {
+        return Ok(None);
+    }
+    if let Some(boundary_crossing_qpc) = boundary_crossing_qpc {
+        return Ok(Some(boundary_crossing_qpc));
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if test_direct_boundary {
+        return Ok(Some(physical_target_qpc));
+    }
+    let result = wait_to_precision_boundary(
+        qpc_clock,
+        waiter,
+        interrupt,
+        physical_target_qpc,
+        timing,
+        local_metrics,
+    );
+    result.map(|result| Some(result.target_crossing_qpc))
+}
+
 /// Pre-send admission gate for focus, preflight, late-grace, conflict, and final Down authorization.
 #[allow(clippy::too_many_arguments)]
 fn admit_authored_down(
@@ -440,6 +475,7 @@ fn finalize_authored_down_admission(
     down_admission: DownBoundaryAdmission,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
+    boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
     observer: Option<&PendingObservationQueue>,
@@ -451,46 +487,21 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    let target_crossing_qpc = if down_admission.is_missed() || down_admission.is_late_rescue() {
-        None
-    } else {
+    let target_crossing_qpc = match resolve_target_crossing_qpc(
+        down_admission,
+        boundary_crossing_qpc,
+        physical_target_qpc,
+        qpc_clock,
+        waiter,
+        interrupt,
+        timing,
+        local_metrics,
         #[cfg(any(test, feature = "test-support"))]
-        {
-            if test_direct_boundary {
-                Some(physical_target_qpc)
-            } else {
-                match wait_to_precision_boundary(
-                    qpc_clock,
-                    waiter,
-                    interrupt,
-                    physical_target_qpc,
-                    timing,
-                    local_metrics,
-                ) {
-                    Ok(result) => Some(result.target_crossing_qpc),
-                    Err(step) => {
-                        return match step {
-                            DispatchStep::Continue => Ok(AdmissionOutcome::ControlRejected),
-                            other => Err(other),
-                        };
-                    }
-                }
-            }
-        }
-        #[cfg(not(any(test, feature = "test-support")))]
-        {
-            Some(
-                wait_to_precision_boundary(
-                    qpc_clock,
-                    waiter,
-                    interrupt,
-                    physical_target_qpc,
-                    timing,
-                    local_metrics,
-                )?
-                .target_crossing_qpc,
-            )
-        }
+        test_direct_boundary,
+    ) {
+        Ok(value) => value,
+        Err(DispatchStep::Continue) => return Ok(AdmissionOutcome::ControlRejected),
+        Err(step) => return Err(step),
     };
     #[cfg(any(test, feature = "test-support"))]
     invoke_final_gate_race_hook(

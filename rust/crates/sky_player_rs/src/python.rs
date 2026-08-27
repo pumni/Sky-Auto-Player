@@ -17,7 +17,7 @@ use session::TestDispatchSessionPy;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_dispatch_win32::mmcss::PriorityMode;
-use snapshot::{BackendHealthSnapshotPy, ProgressSnapshotPy};
+use snapshot::{BackendHealthSnapshotPy, PollSnapshotPy, ProgressSnapshotPy};
 use std::sync::Arc;
 use telemetry::build_info;
 
@@ -217,6 +217,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSessionConfigPy>()?;
     m.add_class::<NativeDispatchSessionPy>()?;
     m.add_class::<BackendHealthSnapshotPy>()?;
+    m.add_class::<PollSnapshotPy>()?;
     m.add_class::<ProgressSnapshotPy>()?;
     #[cfg(feature = "test-support")]
     m.add_class::<TestDispatchSessionPy>()?;

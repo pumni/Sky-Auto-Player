@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from sky_music.orchestration import native_dispatch as native_dispatch_module
 from sky_music.orchestration.native_dispatch import (
     NativeDispatchError,
     RustDispatchRuntime,
@@ -50,6 +51,10 @@ def _live(status: str, *, finished: bool, paused: bool = False) -> SimpleNamespa
         release_max_us=0,
         release_late_2ms=0,
         recent_latencies_us=(),
+        wait_backend_failures=0,
+        wait_clock_failures=0,
+        recovered_zero_progress_but_late=0,
+        recovered_partial_up_retries=0,
         is_finished=finished,
         is_paused=paused,
         input_path_degraded=False,
@@ -159,8 +164,11 @@ class FakeSession:
         self.arm_pre_roll_us: list[int] = []
         self.pause_calls = 0
         self.resume_calls = 0
+        self.heartbeat_calls = 0
         self.target_hwnd_calls: list[int] = []
         self.focus_hint_calls: list[bool] = []
+        self.poll_state_calls = 0
+        self.snapshot_lite_calls = 0
 
     def arm(self, pre_roll_us: int) -> None:
         self.arm_calls += 1
@@ -174,12 +182,26 @@ class FakeSession:
         self.resume_calls += 1
 
     def snapshot_lite(self) -> SimpleNamespace:
+        self.snapshot_lite_calls += 1
         if self._snapshots:
             self._last_snapshot = self._snapshots.pop(0)
         return self._last_snapshot
 
+    def poll_state(self) -> SimpleNamespace:
+        self.poll_state_calls += 1
+        if self._snapshots:
+            self._last_snapshot = self._snapshots.pop(0)
+        snapshot = self._last_snapshot
+        return SimpleNamespace(
+            elapsed_us=snapshot.elapsed_us,
+            pre_roll_remaining_us=snapshot.pre_roll_remaining_us,
+            is_finished=snapshot.is_finished,
+            is_paused=snapshot.is_paused,
+            status=snapshot.status,
+        )
+
     def heartbeat(self) -> None:
-        return None
+        self.heartbeat_calls += 1
 
     def join(self, *, timeout_ms: int) -> bool:
         self.join_calls += 1
@@ -229,6 +251,89 @@ def test_normal_finish_consumes_terminal_snapshot_without_cleanup_race() -> None
     assert session.report_calls == 1
     assert session.panic_calls == 0
     assert session.quit_calls == 0
+    assert session.poll_state_calls == 2
+    assert session.snapshot_lite_calls == 0
+
+
+def test_runtime_uses_heavy_snapshot_only_when_renderer_is_due() -> None:
+    session = FakeSession(
+        [
+            _live("playing", finished=False),
+            _live("playing", finished=False),
+            _live("finished", finished=True),
+        ],
+        _report("finished"),
+    )
+    runtime = _runtime(session)
+    rendered: list[dict[str, Any]] = []
+    runtime._renderer = SimpleNamespace(
+        render=lambda *args, **kwargs: rendered.append(kwargs),
+        finish=lambda _message: None,
+    )
+
+    outcome, _snapshot, _telemetry = runtime.run()
+
+    assert outcome == PlaybackOutcome.FINISHED
+    assert session.poll_state_calls == 3
+    assert session.snapshot_lite_calls == 1
+    assert len(rendered) == 1
+    assert "missed_down_boundaries" in rendered[0]
+
+
+def test_supervisor_cadences_are_independent_and_command_poll_stays_per_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now = round(self.now + seconds, 6)
+
+    class CountingControls:
+        poll_calls = 0
+
+        def poll(self) -> None:
+            self.poll_calls += 1
+            return
+
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    clock = FakeClock()
+    monkeypatch.setattr(native_dispatch_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(native_dispatch_module.time, "sleep", clock.sleep)
+    focus_calls = 0
+    original_publish_focus = RustDispatchRuntime._publish_focus
+
+    def count_focus_calls(runtime: RustDispatchRuntime) -> None:
+        nonlocal focus_calls
+        focus_calls += 1
+        original_publish_focus(runtime)
+
+    monkeypatch.setattr(RustDispatchRuntime, "_publish_focus", count_focus_calls)
+    session = FakeSession(
+        [_live("playing", finished=False) for _ in range(12)]
+        + [_live("finished", finished=True)],
+        _report("finished"),
+    )
+    controls = CountingControls()
+    runtime = _runtime(session)
+    runtime._controls = controls
+    runtime._sleep_s = 0.020
+
+    runtime.run()
+
+    assert controls.poll_calls == 12
+    assert session.poll_state_calls == 13
+    assert session.heartbeat_calls == 2
+    assert focus_calls == 11  # startup plus the 50 Hz cadence, not every poll
+    assert session.snapshot_lite_calls == 0
 
 
 def test_runtime_arms_native_before_preroll_reaches_zero() -> None:

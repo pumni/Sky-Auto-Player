@@ -1,6 +1,52 @@
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::collections::HashMap;
 
+/// Lifecycle values for the allocation-free supervisor poll path.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum EnginePollStatus {
+    Ready,
+    Preroll,
+    Playing,
+    Paused,
+    Finished,
+    Quit,
+    Skipped,
+    Error,
+    Panicked,
+    Poisoned,
+    Invalid,
+}
+
+impl EnginePollStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Preroll => "preroll",
+            Self::Playing => "playing",
+            Self::Paused => "paused",
+            Self::Finished => "finished",
+            Self::Quit => "quit",
+            Self::Skipped => "skipped",
+            Self::Error => "error",
+            Self::Panicked => "panicked",
+            Self::Poisoned => "poisoned",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+/// Tiny frequent-poll shape. It intentionally has no dependency on the
+/// shared metrics snapshot, diagnostic strings, or variable-sized collections.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct EnginePollSnapshot {
+    pub elapsed_us: u64,
+    pub pre_roll_remaining_us: u64,
+    pub is_finished: bool,
+    pub is_paused: bool,
+    pub status: EnginePollStatus,
+}
+
 /// Public snapshot shape returned by
 /// [`crate::engine::NativeDispatchSession::snapshot`].
 #[derive(Debug, Clone)]

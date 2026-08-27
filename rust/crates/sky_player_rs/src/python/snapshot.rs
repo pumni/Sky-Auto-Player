@@ -1,5 +1,31 @@
-use crate::engine::EngineProgressSnapshot;
+use crate::engine::{EnginePollSnapshot, EngineProgressSnapshot};
 use pyo3::prelude::*;
+
+#[pyclass(name = "PollSnapshot", frozen, skip_from_py_object)]
+pub(super) struct PollSnapshotPy {
+    #[pyo3(get)]
+    pub(super) elapsed_us: u64,
+    #[pyo3(get)]
+    pub(super) pre_roll_remaining_us: u64,
+    #[pyo3(get)]
+    pub(super) is_finished: bool,
+    #[pyo3(get)]
+    pub(super) is_paused: bool,
+    #[pyo3(get)]
+    pub(super) status: String,
+}
+
+impl PollSnapshotPy {
+    pub(super) fn from_snapshot(snapshot: EnginePollSnapshot) -> Self {
+        Self {
+            elapsed_us: snapshot.elapsed_us,
+            pre_roll_remaining_us: snapshot.pre_roll_remaining_us,
+            is_finished: snapshot.is_finished,
+            is_paused: snapshot.is_paused,
+            status: snapshot.status.as_str().to_string(),
+        }
+    }
+}
 
 #[pyclass(name = "BackendHealthSnapshot", frozen, skip_from_py_object)]
 #[derive(Clone)]

@@ -12,7 +12,10 @@ use super::{
     WorkerResources, WorkerTimingState, describe_release_outcome, ensure_preflight_for_target,
     initialize_startup, load_target_stamp, release_state_verified, wait_failure_message,
 };
-use crate::engine::config::DEFAULT_ADMISSION_GUARD_US;
+use crate::engine::config::{
+    CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, DispatchProfile,
+    STARTUP_READINESS_RESERVE_US,
+};
 use std::sync::atomic::Ordering;
 
 fn validate_production_wait_backend(
@@ -33,6 +36,30 @@ fn validate_production_wait_backend(
         return Err(wait_failure_message(failure));
     }
     Ok(())
+}
+
+fn startup_wake_probe(
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    qpc_clock: QpcClock,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    initial_now_ticks: QpcTicks,
+    startup_deadline_ticks: QpcTicks,
+) -> Option<sky_dispatch_win32::wait::WakeErrorStats> {
+    let budget_ticks = qpc_clock
+        .duration_from_us(CALIBRATION_MAX_STARTUP_BUDGET_US)
+        .ok()?;
+    let remaining_ticks = startup_deadline_ticks
+        .checked_duration_since(initial_now_ticks)
+        .ok()?;
+    if remaining_ticks < budget_ticks {
+        return None;
+    }
+    let stats = waiter.probe_wake_error_stats(qpc_clock, interrupt, CALIBRATION_SAMPLES)?;
+    let completed_ticks = qpc_clock.now().ok()?;
+    let probe_elapsed_ticks = completed_ticks
+        .checked_duration_since(initial_now_ticks)
+        .ok()?;
+    (probe_elapsed_ticks <= budget_ticks).then_some(stats)
 }
 
 /// Assembles the worker's admission state: backend, coordinator,
@@ -320,25 +347,15 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         config.telemetry.capacity,
     )));
     core.errors.abort_counts.reserve(6);
-    // Production dispatch uses one fixed QPC spin handoff.  Wake probing and
-    // adaptive lead control are diagnostic-only and cannot alter this path.
     #[cfg(any(test, feature = "test-support"))]
-    let effective_spin_threshold_us = config
+    let effective_startup_reserve_us = config
         .wait
         .test_spin_threshold_us
-        .unwrap_or(super::super::config::DEFAULT_SPIN_THRESHOLD_US);
+        .unwrap_or(STARTUP_READINESS_RESERVE_US);
     #[cfg(not(any(test, feature = "test-support")))]
-    let effective_spin_threshold_us = super::super::config::DEFAULT_SPIN_THRESHOLD_US;
-    #[cfg(any(test, feature = "test-support"))]
-    let effective_admission_guard_us = config
-        .wait
-        .test_spin_threshold_us
-        .unwrap_or(DEFAULT_ADMISSION_GUARD_US);
-    #[cfg(not(any(test, feature = "test-support")))]
-    let effective_admission_guard_us = DEFAULT_ADMISSION_GUARD_US;
+    let effective_startup_reserve_us = STARTUP_READINESS_RESERVE_US;
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
-    core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     let initial_now_ticks = match qpc_clock.now() {
         Ok(now) => now,
         Err(error) => {
@@ -360,6 +377,48 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
+    let startup_reserve_ticks = match qpc_clock.duration_from_us(effective_startup_reserve_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("startup readiness reserve conversion failed: {error:?}"),
+            );
+        }
+    };
+    let startup_anchor_ticks = worker.epoch_qpc;
+    let startup_deadline_ticks = QpcTicks::from_raw(
+        startup_anchor_ticks
+            .as_u64()
+            .saturating_sub(startup_reserve_ticks.as_u64()),
+    );
+    let calibration_stats =
+        if backend_is_production && matches!(config.profile, DispatchProfile::Production) {
+            startup_wake_probe(
+                &waiter,
+                qpc_clock,
+                interrupt,
+                initial_now_ticks,
+                startup_deadline_ticks,
+            )
+        } else {
+            None
+        };
+    #[cfg(any(test, feature = "test-support"))]
+    let effective_spin_threshold_us = config
+        .wait
+        .test_spin_threshold_us
+        .unwrap_or_else(|| super::timing::select_spin_threshold_us(calibration_stats));
+    #[cfg(not(any(test, feature = "test-support")))]
+    let effective_spin_threshold_us = super::timing::select_spin_threshold_us(calibration_stats);
+    core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
+    if let Some(stats) = calibration_stats {
+        core.metrics.wake_error_p50_us = stats.p50_us;
+        core.metrics.wake_error_p95_us = stats.p95_us;
+        core.metrics.wake_error_p99_us = stats.p99_us;
+        core.metrics.wake_error_max_us = stats.max_us;
+    }
     let effective_spin_threshold_ticks =
         match qpc_clock.duration_from_us(effective_spin_threshold_us) {
             Ok(ticks) => ticks,
@@ -371,16 +430,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    let admission_guard_ticks = match qpc_clock.duration_from_us(effective_admission_guard_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("admission guard conversion failed: {error:?}"),
-            );
-        }
-    };
     let health_options = DispatchHealthOptions {
         wait_warn_us: config.timing.input_path_warn_us,
         ..DispatchHealthOptions::default()
@@ -396,19 +445,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
-    let startup_anchor_ticks = worker.epoch_qpc;
-    let startup_deadline_ticks = match qpc_clock.duration_from_us(effective_admission_guard_us) {
-        Ok(guard) => {
-            QpcTicks::from_raw(startup_anchor_ticks.as_u64().saturating_sub(guard.as_u64()))
-        }
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("startup admission guard conversion failed: {error:?}"),
-            );
-        }
-    };
     let startup_anchor_ticks =
         match PlaybackClockState::new(startup_anchor_ticks, DurationTicks::from_raw(0)) {
             Ok(clock) => clock,
@@ -428,7 +464,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         down_late_grace_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
-        admission_guard_ticks,
         focus_restore_grace_ticks,
         paused_poll_ticks,
         lease_timeout_ticks,

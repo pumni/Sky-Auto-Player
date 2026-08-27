@@ -210,6 +210,19 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
     session.arm(0)  # type: ignore[attr-defined]
     assert session.join(timeout_ms=5_000) is True
 
+    poll = session.poll_state()  # type: ignore[attr-defined]
+    assert isinstance(poll, sky_player_rs.PollSnapshot)  # type: ignore[attr-defined]
+    assert poll.is_finished is True
+    assert poll.status == "finished"
+    assert set(dir(poll)) >= {
+        "elapsed_us",
+        "pre_roll_remaining_us",
+        "is_finished",
+        "is_paused",
+        "status",
+    }
+    assert not hasattr(poll, "backend_health")
+
     live = session.snapshot_lite()  # type: ignore[attr-defined]
     assert isinstance(live, sky_player_rs.ProgressSnapshot)  # type: ignore[attr-defined]
     assert isinstance(live.backend_health, sky_player_rs.BackendHealthSnapshot)  # type: ignore[attr-defined]

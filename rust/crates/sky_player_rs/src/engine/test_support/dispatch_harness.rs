@@ -5,7 +5,7 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
-use crate::engine::config::{DEFAULT_ADMISSION_GUARD_US, DispatchProfile, WorkerConfig};
+use crate::engine::config::{DispatchProfile, WorkerConfig};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
@@ -639,9 +639,6 @@ impl ProductionDispatchTestHarness {
         let health_options = DispatchHealthOptions::default();
         let health = WorkerHealthState::new(health_options);
         let mut timing = WorkerTimingState::create_test_timing();
-        timing.admission_guard_ticks = qpc_clock
-            .duration_from_us(DEFAULT_ADMISSION_GUARD_US)
-            .expect("test admission guard conversion");
         timing.down_late_grace_ticks = qpc_clock
             .duration_from_us(500)
             .expect("test down late-grace conversion");
@@ -1068,8 +1065,8 @@ impl ProductionDispatchTestHarness {
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
                 physical_target_qpc: plan.physical_target_qpc(),
-                admission_guard_ticks: if matches!(plan, NextDispatchPlan::Physical(_)) {
-                    self.timing.admission_guard_ticks
+                spin_threshold_ticks: if matches!(plan, NextDispatchPlan::Physical(_)) {
+                    self.timing.effective_spin_threshold_ticks
                 } else {
                     DurationTicks::ZERO
                 },
@@ -1136,7 +1133,15 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(now_ticks, true)
             .map_err(|error| format!("benchmark timeline: {error}"))?;
         self.effective_now_ticks = effective_now_ticks;
-        let step = self.dispatch_plan_at(plan, effective_now_ticks, now_ticks, true, None);
+        let step = self.dispatch_plan_at_with_sender_option(
+            plan,
+            effective_now_ticks,
+            now_ticks,
+            true,
+            Some(now_ticks),
+            None,
+            false,
+        );
         Ok(step)
     }
     fn align_epoch_to_deadline_for_test(&mut self, deadline: TimelineTicks, now_ticks: QpcTicks) {
@@ -1208,17 +1213,20 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks,
             now_ticks,
             allow_pre_deadline,
+            None,
             test_physical_target_qpc,
             test_physical_target_qpc.is_some(),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_plan_at_with_sender_option(
         &mut self,
         plan: &NextDispatchPlan,
         effective_now_ticks: TimelineTicks,
         now_ticks: QpcTicks,
         allow_pre_deadline: bool,
+        boundary_crossing_qpc: Option<QpcTicks>,
         test_physical_target_qpc: Option<QpcTicks>,
         test_inject_sender_start: bool,
     ) -> DispatchStep {
@@ -1246,6 +1254,7 @@ impl ProductionDispatchTestHarness {
             &self.interrupt,
             &self.progress_clock,
             Some(&self.observer),
+            boundary_crossing_qpc,
             allow_pre_deadline,
             test_physical_target_qpc,
             test_inject_sender_start,
@@ -1404,7 +1413,15 @@ impl ProductionDispatchTestHarness {
         });
         self.runtime
             .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-        self.dispatch_plan_at_with_sender_option(plan, deadline, target, true, Some(target), false)
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            deadline,
+            target,
+            true,
+            None,
+            Some(target),
+            false,
+        )
     }
 
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
@@ -1427,6 +1444,7 @@ impl ProductionDispatchTestHarness {
             plan.deadline_ticks().expect("physical deadline"),
             overdue_now,
             false,
+            None,
             None,
             true,
         )
@@ -1467,6 +1485,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks,
             overdue_now,
             false,
+            None,
             None,
             false,
         )
@@ -1542,6 +1561,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks,
             now_ticks,
             false,
+            None,
             Some(target),
             false,
         )
@@ -1578,11 +1598,11 @@ impl ProductionDispatchTestHarness {
             now_ticks,
             physical_target_qpc,
             down_admission: DownBoundaryAdmission::Normal,
-            startup_target_selected: false,
             focus_loss_fault: false,
             interrupt: &self.interrupt,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
+            boundary_crossing_qpc: None,
             test_direct_boundary: false,
             test_inject_sender_start: false,
         };
