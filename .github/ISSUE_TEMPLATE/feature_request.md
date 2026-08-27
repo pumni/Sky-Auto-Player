@@ -1,28 +1,27 @@
+---
 name: Feature request
-about: Suggest a new behaviour, a tuning preset, a new song format, etc.
+about: Suggest a new behaviour, tuning option, song format, or workflow improvement
 title: ""
 labels: ["enhancement"]
-
+assignees: ''
 ---
 
 **Problem**
 
-What is missing or awkward today? Be specific.
+What is missing or awkward today? Be specific about the user-visible outcome.
 
-**Proposed solution**
+**Proposed direction**
 
-Sketch the API, the config field, the CLI flag, or the UI flow.
+Describe the smallest useful behavior change. API/config/CLI/UI details are welcome when they are part of the requirement, but implementation choreography is not required.
 
 **Alternatives considered**
 
-What else have you weighed? Why is this option the simplest that solves the stated problem? (See `AGENTS.md` Working Principles: simplicity, surgical, no speculation.)
+What else did you consider, and why would this direction be preferable?
 
-**AGENTS.md check**
+**Constraints / compatibility**
 
-- [ ] Does not relax P0 security mandates.
-- [ ] Does not require new third-party dependencies — or justifies them explicitly (size, license, no stdlib alternative).
-- [ ] Documents the change scope (one module, not a refactor).
+Call out any security, Windows/native, update/release, compatibility, or data-format constraints that matter. Security-sensitive changes must preserve the canonical [`SECURITY.md`](../../SECURITY.md) boundary unless the request explicitly proposes a reviewed security-contract change.
 
-**Validation plan**
+**Evidence / acceptance**
 
-Which gate in the altitude table will you run to prove the feature works?
+What observable behavior would show that the feature works? Mention relevant direct tests, measurements, or specialized verification if already known; repository checks choose the exact command surface during implementation.

@@ -1,59 +1,94 @@
 # Security Policy
 
-## Scope
+## Canonical security contract
 
-Sky Auto Player is a Windows 11 desktop tool that reads JSON song files and simulates keyboard keypresses through the public Windows `SendInput` API so that users can play music sheets in [Sky: Children of the Light](https://www.thatskygame.com/) hands-free.
+This file is the source of truth for Sky Auto Player's security boundary. Agent guidance may
+summarize these rules, but it does not own or redefine them. The executable enforcement gate is
+`scripts/audit_security_mandates.py`.
 
-**The entire system is built on three non-negotiable security mandates.** They live in [`AGENTS.md`](./AGENTS.md) as P0 rules and are enforced by `scripts/audit_security_mandates.py`.
+Sky Auto Player is a Windows 11 desktop tool that reads music-sheet files and simulates keyboard
+keypresses through the public Windows `SendInput` API so users can play music sheets in
+[Sky: Children of the Light](https://www.thatskygame.com/) hands-free.
 
-### 1. NO GAME TAMPERING
+The entire system is built on three non-negotiable mandates.
+
+### 1. No game or process tampering
 
 Sky Auto Player **never**:
 
 - modifies or patches game files;
-- reads or writes any other process's memory;
+- reads or writes another process's memory;
 - installs Windows hooks (`SetWindowsHookEx`, `SetWinEventHook`, etc.), regardless of target;
-- injects DLLs into any other process;
-- attaches a debugger to any other process;
-- bypasses anti-cheat.
+- injects DLLs or code into another process;
+- attaches a debugger to another process;
+- bypasses anti-cheat or interferes with anti-cheat operation.
 
-The P0 audit forbids hooks on any process, including keyboard hooks — not just
-hooks targeting the game.
+The hook prohibition applies to input/keyboard hooks as well as game-targeted hooks.
 
-### 2. SENDINPUT ONLY
+### 2. `SendInput` only for gameplay input
 
-The only mechanism used to send keystrokes is `user32.SendInput`. Legacy
-`keybd_event` / `mouse_event` calls and third-party input modules
-(`python-keyboard`, `pynput`, etc.) are forbidden.
+The only supported mechanism for gameplay keystroke simulation is `user32.SendInput`. Legacy
+`keybd_event` / `mouse_event` calls and third-party input injection modules such as
+`python-keyboard`, `pynput`, and similar tooling are forbidden.
 
-### 3. STRICT VALIDATION
+Platform APIs used for observation, timing, UI, calibration, packaging, or updater behavior do not
+authorize a second gameplay-input mechanism and must remain inside their documented boundaries.
 
-Every CLI argument, config field, song file, hotkey binding, and timing profile is validated through a typed dataclass before reaching the dispatch engine. Malformed inputs are rejected with a clear error rather than silently coerced.
+### 3. Strict validation and fail-closed security behavior
+
+CLI arguments, configuration, song inputs, hotkey bindings, timing values, updater inputs, and other
+external data must be validated before reaching sensitive execution boundaries. Malformed,
+unsupported, ambiguous, or integrity-invalid security-sensitive input is rejected rather than
+silently coerced into a permissive behavior.
 
 ## Auditing
 
-The P0 mandates are enforced both **by review** (every PR must pass CI) and **by automation** (`scripts/audit_security_mandates.py` runs as a CI gate on every push and pull request). The audit scans both Python under `src/` and Rust under `rust/`. Any new code that adds a forbidden API call — hook, memory read, remote thread, debug attach — fails CI immediately. Historical exceptions, if any, are listed in `.config/security_audit_baseline.json` with a justification and a tracking reference.
+The mandates above are enforced by review and by `scripts/audit_security_mandates.py`, which scans
+Python under `src/` and Rust under `rust/`. New references to forbidden hooks, process-memory APIs,
+remote-thread/debug tooling, legacy input APIs, or disallowed Win32 surfaces fail the audit.
+Historical exceptions, if any, are recorded in `.config/security_audit_baseline.json` with their
+justification and tracking reference.
 
-To run the audit locally:
+Run the security gate locally with:
 
 ```powershell
 uv run --env-file .env python scripts/audit_security_mandates.py
 ```
 
+The normal repository verification entry point (`uv run python scripts/check.py`) includes this
+audit in its `static` group.
+
+## Update and release integrity
+
+The public distribution is intentionally unsigned and portable. Unsigned distribution is not a
+security bypass: the native updater must preserve its HTTPS allow-list, exact SHA256/archive/manifest
+verification, transaction/rollback behavior, preserve-list, bounded provenance, and user-triggered
+execution model. The current normative contract is
+[`docs/distribution-and-update.md`](docs/distribution-and-update.md).
+
+Changes to updater trust, release provenance, allowed download origins, preserved user data, or
+transaction integrity are security-sensitive and require direct tests/evidence for that boundary.
+
 ## Reporting a Vulnerability
 
-If you discover a way to bypass these mandates or abuse Sky Auto Player in a way that violates the P0 rules (memory tampering, hooks, DLL injection, anti-cheat evasion, etc.):
+If you discover a way to bypass these mandates or abuse Sky Auto Player through memory tampering,
+hooks, DLL/code injection, anti-cheat evasion, update-integrity bypass, or a comparable security
+issue:
 
-- Email **pumni.dev@gmail.com** and encrypt sensitive material at the PGP key linked from the publisher profile.
-- Do **not** open a public issue for reproducer steps.
+- Email **pumni.dev@gmail.com** and encrypt sensitive material at the PGP key linked from the
+  publisher profile.
+- Do **not** open a public issue containing reproducer steps.
 - Expect an acknowledgement within 7 days and a triage decision within 14 days.
 
 Reports are appreciated; coordinated disclosure is the norm.
 
 ## Out of Scope
 
-- Sky Auto Player must never be used to violate Thatgamecompany's [Sky Terms of Service](https://www.thatskygame.com/terms-of-service/). Automated playback may itself be prohibited; the user assumes that risk.
-- Behaviour caused by running the binary outside its intended environment (e.g. on Windows builds we don't support, with broken permissions, or with simulated anti-cheat) is out of scope.
+- Sky Auto Player must never be used to violate Thatgamecompany's
+  [Sky Terms of Service](https://www.thatskygame.com/terms-of-service/). Automated playback may
+  itself be prohibited; the user assumes that risk.
+- Behavior caused by running the binary outside its intended environment (for example unsupported
+  Windows builds, broken permissions, or simulated anti-cheat environments) is out of scope.
 
 ## Recognition
 

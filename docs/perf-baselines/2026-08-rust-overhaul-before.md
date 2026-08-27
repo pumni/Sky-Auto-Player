@@ -1,6 +1,6 @@
 # Performance Baseline: Before Rust Overhaul (Aug 2026)
 
-This document captures the performance and efficiency baselines of the system prior to the complete Rust orchestration overhaul (`docs/2026-08-01-rust-overhaul-plan.md`). These baselines serve as the primary success criteria for the refactor.
+This document captures the performance and efficiency baselines of the system prior to the complete Rust orchestration overhaul. The implementation plan that originally framed this baseline has been retired from the active documentation tree and remains available through Git history. These measurements are historical evidence, not current repository instructions.
 
 ## 1. Dispatch Efficiency (Python vs. Rust prototype)
 

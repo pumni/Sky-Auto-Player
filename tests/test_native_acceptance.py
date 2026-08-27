@@ -813,19 +813,24 @@ def test_no_outlier_exclusion_contract() -> None:
 
 
 def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> None:
-    workflow = (
-        Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
-    ).read_text(encoding="utf-8")
+    root = Path(__file__).parents[1]
+    workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    verifier = (root / "scripts" / "check.py").read_text(encoding="utf-8")
     manual_branch = 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]'
     path_diff = 'changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"'
     assert workflow.index(manual_branch) < workflow.index(path_diff)
     assert "fetch-depth: 0" in workflow
-    assert "cargo fmt --manifest-path rust/Cargo.toml --all -- --check" in workflow
-    assert "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked" in workflow
-    assert "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings" in workflow
-    assert "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked" in workflow
+    assert "uv run python scripts/check.py rust" in workflow
     assert "scripts/build_rust_wheel.py --test-support" in workflow
-    assert "uv run pytest -m \"not slow\"" in workflow
+    assert "uv run python scripts/check.py tests" in workflow
+    for required in (
+        '"cargo", "fmt", "--manifest-path", "rust/Cargo.toml", "--all", "--", "--check"',
+        '"cargo",\n                "check",',
+        '"cargo",\n                "clippy",',
+        '"cargo",\n                "test",',
+        'sys.executable, "-m", "pytest", "-m", "not slow"',
+    ):
+        assert required in verifier
     assert "baseline_sha:" not in workflow
     assert "performance_scope:" not in workflow
     assert "scripts/bench_native_ab.py" not in workflow

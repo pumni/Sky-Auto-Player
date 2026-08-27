@@ -1,16 +1,16 @@
-"""Audit Sky Auto Player's source tree for AGENTS.md P0 security-mandate violations.
+"""Audit Sky Auto Player's source tree for SECURITY.md contract violations.
 
 Mirrors the static guard `scripts/audit_free_threaded_wheels.py` plays for the
 build pre-check. Walks Python under ``src/`` with an ``ast`` pass and Rust
 under ``rust/`` with a conservative lexical pass. It flags anything that,
-even if dormant or in dead code, crosses an AGENTS.md security mandate:
+even if dormant or in dead code, crosses the canonical security boundary:
 
-    P0.1 NO GAME TAMPERING    — hooks, injection, process tampering
-    P0.2 SENDINPUT ONLY       — only `user32.SendInput` family is legal
-    P0.3 STRICT VALIDATION    — runtime import of foothold tooling is denied
+    NO GAME TAMPERING    — hooks, injection, process tampering
+    SENDINPUT ONLY       — only `user32.SendInput` family is legal
+    STRICT VALIDATION    — runtime import of foothold tooling is denied
 
 Rust's ``windows-sys`` dependency is checked against an explicit module
-allowlist as well.  This keeps a newly added Win32 surface from silently
+allowlist as well. This keeps a newly added Win32 surface from silently
 expanding the SendInput-only boundary.
 
 The audit is read-only. Findings print to stdout, and exit code is non-zero
@@ -135,7 +135,7 @@ def _scan_calls(tree: ast.AST) -> list[tuple[int, str, str]]:
                     (
                         node.lineno,
                         f"forbidden-call:{name}",
-                        f"`{name}` violates AGENTS.md P0 (game tampering / hook / debug).",
+                        f"`{name}` violates SECURITY.md (game tampering / hook / debug).",
                     )
                 )
             self.generic_visit(node)
@@ -156,7 +156,7 @@ def _scan_imports(tree: ast.AST) -> list[tuple[int, str, str]]:
                         (
                             node.lineno,
                             f"forbidden-import:{top}",
-                            f"importing `{alias.name}` is a foothold tool; violates AGENTS.md P0.",
+                            f"importing `{alias.name}` is a foothold tool; violates SECURITY.md.",
                         )
                     )
         elif isinstance(node, ast.ImportFrom):
@@ -166,7 +166,7 @@ def _scan_imports(tree: ast.AST) -> list[tuple[int, str, str]]:
                     (
                         node.lineno,
                         f"forbidden-import:{module}",
-                        f"`from {node.module} import ...` is a foothold tool; violates AGENTS.md P0.",
+                        f"`from {node.module} import ...` is a foothold tool; violates SECURITY.md.",
                     )
                 )
             for alias in node.names:
@@ -303,7 +303,7 @@ def scan_rust_file(path: Path) -> list[Finding]:
                     path,
                     line_number,
                     f"forbidden-call:{name}",
-                    f"`{name}` violates AGENTS.md P0 (SendInput-only / no tampering).",
+                    f"`{name}` violates SECURITY.md (SendInput-only / no tampering).",
                 )
             )
         if match := dll_pattern.search(line):
@@ -343,7 +343,7 @@ def audit_rust_tree(source_root: Path) -> list[Finding]:
 
 
 def main() -> int:
-    print(f"=== {NAME}: AGENTS.md P0 security-mandate audit ===\n")
+    print(f"=== {NAME}: SECURITY.md mandate audit ===\n")
     print(f"Python source:   {PYTHON_SOURCE_ROOT.resolve()}")
     print(f"Rust source:     {RUST_SOURCE_ROOT.resolve()}")
     print(f"Baseline file:   {BASELINE_PATH.resolve() or '(missing)'}\n")
@@ -376,7 +376,7 @@ def main() -> int:
         f"({suppressed} suppressed by baseline, {fresh} fresh)"
     )
     if fresh:
-        print("\n[FAIL] Unsuppressed P0 violations. Move code off the forbidden API")
+        print("\n[FAIL] Unsuppressed security-contract violations. Move code off the forbidden API")
         print("       or add a justified entry to .config/security_audit_baseline.json.")
         return 1
 
