@@ -9,7 +9,7 @@ assignees: ''
 **Before you file**
 
 - [ ] I searched existing issues for a duplicate.
-- [ ] This is a functional bug, not a P0/security finding (use the *AGENTS.md P0 report* template) and not a feature request.
+- [ ] This is a functional bug, not a security or vulnerability disclosure. For security-sensitive findings, follow [`SECURITY.md`](../../SECURITY.md) and use the private disclosure channel.
 - [ ] I removed private data from any pasted logs (paths and song names are fine; credentials, tokens, and personal info are not).
 
 **Environment**
