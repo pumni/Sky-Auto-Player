@@ -40,7 +40,7 @@ jobs:
       - name: Repository verification — static
         run: uv run python scripts/check.py static
 
-      - name: Rust — format, lint, tests, and native wheel
+      - name: Rust — install and verify pinned stable toolchain
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
@@ -49,14 +49,19 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
-          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
-          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
-          cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked
-          uv run --env-file .env python scripts/build_rust_wheel.py
 
-      - name: Tests — full
-        run: uv run pytest
+      - name: Repository verification — Rust
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: uv run python scripts/check.py rust
+
+      - name: Rust — build native wheel
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: uv run --env-file .env python scripts/build_rust_wheel.py
+
+      - name: Repository verification — full Python tests
+        run: uv run python scripts/check.py tests-full
 
       - name: Assert tag version equals pyproject.toml
         id: verlock
