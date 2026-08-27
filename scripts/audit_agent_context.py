@@ -57,26 +57,34 @@ def main() -> int:
         if size > limit:
             failures.append(f"{path} is {size} bytes; budget is {limit}")
 
-    for path in RETIRED_PATHS:
-        if (ROOT / path).exists():
-            failures.append(f"retired context surface returned: {path}")
+    failures.extend(
+        f"retired context surface returned: {path}"
+        for path in RETIRED_PATHS
+        if (ROOT / path).exists()
+    )
 
     docs = ROOT / "docs"
     if docs.is_dir():
-        for path in docs.glob("*plan*.md"):
-            failures.append(f"top-level implementation plan must live in Git history: {path.relative_to(ROOT)}")
-        for path in docs.rglob("*HANDOFF*.md"):
-            if "archive" not in path.parts:
-                failures.append(f"active agent handoff document is forbidden: {path.relative_to(ROOT)}")
+        failures.extend(
+            f"top-level implementation plan must live in Git history: {path.relative_to(ROOT)}"
+            for path in docs.glob("*plan*.md")
+        )
+        failures.extend(
+            f"active agent handoff document is forbidden: {path.relative_to(ROOT)}"
+            for path in docs.rglob("*HANDOFF*.md")
+            if "archive" not in path.parts
+        )
 
     for path in CONTROL_SURFACES:
         target = ROOT / path
         if not target.is_file():
             continue
         lowered = _read(path).lower()
-        for phrase in FORBIDDEN_CHOREOGRAPHY:
-            if phrase in lowered:
-                failures.append(f"{path} contains retired instruction choreography: {phrase!r}")
+        failures.extend(
+            f"{path} contains retired instruction choreography: {phrase!r}"
+            for phrase in FORBIDDEN_CHOREOGRAPHY
+            if phrase in lowered
+        )
 
     agents = ROOT / "AGENTS.md"
     if agents.is_file():
