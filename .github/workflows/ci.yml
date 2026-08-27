@@ -67,7 +67,7 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               # Winget is not currently supported; no manifest validation is run.
-              src/*|tests/*|scripts/*|rust/*|.github/workflows/*|.github/actions/*)
+              src/*|tests/*|scripts/*|rust/*|.github/workflows/*|.github/actions/*|.github/ISSUE_TEMPLATE/*)
                 relevant=true
                 break
                 ;;
