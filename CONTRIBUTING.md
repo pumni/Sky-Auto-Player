@@ -1,85 +1,85 @@
 # Contributing to Sky Auto Player
 
-Thanks for considering a contribution to Sky Auto Player. This document explains the
-expectations, the architecture boundaries you must respect, and how to get a change merged.
+Thanks for considering a contribution. The repository favors small, evidence-backed changes and
+keeps process proportional to the risk of the boundary being changed.
 
-## Read these first
+## Start with the relevant evidence
 
-Before writing any code, read:
+- Read [`SECURITY.md`](SECURITY.md) for the non-negotiable security boundary.
+- Use [`docs/INDEX.md`](docs/INDEX.md) to route to the smallest active document set relevant to your
+  change.
+- Inspect the production source and direct tests for the behavior you are changing.
+- [`AGENTS.md`](AGENTS.md) is a concise repository/agent guide; it is not a replacement for source,
+  tests, or task-specific investigation.
 
-- [`SECURITY.md`](SECURITY.md) - the P0 security mandates are immutable.
-- [`AGENTS.md`](AGENTS.md) - the priority stack, architecture invariants, and boundaries.
-  Treat it as the single source of truth for engineering rules in this repo.
-- [`docs/architecture.md`](docs/architecture.md) and
-  [`docs/rt-dispatch-architecture.md`](docs/rt-dispatch-architecture.md) - the layering and
-  purity contracts you must keep intact.
+Do not preload historical plans or archives. Existing documentation describes the current system and
+should normally be preserved, but an intentional contribution may change a documented architecture
+or contract; update the active documentation in the same change when that happens.
 
-If any of these documents and your change disagree, the documents win. If you think a document
-itself is wrong, open an issue first - do not fix it silently in a code PR.
+## Contributions we welcome
 
-## Scope of contributions we welcome
+- Bug fixes with direct regression coverage.
+- Performance work backed by measurements on a comparable environment.
+- New or improved supported sheet-format handling.
+- Documentation improvements that make current behavior easier to navigate.
+- Windows/native improvements that preserve the documented security and platform boundaries.
+- Translation improvements for the site source under `site/src/content/` and `site/src/data/`.
 
-- Bug fixes with a minimal failing test that goes green.
-- Performance work that is backed by a `perf-baselines/` measurement before and after.
-- New sheet-format readers (JSON, skysheet, JSON-compatible TXT are the supported set today).
-- Documentation improvements that match the existing `docs/INDEX.md` hierarchy.
-- Windows platform integrations that respect the `platform/`-only `ctypes` boundary.
-- Translation improvements for the landing page (source files in `site/src/content/` and `site/src/data/`).
+## Out of scope
 
-## Out of scope (will be closed)
+- Game/process tampering, memory reads/writes, hooks, injection, debugger attach, anti-cheat evasion,
+  or a gameplay-input mechanism other than Windows `SendInput`.
+- Dependencies such as `python-keyboard`, `pynput`, `SetWindowsHookEx`, or another keyboard-injection
+  mechanism. `scripts/audit_security_mandates.py` enforces this boundary.
+- macOS/Linux ports in the current product scope.
+- Broad unrelated rewrites without evidence that they are necessary for the stated outcome.
 
-- Anything on the P0 never-list: game tampering, memory reads, hooks, injection, debugger
-  attach, anti-cheat evasion, or any input mechanism other than Windows `SendInput`.
-- Ports to macOS or Linux. Sky Auto Player is Windows-only by design.
-- Dependencies on `python-keyboard`, `pynput`, `SetWindowsHookEx`, or any third-party keyboard
-  module. The security audit (`scripts/audit_security_mandates.py`) will fail any such PR.
-- Broad rewrites without tests. Keep diffs focused and reviewable.
+## Architecture
 
-## Architecture contracts you must keep
+The current architecture is documented in `docs/architecture.md` and
+`docs/rt-dispatch-architecture.md`. In particular, keep domain/orchestration independent from direct
+Win32/input effects unless the contribution explicitly changes the architecture and updates the
+corresponding executable boundary checks and documentation.
 
-- `src/sky_music/domain/` and `src/sky_music/orchestration/` stay pure: no `ctypes`, no
-  `SendInput`, no wall-clock, no Windows-specific imports. Timing edges are unit-tested
-  against a controlled clock.
-- `src/sky_music/platform/` is the only place Win32, `ctypes`, or `SendInput` may live.
-- `src/sky_music/infrastructure/` may import `platform/` but must not be imported by `domain/`
-  or `orchestration/`.
-- Domain models use `@dataclass(frozen=True, slots=True)`.
+Do not copy architecture rules into a new contribution-specific instruction layer. Prefer source,
+direct tests, active docs, and repository checks as the evidence system.
 
 ## Workflow
 
-1. Open an issue describing the change before opening a PR for anything non-trivial.
-2. Branch from `main`. Use a conventional-commit prefix on the branch name and the commit
-   subjects (`feat(scope):`, `fix(scope):`, `docs(scope):`, `refactor(scope):`, etc.).
-3. Run the narrowest validation gate that covers your change scope:
+1. Branch from `main` and keep the change focused on one outcome. An issue is useful for product
+   discussion or genuinely ambiguous semantics, but it is not mandatory ceremony for ordinary
+   implementation work.
+2. During development, run the smallest relevant repository verification group:
 
    ```powershell
-   uv run ruff check .
-   uv run pyright
-   uv run pytest
+   uv run python scripts/check.py static
+   uv run python scripts/check.py tests
+   uv run python scripts/check.py rust
    ```
 
-   For any security-touch surface (`platform/`, `SendInput` seams, the audit script, the
-   updater script, the scheduler-purity boundary), also run:
+3. Before completion, run `uv run python scripts/check.py` when your environment supports the full
+   normal gate. Run specialized Windows timing, package, updater, release, or benchmark evidence when
+   the changed boundary requires it.
+4. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
+   to make a change pass.
+5. In the PR, report the checks/evidence actually run and any relevant residual risk.
 
-   ```powershell
-   uv run --env-file .env python scripts/audit_security_mandates.py
-   ```
-
-4. Keep one logical change per PR. Never mix a refactor with a behavior change in one PR.
-5. Do not commit secrets, do not push `.env`, do not skip hooks. Never bypass a CI gate to
-   reach "done".
+A refactor and a behavior change may live in the same PR when they form one inseparable, reviewable
+outcome and the tests make the behavior change explicit. Avoid unrelated cleanup.
 
 ## Dependency management
 
-Always use `uv sync` / `uv add` / `uv add --dev`. Never `pip install`, never manually activate
-`.venv`. Free-threaded interpreter (`3.14+freethreaded`) is mandatory.
+Use `uv sync`, `uv add`, or `uv add --dev`; do not use ad-hoc `pip install` for project dependency
+changes. The repository's pinned free-threaded Python/toolchain configuration remains the executable
+source of truth for supported development versions.
 
-## Commit message format
+## Commit messages
 
-Conventional commits: `type(scope): summary`. Frequent scopes: `scheduler`, `windows`, `ui`,
-`cli`, `build`, `docs`, `deps`, `tooling`, `sec`. One logical change per commit.
+Conventional commit subjects are preferred: `type(scope): summary` (for example `fix(ui): ...` or
+`refactor(dispatch): ...`). Optimize for a reviewable history rather than forcing implementation
+work into a predetermined phase choreography.
 
 ## Licensing
 
-By contributing you agree that your contributions are licensed under the GNU GPL v3.0, the
-same license as the rest of the repository.
+By contributing you agree that your contributions are licensed under the GNU GPL v3.0, the same
+license as the rest of the repository.
