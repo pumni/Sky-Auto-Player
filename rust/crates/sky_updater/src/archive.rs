@@ -11,10 +11,20 @@ use crate::{
     ZIP_MAX_COMPRESSED_BYTES, ZIP_MAX_ENTRIES, ZIP_MAX_ENTRY_BYTES, ZIP_MAX_UNCOMPRESSED_BYTES,
 };
 
+use std::fmt::Write as _;
+
+fn format_hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        let _ = write!(hex, "{:02x}", b);
+    }
+    hex
+}
+
 pub fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    format_hex(&hasher.finalize())
 }
 
 pub fn sha256_file(path: &Path) -> Result<String> {
@@ -28,7 +38,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(format_hex(&hasher.finalize()))
 }
 
 pub fn parse_sha_sidecar(bytes: &[u8], expected_zip_name: &str) -> Result<String> {
@@ -334,6 +344,18 @@ mod tests {
         }
         writer.finish().expect("finish");
         output.into_inner()
+    }
+
+    #[test]
+    fn sha256_known_vectors() {
+        assert_eq!(
+            sha256_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
