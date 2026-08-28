@@ -69,6 +69,7 @@ PRODUCTION_DOWN_LATE_GRACE_US = 500
 PRODUCTION_MIN_SPIN_THRESHOLD_US = 250
 PRODUCTION_MAX_SPIN_THRESHOLD_US = 1_000
 PRODUCTION_CALIBRATION_SAMPLES = 6
+PRODUCTION_AUTO_ACQUIRED_PRIORITIES = frozenset(("mmcss:Games", "thread:highest"))
 
 PRODUCTION_CORRECTNESS_COUNTERS = (
     "production_release_gap_below_policy_count",
@@ -1371,10 +1372,21 @@ def _aggregate_runtime_provenance(runs: list[dict[str, Any]]) -> dict[str, Any]:
     calibration_sample_counts = _unique_run_values(
         runs, "startup_calibration_sample_count"
     )
-    return {
-        "requested_rt_priority_mode": scalar_values["requested_rt_priority_mode"][0]
+    requested_priority: Any = (
+        scalar_values["requested_rt_priority_mode"][0]
         if len(scalar_values["requested_rt_priority_mode"]) == 1
-        else scalar_values["requested_rt_priority_mode"],
+        else scalar_values["requested_rt_priority_mode"]
+    )
+    production_priority_valid = (
+        requested_priority == "auto"
+        and bool(acquired_priorities)
+        and all(
+            priority in PRODUCTION_AUTO_ACQUIRED_PRIORITIES
+            for priority in acquired_priorities
+        )
+    )
+    return {
+        "requested_rt_priority_mode": requested_priority,
         "acquired_priority": acquired_priorities[0]
         if len(acquired_priorities) == 1
         else "mixed",
@@ -1413,6 +1425,7 @@ def _aggregate_runtime_provenance(runs: list[dict[str, Any]]) -> dict[str, Any]:
         if len(scalar_values["spin_threshold_source"]) == 1
         else scalar_values["spin_threshold_source"],
         "priority_active": all(run["acquired_priority"] != "off" for run in runs),
+        "production_priority_valid": production_priority_valid,
         "calibration_provenance_valid": all(
             bool(run["runtime_provenance"]["calibration_provenance_valid"])
             for run in runs
@@ -1447,11 +1460,16 @@ def _scheduling_qualification(
     )
     effective_wait_policy = provenance["effective_wait_policy"]
     production_mode = effective_wait_policy == "production_calibrated"
+    production_priority_valid = bool(provenance["production_priority_valid"])
     status = "qualified"
     if not production_mode:
         status = "legacy_test_support_only"
+    elif provenance["requested_rt_priority_mode"] != "auto":
+        status = "inconclusive_nonproduction_priority_request"
     elif not provenance["priority_active"]:
         status = "inconclusive_priority_fallback"
+    elif not production_priority_valid:
+        status = "inconclusive_nonproduction_priority_acquisition"
     elif not provenance["calibration_provenance_valid"]:
         status = "inconclusive_calibration_fallback"
     elif not sender_cutoff_clean:
@@ -1466,7 +1484,7 @@ def _scheduling_qualification(
         "waiter_timing_clean": waiter_timing_clean,
         "dispatch_path_clean": dispatch_path_clean,
         "sender_cutoff_clean": sender_cutoff_clean,
-        "priority_qualification": provenance["priority_active"],
+        "priority_qualification": production_priority_valid,
         "calibration_provenance_valid": provenance["calibration_provenance_valid"],
         "statistics_eligible": (
             status == "qualified"
@@ -1751,6 +1769,10 @@ def _runtime_provenance(
         and source == "legacy_test_wide_spin"
         and threshold_us == 20_000
     )
+    production_priority_valid = (
+        requested_priority == "auto"
+        and acquired_priority in PRODUCTION_AUTO_ACQUIRED_PRIORITIES
+    )
     return {
         "requested_rt_priority_mode": requested_priority,
         "acquired_priority": acquired_priority,
@@ -1762,12 +1784,13 @@ def _runtime_provenance(
         "effective_spin_threshold_us": threshold_us,
         "spin_threshold_source": source,
         "priority_active": acquired_priority != "off",
+        "production_priority_valid": production_priority_valid,
         "calibration_provenance_valid": calibration_provenance_valid,
         "legacy_provenance_valid": legacy_provenance_valid,
         "production_wait_qualification": (
             expected_wait_policy == "production_calibrated"
             and calibration_provenance_valid
-            and acquired_priority != "off"
+            and production_priority_valid
         ),
         "expected_wait_policy": expected_wait_policy,
     }
@@ -3025,6 +3048,10 @@ def main() -> int:
         raise SystemExit("--budget-seconds must be between 1 and 600 seconds")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
+    if args.wait_policy == "production_calibrated" and args.rt_priority_mode != "auto":
+        raise SystemExit(
+            "--wait-policy production_calibrated requires --rt-priority-mode auto"
+        )
     mock_base_latency_us, mock_per_key_latency_us = _resolve_mock_latency_values(
         backend=args.backend,
         mock_base_latency_us=args.mock_base_latency_us,
@@ -3852,16 +3879,20 @@ def main() -> int:
     acceptance_failure_reasons = _acceptance_failure_reasons(report)
     report["acceptance_clean"] = not acceptance_failure_reasons
     report["acceptance_failure_reasons"] = acceptance_failure_reasons
-    report["statistics_eligible"] = report[
-        "acceptance_clean"
-    ] and _qualification_boundary_gate(
-        backend=args.backend, measured_boundaries=physical_boundaries
-    )
-    report["scheduling_qualification"] = _scheduling_qualification(
+    scheduling_qualification = _scheduling_qualification(
         dispatch_runs,
         backend=args.backend,
         acceptance_clean=report["acceptance_clean"],
         physical_boundaries=physical_boundaries,
+    )
+    report["scheduling_qualification"] = scheduling_qualification
+    report["statistics_eligible"] = (
+        scheduling_qualification["statistics_eligible"]
+        if benchmark_config["effective_wait_policy"] == "production_calibrated"
+        else report["acceptance_clean"]
+        and _qualification_boundary_gate(
+            backend=args.backend, measured_boundaries=physical_boundaries
+        )
     )
     encoded = json.dumps(report, indent=2)
     print(encoded)
