@@ -7,7 +7,6 @@ import subprocess
 
 import pytest
 
-
 _SYNTHETIC_SHARING_VIOLATION = "being used by another process"
 _MAX_SELF_TEST_ATTEMPTS = 3
 
