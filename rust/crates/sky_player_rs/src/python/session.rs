@@ -243,7 +243,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("native_build_version", env!("CARGO_PKG_VERSION"))?;
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
         dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
-        dict.set_item("pyo3_version", "0.29.0")?;
+        dict.set_item("pyo3_version", "0.29.2")?;
         dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
         dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
         dict.set_item("elapsed_us", snap.elapsed_us)?;

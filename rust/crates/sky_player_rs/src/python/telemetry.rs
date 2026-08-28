@@ -16,7 +16,7 @@ pub(super) fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         "calibration_schema_version",
         sky_dispatch_win32::calibration::CALIBRATION_SCHEMA_VERSION,
     )?;
-    dict.set_item("pyo3_version", "0.29.0")?;
+    dict.set_item("pyo3_version", "0.29.2")?;
     dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
     dict.set_item(
         "qpc_frequency_hz",

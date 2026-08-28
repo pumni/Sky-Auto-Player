@@ -7,7 +7,7 @@
   diff required review.
 - Toolchain: `rustc 1.98.0 (88d9e12ae 2026-08-18)` / Cargo `1.98.0`.
 - QPC: `10,000,000 Hz` on the benchmark host.
-- Final source changes are limited to `sky_dispatch_core/Cargo.toml` and `rust/Cargo.lock`.
+- Final source/build changes are limited to the PyO3 manifests/metadata and `rust/Cargo.lock`.
   No production dispatch source, timing constant, packet path, retry policy, or Win32
   boundary changed.
 
@@ -30,42 +30,43 @@ Production usage was checked against all five requested manifests:
 | Crate | Production direct dependencies observed | Result |
 | --- | --- | --- |
 | Workspace `rust/Cargo.toml` | No direct dependencies; workspace/profile/toolchain declaration only | No dependency change needed. |
-| `sky_dispatch_core` | `serde`, `smallvec`, `thiserror` | `serde_json` was only used by golden tests and benchmarks; moved to `dev-dependencies`. |
+| `sky_dispatch_core` | `serde`, `smallvec`, `thiserror` | `serde_json` was already in `dev-dependencies` on the baseline; no change needed. |
 | `sky_dispatch_win32` | workspace core, `serde`, `serde_json`, `smallvec`, `thiserror`, `windows-sys` | No unused production direct dependency found. |
 | `sky_player_rs` | workspace crates, `pyo3`, `serde`, `serde_json`, `smallvec`, `crossbeam-queue`, `parking_lot`, `thiserror` | No unused production direct dependency found. |
 | `sky_updater` | `pep440_rs`, `serde`, `serde_json`, `sha2`, `thiserror`, `zip`, `windows-sys` | No unused production direct dependency found. `zip` remains `2.4.2`. |
 
 Implemented:
 
-1. `rust/crates/sky_dispatch_core/Cargo.toml`: moved `serde_json = "1"` from
-   `[dependencies]` to `[dev-dependencies]`. This is build/dependency hygiene, not a
-   runtime speed claim.
-2. `rust/Cargo.lock`: updated `thiserror` and `thiserror-impl` from `2.0.19` to
-   `2.0.20`; no other lockfile package changed.
+1. `rust/crates/sky_player_rs/Cargo.toml`: updated the exact PyO3 constraint from
+   `=0.29.0` to `=0.29.2`.
+2. `rust/crates/sky_player_rs/src/python/session.rs` and `telemetry.rs`: kept the
+   exported `pyo3_version` metadata synchronized with the compiled dependency.
+3. `rust/Cargo.lock`: updated the PyO3 family (`pyo3`, `pyo3-build-config`, `pyo3-ffi`,
+   `pyo3-macros`, and `pyo3-macros-backend`) from `0.29.0` to `0.29.2`.
 
-The official PyO3 release list still identifies `0.29.0` as the current 0.29 release,
-so the exact `pyo3 = "=0.29.0"` constraint was not changed. The official thiserror
-release list identifies `2.0.20` as the newer patch release:
-[PyO3 releases](https://github.com/PyO3/pyo3/releases),
-[thiserror releases](https://github.com/dtolnay/thiserror/releases).
+The official PyO3 release page marks 0.29.2 as the latest release and describes it as
+a patch release containing compatibility, reference-counting, build, and crash fixes:
+[PyO3 0.29.2 release](https://github.com/PyO3/pyo3/releases/tag/v0.29.2).
 
 ## Verification
 
 | Check | Result |
 | --- | --- |
 | Baseline `uv run python scripts/check.py rust` | PASS: format, check, Clippy, workspace tests. |
-| Candidate `uv run python scripts/check.py rust` | PASS: format, check, Clippy, workspace tests. |
-| Candidate `uv run python scripts/check.py static` | PASS: ruff, pyright, context, security, architecture. |
-| Candidate `uv run python scripts/check.py tests` | PASS: 946 passed, 14 skipped, 1 xfailed. Elevated run was required because sandbox ACL blocked pytest temp/AppData cleanup. |
-| `cargo check --workspace --all-targets --locked` | PASS; without `--all-features`, two pre-existing test-only warnings are emitted. |
+| Candidate `uv run python scripts/check.py rust` after PyO3 0.29.2 | PASS: format, check, Clippy, workspace tests. |
+| Candidate `uv run python scripts/check.py static` after PyO3 0.29.2 | PASS: ruff, pyright, context, security, architecture. |
+| Candidate `uv run python scripts/check.py tests` after PyO3 0.29.2 | PASS: 946 passed, 14 skipped, 1 xfailed. Elevated run was required because sandbox ACL blocked pytest temp/AppData cleanup. |
+| `cargo check --workspace --all-targets --all-features --locked` after PyO3 0.29.2 | PASS. |
 | `rt_dispatch_no_alloc` | PASS: 20/20; canonical production hard paths remain zero-allocation. |
-| Release all-target build | PASS with `--release --locked`. |
-| `scripts/audit_dispatch_assembly.ps1` | PASS. `dispatch_due_from_plan` and `recover_missed_down_boundary` remain free of reported division/copy helpers. |
+| Release `sky_player_rs` build after PyO3 0.29.2 | PASS with `--release --all-features --locked`. |
+| `scripts/audit_dispatch_assembly.ps1` after PyO3 0.29.2 | PASS. `dispatch_due_from_plan` and `recover_missed_down_boundary` remain free of reported division/copy helpers. |
 
 ## Benchmark evidence
 
 The raw reports were generated with the same host, Rust compiler, QPC frequency, and
-10,000 iterations. They are kept as local ignored artifacts under `.benchmarks/`:
+10,000 iterations. They are kept as local ignored artifacts under `.benchmarks/`. The
+dispatch source and timing policy were unchanged by the final PyO3 patch update, so the
+measurements remain representative of the final runtime path:
 
 - `baseline-phase-a-10k.txt`
 - `candidate-phase-a-10k.txt`
@@ -138,9 +139,9 @@ game receipt.
 
 ## Risk and recommendation
 
-- Correctness risk: low; only dependency classification and patch-level thiserror lock
-  resolution changed, with all Rust correctness, security, architecture, and allocation
-  gates green.
+- Correctness risk: low; only patch-level PyO3 resolution and synchronized exported
+  version metadata changed, with all Rust correctness, security, architecture, and
+  allocation gates green.
 - Timing risk: no intentional runtime timing change. Existing host scheduling variance
   and tight-deadline misses remain visible.
 - Windows residual risk: real `SendInput` duration, scheduler preemption near the syscall,
