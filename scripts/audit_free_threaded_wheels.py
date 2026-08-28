@@ -29,7 +29,7 @@ NAME: str = "Sky Auto Player"
 # (PEP 440 specifier) are checked at runtime.
 RUNTIME_MIN_VERSION: dict[str, str] = {
     "rapidfuzz": ">=3.14.5",
-    "textual": ">=8.2.7",
+    "textual": ">=8.2.8",
 }
 
 
