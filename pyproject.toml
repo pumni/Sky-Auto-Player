@@ -8,14 +8,14 @@ readme = "README.md"
 # window can starve the UI thread (or vice versa) and yields tail-latency spikes around 100-250 us
 # while a std-GIL + 1 ms switch-interval tuning pushes measurement noise around the spinner. The
 # 3.14 free-threaded build (`cpython-3.14+freethreaded`) cleanly decouples the two threads so the
-# spinner can no longer pre-empt the UI renderer. `rapidfuzz 3.14.5` and `textual 8.2.7` both ship
+# spinner can no longer pre-empt the UI renderer. `rapidfuzz 3.14.5` and `textual 8.2.8` both ship
 # free-threaded-compatible wheels and run unchanged under no-GIL. The exact interpreter is pinned
 # by `.python-version`; keep these two in sync.
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "packaging>=24.0",
+    "packaging>=26.3",
     "rapidfuzz>=3.14.5",
-    "textual>=8.2.7",
+    "textual>=8.2.8",
 ]
 
 [build-system]
