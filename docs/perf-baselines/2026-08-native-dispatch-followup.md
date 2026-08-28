@@ -155,14 +155,15 @@ The starting checkout was `455c8adb52f11a25ac3f22ebef66aa0b4602f461` with a
 clean working tree. The follow-up implementation commits were:
 
 ```text
-6279af7  fix: enforce custom sender down cutoff
-c58679a  fix: separate release visibility forensics
-06bacaa  bench: separate acceptance qualification dimensions
-ea3afde  bench: record overdue real-wait samples
-e8e826f  bench: expose failed qualification dimensions
-a3cb345  test: verify failed acceptance dimension reports
-a4f5404  bench: classify anomaly ring overflow as diagnostic
-0b92837  refactor: isolate test-support dispatch seams
+6279af7599f24ded0b9b2c290cd41939849d9095  fix: enforce custom sender down cutoff
+c58679a74b66ed64d3cb81b4ef5272f6b3976b7c  fix: separate release visibility forensics
+06bacaa29c5be791cc0a2e73d192cdceaf7c327c  bench: separate acceptance qualification dimensions
+ea3afdeb9a52b20fd53eafe1f244283bb8236a56  bench: record overdue real-wait samples
+e8e826f1fb8a3718dea4b4f37013cc3c9e9c9883  bench: expose failed qualification dimensions
+a3cb345fbb6aaf0c06b90e67fc76107ba2d8ff0c  test: verify failed acceptance dimension reports
+a4f5404688326a2acadfa1228eaa8c5082722290  bench: classify anomaly ring overflow as diagnostic
+0b9283720a6169f4b38fab3c97039ad03e8f7104  refactor: isolate test-support dispatch seams
+cd7541763981fe82dd098825a3f8169358b57287  bench: report aggregate real wait cost
 ```
 
 The custom test-support sender now samples its authoritative QPC immediately
