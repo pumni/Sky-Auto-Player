@@ -152,7 +152,7 @@ fn exact_asset_url<'a>(assets: &'a [ReleaseAsset], expected_name: &str) -> Resul
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use serde_json::{Value, json};
 
@@ -178,6 +178,8 @@ mod tests {
         manifest_url: String,
         manifest_bytes: Vec<u8>,
     }
+
+    static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
     fn fixture() -> Fixture {
         let target = "2.0.0";
@@ -238,10 +240,7 @@ mod tests {
         let destination = std::env::temp_dir().join(format!(
             "sky-updater-github-test-{}-{}-release.zip",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
+            NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let result = fetch_exact_release(&fixture.client, "2.0.0", channel, &destination);
         let _ = std::fs::remove_file(destination);
