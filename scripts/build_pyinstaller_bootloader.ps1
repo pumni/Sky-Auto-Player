@@ -28,12 +28,26 @@ try {
         throw "Could not resolve an exact PyInstaller version from the locked environment."
     }
     $tag = "v$version"
+    $expectedSourceCommits = @{
+        # Keep this allowlist aligned with the exact PyInstaller version in
+        # uv.lock. A tag alone is not sufficient provenance for a release
+        # bootloader because a mutable tag could resolve to another commit.
+        "6.22.2" = "19f42e7f13d56cd880a4ced8bb3594875e5227c6"
+    }
+    $expectedSourceCommit = $expectedSourceCommits[$version]
+    if (-not $expectedSourceCommit) {
+        throw "PyInstaller $version has no allowlisted source commit. Update the bootloader provenance allowlist first."
+    }
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $source = Join-Path $work "pyinstaller"
     Invoke-Checked "git" @(
         "clone", "--depth", "1", "--branch", $tag,
         "https://github.com/pyinstaller/pyinstaller.git", $source
     ) $work
+    $actualSourceCommit = (& git -C $source rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualSourceCommit -ne $expectedSourceCommit) {
+        throw "PyInstaller source commit mismatch: expected $expectedSourceCommit, got $actualSourceCommit"
+    }
     Push-Location (Join-Path $source "bootloader")
     try {
         Invoke-Checked "uv" @(
@@ -55,6 +69,7 @@ try {
     [ordered]@{
         pyinstaller_version = $version
         source_tag = $tag
+        source_commit = $actualSourceCommit
         bootloader = "Windows-64bit-intel/run.exe"
         sha256 = $hash
         built_utc = [DateTime]::UtcNow.ToString("o")
