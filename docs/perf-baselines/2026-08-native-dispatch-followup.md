@@ -143,3 +143,133 @@ None of these artifacts observes Sky's Raw Input, frame registration, render,
 or audio onset. A remaining “HUD clean but note not heard” report therefore
 requires downstream observability; sender telemetry alone cannot distinguish
 game sampling from game-side rejection or audio behavior.
+
+## Follow-up: acceptance-fidelity repair (schema 9)
+
+This section is a successor to the earlier evidence above. The earlier failed
+results remain historical evidence; they are not rewritten as passes.
+
+### Scope and implementation
+
+The starting checkout was `455c8adb52f11a25ac3f22ebef66aa0b4602f461` with a
+clean working tree. The follow-up implementation commits were:
+
+```text
+6279af7  fix: enforce custom sender down cutoff
+c58679a  fix: separate release visibility forensics
+06bacaa  bench: separate acceptance qualification dimensions
+ea3afde  bench: record overdue real-wait samples
+e8e826f  bench: expose failed qualification dimensions
+a3cb345  test: verify failed acceptance dimension reports
+a4f5404  bench: classify anomaly ring overflow as diagnostic
+0b92837  refactor: isolate test-support dispatch seams
+```
+
+The custom test-support sender now samples its authoritative QPC immediately
+before the custom emitter, applies the shared production Down-only cutoff, and
+returns `DeadlineMissedBeforeSend` without invoking the emitter when the sample
+is one tick beyond the boundary. Equality is allowed and Up-only packets are
+exempt. The deterministic tests are
+`prepared_down_cutoff_exact_boundary_sends_once`,
+`prepared_down_cutoff_one_tick_late_never_calls_emitter`,
+`prepared_custom_emitter_samples_cutoff_before_invocation`, and
+`prepared_custom_emitter_keeps_up_only_exempt_from_down_cutoff` in
+`rust/crates/sky_dispatch_win32/src/input/tests/tracked.rs`.
+
+Production behavior was intentionally frozen: authored timestamps, the
+500 µs Down grace, 300 µs default transport margin, hold policy, authored
+release-gap validation, focus/target/lease gates, future authorization,
+single-wait architecture, one `SendInput` attempt, cleanup, and RT allocation
+behavior did not change.
+
+### Corrected release-gap contract
+
+The old forensic counter compared
+`next_down_pre_call - previous_up_completion` with the complete authored
+`min_release_gap_us`. That required transport to consume none of the headroom
+that the policy intentionally reserved. At 60 FPS the unchanged authored
+policy is:
+
+```text
+frame floor       = 16,667 µs
+sender headroom   = 500 + 300 = 800 µs
+authored gap      = 17,467 µs
+```
+
+Static schedule validation still hard-requires the authored target gap of
+17,467 µs. Sender forensics now compares the conservative completion-to-next-
+pre-call interval with the base 16,667 µs visibility floor. The consumed
+800 µs headroom is reported separately. Negative timestamp ordering and all
+ownership/transport/trace/cleanup invariants remain hard failures. Structural
+anomalies are hard qualification counters; timing observations, headroom
+consumption, and bounded anomaly-ring overwrite are visible diagnostics and
+are no longer accepted only through one undifferentiated anomaly total.
+
+The acceptance report now separates `hard_correctness`,
+`hard_scheduler_cutoff`, `transport_diagnostics`, and
+`headroom_consumption_diagnostics`. `rt_handoff_bench` separately reports
+`waiter_timing_clean`, `dispatch_path_clean`, `sender_cutoff_clean`, and
+`statistics_eligible`; its test-support wait path is not silently presented as
+production `SendInput` qualification.
+
+### Environment and provenance
+
+All acceptance runs below were on:
+
+```text
+Windows-11-10.0.26200-SP0
+AMD64 Family 23 Model 104 Stepping 1, AuthenticAMD
+QPC 10,000,000 Hz
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+```
+
+The schema-9 acceptance artifacts record `dirty_worktree=false` and their
+`native_build_commit` equals their candidate SHA. The test-support wheel used
+for the final source verification was built at `0b9283720a6169f4b38fab3c97039ad03e8f7104`;
+its SHA256 was
+`6E63F9F087853DEC5A8E5383A85CFAD4C2CD4B6C80544227615078537265AF56`.
+The earlier schema-9 JSON runs at `ea3afde` and `a4f5404` preserve native
+commit provenance in their own reports; their historical runner did not emit a
+wheel SHA field. No stale wheel was accepted: each run passed the build
+commit guard before execution. A final production wheel is built and verified
+at the final documentation commit after this section is committed.
+
+### Corrected evidence
+
+| Evidence | Command/workload | Candidate/native commit | Samples | Result |
+| --- | --- | --- | ---: | --- |
+| E1 cold single-key | `bench_native_acceptance.py --dispatch-repeats 40 --actions 128 --polyphony 1 --scenario paired --gap-profile cold --start-delay-us 100000 --skip-command-samples --continue-after-failure --budget-seconds 600` | `ea3afde` / `ea3afde` | 10,880 requested boundaries; 15/40 suites completed | **REAL CUTOFF FAILURE**; faithful seam recorded Down cutoff misses, so not statistically eligible |
+| E2 hot single-key | same paired p1 shape with `--gap-profile hot` | `ea3afde` / `ea3afde` | 40 suites requested; 23 completed | Not qualified; failure artifacts retained, including cutoff/lease failures |
+| E3 hot polyphony 15 | paired `--polyphony 15 --gap-profile hot` | `a4f5404` / `a4f5404` | 272 boundaries, 4,080 keys | **REAL RELEASE-VISIBILITY FAILURE** under corrected floor: 1,815 hard floor violations; old 2,025 full-gap count was over-constrained |
+| E4 real-wait core | `RT_HANDOFF_BENCH_ITERATIONS=10000 RT_HANDOFF_BENCH_SCOPE=real_wait_core RT_HANDOFF_BENCH_MODE=real_wait` with `DUE_US=1000` | cargo binary at `ea3afde` | 10,000 iterations/mode | Not qualified: `statistics_eligible=false`; dimensions and raw counters retained |
+| E5 negative cutoff | deterministic Rust sender tests listed above | `0b92837` test-support source | equality/+1 tick/Up-only cases | Pass; late Down is rejected before successful mock transport |
+
+Artifacts:
+
+```text
+C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-ea3afde-cold-p1-start100ms.json
+C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-ea3afde-hot-p1.json
+C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-a4f5404-hot-p15.json
+C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-ea3afde-rt-real-wait-core.json
+```
+
+The cold result is a real failure of the unchanged 500 µs cutoff on this
+host, not evidence that the mock transported an out-of-grace Down. The p15
+result shows that the old 2,025 count was inflated by comparing against the
+full authored gap, but the corrected base-frame floor still has real observed
+violations in this run. The real-wait report contains 10,000 iterations per
+mode and reports wait count, overdue count, p99/p99.9 tails, spin time/duty,
+wall time, and process CPU duty. Process CPU duty is benchmark-fixture CPU,
+not application CPU. The 1 ms due interval is a bounded waiter workload and
+not a 60-FPS game claim.
+
+The corrected evidence does not justify changing calibration in this task.
+Because the real-wait Down modes still show cutoff misses and the cold run
+shows host sensitivity at the unchanged grace, the recommendation is
+**SEPARATE CALIBRATION INVESTIGATION REQUIRED**; that is a separate task, not
+a production change here. No runtime adaptation or scheduler tuning was
+introduced.
+
+Finally, sender-side evidence still does not prove that Sky sampled, rendered,
+or produced audio for every injected transition. Game receipt and audio remain
+outside this application's observability boundary.
