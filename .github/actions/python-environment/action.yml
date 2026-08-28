@@ -11,7 +11,7 @@ runs:
   using: composite
   steps:
     - name: Install uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
@@ -19,7 +19,7 @@ runs:
         # setup-uv sets UV_PYTHON so every later `uv` invocation resolves the
         # same interpreter; `uv sync` still re-reads `.python-version` as a
         # second source of truth.
-        python-version: "3.14+freethreaded"
+        python-version: "3.14.7+freethreaded"
 
     - name: Materialize .env
       shell: pwsh

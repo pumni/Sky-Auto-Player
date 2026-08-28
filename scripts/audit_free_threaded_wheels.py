@@ -6,7 +6,7 @@ failure so it can be used as a CI gate.
 
 Why this matters
 ----------------
-Sky Auto Player pins ``.python-version`` to ``3.14+freethreaded`` so the dispatch
+Sky Auto Player pins ``.python-version`` to ``3.14.7+freethreaded`` so the dispatch
 spinner and the Textual UI thread run truly in parallel. Native deps must
 ship ``cp314t`` wheels — a standard ``cp314`` wheel will fail to import under
 a free-threaded interpreter (different ABI), so the runtime import check is
@@ -90,7 +90,7 @@ def main() -> int:
     py_ok = check_interpreter()
     if not py_ok:
         print("\n[FAIL] Interpreter is not free-threaded.")
-        print("        Fix: set `.python-version` to `3.14+freethreaded` and `uv sync`.")
+        print("        Fix: set `.python-version` to `3.14.7+freethreaded` and `uv sync`.")
         return 1
 
     print("\nRuntime dependencies:")

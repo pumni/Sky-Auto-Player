@@ -54,7 +54,7 @@ AV risk themselves.
 ## Notes for free-threaded forkers (`python3.14t`)
 
 Sky Auto Player is pinned to the free-threaded CPython 3.14 build by the
-**interpreter pair invariant** — `.python-version` (`3.14+freethreaded`) and
+**interpreter pair invariant** — `.python-version` (`3.14.7+freethreaded`) and
 `pyproject.toml`'s `requires-python` (`>=3.14,<3.15`) move together. The
 project deliberately makes the no-GIL runtime a hard requirement (the dispatch
 loop and the Textual UI thread must not contend on the GIL).
@@ -90,7 +90,7 @@ and is left as a fork exercise.
 ## `requires-python` policy
 
 `pyproject.toml` pins `requires-python = ">=3.14,<3.15"`, paired with
-`.python-version = "3.14+freethreaded"` (the interpreter-pair invariant
+`.python-version = "3.14.7+freethreaded"` (the interpreter-pair invariant
 documented in `AGENTS.md` and enforced at runtime by
 `assert_free_threaded_runtime()` — see above). The free-threaded build of
 3.14 is mandatory: the dispatch loop and the Textual UI thread must not
