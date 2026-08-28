@@ -104,6 +104,47 @@ fn prepared_down_cutoff_one_tick_late_never_calls_emitter() {
 }
 
 #[test]
+fn prepared_custom_emitter_samples_cutoff_before_invocation() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
+    let current = clock.now().expect("QPC sample");
+    let cutoff = crate::clock::QpcTicks::from_raw(current.as_u64() - 1);
+    let mut state = TrackedKeyState::with_qpc_clock(clock);
+    state.set_packet_emitter(prepared_success_emitter(calls.clone()));
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
+        .expect("valid prepared Down packet");
+
+    let outcome = state.send_prepared_physical_packet_with_cutoff(&prepared, Some(cutoff));
+
+    assert_eq!(
+        outcome.status,
+        SendTransactionStatus::DeadlineMissedBeforeSend
+    );
+    assert_eq!(outcome.evidence.attempts, 0);
+    assert!(outcome.evidence.started_ticks.is_some());
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(state.active_mask, 0);
+}
+
+#[test]
+fn prepared_custom_emitter_keeps_up_only_exempt_from_down_cutoff() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
+    let current = clock.now().expect("QPC sample");
+    let cutoff = crate::clock::QpcTicks::from_raw(current.as_u64() - 1);
+    let mut state = TrackedKeyState::with_qpc_clock(clock);
+    state.set_packet_emitter(prepared_success_emitter(calls.clone()));
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(1, 0))
+        .expect("valid prepared Up packet");
+
+    let outcome = state.send_prepared_physical_packet_with_cutoff(&prepared, Some(cutoff));
+
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn prepared_up_only_late_cutoff_remains_release_eligible() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));

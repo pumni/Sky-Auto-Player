@@ -22,7 +22,8 @@ pub(crate) fn create_mock_backend(
     let send_call_count = script.send_call_count.clone();
     let script_emitter = Arc::clone(&script);
     let call_index_emitter = Arc::clone(&call_index);
-    let mut backend = TrackedKeyState::with_emitter(move |codes, _key_up| {
+    let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
+    backend.set_emitter(move |codes, _key_up| {
         if let Some(counter) = &send_call_count {
             counter.fetch_add(1, Ordering::SeqCst);
         }

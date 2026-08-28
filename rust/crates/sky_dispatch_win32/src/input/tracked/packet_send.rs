@@ -42,6 +42,30 @@ fn deadline_missed_before_send_outcome(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn clock_failure_before_send_outcome(
+    packet: PhysicalPacket,
+    error: crate::clock::QpcError,
+) -> SendTransactionOutcome {
+    SendTransactionOutcome {
+        status: SendTransactionStatus::ClockFailureBeforeSend,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask | packet.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts: 0,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: None,
+            completed_ticks: None,
+            timing_error: Some(error),
+        },
+    }
+}
+
 impl TrackedKeyState {
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
@@ -362,7 +386,11 @@ impl TrackedKeyState {
         latest_allowed_down_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
-        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+        if super::super::packet::down_cutoff_missed(
+            packet.down_mask,
+            started_ticks,
+            latest_allowed_down_qpc,
+        ) {
             return self.apply_packet_outcome(
                 packet,
                 deadline_missed_before_send_outcome(packet, started_ticks),
@@ -503,7 +531,11 @@ impl TrackedKeyState {
                 None
             };
             if let Some(started_ticks) = started_ticks {
-                if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+                if super::super::packet::down_cutoff_missed(
+                    packet.down_mask,
+                    started_ticks,
+                    latest_allowed_down_qpc,
+                ) {
                     return self.apply_packet_outcome(
                         packet,
                         deadline_missed_before_send_outcome(packet, started_ticks),
@@ -626,8 +658,70 @@ impl TrackedKeyState {
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
-        let outcome = if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-            emitter(packet)
+        let outcome = if self.custom_packet_emitter.is_some() {
+            let started_ticks = if let Some(clock) = self.qpc_clock {
+                match clock.now() {
+                    Ok(ticks) => Some(ticks),
+                    Err(error) => {
+                        self.timing_error = Some(error);
+                        return self.apply_packet_outcome(
+                            packet,
+                            clock_failure_before_send_outcome(packet, error),
+                        );
+                    }
+                }
+            } else if latest_allowed_down_qpc.is_some() {
+                return self.apply_packet_outcome(
+                    packet,
+                    SendTransactionOutcome {
+                        status: SendTransactionStatus::ClockFailureBeforeSend,
+                        evidence: SendEvidence {
+                            requested_mask: packet.up_mask | packet.down_mask,
+                            confirmed_mask: 0,
+                            skipped_mask: 0,
+                            first_inserted: 0,
+                            attempts: 0,
+                            zero_progress_retries: 0,
+                            retry_reason: PacketRetryReason::None,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            started_ticks: None,
+                            completed_ticks: None,
+                            timing_error: None,
+                        },
+                    },
+                );
+            } else {
+                None
+            };
+            if let Some(started_ticks) = started_ticks
+                && super::super::packet::down_cutoff_missed(
+                    packet.down_mask,
+                    started_ticks,
+                    latest_allowed_down_qpc,
+                )
+            {
+                return self.apply_packet_outcome(
+                    packet,
+                    deadline_missed_before_send_outcome(packet, started_ticks),
+                );
+            }
+            let emitter = self
+                .custom_packet_emitter
+                .as_ref()
+                .expect("packet emitter checked above");
+            let mut outcome = emitter(packet);
+            if let Some(started_ticks) = started_ticks {
+                outcome.evidence.started_ticks = Some(started_ticks);
+                if outcome
+                    .evidence
+                    .completed_ticks
+                    .is_some_and(|completed| completed < started_ticks)
+                {
+                    outcome.evidence.completed_ticks = Some(started_ticks);
+                }
+            }
+            outcome
         } else {
             let Some(clock) = self.qpc_clock else {
                 self.last_error = Some("packet sender has no QPC clock".to_string());

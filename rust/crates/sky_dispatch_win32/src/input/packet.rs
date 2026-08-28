@@ -11,6 +11,19 @@ use std::mem::MaybeUninit;
 
 pub const MAX_PACKET_EVENTS: usize = 30;
 
+/// Return whether a packet containing a Down crossed its authoritative
+/// sender cutoff. The predicate is shared by the real SendInput envelope,
+/// caller-owned test boundaries, and the custom test-support emitter so that
+/// equality remains admissible and Up-only releases remain exempt.
+#[inline]
+pub(crate) fn down_cutoff_missed(
+    down_mask: u16,
+    started_ticks: QpcTicks,
+    latest_allowed_down_qpc: Option<QpcTicks>,
+) -> bool {
+    down_mask != 0 && latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest)
+}
+
 /// Fixed-capacity physical work prepared before the precision boundary.
 ///
 /// The Win32 payload is intentionally opaque to the scheduler/core crates.
@@ -218,13 +231,14 @@ impl PreparedTaggedCalibrationPacket {
                 cb_size: std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>(
                 ) as i32,
             },
+            0,
             clock,
             physical_target_qpc,
             None,
         );
 
         #[cfg(not(windows))]
-        let result = send_input_view_at_target(self.requested, clock, physical_target_qpc, None);
+        let result = send_input_view_at_target(self.requested, 0, clock, physical_target_qpc, None);
 
         match result {
             Ok(result) => result,
@@ -382,6 +396,7 @@ struct PreparedInputView {
 #[cfg(windows)]
 fn send_input_view_at_target(
     view: PreparedInputView,
+    down_mask: u16,
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
     latest_allowed_down_qpc: Option<QpcTicks>,
@@ -405,7 +420,7 @@ fn send_input_view_at_target(
         std::hint::spin_loop();
     };
 
-    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+    if down_cutoff_missed(down_mask, started_ticks, latest_allowed_down_qpc) {
         return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
     }
 
@@ -436,6 +451,7 @@ fn send_input_view_at_target(
 #[cfg(not(windows))]
 fn send_input_view_at_target(
     requested: u8,
+    down_mask: u16,
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
     latest_allowed_down_qpc: Option<QpcTicks>,
@@ -452,7 +468,7 @@ fn send_input_view_at_target(
         }
         std::hint::spin_loop();
     };
-    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+    if down_cutoff_missed(down_mask, started_ticks, latest_allowed_down_qpc) {
         return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
     }
     let completed_ticks = match clock.now() {
@@ -515,7 +531,11 @@ fn send_once_prepared_view(
                 Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
-        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+        if down_cutoff_missed(
+            prepared.packet().down_mask,
+            started_ticks,
+            latest_allowed_down_qpc,
+        ) {
             return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
         }
         let inserted =
@@ -550,7 +570,11 @@ fn send_once_prepared_view(
                 Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
-        if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+        if down_cutoff_missed(
+            prepared.packet().down_mask,
+            started_ticks,
+            latest_allowed_down_qpc,
+        ) {
             return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
         }
         let completed_ticks = match clock.now() {
@@ -1155,11 +1179,17 @@ pub fn send_prepared_physical_packet_view_once_at_target_with_cutoff(
     let requested = prepared.event_count();
 
     #[cfg(windows)]
-    let first =
-        send_input_view_at_target(view, clock, physical_target_qpc, latest_allowed_down_qpc);
+    let first = send_input_view_at_target(
+        view,
+        packet.down_mask,
+        clock,
+        physical_target_qpc,
+        latest_allowed_down_qpc,
+    );
     #[cfg(not(windows))]
     let first = send_input_view_at_target(
         requested,
+        packet.down_mask,
         clock,
         physical_target_qpc,
         latest_allowed_down_qpc,
@@ -1191,7 +1221,7 @@ fn send_prepared_physical_packet_once_at_target_scripted(
         }
         std::hint::spin_loop();
     };
-    if latest_allowed_down_qpc.is_some_and(|latest| started_ticks > latest) {
+    if down_cutoff_missed(packet.down_mask, started_ticks, latest_allowed_down_qpc) {
         return prepared_send_outcome(
             packet,
             Err(PreparedSendFailure::DeadlineMissed { started_ticks }),
@@ -1285,7 +1315,7 @@ mod tests {
             .next()
             .expect("prepared-send primitive body");
         let cutoff = body
-            .find("latest_allowed_down_qpc.is_some_and")
+            .find("down_cutoff_missed")
             .expect("authoritative cutoff check");
         let syscall = body.find("SendInput(").expect("direct SendInput call");
         assert!(cutoff < syscall);
@@ -1304,12 +1334,32 @@ mod tests {
         let payload = body.find("let inputs = prepared.inputs.as_ptr").unwrap();
         let reset = body.find("SetLastError(0)").unwrap();
         let pre_call = body.find("let started_ticks").unwrap();
-        let cutoff = body.find("latest_allowed_down_qpc.is_some_and").unwrap();
+        let cutoff = body.find("down_cutoff_missed").unwrap();
         let syscall = body.find("SendInput(").unwrap();
         assert!(payload < reset);
         assert!(reset < pre_call);
         assert!(pre_call < cutoff);
         assert!(cutoff < syscall);
+    }
+
+    #[test]
+    fn down_cutoff_truth_table_is_directional_and_inclusive() {
+        let latest = QpcTicks::from_raw(100);
+        let cases = [
+            (0b001, 99, false),
+            (0b001, 100, false),
+            (0b001, 101, true),
+            (0, 99, false),
+            (0, 100, false),
+            (0, 101, false),
+        ];
+        for (down_mask, started, expected) in cases {
+            assert_eq!(
+                down_cutoff_missed(down_mask, QpcTicks::from_raw(started), Some(latest)),
+                expected,
+                "down_mask={down_mask:#x}, started={started}"
+            );
+        }
     }
 
     #[test]
