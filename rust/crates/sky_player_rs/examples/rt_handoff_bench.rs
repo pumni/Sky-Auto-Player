@@ -1047,11 +1047,20 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     }
     let acceptance_clean = acceptance_failure_reasons.is_empty();
     let statistics_eligible = acceptance_clean && iterations() >= 10_000;
+    let sender_cutoff_exercised = true;
     let spin_duty = spin_duty_cycle_ppm(&samples.spin_time_us, &samples.wall_time_us);
     json!({
         "acceptance_clean": acceptance_clean,
         "acceptance_failure_reasons": acceptance_failure_reasons,
         "statistics_eligible": statistics_eligible,
+        "qualification_dimensions": {
+            "waiter_timing_clean": acceptance_clean,
+            "dispatch_path_clean": acceptance_clean,
+            "sender_cutoff_clean": false,
+            "sender_cutoff_exercised": sender_cutoff_exercised,
+            "sender_cutoff_note": "This benchmark uses the test-support sender seam; it does not qualify the production SendInput cutoff. Deterministic cutoff truth-table coverage is reported by the Rust sender tests.",
+            "statistics_eligible": statistics_eligible,
+        },
         "controller": "dispatch_start_error",
         "preparation": {
             "plan_build_us": unsigned_summary(samples.plan_build_us),
@@ -1314,10 +1323,24 @@ fn main() {
     let observation_enqueue_ab = observation_enqueue_ab();
     let acceptance_clean = all_scenarios_clean(&mode_reports);
     let statistics_eligible = acceptance_clean && iterations() >= 10_000;
+    let sender_cutoff_exercised = matches!(
+        benchmark_mode,
+        BenchmarkMode::RealWait
+            | BenchmarkMode::PhaseASyntheticTargetPlusOneTick
+            | BenchmarkMode::PhaseAProductionBoundary
+    );
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
         "acceptance_clean": acceptance_clean,
         "statistics_eligible": statistics_eligible,
+        "qualification_dimensions": {
+            "waiter_timing_clean": benchmark_mode.uses_real_waiter().then_some(acceptance_clean),
+            "dispatch_path_clean": acceptance_clean,
+            "sender_cutoff_clean": false,
+            "sender_cutoff_exercised": sender_cutoff_exercised,
+            "sender_cutoff_note": "This benchmark does not independently qualify the production SendInput cutoff; deterministic cutoff truth-table coverage is reported by the Rust sender tests and native acceptance seam.",
+            "statistics_eligible": statistics_eligible,
+        },
         "production_timing_policy": true,
         "benchmark_scope": benchmark_scope.name(),
         "benchmark_mode": benchmark_mode.name(),
@@ -1328,7 +1351,7 @@ fn main() {
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
-            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; not Raw Input or game-observed latency",
+            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",

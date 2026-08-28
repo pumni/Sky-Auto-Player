@@ -188,6 +188,8 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["require_focus"] is True
     assert config["materialized_min_hold_us"] == 17_467
     assert config["materialized_release_gap_us"] == 17_467
+    assert config["materialized_release_visibility_floor_us"] == 16_667
+    assert config["sender_headroom_us"] == 800
     assert config["down_late_grace_us"] == 500
 
 
@@ -234,10 +236,12 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
             "require_focus": False,
             "materialized_min_hold_us": 17_467,
             "materialized_release_gap_us": 17_467,
+            "materialized_release_visibility_floor_us": 16_667,
+            "sender_headroom_us": 800,
             "down_late_grace_us": 500,
         }
     report = {
-        "benchmark_schema_version": 8,
+        "benchmark_schema_version": 9,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
@@ -274,14 +278,14 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
 
 def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
     candidate = {
-        "benchmark_schema_version": 8,
+        "benchmark_schema_version": 9,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
         "timeline_semantics_version": 2,
     }
     baseline = {
-        "benchmark_schema_version": 8,
+        "benchmark_schema_version": 9,
         "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "timeline_semantics_version": 1,
     }
@@ -529,6 +533,35 @@ def test_completion_hold_diagnostic_does_not_fail_clean_hard_gates() -> None:
     )
 
 
+def test_timing_forensics_diagnostics_do_not_poison_hard_qualification() -> None:
+    snapshot = {
+        "hold_pair_samples": 1,
+        "production_forensics_anomaly_count": 3,
+        "production_timing_diagnostic_count": 3,
+        "production_release_headroom_consumed_count": 10,
+        "production_max_release_headroom_consumed_ticks": 800,
+    }
+    counters = ACCEPTANCE._correctness_counters(
+        snapshot,
+        {},
+        expected_hold_pair_samples=1,
+    )
+    diagnostics = ACCEPTANCE._forensics_diagnostics(snapshot)
+
+    assert "production_forensics_anomaly_count" not in counters
+    assert diagnostics["production_forensics_anomaly_count"] == 3
+    assert diagnostics["production_timing_diagnostic_count"] == 3
+    assert diagnostics["production_max_release_headroom_consumed_ticks"] == 800
+    ACCEPTANCE._assert_report_correctness(
+        {
+            "correctness": counters,
+            "forensics_diagnostics": diagnostics,
+            "hold_pair_samples": 1,
+            "expected_hold_pair_samples": 1,
+        }
+    )
+
+
 def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
     required_zero = dict.fromkeys(
         (
@@ -550,7 +583,7 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
         "production_anchor_overwrite_count",
         "production_unmatched_up_count",
         "production_anomaly_ring_overwrite_count",
-        "production_forensics_anomaly_count",
+        "production_structural_anomaly_count",
         "hold_pair_sample_mismatch",
         ),
         0,

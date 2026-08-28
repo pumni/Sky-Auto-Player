@@ -45,7 +45,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 8
+BENCHMARK_SCHEMA_VERSION = 9
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -73,7 +73,7 @@ PRODUCTION_CORRECTNESS_COUNTERS = (
     "production_anchor_overwrite_count",
     "production_unmatched_up_count",
     "production_anomaly_ring_overwrite_count",
-    "production_forensics_anomaly_count",
+    "production_structural_anomaly_count",
 )
 
 # Completion is sampled after SendInput returns.  It is useful transport
@@ -81,6 +81,19 @@ PRODUCTION_CORRECTNESS_COUNTERS = (
 # checked at the trusted pre-call boundary above the actual SendInput call.
 PRODUCTION_DIAGNOSTIC_COUNTERS = (
     "production_completion_hold_below_frame_count",
+    "production_forensics_anomaly_count",
+    "production_timing_diagnostic_count",
+    "production_release_headroom_consumed_count",
+)
+PRODUCTION_DIAGNOSTIC_MAX_FIELDS = (
+    "production_max_release_headroom_consumed_ticks",
+)
+
+HARD_SCHEDULER_CUTOFF_COUNTERS = (
+    "missed_down_boundaries",
+    "missed_down_keys",
+    "pre_call_hold_shrink_over_grace_count",
+    "production_release_gap_below_policy_count",
 )
 
 MIXED_POLY_TIMING_FIELDS = (
@@ -372,6 +385,9 @@ def _benchmark_config(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
 ) -> dict[str, Any]:
+    frame_policy = FrameTimingPolicy.from_hold_frames(1.0, args.game_fps)
+    frame_us = int(frame_policy.frame_us)
+    release_gap_us = int(frame_policy.min_release_gap_us)
     require_focus = getattr(args, "require_focus", None)
     if require_focus is None:
         require_focus = args.backend == "sendinput"
@@ -415,9 +431,9 @@ def _benchmark_config(
             game_fps=args.game_fps,
             gap_profile=args.gap_profile,
         ),
-        "materialized_release_gap_us": _materialized_release_gap_us(
-            game_fps=args.game_fps,
-        ),
+        "materialized_release_gap_us": release_gap_us,
+        "materialized_release_visibility_floor_us": frame_us,
+        "sender_headroom_us": release_gap_us - frame_us,
         "down_late_grace_us": PRODUCTION_DOWN_LATE_GRACE_US,
     }
 
@@ -757,7 +773,14 @@ def _correctness_counters(
 
 def _forensics_diagnostics(snapshot: dict[str, Any]) -> dict[str, int]:
     return {
-        name: int(snapshot.get(name, 0)) for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+        **{
+            name: int(snapshot.get(name, 0))
+            for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+        },
+        **{
+            name: int(snapshot.get(name, 0))
+            for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
+        },
     }
 
 
@@ -787,10 +810,87 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
 
 def _aggregate_forensics_diagnostics(runs: list[dict[str, Any]]) -> dict[str, int]:
     return {
-        name: sum(
-            int(run.get("forensics_diagnostics", {}).get(name, 0)) for run in runs
-        )
+        **{
+            name: sum(
+                int(run.get("forensics_diagnostics", {}).get(name, 0))
+                for run in runs
+            )
+            for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+        },
+        **{
+            name: max(
+                (int(run.get("forensics_diagnostics", {}).get(name, 0)) for run in runs),
+                default=0,
+            )
+            for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
+        },
+    }
+
+
+def _qualification_dimensions(
+    correctness: dict[str, int], forensics: dict[str, int]
+) -> dict[str, Any]:
+    hard_scheduler = {
+        name: int(correctness.get(name, 0))
+        for name in HARD_SCHEDULER_CUTOFF_COUNTERS
+    }
+    hard_correctness = {
+        name: int(value)
+        for name, value in correctness.items()
+        if name not in HARD_SCHEDULER_CUTOFF_COUNTERS
+    }
+    transport_diagnostics = {
+        name: int(forensics.get(name, 0))
         for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+    }
+    headroom_diagnostics = {
+        name: int(forensics.get(name, 0))
+        for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
+    }
+    return {
+        "hard_correctness": hard_correctness,
+        "hard_scheduler_cutoff": hard_scheduler,
+        "transport_diagnostics": transport_diagnostics,
+        "headroom_consumption_diagnostics": headroom_diagnostics,
+    }
+
+
+def _release_forensics_summary(
+    runs: list[dict[str, Any]],
+    benchmark_config: dict[str, Any],
+    qpc_frequency_hz: int,
+) -> dict[str, Any]:
+    min_ticks = _aggregate_scalar_min_nonzero(
+        runs, "production_min_release_gap_ticks"
+    )
+    visibility_floor_ticks = _aggregate_scalar_max(
+        runs, "production_release_visibility_floor_ticks"
+    )
+    diagnostics = _aggregate_forensics_diagnostics(runs)
+    return {
+        "authored_release_gap_us": int(
+            benchmark_config["materialized_release_gap_us"]
+        ),
+        "base_visibility_floor_us": int(
+            benchmark_config["materialized_release_visibility_floor_us"]
+        ),
+        "sender_headroom_us": int(benchmark_config["sender_headroom_us"]),
+        "observed_completion_to_next_down_pre_call_min_ticks": min_ticks,
+        "observed_completion_to_next_down_pre_call_min_us": (
+            min_ticks * 1_000_000 // qpc_frequency_hz
+            if min_ticks and qpc_frequency_hz > 0
+            else 0
+        ),
+        "observed_visibility_floor_ticks": visibility_floor_ticks,
+        "base_visibility_violation_count": _aggregate_scalar_sum(
+            runs, "production_release_gap_below_policy_count"
+        ),
+        "headroom_consumed_samples": diagnostics[
+            "production_release_headroom_consumed_count"
+        ],
+        "max_headroom_consumed_ticks": diagnostics[
+            "production_max_release_headroom_consumed_ticks"
+        ],
     }
 
 
@@ -1589,8 +1689,26 @@ def _run_dispatch(
             "production_completion_hold_below_frame_count": int(
                 snapshot.get("production_completion_hold_below_frame_count", 0)
             ),
+            "production_forensics_version": int(
+                snapshot.get("production_forensics_version", 0)
+            ),
+            "production_release_gap_samples": int(
+                snapshot.get("production_release_gap_samples", 0)
+            ),
+            "production_min_release_gap_ticks": int(
+                snapshot.get("production_min_release_gap_ticks", 0)
+            ),
+            "production_release_visibility_floor_ticks": int(
+                snapshot.get("production_release_visibility_floor_ticks", 0)
+            ),
             "production_release_gap_below_policy_count": int(
                 snapshot.get("production_release_gap_below_policy_count", 0)
+            ),
+            "production_release_headroom_consumed_count": int(
+                snapshot.get("production_release_headroom_consumed_count", 0)
+            ),
+            "production_max_release_headroom_consumed_ticks": int(
+                snapshot.get("production_max_release_headroom_consumed_ticks", 0)
             ),
             "production_same_call_same_key_retrigger_count": int(
                 snapshot.get("production_same_call_same_key_retrigger_count", 0)
@@ -1606,6 +1724,12 @@ def _run_dispatch(
             ),
             "production_forensics_anomaly_count": int(
                 snapshot.get("production_forensics_anomaly_count", 0)
+            ),
+            "production_structural_anomaly_count": int(
+                snapshot.get("production_structural_anomaly_count", 0)
+            ),
+            "production_timing_diagnostic_count": int(
+                snapshot.get("production_timing_diagnostic_count", 0)
             ),
             "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
             "outcome": snapshot.get("outcome"),
@@ -2209,7 +2333,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 8"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 9"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -2249,6 +2373,8 @@ def _assert_baseline_compatible(
         "require_focus",
         "materialized_min_hold_us",
         "materialized_release_gap_us",
+        "materialized_release_visibility_floor_us",
+        "sender_headroom_us",
         "down_late_grace_us",
     )
     baseline_config = baseline.get("benchmark_config")
@@ -2868,6 +2994,10 @@ def main() -> int:
                 name: _aggregate_scalar_sum(runs, name)
                 for name in PRODUCTION_DIAGNOSTIC_COUNTERS
             },
+            **{
+                name: _aggregate_scalar_max(runs, name)
+                for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
+            },
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -2928,6 +3058,14 @@ def main() -> int:
                 "correctness_checked_before_percentiles": True,
             },
         }
+        poly_report["release_forensics"] = _release_forensics_summary(
+            runs,
+            benchmark_config,
+            int(native_info["qpc_frequency_hz"]),
+        )
+        poly_report["qualification_dimensions"] = _qualification_dimensions(
+            poly_report["correctness"], poly_report["forensics_diagnostics"]
+        )
         if args.scenario in {"mixed", "coalesced"}:
             for field in MIXED_POLY_TIMING_FIELDS:
                 poly_report.pop(field, None)
@@ -2956,6 +3094,10 @@ def main() -> int:
         "materialized_release_gap_us": benchmark_config[
             "materialized_release_gap_us"
         ],
+        "materialized_release_visibility_floor_us": benchmark_config[
+            "materialized_release_visibility_floor_us"
+        ],
+        "sender_headroom_us": benchmark_config["sender_headroom_us"],
         "timing_comparison_scope": (
             "aggregate_actual_packets"
             if args.scenario in {"mixed", "coalesced"}
@@ -3025,6 +3167,10 @@ def main() -> int:
         **{
             name: _aggregate_scalar_sum(dispatch_runs, name)
             for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+        },
+        **{
+            name: _aggregate_scalar_max(dispatch_runs, name)
+            for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
         },
         "correctness": _aggregate_correctness(dispatch_runs),
         "deadline_missed_before_send_count": sum(
@@ -3165,6 +3311,11 @@ def main() -> int:
         "evidence_scope": (
             "sender_pre_call" if args.backend == "sendinput" else "sender_completion"
         ),
+        "sender_cutoff_scope": (
+            "production_sender_pre_call_qpc"
+            if args.backend == "sendinput"
+            else "test_support_custom_sender_pre_emitter_qpc"
+        ),
         "git_sha": git_info["git_sha"],
         "native_build_commit": native_info["native_build_commit"],
         "expected_native_build_commit": expected_native_commit,
@@ -3179,6 +3330,14 @@ def main() -> int:
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
+    report["release_forensics"] = _release_forensics_summary(
+        dispatch_runs,
+        benchmark_config,
+        int(native_info["qpc_frequency_hz"]),
+    )
+    report["qualification_dimensions"] = _qualification_dimensions(
+        report["correctness"], report["forensics_diagnostics"]
+    )
     acceptance_failure_reasons = _acceptance_failure_reasons(report)
     report["acceptance_clean"] = not acceptance_failure_reasons
     report["acceptance_failure_reasons"] = acceptance_failure_reasons
