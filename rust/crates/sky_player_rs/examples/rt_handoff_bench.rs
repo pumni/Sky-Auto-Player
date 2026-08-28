@@ -160,6 +160,8 @@ struct Samples {
     target_to_completion_us: Vec<i64>,
     completion_error_us: Vec<i64>,
     physical_dispatches: usize,
+    wait_count: usize,
+    overdue_dispatch_count: usize,
     early_dispatch_count: usize,
     non_dispatches: usize,
     deadline_missed_count: usize,
@@ -638,9 +640,15 @@ fn wait_and_dispatch_or_record(
                     return Ok(None);
                 }
             };
-            harness
-                .last_wait_result()
-                .ok_or_else(|| "real benchmark dispatch did not record wait result".to_string())?;
+            if harness.last_wait_result().is_some() {
+                samples.wait_count += 1;
+            } else {
+                // A target can become due while the benchmark is still
+                // preparing the frozen plan.  That is a legitimate
+                // production overdue path, but it is not a real waiter
+                // sample and must make waiter qualification ineligible.
+                samples.overdue_dispatch_count += 1;
+            }
             step
         }
         BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
@@ -1033,6 +1041,9 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     if samples.non_dispatches != 0 {
         acceptance_failure_reasons.push("non_dispatches");
     }
+    if samples.overdue_dispatch_count != 0 {
+        acceptance_failure_reasons.push("overdue_dispatches");
+    }
     if samples.early_dispatch_count != 0 {
         acceptance_failure_reasons.push("early_dispatch");
     }
@@ -1105,6 +1116,8 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "completion_to_rt_ready_us": signed_summary(samples.completion_to_rt_ready_us),
         "target_to_completion_us": signed_summary(samples.target_to_completion_us),
         "physical_dispatches": samples.physical_dispatches,
+        "wait_count": samples.wait_count,
+        "overdue_dispatch_count": samples.overdue_dispatch_count,
         "early_dispatch_count": samples.early_dispatch_count,
         "non_dispatches": samples.non_dispatches,
         "deadline_missed_before_send_count": samples.deadline_missed_count,
