@@ -25,6 +25,45 @@ updates:
           - pyinstaller
           - pyinstaller-hooks-contrib
 
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: weekly
+    groups:
+      cargo-regular:
+        patterns:
+          - serde
+          - serde_json
+          - thiserror
+          - smallvec
+          - crossbeam-queue
+          - parking_lot
+          - proptest
+          - pep440_rs
+        update-types:
+          - patch
+          - minor
+      cargo-major-pyo3:
+        patterns:
+          - pyo3
+        update-types:
+          - major
+      cargo-major-zip:
+        patterns:
+          - zip
+        update-types:
+          - major
+      cargo-major-sha2:
+        patterns:
+          - sha2
+        update-types:
+          - major
+      cargo-major-windows-sys:
+        patterns:
+          - windows-sys
+        update-types:
+          - major
+
   - package-ecosystem: bun
     directory: /site
     schedule:
