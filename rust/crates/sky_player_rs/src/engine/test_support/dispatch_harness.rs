@@ -693,6 +693,21 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    /// Configure the shipping waitable-timer constructor for benchmark
+    /// qualification while retaining the harness's injected transport.
+    pub fn configure_production_wait_policy(
+        &mut self,
+        spin_threshold_us: u64,
+    ) -> Result<(), String> {
+        self.resources.waiter = HybridWaiter::production();
+        self.timing.effective_spin_threshold_ticks = self
+            .resources
+            .clock
+            .duration_from_us(spin_threshold_us)
+            .map_err(|error| format!("benchmark spin threshold conversion: {error:?}"))?;
+        Ok(())
+    }
+
     /// Enable the test-only observer profile so timing benchmarks can report
     /// the post-SendInput ready boundary without changing production policy.
     pub fn enable_dispatch_ready_timing_for_benchmark(&mut self) {

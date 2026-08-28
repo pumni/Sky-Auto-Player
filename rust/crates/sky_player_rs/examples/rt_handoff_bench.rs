@@ -752,11 +752,7 @@ fn run_down(
                 due_us()
             };
         harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
-        harness.configure_wait_policy(
-            mode.waitable_timer_enabled,
-            mode.event_wait_enabled,
-            mode.effective_spin_threshold_us,
-        )?;
+        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         harness.reset_preparation_counts_for_test();
         let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
@@ -805,11 +801,7 @@ fn run_up(
             }
         };
         harness.enable_dispatch_ready_timing_for_benchmark();
-        harness.configure_wait_policy(
-            mode.waitable_timer_enabled,
-            mode.event_wait_enabled,
-            mode.effective_spin_threshold_us,
-        )?;
+        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
         if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
@@ -869,11 +861,7 @@ fn run_mixed(
             }
         };
         harness.enable_dispatch_ready_timing_for_benchmark();
-        harness.configure_wait_policy(
-            mode.waitable_timer_enabled,
-            mode.event_wait_enabled,
-            mode.effective_spin_threshold_us,
-        )?;
+        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
         if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
@@ -1157,7 +1145,11 @@ fn build_wait_mode(
     adaptive_spin_enabled: bool,
 ) -> WaitMode {
     let qpc_clock = QpcClock::initialize().expect("QPC");
-    let waiter = HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
+    let waiter = if waitable_timer_enabled && event_wait_enabled {
+        HybridWaiter::production()
+    } else {
+        HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled)
+    };
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
         .probe_wake_error_stats(
@@ -1185,7 +1177,7 @@ fn build_wait_mode(
 
 fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode {
     let qpc_clock = QpcClock::initialize().expect("QPC");
-    let waiter = HybridWaiter::with_options(true, true);
+    let waiter = HybridWaiter::production();
     let interrupt = OwnedEvent::new_auto_reset().expect("benchmark interrupt event");
     let startup_wake_error = waiter
         .probe_wake_error_stats(
@@ -1316,6 +1308,9 @@ fn main() {
                     "calibration_budget_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
                     "startup_readiness_reserve_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
                     "effective_spin_threshold_us": mode.effective_spin_threshold_us,
+                    "requested_wait_policy": "production_calibrated",
+                    "effective_wait_policy": "production_calibrated",
+                    "waiter_constructor": "HybridWaiter::production",
                     "mmcss_mode": "off_test_guard",
                     "priority_mode": "off_test_guard",
                     "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
@@ -1355,9 +1350,19 @@ fn main() {
             "dispatch_path_clean": acceptance_clean,
             "sender_cutoff_clean": false,
             "sender_cutoff_exercised": sender_cutoff_exercised,
+            "sender_cutoff_qualification": "separate_native_sender_acceptance",
             "sender_cutoff_note": "This benchmark does not independently qualify the production SendInput cutoff; deterministic cutoff truth-table coverage is reported by the Rust sender tests and native acceptance seam.",
             "statistics_eligible": statistics_eligible,
         },
+        "requested_wait_policy": "production_calibrated",
+        "effective_wait_policy": "production_calibrated",
+        "waiter_constructor": if benchmark_mode.uses_real_waiter() {
+            "HybridWaiter::production"
+        } else {
+            "test_support_direct_boundary"
+        },
+        "priority_mode": "off_test_guard",
+        "mmcss_mode": "off_test_guard",
         "production_timing_policy": true,
         "benchmark_scope": benchmark_scope.name(),
         "benchmark_mode": benchmark_mode.name(),
