@@ -5,7 +5,6 @@
 *Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision.*
 
 [![Latest version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue&logo=rust&logoColor=white)](https://github.com/pumni/Sky-Auto-Player/releases/latest)
-[![Python 3.14t](https://img.shields.io/badge/python-3.14t%20(no--gil)-blue?style=for-the-badge&logo=python&logoColor=white)](https://docs.python.org/3.14/whatsnew/3.14.html)
 [![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player/releases)
 [![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold)](https://github.com/pumni/Sky-Auto-Player/stargazers)
