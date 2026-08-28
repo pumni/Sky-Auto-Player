@@ -6,20 +6,22 @@ mod conversion;
 mod session;
 mod snapshot;
 mod telemetry;
+#[cfg(feature = "test-support")]
+mod test_session;
 
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
 use session::NativeDispatchSessionPy;
-#[cfg(feature = "test-support")]
-use session::TestDispatchSessionPy;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_dispatch_win32::mmcss::PriorityMode;
 use snapshot::{BackendHealthSnapshotPy, PollSnapshotPy, ProgressSnapshotPy};
 use std::sync::Arc;
 use telemetry::build_info;
+#[cfg(feature = "test-support")]
+use test_session::TestDispatchSessionPy;
 
 #[pyfunction]
 fn instrument_scan_codes() -> Vec<u16> {

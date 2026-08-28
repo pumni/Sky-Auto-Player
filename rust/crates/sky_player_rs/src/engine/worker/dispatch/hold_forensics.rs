@@ -404,7 +404,24 @@ impl ProductionHoldForensics {
             }
             self.anchors[slot].valid = false;
         }
-        let mut down_mask = packet.down_mask;
+        self.observe_downs(
+            packet.down_mask,
+            source_action_index,
+            target,
+            pre_call,
+            completion,
+        );
+        self.publish_metrics(metrics);
+    }
+
+    fn observe_downs(
+        &mut self,
+        mut down_mask: u16,
+        source_action_index: u32,
+        target: u64,
+        pre_call: u64,
+        completion: u64,
+    ) {
         while down_mask != 0 {
             let slot = down_mask.trailing_zeros() as usize;
             let bit = 1u16 << slot;
@@ -413,9 +430,7 @@ impl ProductionHoldForensics {
                 match pre_call.checked_sub(previous_up_completion) {
                     None => {
                         // A pre-call sample before the previous Up completion
-                        // is an ordering fault. Do not turn it into a false
-                        // zero-gap sample; retain both timestamps in the
-                        // anomaly payload.
+                        // is an ordering fault. Retain both timestamps.
                         self.release_gap_below_policy_count =
                             self.release_gap_below_policy_count.saturating_add(1);
                         self.record_anomaly(
@@ -431,11 +446,11 @@ impl ProductionHoldForensics {
                     }
                     Some(gap) => {
                         self.release_gap_samples = self.release_gap_samples.saturating_add(1);
-                        if self.release_gap_samples == 1 {
-                            self.min_release_gap_ticks = gap;
+                        self.min_release_gap_ticks = if self.release_gap_samples == 1 {
+                            gap
                         } else {
-                            self.min_release_gap_ticks = self.min_release_gap_ticks.min(gap);
-                        }
+                            self.min_release_gap_ticks.min(gap)
+                        };
                         let headroom_consumed = self.authored_release_gap_ticks.saturating_sub(gap);
                         if headroom_consumed > 0 {
                             self.release_headroom_consumed_count =
@@ -482,7 +497,6 @@ impl ProductionHoldForensics {
                 completion_ticks: completion,
             };
         }
-        self.publish_metrics(metrics);
     }
 
     #[allow(clippy::too_many_arguments)]

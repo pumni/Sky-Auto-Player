@@ -1,5 +1,7 @@
 mod cleanup;
 mod packet_send;
+#[cfg(any(test, feature = "test-support"))]
+mod packet_send_test_support;
 mod preflight;
 mod state;
 
