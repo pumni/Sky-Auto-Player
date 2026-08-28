@@ -435,7 +435,7 @@ wheels = [
 
 [[package]]
 name = "sky-auto-player"
-version = "3.5.0rc1"
+version = "3.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },
