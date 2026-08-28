@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import pathlib
 import subprocess
 
 import pytest
@@ -13,7 +13,7 @@ _SYNTHETIC_SHARING_VIOLATION = "being used by another process"
 _MAX_SELF_TEST_ATTEMPTS = 3
 
 
-def _run_result_polling_self_test(script: Path) -> subprocess.CompletedProcess[str]:
+def _run_result_polling_self_test(script: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "pwsh",
@@ -45,7 +45,7 @@ def test_result_polling_ignores_intermediate_success() -> None:
     if os.name != "nt":
         pytest.skip("requires Windows PowerShell")
 
-    script = Path(__file__).parents[1] / "scripts" / "test_windows_updater_e2e.ps1"
+    script = pathlib.Path(__file__).parents[1] / "scripts" / "test_windows_updater_e2e.ps1"
     completed: subprocess.CompletedProcess[str] | None = None
     for _ in range(_MAX_SELF_TEST_ATTEMPTS):
         completed = _run_result_polling_self_test(script)
