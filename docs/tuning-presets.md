@@ -56,8 +56,9 @@ AV risk themselves.
 Sky Auto Player is pinned to the free-threaded CPython 3.14 build by the
 **interpreter pair invariant** — `.python-version` (`3.14.7+freethreaded`) and
 `pyproject.toml`'s `requires-python` (`>=3.14,<3.15`) move together. The
-project deliberately makes the no-GIL runtime a hard requirement (the dispatch
-loop and the Textual UI thread must not contend on the GIL).
+project deliberately makes the no-GIL runtime a hard requirement so Python-side
+orchestration, telemetry, support timing helpers, and the Textual UI can progress
+alongside the native Rust worker without GIL contention.
 The `--no-switch-interval-tuning` flag is therefore a no-op in practice — the
 runtime skips `setswitchinterval` automatically when `sys._is_gil_enabled()`
 returns `False`.
@@ -74,10 +75,10 @@ guard raises `FreeThreadedRuntimeError` if **either** of the following fails:
   or the probe is missing on an interpreter older than 3.13).
 
 `main()` prints a banner that names the failed condition and exits with code 2
-(via `_wait_key_and_exit(2)`). The app never proceeds into the dispatch loop
-on a non-free-threaded interpreter — silently installing a stock 3.14 build
-under the app would otherwise deadlock the UI thread against the dispatch
-spin.
+(via `_wait_key_and_exit(2)`). The app never proceeds into native-worker
+orchestration on a non-free-threaded interpreter — silently installing a stock
+3.14 build would otherwise reintroduce GIL contention between the UI and
+Python-side background work.
 
 ### Building a `python3.14t` binary
 
@@ -93,8 +94,9 @@ and is left as a fork exercise.
 `.python-version = "3.14.7+freethreaded"` (the interpreter-pair invariant
 documented in `AGENTS.md` and enforced at runtime by
 `assert_free_threaded_runtime()` — see above). The free-threaded build of
-3.14 is mandatory: the dispatch loop and the Textual UI thread must not
-contend on the GIL. The `getattr(sys, "_is_gil_enabled", None)` probe in
+3.14 is mandatory so Python-side orchestration, telemetry, support timing
+helpers, and the Textual UI can progress alongside the native Rust worker
+without GIL contention. The `getattr(sys, "_is_gil_enabled", None)` probe in
 `realtime.py` is used only to detect whether the runtime GIL is still active
 in a build that *advertises* free-threadedness (e.g. a forker who flipped
 `PYTHON_GIL=1` on a `3.14t` build); it is not a backward-compat path for
