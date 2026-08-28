@@ -2,12 +2,15 @@
 
 ## Scope and provenance
 
-- Starting HEAD: `72634af45ac5b62dbab63fcbeeaf61f4e9697d9d`.
-- Starting worktree: clean; HEAD matched the requested baseline, so no related newer
-  diff required review.
+- Audit baseline: `72634af45ac5b62dbab63fcbeeaf61f4e9697d9d`.
+- Current audited HEAD: `1bfa4420119cbd7f811a2c4d28d85f46505158ca`.
+- The two commits after the baseline are `ba2e794` (audit/dependency hygiene) and
+  `1bfa442` (PyO3 0.29.2). Neither changes production dispatch, wait, or SendInput
+  source.
 - Toolchain: `rustc 1.98.0 (88d9e12ae 2026-08-18)` / Cargo `1.98.0`.
 - QPC: `10,000,000 Hz` on the benchmark host.
-- Final source/build changes are limited to the PyO3 manifests/metadata and `rust/Cargo.lock`.
+- Final source/build changes from the audit baseline are limited to
+  `sky_dispatch_core/Cargo.toml`, PyO3 manifests/metadata, and `rust/Cargo.lock`.
   No production dispatch source, timing constant, packet path, retry policy, or Win32
   boundary changed.
 
@@ -30,18 +33,23 @@ Production usage was checked against all five requested manifests:
 | Crate | Production direct dependencies observed | Result |
 | --- | --- | --- |
 | Workspace `rust/Cargo.toml` | No direct dependencies; workspace/profile/toolchain declaration only | No dependency change needed. |
-| `sky_dispatch_core` | `serde`, `smallvec`, `thiserror` | `serde_json` was already in `dev-dependencies` on the baseline; no change needed. |
+| `sky_dispatch_core` | `serde`, `smallvec`, `thiserror` | `serde_json` had no production use; commit `ba2e794` moved it from `[dependencies]` to `[dev-dependencies]`. |
 | `sky_dispatch_win32` | workspace core, `serde`, `serde_json`, `smallvec`, `thiserror`, `windows-sys` | No unused production direct dependency found. |
 | `sky_player_rs` | workspace crates, `pyo3`, `serde`, `serde_json`, `smallvec`, `crossbeam-queue`, `parking_lot`, `thiserror` | No unused production direct dependency found. |
 | `sky_updater` | `pep440_rs`, `serde`, `serde_json`, `sha2`, `thiserror`, `zip`, `windows-sys` | No unused production direct dependency found. `zip` remains `2.4.2`. |
 
 Implemented:
 
-1. `rust/crates/sky_player_rs/Cargo.toml`: updated the exact PyO3 constraint from
+1. `rust/crates/sky_dispatch_core/Cargo.toml` (commit `ba2e794`): moved
+   `serde_json = "1"` from `[dependencies]` to `[dev-dependencies]`; this is build
+   and dependency hygiene, not a runtime speed claim.
+2. `rust/Cargo.lock` (commit `ba2e794`): updated `thiserror` and `thiserror-impl`
+   from `2.0.19` to `2.0.20`.
+3. `rust/crates/sky_player_rs/Cargo.toml` (commit `1bfa442`): updated the exact PyO3 constraint from
    `=0.29.0` to `=0.29.2`.
-2. `rust/crates/sky_player_rs/src/python/session.rs` and `telemetry.rs`: kept the
+4. `rust/crates/sky_player_rs/src/python/session.rs` and `telemetry.rs`: kept the
    exported `pyo3_version` metadata synchronized with the compiled dependency.
-3. `rust/Cargo.lock`: updated the PyO3 family (`pyo3`, `pyo3-build-config`, `pyo3-ffi`,
+5. `rust/Cargo.lock` (commit `1bfa442`): updated the PyO3 family (`pyo3`, `pyo3-build-config`, `pyo3-ffi`,
    `pyo3-macros`, and `pyo3-macros-backend`) from `0.29.0` to `0.29.2`.
 
 The official PyO3 release page marks 0.29.2 as the latest release and describes it as
