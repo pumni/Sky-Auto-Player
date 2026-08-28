@@ -462,20 +462,43 @@ pub(crate) fn try_publish_metrics(
     qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
-) {
+) -> bool {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
-    if force || now_us.saturating_sub(last) >= 50_000 {
-        let mut published = local.clone();
-        published.max_sendinput_pre_call_lateness_us = qpc_clock
-            .duration_to_us(DurationTicks::from_raw(
-                local.max_sendinput_pre_call_lateness_ticks,
-            ))
-            .unwrap_or_default();
-        if shared.snapshot.try_publish(&published) {
-            shared.last_publish_us.store(now_us, Ordering::Relaxed);
-            #[cfg(test)]
-            shared.publish_count.fetch_add(1, Ordering::Relaxed);
-        }
+    if !force && now_us.saturating_sub(last) < 50_000 {
+        return true;
+    }
+    let mut published = local.clone();
+    published.max_sendinput_pre_call_lateness_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(
+            local.max_sendinput_pre_call_lateness_ticks,
+        ))
+        .unwrap_or_default();
+    if shared.snapshot.try_publish(&published) {
+        shared.last_publish_us.store(now_us, Ordering::Relaxed);
+        #[cfg(test)]
+        shared.publish_count.fetch_add(1, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+/// Publish the terminal metrics before the lifecycle outcome becomes visible.
+///
+/// A live snapshot reader may briefly pin both double-buffer slots across a
+/// publication boundary. Dropping the terminal publication in that case lets
+/// callers observe a finished/error outcome with stale counters. Terminal
+/// cleanup is outside the precision dispatch path, so yielding until a slot
+/// is available preserves the terminal snapshot consistency contract without
+/// adding work to healthy dispatch.
+pub(crate) fn publish_terminal_metrics(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+) {
+    while !try_publish_metrics(local, shared, qpc_clock, now_us, true) {
+        std::thread::yield_now();
     }
 }
 

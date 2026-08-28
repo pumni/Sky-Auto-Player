@@ -1,10 +1,12 @@
 use super::{
     OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
     TrackedKeyState, WorkerMetricsLocal, WorkerSchedulingGuards, current_process_cpu_time_us,
-    current_thread_cpu_time_us, publish_backend_metrics, try_publish_metrics,
+    current_thread_cpu_time_us, publish_backend_metrics,
 };
 use crate::engine::shared::SharedProgressClock;
-use crate::engine::telemetry::{NativeTelemetryOutput, SharedMetrics, TelemetryCollector};
+use crate::engine::telemetry::{
+    NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
+};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::DurationTicks;
@@ -255,7 +257,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             / local_metrics.playback_wall_time_us as u128)
             as u64;
     }
-    try_publish_metrics(&local_metrics, metrics, qpc_clock, end_us, true);
+    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
     metrics.is_paused.store(false, Ordering::Relaxed);
     let telemetry = match Arc::try_unwrap(telemetry) {
         Ok(telemetry) => telemetry.into_inner(),
@@ -267,7 +269,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();
     local_metrics.power_throttling_disabled = false;
-    try_publish_metrics(&local_metrics, metrics, qpc_clock, end_us, true);
+    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
     match (worker_result, cleanup_result) {
         (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}

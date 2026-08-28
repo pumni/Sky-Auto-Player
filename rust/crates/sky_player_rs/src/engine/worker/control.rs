@@ -139,7 +139,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 *terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                 return CommandControl::Exit;
             }
-        }
+        };
         *terminal_error = Some("panic_release_requested".to_string());
         return CommandControl::Exit;
     }
