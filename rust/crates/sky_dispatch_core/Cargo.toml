@@ -12,10 +12,10 @@ test-support = []
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"
+serde_json = "1"
 
 [[bench]]
 name = "soak_benchmark"
