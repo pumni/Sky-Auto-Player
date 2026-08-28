@@ -1090,8 +1090,12 @@ def test_test_support_fault_matrix_publishes_terminal_counters(
     session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
         actions,
         list(ACCEPTANCE.SKY_15_SCAN_CODES),
-        min_hold_us=100,
-        down_late_grace_us=100,
+        # This case qualifies transport-fault telemetry, not the scheduler's
+        # deadline boundary.  Give the injected first Down enough test-only
+        # admission slack that host load cannot bypass the fault injector
+        # with a legitimate down-deadline miss before the assertion runs.
+        min_hold_us=5_000,
+        down_late_grace_us=5_000,
         game_fps=60,
         mock_latency_base_us=0,
         mock_latency_per_key_us=0,
