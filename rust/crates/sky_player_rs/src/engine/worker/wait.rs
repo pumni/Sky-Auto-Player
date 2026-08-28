@@ -1,64 +1,10 @@
-use super::{WorkerTimingState, lease_bounded_ticks, wait_failure_message};
+use super::{lease_bounded_ticks, wait_failure_message};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
 use std::sync::atomic::AtomicU64;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PrecisionWaitResult {
-    /// QPC sample at which the waiter crossed the authored physical target.
-    /// The worker owns this crossing before final policy admission.
-    pub(crate) target_crossing_qpc: QpcTicks,
-    pub(crate) spin_ticks: DurationTicks,
-}
-
-pub(crate) fn wait_to_precision_boundary(
-    qpc_clock: QpcClock,
-    waiter: &HybridWaiter,
-    interrupt: &OwnedEvent,
-    physical_target_qpc: QpcTicks,
-    timing: &WorkerTimingState,
-    local_metrics: &mut WorkerMetricsLocal,
-) -> Result<PrecisionWaitResult, super::DispatchStep> {
-    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
-        qpc_clock,
-        physical_target_qpc,
-        timing.effective_spin_threshold_ticks,
-        interrupt,
-    );
-    match wait_result.outcome {
-        WaitOutcome::Deadline => {
-            let Some(wake_qpc) = wait_result.wake_qpc else {
-                return Err(super::DispatchStep::TerminateStatic(
-                    "precision_wait_missing_wake_qpc",
-                ));
-            };
-            Ok(PrecisionWaitResult {
-                target_crossing_qpc: wake_qpc,
-                spin_ticks: wait_result.spin_ticks,
-            })
-        }
-        WaitOutcome::Interrupted => {
-            local_metrics.wait_interrupted_count =
-                local_metrics.wait_interrupted_count.saturating_add(1);
-            Err(super::DispatchStep::Continue)
-        }
-        WaitOutcome::Failed(failure) => {
-            if matches!(failure, WaitFailure::Clock) {
-                local_metrics.wait_clock_failures =
-                    local_metrics.wait_clock_failures.saturating_add(1);
-            } else {
-                local_metrics.wait_backend_failures =
-                    local_metrics.wait_backend_failures.saturating_add(1);
-            }
-            Err(super::DispatchStep::Terminate(wait_failure_message(
-                failure,
-            )))
-        }
-    }
-}
 
 pub(crate) enum WaitBoundary {
     Due {
@@ -130,6 +76,21 @@ fn dispatch_deadline_wake_is_due(bounded_target: QpcTicks, target_qpc: QpcTicks)
     bounded_target == target_qpc
 }
 
+fn spin_threshold_for_bounded_target(
+    bounded_target: QpcTicks,
+    physical_target_qpc: QpcTicks,
+    calibrated_spin_threshold_ticks: DurationTicks,
+) -> DurationTicks {
+    if dispatch_deadline_wake_is_due(bounded_target, physical_target_qpc) {
+        calibrated_spin_threshold_ticks
+    } else {
+        // A lease-only wake is an orchestration heartbeat, not a musical
+        // boundary. Busy-spinning before it spends CPU without improving the
+        // physical dispatch contract.
+        DurationTicks::ZERO
+    }
+}
+
 pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
     let WaitBoundaryInput {
         deadline,
@@ -183,10 +144,12 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 return WaitBoundary::Exit;
             }
         };
+    let wait_spin_threshold_ticks =
+        spin_threshold_for_bounded_target(bounded_target, target_qpc, spin_threshold_ticks);
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         bounded_target,
-        spin_threshold_ticks,
+        wait_spin_threshold_ticks,
         interrupt,
     );
     match wait_result.outcome {
@@ -223,7 +186,8 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
 mod tests {
     use super::{
         WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-        dispatch_deadline_wake_is_due, record_wait_failure, wait_for_next_boundary,
+        dispatch_deadline_wake_is_due, record_wait_failure, spin_threshold_for_bounded_target,
+        wait_for_next_boundary,
     };
     use crate::engine::telemetry::WorkerMetricsLocal;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
@@ -240,22 +204,9 @@ mod tests {
             .nth(1)
             .expect("admission wait implementation");
         assert!(body.contains("physical_target_qpc"));
-        assert!(body.contains("spin_threshold_ticks"));
-    }
-
-    #[test]
-    fn precision_wait_crosses_the_physical_target_with_the_bounded_spin() {
-        let source = include_str!("wait.rs");
-        let body = source
-            .split("pub(crate) fn wait_to_precision_boundary")
-            .nth(1)
-            .expect("precision wait implementation")
-            .split("pub(crate) enum WaitBoundary")
-            .next()
-            .expect("precision wait body");
-        assert!(body.contains("physical_target_qpc"));
-        assert!(body.contains("timing.effective_spin_threshold_ticks"));
-        assert!(!body.contains("saturating_sub(timing.effective_spin_threshold_ticks"));
+        assert!(body.contains("wait_until_ticks_with_metrics_typed"));
+        assert!(body.contains("wait_spin_threshold_ticks"));
+        assert!(!body.contains("wait_to_precision_boundary"));
     }
 
     #[test]
@@ -268,6 +219,32 @@ mod tests {
             QpcTicks::from_raw(1),
             QpcTicks::from_raw(2)
         ));
+    }
+
+    #[test]
+    fn lease_only_wake_does_not_busy_spin() {
+        let configured = DurationTicks::from_raw(123);
+        assert_eq!(
+            spin_threshold_for_bounded_target(
+                QpcTicks::from_raw(99),
+                QpcTicks::from_raw(100),
+                configured,
+            ),
+            DurationTicks::ZERO
+        );
+    }
+
+    #[test]
+    fn physical_target_wake_keeps_calibrated_spin() {
+        let configured = DurationTicks::from_raw(123);
+        assert_eq!(
+            spin_threshold_for_bounded_target(
+                QpcTicks::from_raw(100),
+                QpcTicks::from_raw(100),
+                configured,
+            ),
+            configured
+        );
     }
 
     #[test]

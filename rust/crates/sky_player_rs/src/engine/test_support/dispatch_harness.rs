@@ -1251,7 +1251,6 @@ impl ProductionDispatchTestHarness {
             &self.desired_pause,
             &self.supervisor_heartbeat_ticks,
             self.timing.lease_timeout_ticks,
-            &self.interrupt,
             &self.progress_clock,
             Some(&self.observer),
             boundary_crossing_qpc,
@@ -1265,12 +1264,24 @@ impl ProductionDispatchTestHarness {
     pub fn dispatch_due_from_plan_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let now_ticks = self.resources.clock.now().expect("qpc now");
         let allow_pre_deadline = !self.runtime.down_boundary_state.awaiting_future();
-        self.dispatch_plan_at(
+        let boundary_crossing_qpc = if allow_pre_deadline {
+            // The old direct test seam performed the now-removed inner wait;
+            // represent its completed crossing with the frozen target.
+            plan.physical_target_qpc()
+        } else {
+            plan.physical_target_qpc()
+                .filter(|target| *target <= now_ticks)
+                .map(|_| now_ticks)
+        };
+        let dispatch_now_ticks = boundary_crossing_qpc.unwrap_or(now_ticks);
+        self.dispatch_plan_at_with_sender_option(
             plan,
             self.effective_now_ticks,
-            now_ticks,
+            dispatch_now_ticks,
             allow_pre_deadline,
+            boundary_crossing_qpc,
             None,
+            boundary_crossing_qpc.is_some(),
         )
     }
 
@@ -1590,8 +1601,11 @@ impl ProductionDispatchTestHarness {
         plan: &NextDispatchPlan,
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
-        let now_ticks = self.resources.clock.now().expect("qpc now");
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
+        // This direct helper represents the old inner wait with a synthetic
+        // exact-boundary sample. The production worker supplies the real
+        // crossing from its single wait before entering this function.
+        let now_ticks = physical_target_qpc;
         let ctx = AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
@@ -1599,12 +1613,14 @@ impl ProductionDispatchTestHarness {
             physical_target_qpc,
             down_admission: DownBoundaryAdmission::Normal,
             focus_loss_fault: false,
-            interrupt: &self.interrupt,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,
-            boundary_crossing_qpc: None,
+            // This helper dispatches a frozen plan at its synthetic exact
+            // boundary; the worker loop normally supplies this sample from
+            // its single wait.
+            boundary_crossing_qpc: Some(physical_target_qpc),
             test_direct_boundary: false,
-            test_inject_sender_start: false,
+            test_inject_sender_start: true,
         };
         dispatch_authored_packet(
             ctx,

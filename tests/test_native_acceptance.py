@@ -492,18 +492,41 @@ assert info["rustc_version"].startswith("rustc 1.98.0 "), info
     assert result.returncode == 0, f"child stdout={result.stdout}\nchild stderr={result.stderr}"
 
 
-def test_production_correctness_counters_are_acceptance_gates() -> None:
+def test_completion_hold_is_transport_diagnostic_not_acceptance_gate() -> None:
     snapshot = {
         "production_completion_hold_below_frame_count": 1,
         "production_release_gap_below_policy_count": 2,
         "production_same_call_same_key_retrigger_count": 3,
     }
     counters = ACCEPTANCE._correctness_counters(snapshot, {})
-    assert counters["production_completion_hold_below_frame_count"] == 1
+    diagnostics = ACCEPTANCE._forensics_diagnostics(snapshot)
+    assert "production_completion_hold_below_frame_count" not in counters
+    assert diagnostics["production_completion_hold_below_frame_count"] == 1
     assert counters["production_release_gap_below_policy_count"] == 2
     assert counters["production_same_call_same_key_retrigger_count"] == 3
     with pytest.raises(SystemExit, match="correctness failure"):
         ACCEPTANCE._assert_report_correctness({"correctness": counters})
+
+
+def test_completion_hold_diagnostic_does_not_fail_clean_hard_gates() -> None:
+    snapshot = {
+        "hold_pair_samples": 1,
+        "production_completion_hold_below_frame_count": 1,
+    }
+    counters = ACCEPTANCE._correctness_counters(
+        snapshot,
+        {},
+        expected_hold_pair_samples=1,
+    )
+
+    ACCEPTANCE._assert_report_correctness(
+        {
+            "correctness": counters,
+            "forensics_diagnostics": ACCEPTANCE._forensics_diagnostics(snapshot),
+            "hold_pair_samples": 1,
+            "expected_hold_pair_samples": 1,
+        }
+    )
 
 
 def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
@@ -522,7 +545,6 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
         "pre_call_hold_shrink_over_grace_count",
             "hold_unmatched_up_count",
         "hold_anchor_overwrite_count",
-        "production_completion_hold_below_frame_count",
         "production_release_gap_below_policy_count",
         "production_same_call_same_key_retrigger_count",
         "production_anchor_overwrite_count",
@@ -1072,7 +1094,7 @@ def test_failed_correctness_run_keeps_raw_evidence_for_artifact() -> None:
         "keys_dropped": 0,
         "failed_release_count": 0,
         "chord_split_events": 0,
-        "correctness": {"production_completion_hold_below_frame_count": 1},
+        "correctness": {"production_release_gap_below_policy_count": 1},
         "polyphony": 1,
         "_snapshot": {"evidence": "snapshot"},
         "_telemetry": {"evidence": "telemetry"},

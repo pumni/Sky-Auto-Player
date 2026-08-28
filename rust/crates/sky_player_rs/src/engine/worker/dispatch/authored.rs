@@ -11,7 +11,6 @@ use super::super::{
     final_control_precheck, final_down_target_admission, focus_matches, handle_final_focus_loss,
     load_target_stamp, record_final_gate_rejection, record_sendinput_pre_call_lateness,
     signed_ticks_to_us, suspend_live_input, target_stamp_still_current, trace_kind_for_packet_kind,
-    wait_to_precision_boundary,
 };
 use super::DownBoundaryAdmission;
 use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
@@ -51,7 +50,6 @@ pub(crate) fn dispatch_authored_packet(
         physical_target_qpc,
         down_admission,
         focus_loss_fault,
-        interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         boundary_crossing_qpc,
@@ -62,7 +60,6 @@ pub(crate) fn dispatch_authored_packet(
     } = ctx;
     let WorkerResources {
         clock: qpc_clock,
-        waiter,
         backend,
         coordinator,
         playback: clock_state,
@@ -90,7 +87,6 @@ pub(crate) fn dispatch_authored_packet(
         desired_pause,
         progress_clock,
         qpc_clock,
-        waiter,
         backend,
         coordinator,
         clock_state,
@@ -100,7 +96,6 @@ pub(crate) fn dispatch_authored_packet(
         down_admission,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
-        interrupt,
         supervisor_heartbeat_ticks,
         lease_timeout_ticks,
         boundary_crossing_qpc,
@@ -128,7 +123,6 @@ fn commit_down_send_outcome(
     desired_pause: &AtomicBool,
     progress_clock: &SharedProgressClock,
     qpc_clock: QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
@@ -138,7 +132,6 @@ fn commit_down_send_outcome(
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     boundary_crossing_qpc: Option<QpcTicks>,
@@ -183,8 +176,6 @@ fn commit_down_send_outcome(
         view,
         config,
         qpc_clock,
-        waiter,
-        interrupt,
         backend,
         coordinator,
         clock_state,
@@ -198,7 +189,6 @@ fn commit_down_send_outcome(
         panic_requested,
         desired_pause,
         progress_clock,
-        timing,
         physical_target_qpc,
         down_admission,
         supervisor_heartbeat_ticks,
@@ -271,11 +261,6 @@ fn resolve_target_crossing_qpc(
     down_admission: DownBoundaryAdmission,
     boundary_crossing_qpc: Option<QpcTicks>,
     physical_target_qpc: QpcTicks,
-    qpc_clock: QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-    timing: &WorkerTimingState,
-    local_metrics: &mut WorkerMetricsLocal,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
 ) -> Result<Option<QpcTicks>, DispatchStep> {
     if down_admission.is_missed() || down_admission.is_late_rescue() {
@@ -288,15 +273,10 @@ fn resolve_target_crossing_qpc(
     if test_direct_boundary {
         return Ok(Some(physical_target_qpc));
     }
-    let result = wait_to_precision_boundary(
-        qpc_clock,
-        waiter,
-        interrupt,
-        physical_target_qpc,
-        timing,
-        local_metrics,
-    );
-    result.map(|result| Some(result.target_crossing_qpc))
+    let _ = physical_target_qpc;
+    Err(DispatchStep::TerminateStatic(
+        "missing physical boundary crossing evidence",
+    ))
 }
 
 /// Pre-send admission gate for focus, preflight, late-grace, conflict, and final Down authorization.
@@ -455,8 +435,6 @@ fn finalize_authored_down_admission(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
     qpc_clock: QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
@@ -470,7 +448,6 @@ fn finalize_authored_down_admission(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     progress_clock: &SharedProgressClock,
-    timing: &WorkerTimingState,
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
     supervisor_heartbeat_ticks: &AtomicU64,
@@ -491,11 +468,6 @@ fn finalize_authored_down_admission(
         down_admission,
         boundary_crossing_qpc,
         physical_target_qpc,
-        qpc_clock,
-        waiter,
-        interrupt,
-        timing,
-        local_metrics,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
     ) {

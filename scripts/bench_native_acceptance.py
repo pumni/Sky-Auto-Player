@@ -68,13 +68,19 @@ MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
 PRODUCTION_DOWN_LATE_GRACE_US = 500
 
 PRODUCTION_CORRECTNESS_COUNTERS = (
-    "production_completion_hold_below_frame_count",
     "production_release_gap_below_policy_count",
     "production_same_call_same_key_retrigger_count",
     "production_anchor_overwrite_count",
     "production_unmatched_up_count",
     "production_anomaly_ring_overwrite_count",
     "production_forensics_anomaly_count",
+)
+
+# Completion is sampled after SendInput returns.  It is useful transport
+# evidence, but it is not a scheduler contract: the hard hold policy is
+# checked at the trusted pre-call boundary above the actual SendInput call.
+PRODUCTION_DIAGNOSTIC_COUNTERS = (
+    "production_completion_hold_below_frame_count",
 )
 
 MIXED_POLY_TIMING_FIELDS = (
@@ -749,6 +755,12 @@ def _correctness_counters(
     return counters
 
 
+def _forensics_diagnostics(snapshot: dict[str, Any]) -> dict[str, int]:
+    return {
+        name: int(snapshot.get(name, 0)) for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+    }
+
+
 def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
     names = (
         "chord_integrity_lost",
@@ -770,6 +782,15 @@ def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
     return {
         name: sum(int(run["correctness"].get(name, 0)) for run in runs)
         for name in names
+    }
+
+
+def _aggregate_forensics_diagnostics(runs: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        name: sum(
+            int(run.get("forensics_diagnostics", {}).get(name, 0)) for run in runs
+        )
+        for name in PRODUCTION_DIAGNOSTIC_COUNTERS
     }
 
 
@@ -1482,6 +1503,7 @@ def _run_dispatch(
                 diagnostics,
                 expected_hold_pair_samples=expected_hold_pair_samples,
             ),
+            "forensics_diagnostics": _forensics_diagnostics(snapshot),
             "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
             "pre_call_lateness_us": _pre_call_error_report_pairs(
                 metric_rows["pre_call_lateness_us"]
@@ -2841,6 +2863,11 @@ def main() -> int:
                 name: _aggregate_scalar_sum(runs, name)
                 for name in PRODUCTION_CORRECTNESS_COUNTERS
             },
+            "forensics_diagnostics": _aggregate_forensics_diagnostics(runs),
+            **{
+                name: _aggregate_scalar_sum(runs, name)
+                for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+            },
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -2993,6 +3020,11 @@ def main() -> int:
         **{
             name: _aggregate_scalar_sum(dispatch_runs, name)
             for name in PRODUCTION_CORRECTNESS_COUNTERS
+        },
+        "forensics_diagnostics": _aggregate_forensics_diagnostics(dispatch_runs),
+        **{
+            name: _aggregate_scalar_sum(dispatch_runs, name)
+            for name in PRODUCTION_DIAGNOSTIC_COUNTERS
         },
         "correctness": _aggregate_correctness(dispatch_runs),
         "deadline_missed_before_send_count": sum(

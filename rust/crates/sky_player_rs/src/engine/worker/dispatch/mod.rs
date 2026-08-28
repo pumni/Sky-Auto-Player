@@ -112,7 +112,6 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) physical_target_qpc: QpcTicks,
     pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) focus_loss_fault: bool,
-    pub(crate) interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
     /// QPC sample returned by the direct target wait. When present, the
