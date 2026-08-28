@@ -702,6 +702,19 @@ impl ProductionDispatchTestHarness {
     pub fn last_wait_result(&self) -> Option<WaitResult> {
         self.last_wait_result
     }
+
+    pub fn last_wait_spin_us(&self) -> Result<u64, String> {
+        let Some(wait_result) = self.last_wait_result else {
+            // A target that was already due takes the production overdue
+            // path and performs no blocking wait or precision spin.
+            return Ok(0);
+        };
+        let spin_ticks = wait_result.spin_ticks;
+        self.resources
+            .clock
+            .duration_to_us(spin_ticks)
+            .map_err(|error| format!("benchmark spin-duration conversion: {error:?}"))
+    }
     /// Advance simulated playback time by `us` microseconds and return effective now ticks.
     pub fn advance_playback_time_us(&mut self, us: u64) -> TimelineTicks {
         let advance_qpc = self.resources.clock.duration_from_us(us).unwrap();
@@ -1086,7 +1099,7 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let wait_result = match boundary {
+        let (wait_result, dispatch_qpc) = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
                 dispatch_qpc,
@@ -1096,17 +1109,13 @@ impl ProductionDispatchTestHarness {
                     Some(dispatch_qpc),
                     plan.physical_target_qpc(),
                 );
-                wait_result
+                (Some(wait_result), dispatch_qpc)
             }
             WaitBoundary::Due {
-                wait_result: None, ..
-            } => {
-                return Err(format!(
-                    "benchmark deadline was already due without a blocking wait: deadline={:?}, effective_now={:?}",
-                    plan.deadline_ticks(),
-                    self.effective_now_ticks
-                ));
-            }
+                wait_result: None,
+                dispatch_qpc,
+                ..
+            } => (None, dispatch_qpc),
             WaitBoundary::Replan { .. } => {
                 return Err("benchmark wait unexpectedly required replan".to_string());
             }
@@ -1118,15 +1127,14 @@ impl ProductionDispatchTestHarness {
                     .unwrap_or_else(|| "benchmark wait exited".to_string()));
             }
         };
-        self.last_wait_result = Some(wait_result);
-        self.runtime
-            .set_deadline_wait_evidence_for_test(wait_result.wake_qpc, plan.physical_target_qpc());
-        let now_ticks = wait_result.wake_qpc.unwrap_or(
-            self.resources
-                .clock
-                .now()
-                .map_err(|error| format!("benchmark send QPC: {error:?}"))?,
+        self.last_wait_result = wait_result;
+        self.runtime.set_deadline_wait_evidence_for_test(
+            wait_result.and_then(|result| result.wake_qpc),
+            plan.physical_target_qpc(),
         );
+        let now_ticks = wait_result
+            .and_then(|result| result.wake_qpc)
+            .unwrap_or(dispatch_qpc);
         let effective_now_ticks = self
             .resources
             .playback

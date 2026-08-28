@@ -77,6 +77,7 @@ enum BenchmarkMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkScope {
     Full,
+    RealWaitCore,
     PhaseASenderOnly,
     PhaseAProductionMatrix,
 }
@@ -85,10 +86,11 @@ impl BenchmarkScope {
     fn from_env() -> Result<Self, String> {
         match std::env::var("RT_HANDOFF_BENCH_SCOPE").as_deref() {
             Ok("full") | Err(std::env::VarError::NotPresent) => Ok(Self::Full),
+            Ok("real_wait_core") => Ok(Self::RealWaitCore),
             Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
             Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, phase_a_sender_only, or phase_a_production_matrix, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, or phase_a_production_matrix, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -97,6 +99,7 @@ impl BenchmarkScope {
     const fn name(self) -> &'static str {
         match self {
             Self::Full => "full",
+            Self::RealWaitCore => "real_wait_core",
             Self::PhaseASenderOnly => "phase_a_sender_only",
             Self::PhaseAProductionMatrix => "phase_a_production_matrix",
         }
@@ -163,6 +166,8 @@ struct Samples {
     failure_reasons: BTreeMap<String, usize>,
     observation_count: usize,
     observation_gaps: usize,
+    spin_time_us: Vec<u64>,
+    wall_time_us: Vec<u64>,
 }
 
 impl Samples {
@@ -666,14 +671,58 @@ fn wait_and_dispatch_or_record(
 }
 
 fn drain_observations(harness: &mut ProductionDispatchTestHarness, samples: &mut Samples) {
-    let mut count = 0;
+    let mut physical_count = 0;
     while let Some(observation) = harness.pop_observation() {
-        count += 1;
-        samples.observation_count += 1;
-        add_observation(samples, observation);
+        match observation {
+            DispatchObservation::Down(_) | DispatchObservation::Up(_) => {
+                physical_count += 1;
+                samples.observation_count += 1;
+                add_observation(samples, observation);
+            }
+            // A terminal cleanup/reset lifecycle can be emitted after a
+            // mixed packet. It is not a physical timing sample; accepting it
+            // here keeps the real-wait benchmark focused on the one physical
+            // observation promised by the iteration while still detecting a
+            // missing or duplicated Down/Up below.
+            DispatchObservation::Lifecycle(_) => {}
+            other => {
+                samples.observation_count += 1;
+                add_observation(samples, other);
+            }
+        }
     }
-    if count != 1 {
+    if physical_count != 1 {
         samples.observation_gaps += 1;
+    }
+}
+
+fn record_wait_metrics(
+    samples: &mut Samples,
+    harness: &ProductionDispatchTestHarness,
+    benchmark_mode: BenchmarkMode,
+) -> Result<(), String> {
+    if matches!(benchmark_mode, BenchmarkMode::RealWait) {
+        samples.spin_time_us.push(harness.last_wait_spin_us()?);
+    }
+    Ok(())
+}
+
+fn spin_duty_cycle_ppm(spin_time_us: &[u64], wall_time_us: &[u64]) -> u64 {
+    let spin_total = spin_time_us
+        .iter()
+        .copied()
+        .fold(0_u64, u64::saturating_add);
+    let wall_total = wall_time_us
+        .iter()
+        .copied()
+        .fold(0_u64, u64::saturating_add);
+    if wall_total == 0 {
+        0
+    } else {
+        spin_total
+            .saturating_mul(1_000_000)
+            .checked_div(wall_total)
+            .unwrap_or(0)
     }
 }
 
@@ -684,6 +733,7 @@ fn run_down(
 ) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
+        let iteration_started = Instant::now();
         let mut harness =
             ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
         harness.enable_dispatch_ready_timing_for_benchmark();
@@ -710,10 +760,17 @@ fn run_down(
         );
         if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
         {
+            samples
+                .wall_time_us
+                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
             continue;
         }
         samples.physical_dispatches += 1;
+        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
     }
     Ok(samples)
 }
@@ -725,6 +782,7 @@ fn run_up(
 ) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
+        let iteration_started = Instant::now();
         let mut harness = match ProductionDispatchTestHarness::try_new_uponly_release_chord_with_gap(
             key_count,
             due_us(),
@@ -732,6 +790,9 @@ fn run_up(
             Ok(harness) => harness,
             Err(error) => {
                 samples.record_failure(format!("setup_error:{error}"));
+                samples.wall_time_us.push(
+                    u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                );
                 continue;
             }
         };
@@ -763,10 +824,17 @@ fn run_up(
         );
         if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
         {
+            samples
+                .wall_time_us
+                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
             continue;
         }
         samples.physical_dispatches += 1;
+        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
     }
     Ok(samples)
 }
@@ -778,6 +846,7 @@ fn run_mixed(
 ) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
+        let iteration_started = Instant::now();
         let mut harness = match ProductionDispatchTestHarness::try_new_mixed_events_with_gap(
             event_count,
             due_us(),
@@ -785,6 +854,9 @@ fn run_mixed(
             Ok(harness) => harness,
             Err(error) => {
                 samples.record_failure(format!("setup_error:{error}"));
+                samples.wall_time_us.push(
+                    u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                );
                 continue;
             }
         };
@@ -809,10 +881,17 @@ fn run_mixed(
         );
         if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
         {
+            samples
+                .wall_time_us
+                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
             continue;
         }
         samples.physical_dispatches += 1;
+        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
     }
     Ok(samples)
 }
@@ -968,6 +1047,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     }
     let acceptance_clean = acceptance_failure_reasons.is_empty();
     let statistics_eligible = acceptance_clean && iterations() >= 10_000;
+    let spin_duty = spin_duty_cycle_ppm(&samples.spin_time_us, &samples.wall_time_us);
     json!({
         "acceptance_clean": acceptance_clean,
         "acceptance_failure_reasons": acceptance_failure_reasons,
@@ -1023,6 +1103,9 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "observation_count": samples.observation_count,
         "observation_gaps": samples.observation_gaps,
         "observation_queue": "bounded_nonblocking_on",
+        "spin_time_us": unsigned_summary(samples.spin_time_us),
+        "wall_time_us": unsigned_summary(samples.wall_time_us),
+        "spin_duty_cycle_ppm": spin_duty,
     })
 }
 
@@ -1119,17 +1202,34 @@ fn main() {
     {
         panic!("phase_a_production_matrix requires phase_a_production_boundary benchmark mode");
     }
+    if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("real_wait_core requires real_wait benchmark mode");
+    }
     let qpc_frequency = qpc_frequency_checked().expect("QPC frequency");
     let mut mode_reports = serde_json::Map::new();
-    if matches!(benchmark_scope, BenchmarkScope::Full) {
-        let modes = [
-            build_wait_mode("production_adaptive_spin", true, true, true),
-            build_fixed_wait_mode("fixed_spin_250us", 250),
-            build_fixed_wait_mode("fixed_spin_400us", 400),
-            build_fixed_wait_mode("fixed_spin_700us", 700),
-            build_fixed_wait_mode("fixed_spin_1000us", 1_000),
-            build_fixed_wait_mode("fixed_spin_1500us", 1_500),
-        ];
+    if matches!(
+        benchmark_scope,
+        BenchmarkScope::Full | BenchmarkScope::RealWaitCore
+    ) {
+        let modes = if matches!(benchmark_scope, BenchmarkScope::Full) {
+            vec![
+                build_wait_mode("production_adaptive_spin", true, true, true),
+                build_fixed_wait_mode("fixed_spin_250us", 250),
+                build_fixed_wait_mode("fixed_spin_400us", 400),
+                build_fixed_wait_mode("fixed_spin_700us", 700),
+                build_fixed_wait_mode("fixed_spin_1000us", 1_000),
+                build_fixed_wait_mode("fixed_spin_1500us", 1_500),
+            ]
+        } else {
+            vec![
+                build_wait_mode("production_adaptive_spin", true, true, true),
+                build_fixed_wait_mode("fixed_spin_400us", 400),
+                build_fixed_wait_mode("fixed_spin_700us", 700),
+                build_fixed_wait_mode("fixed_spin_1000us", 1_000),
+            ]
+        };
         for mode in modes {
             let mode_started = Instant::now();
             let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
@@ -1167,14 +1267,16 @@ fn main() {
                     ),
                 );
             }
-            for event_count in [2, 10, 14] {
-                scenarios.insert(
-                    format!("mixed_{event_count}"),
-                    summarize(
-                        run_mixed(event_count, mode, benchmark_mode)
-                            .unwrap_or_else(|error| panic!("{error}")),
-                    ),
-                );
+            if matches!(benchmark_scope, BenchmarkScope::Full) {
+                for event_count in [2, 10, 14] {
+                    scenarios.insert(
+                        format!("mixed_{event_count}"),
+                        summarize(
+                            run_mixed(event_count, mode, benchmark_mode)
+                                .unwrap_or_else(|error| panic!("{error}")),
+                        ),
+                    );
+                }
             }
             let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
             mode_reports.insert(
@@ -1226,8 +1328,8 @@ fn main() {
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
-            (BenchmarkScope::Full, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; not Raw Input or game-observed latency",
-            (BenchmarkScope::Full, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; not Raw Input or game-observed latency",
+            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen crossing QPC and the mock transport records an immediate sender-boundary QPC; waiter scheduling and the real SendInput syscall are excluded; not Raw Input or game-observed latency",
