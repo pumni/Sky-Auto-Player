@@ -29,12 +29,12 @@ py-modules = ["main", "build_app"]
 
 [dependency-groups]
 dev = [
-    "maturin>=1.13.3,<2",
+    "maturin>=1.15.0,<2",
     "pyinstaller==6.22.2",
     "pyrefly>=1.2.0",
     "pyright>=1.1.411",
     "pytest>=8.4.2",
-    "pytest-benchmark>=5.2.3",
+    "pytest-benchmark>=5.3.0",
     "pytest-textual-snapshot>=1.1.0",
     "ruff>=0.16.5",
     "soundcard>=0.4.6",
