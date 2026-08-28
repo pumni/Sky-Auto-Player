@@ -1,15 +1,18 @@
 # Dependency, Toolchain, Packaging & Release Modernization Acceptance
 
-Date: 2026-08-28
+Qualification date: 2026-08-28
+Post-push follow-up: 2026-08-29
 
 ## A. Baseline and final state
 
 - Requested baseline: `cf6fb3de97f5e3290c46c7bd7532c90733bbfe9b`.
-- Final implementation tip before this report-only commit: `d1afa3d1c16a8adb2dbc4b39ef6fa593a1955cc9`.
+- Accepted implementation tip: `e545bd62bd8329daa3eb52b2dd848066e16efe03`.
 - Branch: `main`.
-- `origin/main` was fetched before finalization and remains at the requested baseline; no newer
-  remote changes were overwritten. The local branch is ahead and has not been pushed.
-- The nine local commits after the baseline remain purpose-separated by workstream.
+- `origin/main` was verified at the accepted implementation tip after push; no newer remote changes
+  were overwritten. This documentation follow-up is intentionally separate from that implementation
+  tip and may be one local commit ahead until it is pushed.
+- The nine implementation commits after the baseline remain purpose-separated by workstream; the
+  previous acceptance report was the tenth commit.
 
 Environment used for qualification:
 
@@ -56,6 +59,24 @@ Evidence:
 The canonical `scripts/check.py tests` command still encounters `PermissionError: [WinError 5]`
 when pytest removes the pre-existing locked root `.pytest_tmp` directory. This is a host filesystem
 condition; the same tests pass with an isolated `.tmp` basetemp.
+
+Post-push verification on the accepted implementation tip is complete:
+
+- GitHub [CI run #391 / `33192063876`](https://github.com/pumni/Sky-Auto-Player/actions/runs/33192063876)
+  checked out `e545bd6` and completed successfully.
+- Static/security, Windows compatibility and unit tests, packaged frozen unsigned app smoke, and
+  the required CI gate all completed successfully.
+- The matching [GitHub Pages deployment](https://github.com/pumni/Sky-Auto-Player/actions/runs/33192063793)
+  also completed successfully.
+
+Repository policy follow-up is also complete:
+
+- `main` is now protected by active ruleset `Require CI before main updates` (ruleset ID
+  `21750194`).
+- The ruleset strictly requires the GitHub Actions check `Sky Auto Player — required CI gate`
+  from integration `15368`.
+- No bypass actors, pull-request review requirements, or unrelated branch policy requirements were
+  added.
 
 ## C. Changes committed locally
 
@@ -146,20 +167,22 @@ reproducibility/current-support, not a runtime performance claim. Both Bun versi
 | ZIP 8 migration | MEDIUM | Major dependency/API and decompression backend change; archive, security, rollback, and user-state tests pass. |
 | Site/Astro/Bun updates | LOW | Frozen install, check, lint, format, build, dist/SEO, and 58 E2E pass. |
 | ZIP byte reproducibility | MEDIUM | Current `Compress-Archive` output is not deterministic; root cause remains unqualified. |
-| Final GitHub CI | MEDIUM | Required final commit run is pending because local commits were not pushed. |
+| Final GitHub CI | LOW | Accepted implementation tip `e545bd6` passed CI run `33192063876`; the report-only follow-up is not a production code change. |
+| Main branch policy | LOW | Active ruleset `21750194` strictly requires the accepted CI gate; no bypass actors are configured. |
 | Real production SendInput qualification | HIGH/OPEN | This program did not run the interactive desktop production sink matrix; no timing retune is recommended. |
 
 ## H. Final recommendations
 
-### MERGE AFTER CI FIX
+### ACCEPTED
 
 - `cf1a82e` P0 terminal counter fix.
 - Exact Python/uv pins and allowed tooling/attestation updates.
 - Source bootloader provenance check.
 - `zip 8.6.0 + zlib-rs` updater migration.
 - Site patch/minor updates, Astro `7.2.9`, Bun `1.4.0`, and Dependabot grouping.
+- Post-push acceptance documentation and the `main` required-CI ruleset.
 
-All have local evidence, but the required GitHub CI gate must be run on the final pushed commits.
+All passed the required GitHub CI gate on the pushed implementation tip `e545bd6`.
 
 ### KEEP CURRENT
 

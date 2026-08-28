@@ -6,12 +6,13 @@ failure so it can be used as a CI gate.
 
 Why this matters
 ----------------
-Sky Auto Player pins ``.python-version`` to ``3.14.7+freethreaded`` so the dispatch
-spinner and the Textual UI thread run truly in parallel. Native deps must
-ship ``cp314t`` wheels — a standard ``cp314`` wheel will fail to import under
-a free-threaded interpreter (different ABI), so the runtime import check is
-the load-bearing verification for native packages. For pure-python packages
-we only enforce the minimum version listed in this file (mirrors pyproject).
+Sky Auto Player pins ``.python-version`` to ``3.14.7+freethreaded`` so Python-side
+orchestration, telemetry, support timing helpers, and the Textual UI can progress
+alongside the native Rust worker without GIL contention. Native deps must ship
+``cp314t`` wheels — a standard ``cp314`` wheel will fail to import under a
+free-threaded interpreter (different ABI), so the runtime import check is the
+load-bearing verification for native packages. For pure-python packages we only
+enforce the minimum version listed in this file (mirrors pyproject).
 """
 from __future__ import annotations
 
