@@ -254,6 +254,30 @@ C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-a4f5404-hot-p15.j
 C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup2-ea3afde-rt-real-wait-core.json
 ```
 
+The release-mode rerun after the aggregate-cost report change is preserved at:
+
+```text
+C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-final-75aaf2a-rt-real-wait-core.json
+```
+
+It used the same 1 ms due interval and the clean final source checkout at
+`75aaf2afa231a6c8bf3b456f02b67d98010800f8`. It collected 60,000 waits per
+mode (10,000 in each of six scenarios), with zero early or overdue events.
+The aggregate report now retains total spin and wall time:
+
+| Mode | Spin threshold | Cutoff/non-dispatch | Dispatch p99/p99.9/max | Spin p99/p99.9/max | Total spin / wall (µs) | Spin duty | CPU duty |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fixed 400 µs | 400 µs | 238 | 506 / 1,553 / 24,561 µs | 370 / 379 / 747 µs | 5,302,081 / 96,050,557 | 5.52% | 11.51% |
+| Fixed 700 µs | 700 µs | 89 | 139 / 620 / 28,407 µs | 656 / 672 / 1,083 µs | 23,541,061 / 93,063,424 | 25.30% | 31.44% |
+| Fixed 1,000 µs | 1,000 µs | 10 | 46 / 1,252 / 21,595 µs | 998 / 1,133 / 12,591 µs | 52,131,199 / 91,972,264 | 56.68% | 60.01% |
+| Production calibrated | 909 µs | 32 | 63 / 615 / 13,160 µs | 878 / 886 / 1,824 µs | 25,665,346 / 92,823,221 | 27.65% | 33.65% |
+
+The four modes are not statistically eligible because their faithful
+test-support sender cutoff path recorded Down deadline misses/non-dispatches.
+The benchmark therefore proves the waiter/dispatch measurements and preserves
+the cutoff evidence, but does not certify production `SendInput`; its
+qualification dimensions remain explicitly separated.
+
 The cold result is a real failure of the unchanged 500 µs cutoff on this
 host, not evidence that the mock transported an out-of-grace Down. The p15
 result shows that the old 2,025 count was inflated by comparing against the
