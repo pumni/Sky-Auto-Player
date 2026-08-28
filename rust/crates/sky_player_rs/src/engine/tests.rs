@@ -523,7 +523,9 @@ fn run_seeded_adaptive_startup_schedule_with_capacity(
         },
     );
     options.telemetry.capacity = telemetry_capacity;
-    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    // The widened authored window keeps startup jitter out of this ordering
+    // probe; leave enough lease time for the delayed cleanup boundary too.
+    options.wait.supervisor_lease_timeout_us = 5_000_000;
 
     let session = NativeDispatchSession::new(options).expect("adaptive session admission");
     start_with_test_wall_clock_slack(&session);
@@ -952,26 +954,30 @@ fn same_timestamp_midstream_stale_packet_is_committed_once() {
 fn stale_ups_with_down_same_timestamp_use_one_down_packet() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
+    // Keep worker startup/preemption away from the first authored boundary.
+    // This test probes stale-event ordering, not zero-slack startup timing.
+    const TEST_AUTHORED_EPOCH_US: u64 = 2_000_000;
+
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Up,
-                scheduled_us: 500_000,
+                scheduled_us: TEST_AUTHORED_EPOCH_US,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "mixed-stale-a".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 500_000,
+                scheduled_us: TEST_AUTHORED_EPOCH_US,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "mixed-stale-b".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 500_000,
+                scheduled_us: TEST_AUTHORED_EPOCH_US,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "mixed-down".into(),
             },
@@ -981,7 +987,7 @@ fn stale_ups_with_down_same_timestamp_use_one_down_packet() {
                 // Keep cleanup away from the first packet so parallel test
                 // observer work cannot turn this ordering probe into an
                 // unrelated up-deadline failure.
-                scheduled_us: 1_000_000,
+                scheduled_us: TEST_AUTHORED_EPOCH_US + 500_000,
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "mixed-cleanup".into(),
             },
@@ -2348,14 +2354,14 @@ fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
                 kind: ActionKind::Down,
                 // Keep the focus-state tests independent of worker-startup
                 // jitter; their assertions begin only after this commit.
-                scheduled_us: 400_000,
+                scheduled_us: 2_000_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-recovery-down".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 2_100_000,
+                scheduled_us: 3_700_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-recovery-up".to_string().into(),
             },
@@ -2395,7 +2401,7 @@ fn start_focus_recovery_session(
 }
 
 fn wait_for_focus_down(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
-    let deadline = Instant::now() + Duration::from_secs(1);
+    let deadline = Instant::now() + Duration::from_secs(3);
     let mut snapshot = session.snapshot_lite();
     while snapshot.recent_latencies_us.is_empty()
         && !snapshot.is_finished
