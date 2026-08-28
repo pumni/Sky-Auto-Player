@@ -4968,7 +4968,10 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
     options.timing.min_hold_us = 300;
     let session = NativeDispatchSession::new(options).expect("authored-feasible admission");
 
-    session.start().expect("worker start");
+    // Keep worker startup/preemption outside the first authored boundary. This
+    // test validates completion-latency/release-gap behavior, not zero-slack
+    // startup scheduling.
+    start_with_test_wall_clock_slack(&session);
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
@@ -4995,32 +4998,36 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
 
 #[test]
 fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
+    // Keep the first physical boundary well clear of worker startup. This
+    // test exercises the injected pre-call deadline miss on the second Down,
+    // not an incidental startup scheduling race at an authored zero target.
+    const TEST_AUTHORED_START_US: u64 = 2_000_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
-            scheduled_us: 0,
+            scheduled_us: TEST_AUTHORED_START_US,
             scan_codes: smallvec::smallvec![0x15],
             reason: "A-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Down,
-            scheduled_us: 100_000,
+            scheduled_us: TEST_AUTHORED_START_US + 100_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "B-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 200_000,
+            scheduled_us: TEST_AUTHORED_START_US + 200_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "A-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 200_000,
+            scheduled_us: TEST_AUTHORED_START_US + 200_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "B-up".to_string().into(),
         },
