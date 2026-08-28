@@ -817,11 +817,8 @@ impl TestDispatchSessionPy {
         self.arm(StrictU64(0))
     }
 
-    /// Keep the test-support session's supervisor lease alive for acceptance
-    /// benchmarks that intentionally run longer than the three-second lease.
-    /// Production callers already publish this heartbeat through the normal
-    /// supervisor adapter; exposing it here keeps the test harness on the
-    /// same lifecycle contract without adding a production backend surface.
+    /// Keep the test-support session's supervisor lease alive for long-running
+    /// acceptance benchmarks; production publishes this through its adapter.
     fn heartbeat(&self) -> PyResult<()> {
         self.session.heartbeat().map_err(PyRuntimeError::new_err)
     }
