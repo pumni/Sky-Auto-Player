@@ -7,7 +7,7 @@ Sky itself received or rendered every note.
 
 ## Environment and provenance
 
-- Latest repository revision at documentation time: `1cfb1f0efe79397b77605efd9796ff5c9e7a95c6`
+- Latest repository revision at documentation time: `9d2496dbb655de33ff96aabe4e0e49254bfc0d8d`
 - Phase-A production-path benchmark revision: `1f33ea0efe79397b77605efd9796ff5c9e7a95c6`
 - Native acceptance wheel and harness revision: `1cfb1f0efe79397b77605efd9796ff5c9e7a95c6`
 - Host: Windows 11 build `10.0.26200`, AMD64 Family 23 Model 104 Stepping 1
@@ -117,4 +117,3 @@ invalid; its pre-call shrink-over-grace count was zero. No invariant or
 threshold was weakened to obtain the clean cold-gap qualification result. The
 older baseline and invalid-run artifacts remain at
 `C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-acceptance-artifacts-20260828`.
-
