@@ -1059,6 +1059,8 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
     let acceptance_clean = acceptance_failure_reasons.is_empty();
     let statistics_eligible = acceptance_clean && iterations() >= 10_000;
     let sender_cutoff_exercised = true;
+    let total_spin_time_us = samples.spin_time_us.iter().copied().sum::<u64>();
+    let total_wall_time_us = samples.wall_time_us.iter().copied().sum::<u64>();
     let spin_duty = spin_duty_cycle_ppm(&samples.spin_time_us, &samples.wall_time_us);
     json!({
         "acceptance_clean": acceptance_clean,
@@ -1127,6 +1129,8 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "observation_queue": "bounded_nonblocking_on",
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
+        "total_spin_time_us": total_spin_time_us,
+        "total_wall_time_us": total_wall_time_us,
         "spin_duty_cycle_ppm": spin_duty,
     })
 }
