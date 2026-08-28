@@ -8,6 +8,9 @@ param(
     [string]$ExpectedFromVersion = "3.4.5",
     [string]$ExpectedToVersion = "3.4.5",
     [string]$SyntheticTargetVersion = "3.4.6",
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable",
+    [switch]$ExactTargetQualification,
     [switch]$RunGitHubSmoke,
     [switch]$KeepEvidence,
     [switch]$SelfTestResultPolling,
@@ -317,6 +320,8 @@ function Start-UpdaterProcess {
         [string]$CurrentVersion,
         [string]$TargetVersion,
         [string]$ReleaseDir,
+        [ValidateSet("stable", "beta")]
+        [string]$Channel = "stable",
         [uint32]$ParentPid = 1,
         [string]$FailAt,
         [string]$PauseAt,
@@ -336,7 +341,7 @@ function Start-UpdaterProcess {
         "--parent-pid", [string]$ParentPid,
         "--current-version", $CurrentVersion,
         "--target-version", $TargetVersion,
-        "--channel", "stable"
+        "--channel", $Channel
     )
     if ($Restart) { $arguments += "--restart" }
     if ($FailRestart) { $arguments += "--fail-restart" }
@@ -429,6 +434,8 @@ function Invoke-UpdaterExpectTerminal {
         [string]$CurrentVersion,
         [string]$TargetVersion,
         [string]$ReleaseDir,
+        [ValidateSet("stable", "beta")]
+        [string]$Channel = "stable",
         [string]$FailAt,
         [string]$ExpectedStatus,
         [string]$ExpectedErrorCode,
@@ -439,7 +446,7 @@ function Invoke-UpdaterExpectTerminal {
     $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
     $runInfo = Start-UpdaterProcess -Install $Scenario.Install -Candidate $Candidate `
         -ParentPid $parentPid -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion `
-        -ReleaseDir $ReleaseDir -FailAt $FailAt -Restart:$Restart `
+        -ReleaseDir $ReleaseDir -Channel $Channel -FailAt $FailAt -Restart:$Restart `
         -RequireProgressWindow -FailRestart:$FailRestart
     Stop-ProcessIfRunning $parent
     $observed = Wait-ForUpdaterResult $Scenario $runInfo $ExpectedStatus $ExpectedErrorCode
@@ -504,6 +511,8 @@ function Invoke-Updater {
         [string]$CurrentVersion,
         [string]$TargetVersion,
         [string]$ReleaseDir,
+        [ValidateSet("stable", "beta")]
+        [string]$Channel = "stable",
         [string]$FailAt,
         [string]$PauseAt,
         [switch]$Restart,
@@ -513,7 +522,7 @@ function Invoke-Updater {
     $parent = Start-ParentFixture $Scenario.Install
     $parentPid = if ($parent) { [uint32]$parent.Id } else { [uint32]1 }
     $runInfo = Start-UpdaterProcess -Install $Scenario.Install -Candidate $Candidate `
-        -ParentPid $parentPid -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion -ReleaseDir $ReleaseDir `
+        -ParentPid $parentPid -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion -ReleaseDir $ReleaseDir -Channel $Channel `
         -FailAt $FailAt -PauseAt $PauseAt -Restart:$Restart `
         -RequireProgressWindow:$RequireProgressWindow -FailRestart:$FailRestart
     Start-Sleep -Milliseconds 500
@@ -868,6 +877,25 @@ function Build-SyntheticLocalRelease {
     return $release
 }
 
+function Build-ExactLocalRelease {
+    param([string]$Archive)
+    $archivePath = (Resolve-Path $Archive).Path
+    $archiveDirectory = Split-Path -Parent $archivePath
+    $sidecarPath = "$archivePath.sha256"
+    $manifestPath = Join-Path $archiveDirectory "MANIFEST.json"
+    foreach ($path in @($sidecarPath, $manifestPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "exact release asset is missing: $path"
+        }
+    }
+    $release = Join-Path $script:SandboxRoot "exact-release"
+    New-Item -ItemType Directory -Path $release -Force | Out-Null
+    Copy-Item -LiteralPath $archivePath -Destination (Join-Path $release (Split-Path -Leaf $archivePath)) -Force
+    Copy-Item -LiteralPath $sidecarPath -Destination (Join-Path $release (Split-Path -Leaf $sidecarPath)) -Force
+    Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $release "MANIFEST.json") -Force
+    return $release
+}
+
 function Build-CorruptSidecarRelease {
     param([string]$ValidRelease)
     $release = Join-Path $script:SandboxRoot "corrupt-sidecar-release"
@@ -965,7 +993,9 @@ try {
     $toManifest = Get-ManifestObject $toRoot
     if ($fromManifest.version -ne $ExpectedFromVersion) { throw "rollout acceptance requires a v$ExpectedFromVersion source package; got $($fromManifest.version)" }
     if ($toManifest.version -ne $ExpectedToVersion) { throw "rollout acceptance requires a v$ExpectedToVersion exact package template; got $($toManifest.version)" }
-    if ($fromManifest.version -ne $toManifest.version) { throw "source and exact target template must have the same v3.4.5 package version" }
+    if (-not $ExactTargetQualification -and $fromManifest.version -ne $toManifest.version) {
+        throw "source and exact target template must have the same v3.4.5 package version"
+    }
     if ($SyntheticTargetVersion -eq $fromManifest.version) { throw "synthetic target version must be newer than source" }
 
     $cargoManifest = Join-Path $script:RepoRoot "rust\Cargo.toml"
@@ -988,6 +1018,62 @@ try {
         "production_candidate $($candidateHashes.production_candidate)"
         "e2e_executor $($candidateHashes.e2e_executor)"
     ) | Set-Content (Join-Path $script:EvidenceRoot "candidate-sha256.txt") -Encoding ascii
+
+    $exactRelease = $null
+    if ($ExactTargetQualification) {
+        $exactRelease = Build-ExactLocalRelease $ToPackage
+        $externalManifestHash = (Get-FileHash (Join-Path $exactRelease "MANIFEST.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+        $embeddedManifestHash = (Get-FileHash (Join-Path $toRoot "MANIFEST.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($externalManifestHash -ne $embeddedManifestHash) {
+            throw "exact target external MANIFEST.json differs from the downloaded ZIP manifest"
+        }
+        Write-EvidenceJson "exact-target-assets.json" ([ordered]@{
+            archive = (Split-Path -Leaf $ToPackage)
+            archive_sha256 = (Get-FileHash -LiteralPath $ToPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+            sidecar = (Get-Content -LiteralPath "$ToPackage.sha256" -Raw).Trim()
+            external_manifest_sha256 = $externalManifestHash
+            embedded_manifest_sha256 = $embeddedManifestHash
+            version = $toManifest.version
+        })
+
+        $scenario = New-Scenario "canonical-v345-to-rc1" $fromRoot
+        $run = Invoke-Updater $scenario $e2eCandidate $fromManifest.version $toManifest.version $exactRelease `
+            -Channel $Channel -Restart -RequireProgressWindow
+        if ($run.Result.status -ne "success" -or $run.ExitCode -ne 0) {
+            throw "canonical v3.4.5 to exact v$($toManifest.version) result was not success"
+        }
+        $hExact = Save-ScenarioEvidence "canonical-v345-to-rc1" $scenario $run $toManifest
+        Save-UpdaterLog "canonical-v345-to-rc1" $scenario
+        $installedExactUpdaterHash = (Get-FileHash (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($installedExactUpdaterHash -ne $candidateHashes.packaged_updater) {
+            throw "exact RC install updater hash is not the exact downloaded RC packaged updater hash"
+        }
+        if (-not $hExact.restart_verified) { throw "exact RC restart was not observed" }
+        $exactRestart = Assert-CanonicalSuccess $scenario $run
+        Write-EvidenceJson "canonical-v345-to-rc1-result.json" ([ordered]@{
+            status = "PASS"
+            source_version = $fromManifest.version
+            target_version = $toManifest.version
+            downloaded_archive_sha256 = (Get-FileHash -LiteralPath $ToPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+            installed_updater_sha256 = $installedExactUpdaterHash
+            restarted_pid = $exactRestart.Id
+            channel = $Channel
+            exact_asset = $true
+            active_state_removed = $true
+            transaction_removed = $true
+            preserved_state_verified = $true
+        })
+        $script:Results.canonical_v345_to_rc1 = [ordered]@{
+            status = "PASS"
+            target_version = $toManifest.version
+            installed_updater_sha256 = $installedExactUpdaterHash
+            restarted_pid = $exactRestart.Id
+            restart_verified = $true
+            exact_asset = $true
+            preserved_state_verified = $true
+        }
+        Stop-RestartedApp $scenario.Install
+    }
 
     # The mandatory rollout proof starts with the v3.4.5 package and installs
     # a test-only synthetic v3.4.6 payload. Its updater bytes remain the exact
@@ -1455,6 +1541,7 @@ finally {
     })
     Write-EvidenceJson "summary.json" ([ordered]@{
         overall = $script:Results.overall
+        canonical_v345_to_rc1 = if ($script:Results.canonical_v345_to_rc1) { $script:Results.canonical_v345_to_rc1.status } else { "NOT_RUN" }
         canonical_v345_to_v346 = if ($script:Results.canonical_v345_to_v346) { $script:Results.canonical_v345_to_v346.status } else { "FAIL" }
         ready_visible = [bool]$script:Results.ready_visible
         happy_github = if ($script:Results.happy_github) { $script:Results.happy_github.status } else { "NOT_RUN" }
