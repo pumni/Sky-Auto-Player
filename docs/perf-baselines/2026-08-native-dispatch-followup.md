@@ -10,7 +10,9 @@ for every injected transition.
 
 The implementation work is complete for the defined low-risk scope. The
 coordinator Phase-A qualification and the real-wait core A/B qualification are
-clean. The default single-key hot/cold sender workloads are also clean.
+clean. The final-HEAD single-key hot sender workload is clean. An earlier
+single-key cold run was clean, but two final-HEAD cold reruns exposed
+intermittent pre-call hold-shrink violations, so cold is not signed off below.
 
 The deliberately tighter hot 15-key stress workload remains unqualified: its
 hard release-gap counter detects that a large mock `SendInput` completion can
@@ -102,15 +104,21 @@ converted into a pass.
 
 | Workload | Boundaries | Result | Notes |
 | --- | ---: | --- | --- |
-| Hot, paired, polyphony 1 | 10,240 | Clean/statistically eligible | Completion diagnostic: 196 below-frame samples; hard counters zero. |
-| Cold, paired, polyphony 1 | 10,240 | Clean/statistically eligible | Completion diagnostic zero; hard counters zero. |
+| Hot, paired, polyphony 1 at final HEAD | 10,240 | Clean/statistically eligible | Completion diagnostic: 229 below-frame samples; hard counters zero. |
+| Cold, paired, polyphony 1 at final HEAD | 256–9,216 attempted | Not qualified | Two 40-suite reruns stopped on 3 and 1 pre-call hold-shrink violations; traces remained complete. |
+| Cold, paired, polyphony 1 at `45151f9` | 10,240 | Clean/statistically eligible | Earlier clean artifact; native production code is unchanged by later benchmark/docs commits. |
 | Hot, paired, polyphony 15 | 272 | Not qualified | 4,080 keys delivered; release-gap hard counter 2,025 and matching anomaly count. |
 
-Hot single-key artifact:
-`C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-hot-p1-45151f9.json`
+Final-HEAD hot single-key artifact:
+`C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-hot-p1-a5baa2c.json`
 
-Cold single-key artifact:
+Earlier clean cold single-key artifact:
 `C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-cold-p1-45151f9.json`
+
+Final-HEAD cold failed artifacts:
+`C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-cold-p1-a5baa2c-failed-run-36.json`
+and
+`C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-cold-p1-a5baa2c-v2-failed-run-2.json`.
 
 The hot 15-key artifact is:
 `C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-followup-candidate-hot-45151f9-failed-run-0.json`.
@@ -127,7 +135,9 @@ not by an early Down or an authored-target rewrite. The pre-call boundary is
 the scheduler cutoff; completion is sampled after `SendInput` returns and is
 therefore retained as transport forensics. The separate release-gap result for
 large packets remains hard and prevents claiming a full all-polyphony hot
-acceptance on this host.
+acceptance on this host. The cold rerun failures are also retained as a hard
+qualification result; they show host scheduling jitter beyond the 500 µs
+pre-call hold-shrink allowance, not missing or duplicated input.
 
 None of these artifacts observes Sky's Raw Input, frame registration, render,
 or audio onset. A remaining “HUD clean but note not heard” report therefore
