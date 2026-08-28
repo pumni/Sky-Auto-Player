@@ -18,7 +18,9 @@ def test_result_polling_ignores_intermediate_success() -> None:
     completed = subprocess.run(
         [
             "pwsh",
+            "-NoLogo",
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
@@ -31,7 +33,10 @@ def test_result_polling_ignores_intermediate_success() -> None:
         ],
         capture_output=True,
         text=True,
-        timeout=20,
+        # The PowerShell self-test has its own five-second polling deadline.
+        # This outer guard only covers cold pwsh/Add-Type startup on hosted
+        # Windows runners and must not be used to stretch the polling contract.
+        timeout=45,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
