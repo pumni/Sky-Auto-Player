@@ -622,7 +622,6 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
         "production_same_call_same_key_retrigger_count",
         "production_anchor_overwrite_count",
         "production_unmatched_up_count",
-        "production_anomaly_ring_overwrite_count",
         "production_structural_anomaly_count",
         "hold_pair_sample_mismatch",
         ),

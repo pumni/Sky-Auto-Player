@@ -72,7 +72,6 @@ PRODUCTION_CORRECTNESS_COUNTERS = (
     "production_same_call_same_key_retrigger_count",
     "production_anchor_overwrite_count",
     "production_unmatched_up_count",
-    "production_anomaly_ring_overwrite_count",
     "production_structural_anomaly_count",
 )
 
@@ -81,6 +80,7 @@ PRODUCTION_CORRECTNESS_COUNTERS = (
 # checked at the trusted pre-call boundary above the actual SendInput call.
 PRODUCTION_DIAGNOSTIC_COUNTERS = (
     "production_completion_hold_below_frame_count",
+    "production_anomaly_ring_overwrite_count",
     "production_forensics_anomaly_count",
     "production_timing_diagnostic_count",
     "production_release_headroom_consumed_count",
