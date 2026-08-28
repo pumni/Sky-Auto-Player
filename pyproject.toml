@@ -33,12 +33,12 @@ py-modules = ["main", "build_app"]
 dev = [
     "maturin>=1.13.3,<2",
     "pyinstaller==6.22.2",
-    "pyrefly>=1.1.1",
+    "pyrefly>=1.2.0",
     "pyright>=1.1.411",
     "pytest>=8.4.2",
     "pytest-benchmark>=5.2.3",
     "pytest-textual-snapshot>=1.1.0",
-    "ruff>=0.15.20",
+    "ruff>=0.16.5",
     "soundcard>=0.4.6",
 ]
 
@@ -87,7 +87,14 @@ reportDeprecated   = "error"
 target-version = "py314"
 
 [tool.ruff.lint]
-extend-select = [
+# Keep the repository's established rule set explicit across Ruff releases.
+# New Ruff versions may expand the implicit default set; enabling only the
+# default checks used before this upgrade avoids unrelated whole-tree churn.
+select = [
+    "E4",   # pycodestyle errors — Ruff's established defaults
+    "E7",
+    "E9",
+    "F",    # Pyflakes — Ruff's established defaults
     "UP",   # pyupgrade — modern syntax for 3.14
     "I",    # isort — consistent import ordering
     "B",    # flake8-bugbear — bug detection

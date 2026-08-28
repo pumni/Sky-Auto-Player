@@ -111,7 +111,7 @@ def _optional_text(data: dict[str, object], name: str) -> str | None:
     return value
 
 
-def _optional_os_error(data: dict[str, object], name: str) -> int | None | object:
+def _optional_os_error(data: dict[str, object], name: str) -> int | object | None:
     if name not in data or data[name] is None:
         return None
     value = data[name]
