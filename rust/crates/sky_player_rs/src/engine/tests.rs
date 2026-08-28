@@ -4639,41 +4639,45 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
 
 #[test]
 fn mixed_same_key_retrigger_success_commits_new_generation() {
+    // Keep the first authored boundary out of worker startup/preemption. The
+    // assertions below cover generation ownership and mixed ordering, not
+    // zero-slack dispatch timing.
+    const TEST_AUTHORED_EPOCH_US: u64 = 2_000_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
             // Keep each physical boundary away from worker startup and leave
             // observer work deterministic under the full parallel suite.
-            scheduled_us: 500_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US,
             scan_codes: smallvec::smallvec![0x15],
             reason: "first-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Down,
-            scheduled_us: 1_000_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 500_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "disjoint-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 1_000_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 500_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "retrigger-up".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 1_500_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "stale-release".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 4,
             kind: ActionKind::Up,
-            scheduled_us: 1_500_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
             scan_codes: smallvec::smallvec![0x16],
             reason: "release-two".to_string().into(),
         },
@@ -4929,32 +4933,36 @@ fn native_release_gap_admission_checks_qpc_tick_rounding() {
 
 #[test]
 fn completion_latency_does_not_create_hold_failure_after_release_gap() {
+    // Keep worker startup/preemption away from the first authored boundary.
+    // This test validates completion-latency/release-gap behavior, not
+    // zero-slack startup scheduling.
+    const TEST_AUTHORED_EPOCH_US: u64 = 2_000_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
-            scheduled_us: 0,
+            scheduled_us: TEST_AUTHORED_EPOCH_US,
             scan_codes: smallvec::smallvec![0x15],
             reason: "seed-down".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000,
             scan_codes: smallvec::smallvec![0x15],
             reason: "same-key-release".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 1_000 + 16_667,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000 + 16_667,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "same-key-chord-after-release-gap".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: 2_000 + 16_667,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 2_000 + 16_667,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "cleanup".to_string().into(),
         },
@@ -4976,9 +4984,6 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
     options.timing.min_hold_us = 300;
     let session = NativeDispatchSession::new(options).expect("authored-feasible admission");
 
-    // Keep worker startup/preemption outside the first authored boundary. This
-    // test validates completion-latency/release-gap behavior, not zero-slack
-    // startup scheduling.
     start_with_test_wall_clock_slack(&session);
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
