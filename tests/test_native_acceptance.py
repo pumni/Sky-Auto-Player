@@ -188,6 +188,7 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["require_focus"] is True
     assert config["materialized_min_hold_us"] == 17_467
     assert config["materialized_release_gap_us"] == 17_467
+    assert config["down_late_grace_us"] == 500
 
 
 def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
@@ -233,6 +234,7 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
             "require_focus": False,
             "materialized_min_hold_us": 17_467,
             "materialized_release_gap_us": 17_467,
+            "down_late_grace_us": 500,
         }
     report = {
         "benchmark_schema_version": 8,

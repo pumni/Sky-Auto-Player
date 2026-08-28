@@ -662,7 +662,8 @@ impl TestDispatchSessionPy {
         enable_adaptive_spin = true,
         enable_dispatch_cost_lead = true,
         fault_mode = "none",
-        min_release_gap_us = None
+        min_release_gap_us = None,
+        down_late_grace_us = StrictU64(0)
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -681,9 +682,11 @@ impl TestDispatchSessionPy {
         enable_dispatch_cost_lead: bool,
         fault_mode: &str,
         min_release_gap_us: Option<StrictU64>,
+        down_late_grace_us: StrictU64,
     ) -> PyResult<Self> {
         let _ = (enable_adaptive_spin, enable_dispatch_cost_lead);
         let min_hold_us = min_hold_us.0;
+        let down_late_grace_us = down_late_grace_us.0;
         let game_fps = u16::try_from(game_fps.0)
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
         if !(15..=240).contains(&game_fps) {
@@ -704,6 +707,11 @@ impl TestDispatchSessionPy {
         if min_hold_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "min_hold_us must be at most 60000000",
+            ));
+        }
+        if down_late_grace_us > min_hold_us {
+            return Err(PyValueError::new_err(
+                "down_late_grace_us must not exceed min_hold_us",
             ));
         }
         if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
@@ -758,7 +766,7 @@ impl TestDispatchSessionPy {
                 game_fps,
                 min_hold_us: effective_min_hold_us,
                 min_release_gap_us,
-                down_late_grace_us: 0,
+                down_late_grace_us,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,

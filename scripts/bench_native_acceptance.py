@@ -65,6 +65,7 @@ SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
 MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
+PRODUCTION_DOWN_LATE_GRACE_US = 500
 
 PRODUCTION_CORRECTNESS_COUNTERS = (
     "production_completion_hold_below_frame_count",
@@ -411,6 +412,7 @@ def _benchmark_config(
         "materialized_release_gap_us": _materialized_release_gap_us(
             game_fps=args.game_fps,
         ),
+        "down_late_grace_us": PRODUCTION_DOWN_LATE_GRACE_US,
     }
 
 
@@ -1232,6 +1234,7 @@ def _new_session(
             dispatch_lead_us=fixed_lead_us,
             enable_dispatch_cost_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
+            down_late_grace_us=PRODUCTION_DOWN_LATE_GRACE_US,
         )
     if backend != "sendinput":
         raise ValueError(f"unsupported native benchmark backend: {backend}")
@@ -2213,6 +2216,7 @@ def _assert_baseline_compatible(
         "require_focus",
         "materialized_min_hold_us",
         "materialized_release_gap_us",
+        "down_late_grace_us",
     )
     baseline_config = baseline.get("benchmark_config")
     report_config = report.get("benchmark_config")
