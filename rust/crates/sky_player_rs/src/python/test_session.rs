@@ -108,6 +108,13 @@ impl TestDispatchSessionPy {
                 ));
             }
         };
+        if matches!(test_wait_policy, TestWaitPolicy::ProductionCalibrated)
+            && priority_mode != PriorityMode::Auto
+        {
+            return Err(PyValueError::new_err(
+                "production_calibrated wait_policy requires rt_priority_mode=auto",
+            ));
+        }
         let fault_script = match fault_mode {
             "none" => FaultInjectionScript::none(),
             "zero_progress" => FaultInjectionScript::zero_progress_down_once(),
