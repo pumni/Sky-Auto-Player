@@ -1961,6 +1961,17 @@ def _assert_correctness(run: dict[str, Any]) -> None:
         )
 
 
+def _validate_and_strip_run(
+    suite_runs: dict[str, dict[str, Any]], polyphony: int, run: dict[str, Any]
+) -> None:
+    """Keep failed runs available for the diagnostic artifact before stripping internals."""
+
+    suite_runs[str(polyphony)] = run
+    _assert_correctness(run)
+    run.pop("_snapshot", None)
+    run.pop("_telemetry", None)
+
+
 def _report_sha(report: dict[str, Any]) -> str:
     for field in ("candidate_sha", "native_build_commit", "git_sha"):
         value = report.get(field)
@@ -2561,10 +2572,7 @@ def main() -> int:
                     timeout_ms=next_timeout_ms(),
                     native_build_commit=expected_native_commit,
                 )
-                _assert_correctness(run)
-                run.pop("_snapshot", None)
-                run.pop("_telemetry", None)
-                suite_runs[str(polyphony)] = run
+                _validate_and_strip_run(suite_runs, polyphony, run)
 
             successful_suites.append({"dispatch": suite_runs})
             suite_results.append(

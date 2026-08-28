@@ -1065,6 +1065,26 @@ def test_failed_run_artifact_contains_raw_diagnostics_and_is_not_overwritten(
     assert ACCEPTANCE._failed_run_artifact_path(tmp_path / "acceptance.json", 3) != path
 
 
+def test_failed_correctness_run_keeps_raw_evidence_for_artifact() -> None:
+    suite_runs: dict[str, dict[str, Any]] = {}
+    run: dict[str, Any] = {
+        "outcome": "finished",
+        "keys_dropped": 0,
+        "failed_release_count": 0,
+        "chord_split_events": 0,
+        "correctness": {"production_completion_hold_below_frame_count": 1},
+        "polyphony": 1,
+        "_snapshot": {"evidence": "snapshot"},
+        "_telemetry": {"evidence": "telemetry"},
+    }
+
+    with pytest.raises(RuntimeError, match="correctness counters"):
+        ACCEPTANCE._validate_and_strip_run(suite_runs, 1, run)
+
+    assert suite_runs["1"]["_snapshot"] == {"evidence": "snapshot"}
+    assert suite_runs["1"]["_telemetry"] == {"evidence": "telemetry"}
+
+
 def test_partial_repetition_set_is_invalid_and_not_statistics_eligible() -> None:
     results = [
         ACCEPTANCE.BenchmarkRunResult(index, 0, {"ok": True}, None)
