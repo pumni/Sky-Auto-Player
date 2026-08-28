@@ -383,3 +383,186 @@ INVESTIGATION REQUIRED.**
 No calibration constants, runtime adaptation, 500 µs grace, authored hold or
 release gap, focus policy, target policy, lease policy, one-wait architecture,
 SendInput count, or RT allocation behavior was changed by this follow-up.
+
+## Production-equivalent scheduling rerun (schema 10, source `7c3cff6`)
+
+This section is a later, source-pinned rerun of the scheduling follow-up. It
+does not rewrite the historical failures above. The benchmark source and the
+test-support wheel were both built from the clean checkout at:
+
+```text
+7c3cff6341b89e2e00f162fb7ae3deb9805f0eac
+```
+
+The two implementation commits in this rerun are:
+
+```text
+85a21299ceacc7f1a00d20ce255497c99944b87a  bench: add production-equivalent scheduling provenance
+7c3cff6341b89e2e00f162fb7ae3deb9805f0eac  bench: use production waiter constructor for real-wait evidence
+```
+
+The production behavior remains frozen. No authored timestamps, hold or
+release-gap policy, 500 µs Down grace, focus/target/lease gate, future
+authorization, one-wait architecture, SendInput count, retry policy, or RT
+allocation behavior changed. The new mode only makes the test-support harness
+use the production waiter constructor, production startup calibration formula,
+and explicit scheduling provenance. Its transport remains the deterministic
+mock; it is not a production SendInput substitute.
+
+### Build and host provenance
+
+The host for every artifact in this section was:
+
+```text
+Windows-11-10.0.26200-SP0
+AMD64 Family 23 Model 104 Stepping 1, AuthenticAMD
+QPC 10,000,000 Hz
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+```
+
+The test-support wheel was built with `scripts/build_rust_wheel.py --test-support`.
+Its SHA256 was:
+
+```text
+5A9E501E6568D8D7C946EB1C3B3937BB6FF6B57622C9E07E7C8180EB3701C8A9
+```
+
+The production wheel was built with `scripts/build_rust_wheel.py` and was not
+used for mock acceptance. Its SHA256 was:
+
+```text
+8A1138B5EAB8793C1DBE946ED9FE97D77AB2DB4C2B7851203976266C9439BC86
+```
+
+Both wheel `build_info()` results reported:
+
+```text
+native_build_commit = 7c3cff6341b89e2e00f162fb7ae3deb9805f0eac
+native_abi          = cp314t-win_amd64
+free_threaded       = true
+win32_backend       = true
+```
+
+The production-equivalent runs requested `--rt-priority-mode auto`. The host
+acquired `off` rather than the requested elevated mode, so these artifacts are
+explicitly test-support/off-profile evidence. The harness did not force a
+priority class or relabel the fallback as production scheduling.
+
+### Corrected acceptance reruns
+
+Commands for E1–E3 were the same shape, with the indicated workload changed:
+
+```text
+uv run --offline --env-file .env python scripts/bench_native_acceptance.py \
+  --backend mock --wait-policy production_calibrated --rt-priority-mode auto \
+  --scenario paired --actions 128 --dispatch-repeats 40 --warmup-cycles 8 \
+  --start-delay-us 100000 --skip-command-samples --continue-after-failure \
+  --budget-seconds 600 --expected-native-build-commit 7c3cff6341b89e2e00f162fb7ae3deb9805f0eac
+```
+
+E1 used `--polyphony 1 --gap-profile cold`, E2 used
+`--polyphony 1 --gap-profile hot`, and E3 used
+`--polyphony 15 --gap-profile hot`. Each requested 40 suites and preserved
+failed-run JSON files rather than excluding them.
+
+| Evidence | Requested samples | Completed | Hard correctness counters | Hard cutoff/release counters | Diagnostic counters | Eligibility/result |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| E1 cold p1 | 10,880 authored boundaries | 35/40 suites | trace mismatch 282; other structural counters 0 | missed Down 6 boundaries/6 keys; release floor 0 | completion below frame 0 | `statistics_eligible=false`; test-support cutoff failure, production relevance unproven |
+| E2 hot p1 control | 10,880 authored boundaries | 29/40 suites | trace mismatch 24; other structural counters 0 | missed Down 12 boundaries/12 keys; release floor 0 | completion below frame 64 | `statistics_eligible=false`; no clean control on this host |
+| E3 hot p15 | 10,880 authored boundaries / 163,200 requested keys | 0/40 suites clean | trace mismatch 26; other structural counters 0 | missed Down 13 boundaries/195 keys; corrected release-floor count 73,905 | completion below frame 1,110; headroom consumed 80,610; ring overwrites 72,625 | `statistics_eligible=false`; real mock-model release-visibility failure |
+
+The per-run p15 workload is 272 boundaries and 4,080 keys, matching the
+historical stress shape. The aggregate is larger because the required rerun
+used 40 suites. Static authored targets still used the unchanged 17,467 µs
+release gap and the unchanged 16,667 µs base visibility floor. The old full-gap
+proxy is not used as the sender-side hard observation anymore. The remaining
+p15 failures therefore describe the current mock transport model
+(`80 + 40 × key_count` µs plus Windows scheduling), not measured production
+`SendInput` duration.
+
+E5 is the deterministic cutoff artifact supplied by the Rust sender tests:
+equality at the cutoff sends once, one QPC tick late returns
+`DeadlineMissedBeforeSend` without invoking the custom emitter, and Up-only
+remains exempt. The tests are in
+`rust/crates/sky_dispatch_win32/src/input/tests/tracked.rs` and cover the
+shared production/test-support predicate.
+
+Artifacts:
+
+```text
+.benchmarks/production-equivalent-auto-cold-p1-final7c.json
+.benchmarks/production-equivalent-auto-hot-p1-final7c.json
+.benchmarks/production-equivalent-auto-hot-p15-final7c.json
+```
+
+The E1/E2 labels must be read as **test-support cutoff failures under the
+current host profile**, not as proof that shipping production scheduling or
+real `SendInput` has the same distribution. All raw failed-run artifacts are
+retained beside their report files.
+
+### Real-wait core rerun
+
+The command was:
+
+```text
+RT_HANDOFF_BENCH_ITERATIONS=10000
+RT_HANDOFF_BENCH_SCOPE=real_wait_core
+RT_HANDOFF_BENCH_MODE=real_wait
+RT_HANDOFF_BENCH_DUE_US=1000
+cargo run --manifest-path rust/Cargo.toml -p sky_player_rs \
+  --example rt_handoff_bench --features test-support -- \
+  .benchmarks/production-equivalent-real-wait-core-10k.json
+```
+
+It used `HybridWaiter::production()` and collected 10,000 iterations in each
+of six scenarios, or 60,000 waits per mode. The binary was compiled from the
+clean source SHA above with the test-support feature; unlike wheel-backed
+acceptance, this direct Cargo artifact has no Python wheel SHA. The command,
+source SHA, compiler, QPC and output path above are the complete provenance.
+
+| Mode | Selected spin | Cutoff/non-dispatch | Overdue | Worst dispatch p99/p99.9 | Worst spin p99/p99.9 | Total spin / wall (µs) | CPU duty |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Production calibrated | 1,000 µs | 14 | 0 | 92 / 1,673 µs | 992 / 1,137 µs | 50,132,370 / 97,501,075 | 61.82% |
+| Fixed 400 µs | 400 µs | 239 | 11 | 1,386 / 3,928 µs | 370 / 1,608 µs | 7,041,473 / 104,767,029 | 21.32% |
+| Fixed 700 µs | 700 µs | 204 | 6 | 852 / 3,010 µs | 669 / 1,998 µs | 22,456,542 / 101,382,593 | 37.16% |
+| Fixed 1,000 µs | 1,000 µs | 81 | 6 | 1,268 / 13,820 µs | 999 / 1,404 µs | 49,764,300 / 100,282,744 | 61.16% |
+
+The production-calibrated mode executed six startup samples and selected the
+1,000 µs cap on this run. Every mode has `statistics_eligible=false` because
+the test-support sender seam recorded deadline/non-dispatch or overdue
+evidence. The report keeps the dimensions separate:
+`waiter_timing_clean`, `dispatch_path_clean`, and `sender_cutoff_clean`; the
+last one is never claimed by this benchmark as production `SendInput`
+qualification. Process CPU duty includes benchmark-fixture overhead and is
+not application CPU usage.
+
+Artifact:
+
+```text
+.benchmarks/production-equivalent-real-wait-core-10k.json
+```
+
+### Qualification decision and remaining uncertainty
+
+The cold result is **INCONCLUSIVE** for shipping production: the faithful
+test-support seam observed real cutoff failures under an `Auto→off` host
+profile, but no production scheduling/MMCSS or actual `SendInput` run was
+available. The hot p15 result is **INCONCLUSIVE** for shipping production and
+is a **REAL RELEASE-VISIBILITY FAILURE UNDER THE CURRENT MOCK P15 TRANSPORT
+MODEL**. It must not be used to increase the authored release gap.
+
+No safe interactive foreground sink was available (`GetForegroundWindow()` was
+zero), so an actual production-wheel `SendInput` qualification was not run.
+Using `--no-require-focus` would not have been valid evidence. Sender-side
+evidence does not prove that Sky sampled, rendered, or produced audio for every
+injected transition.
+
+The calibration recommendation is:
+
+**SEPARATE PRODUCTION-EQUIVALENT SCHEDULING / CALIBRATION ROOT-CAUSE
+INVESTIGATION REQUIRED.**
+
+This is not authorization to change calibration constants, add runtime
+adaptation, change the 500 µs grace, or retune authored timing. The next
+investigation must first obtain production-equivalent scheduling and isolated
+real-`SendInput` evidence.
