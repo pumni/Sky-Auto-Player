@@ -563,6 +563,45 @@ def test_timing_forensics_diagnostics_do_not_poison_hard_qualification() -> None
     )
 
 
+def test_failed_run_report_separates_raw_hard_and_diagnostic_dimensions() -> None:
+    failures = [
+        {
+            "qualification_dimensions": {
+                "hard_correctness": {"trace": 1},
+                "hard_scheduler_cutoff": {"missed_down_boundaries": 2},
+                "transport_diagnostics": {"production_timing_diagnostic_count": 3},
+                "headroom_consumption_diagnostics": {
+                    "production_release_headroom_consumed_count": 4,
+                    "production_max_release_headroom_consumed_ticks": 50,
+                },
+            },
+        },
+        {
+            "qualification_dimensions": {
+                "hard_correctness": {"trace": 5},
+                "hard_scheduler_cutoff": {"missed_down_boundaries": 7},
+                "transport_diagnostics": {"production_timing_diagnostic_count": 11},
+                "headroom_consumption_diagnostics": {
+                    "production_release_headroom_consumed_count": 13,
+                    "production_max_release_headroom_consumed_ticks": 40,
+                },
+            },
+        },
+    ]
+
+    dimensions = ACCEPTANCE._aggregate_failure_dimensions(failures)
+
+    assert dimensions["hard_correctness"] == {"trace": 6}
+    assert dimensions["hard_scheduler_cutoff"] == {"missed_down_boundaries": 9}
+    assert dimensions["transport_diagnostics"] == {
+        "production_timing_diagnostic_count": 14
+    }
+    assert dimensions["headroom_consumption_diagnostics"] == {
+        "production_release_headroom_consumed_count": 17,
+        "production_max_release_headroom_consumed_ticks": 50,
+    }
+
+
 def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
     required_zero = dict.fromkeys(
         (
