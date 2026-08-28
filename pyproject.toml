@@ -1,6 +1,6 @@
 [project]
 name = "sky-auto-player"
-version = "3.4.5"
+version = "3.5.0rc1"
 description = "Sky Auto Player - Auto Music Sheet Player"
 readme = "README.md"
 # Production scheduling and SendInput dispatch live in the Rust native extension. Python remains
