@@ -298,3 +298,88 @@ introduced.
 Finally, sender-side evidence still does not prove that Sky sampled, rendered,
 or produced audio for every injected transition. Game receipt and audio remain
 outside this application's observability boundary.
+
+## CI and production-equivalent scheduling follow-up
+
+The final documentation commit `b67cf79107e6bb11c8653350a2aa7ed26f8dd284`
+was independently observed red in GitHub Actions run `33147483496`. Static,
+packaged-smoke, and other validation jobs passed, but the Windows
+`uv run python scripts/check.py rust` step failed one timing-sensitive engine
+test. The failure was `engine::tests::trusted_pre_call_deadline_miss_finishes_with_clean_session_health`:
+worker startup preemption made its authored zero-time first Down cross the
+unchanged 500 µs cutoff before the test's injected second-call fault could be
+observed. GitHub reported 235 player tests passed and 1 failed in that run.
+
+Commit `1ad42ae9338a4342197a505d298776087a2cf89d` fixes only the test setup.
+The completion-latency release-gap test now uses the existing 500 ms test
+pre-roll, and the injected-deadline-miss test starts its authored schedule at
+2 seconds after the frozen epoch. These tests now exercise their intended
+behavior instead of an incidental startup race. No production sender,
+scheduler, authored timestamp policy, hold/release policy, focus/target gate,
+lease, or 500 µs Down grace changed.
+
+The corrected local canonical gates at that source commit were:
+
+```text
+check.py static: PASS
+check.py rust: PASS — 50 core, 1 golden, 3 property, 223 Win32,
+  236 player, 20 no-allocation, 52 updater, 1 packaged E2E, 1 PEP 440,
+  5 updater-safety tests
+check.py tests with test-support wheel: PASS — 944 passed, 1 skipped,
+  1 xfailed
+check.py tests with production wheel: PASS — 936 passed, 9 skipped,
+  1 xfailed
+```
+
+The production-equivalent test-support scheduling rerun used
+`--rt-priority-mode auto`, the same `40 × 128` p1 workloads, and retained
+separate JSON artifacts:
+
+```text
+.benchmarks/followup-final-auto-cold-p1.json
+.benchmarks/followup-final-auto-hot-p1.json
+.benchmarks/followup-final-auto-hot-p15.json
+.benchmarks/followup-final-real-wait-core.json
+```
+
+The p1 cold and hot runs each completed 40/40 suites with 10,880 and 10,240
+physical boundaries respectively, zero missed Down/cutoff events, zero hard
+correctness counters, and `statistics_eligible=true`. These are still
+test-support/host scheduling measurements, not shipping `SendInput` proof.
+The p15 run retained complete trace/transport evidence and reproduced 1,815
+corrected base-frame release-visibility violations under the default mock
+transport model; it did not prove an equivalent duration for production
+`SendInput`.
+
+The real-wait core rerun used:
+
+```text
+RT_HANDOFF_BENCH_ITERATIONS=10000
+RT_HANDOFF_BENCH_SCOPE=real_wait_core
+RT_HANDOFF_BENCH_MODE=real_wait
+RT_HANDOFF_BENCH_DUE_US=1000
+```
+
+It collected 10,000 iterations in each of the four required modes. The run
+remained `statistics_eligible=false` because the test-support real-wait
+scenarios recorded non-dispatch/cutoff evidence; the report retains all raw
+counts and separates waiter timing from sender-cutoff qualification.
+
+An actual production-wheel `SendInput` run was not issued from this execution
+environment. The project-owned sink started successfully, but
+`GetForegroundWindow()` returned `0` (no interactive foreground desktop), so
+using `--no-require-focus` would not have been a valid sink-receipt
+qualification. Actual `SendInput` qualification is therefore
+**INCONCLUSIVE**, not green by omission. The production wheel was nevertheless
+built and verified from a clean tree with `native_build_commit` equal to the
+HEAD used for its build; its exact SHA256 and build metadata are recorded in
+the final command output and acceptance handoff.
+
+The calibration recommendation remains:
+
+**SEPARATE PRODUCTION-EQUIVALENT SCHEDULING / CALIBRATION ROOT-CAUSE
+INVESTIGATION REQUIRED.**
+
+No calibration constants, runtime adaptation, 500 µs grace, authored hold or
+release gap, focus policy, target policy, lease policy, one-wait architecture,
+SendInput count, or RT allocation behavior was changed by this follow-up.
