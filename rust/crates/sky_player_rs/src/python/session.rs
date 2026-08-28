@@ -369,8 +369,20 @@ impl NativeDispatchSessionPy {
             snap.production_min_release_gap_ticks,
         )?;
         dict.set_item(
+            "production_release_visibility_floor_ticks",
+            snap.production_release_visibility_floor_ticks,
+        )?;
+        dict.set_item(
             "production_release_gap_below_policy_count",
             snap.production_release_gap_below_policy_count,
+        )?;
+        dict.set_item(
+            "production_release_headroom_consumed_count",
+            snap.production_release_headroom_consumed_count,
+        )?;
+        dict.set_item(
+            "production_max_release_headroom_consumed_ticks",
+            snap.production_max_release_headroom_consumed_ticks,
         )?;
         dict.set_item(
             "production_same_call_same_key_retrigger_count",
@@ -391,6 +403,14 @@ impl NativeDispatchSessionPy {
         dict.set_item(
             "production_forensics_anomaly_count",
             snap.production_forensics_anomaly_count,
+        )?;
+        dict.set_item(
+            "production_structural_anomaly_count",
+            snap.production_structural_anomaly_count,
+        )?;
+        dict.set_item(
+            "production_timing_diagnostic_count",
+            snap.production_timing_diagnostic_count,
         )?;
         dict.set_item("last_missed_down_reason", snap.last_missed_down_reason)?;
         dict.set_item(

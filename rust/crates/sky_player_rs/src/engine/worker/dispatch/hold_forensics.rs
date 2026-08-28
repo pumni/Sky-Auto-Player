@@ -187,7 +187,7 @@ fn observe_hold_pair(
 /// Fixed-size sender evidence owned by the worker itself. It deliberately
 /// consumes the timestamps already returned by the trusted sender: it does
 /// not sample QPC, allocate, lock, format, or walk the schedule.
-pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 1;
+pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 2;
 const PRODUCTION_ANOMALY_CAPACITY: usize = 32;
 
 #[derive(Clone, Copy, Default)]
@@ -228,12 +228,19 @@ pub(crate) struct ProductionHoldForensics {
     completion_hold_below_frame_count: u64,
     release_gap_samples: u64,
     min_release_gap_ticks: u64,
+    // Observed completion-to-next-pre-call intervals are hard only against
+    // the base frame visibility floor. Authored sender headroom is allowed to
+    // be consumed by transport and is reported separately below.
     release_gap_below_policy_count: u64,
+    release_headroom_consumed_count: u64,
+    max_release_headroom_consumed_ticks: u64,
     same_call_same_key_retrigger_count: u64,
     anchor_overwrite_count: u64,
     unmatched_up_count: u64,
+    structural_anomaly_count: u64,
+    timing_diagnostic_count: u64,
     frame_policy_ticks: u64,
-    release_gap_policy_ticks: u64,
+    authored_release_gap_ticks: u64,
 }
 
 impl ProductionHoldForensics {
@@ -243,7 +250,7 @@ impl ProductionHoldForensics {
         release_gap_policy_ticks: DurationTicks,
     ) {
         self.frame_policy_ticks = frame_policy_ticks.as_u64();
-        self.release_gap_policy_ticks = release_gap_policy_ticks.as_u64();
+        self.authored_release_gap_ticks = release_gap_policy_ticks.as_u64();
     }
 
     pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
@@ -429,8 +436,15 @@ impl ProductionHoldForensics {
                         } else {
                             self.min_release_gap_ticks = self.min_release_gap_ticks.min(gap);
                         }
-                        if self.release_gap_policy_ticks > 0 && gap < self.release_gap_policy_ticks
-                        {
+                        let headroom_consumed = self.authored_release_gap_ticks.saturating_sub(gap);
+                        if headroom_consumed > 0 {
+                            self.release_headroom_consumed_count =
+                                self.release_headroom_consumed_count.saturating_add(1);
+                            self.max_release_headroom_consumed_ticks = self
+                                .max_release_headroom_consumed_ticks
+                                .max(headroom_consumed);
+                        }
+                        if self.frame_policy_ticks > 0 && gap < self.frame_policy_ticks {
                             self.release_gap_below_policy_count =
                                 self.release_gap_below_policy_count.saturating_add(1);
                             self.record_anomaly(
@@ -499,6 +513,11 @@ impl ProductionHoldForensics {
         self.anomaly_valid[self.next_anomaly] = true;
         self.next_anomaly = (self.next_anomaly + 1) % PRODUCTION_ANOMALY_CAPACITY;
         self.anomaly_count = self.anomaly_count.saturating_add(1);
+        if matches!(kind, 1..=6 | 8) {
+            self.structural_anomaly_count = self.structural_anomaly_count.saturating_add(1);
+        } else {
+            self.timing_diagnostic_count = self.timing_diagnostic_count.saturating_add(1);
+        }
     }
 
     #[allow(dead_code)]
@@ -528,11 +547,17 @@ impl ProductionHoldForensics {
         metrics.production_release_gap_samples = self.release_gap_samples;
         metrics.production_min_release_gap_ticks = self.min_release_gap_ticks;
         metrics.production_release_gap_below_policy_count = self.release_gap_below_policy_count;
+        metrics.production_release_visibility_floor_ticks = self.frame_policy_ticks;
+        metrics.production_release_headroom_consumed_count = self.release_headroom_consumed_count;
+        metrics.production_max_release_headroom_consumed_ticks =
+            self.max_release_headroom_consumed_ticks;
         metrics.production_same_call_same_key_retrigger_count =
             self.same_call_same_key_retrigger_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;
         metrics.production_unmatched_up_count = self.unmatched_up_count;
         metrics.production_anomaly_ring_overwrite_count = self.anomaly_ring_overwrites;
         metrics.production_forensics_anomaly_count = self.anomaly_count;
+        metrics.production_structural_anomaly_count = self.structural_anomaly_count;
+        metrics.production_timing_diagnostic_count = self.timing_diagnostic_count;
     }
 }

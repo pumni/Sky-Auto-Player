@@ -59,6 +59,17 @@ one base game frame plus `down_late_grace_us + transport_margin_us`. It is an
 authored schedule value, not a runtime delay or a guarantee that the game
 sampled Up before the next Down.
 
+Production hold forensics keeps these two contracts separate. Static schedule
+validation still requires the authored target gap to be at least
+`min_release_gap_us` (`frame_us + sender_headroom_us`). The conservative
+sender observation `next_down_pre_call - previous_up_completion` is instead
+compared with the base frame visibility floor `frame_us`: transport completion
+may consume the sender headroom that was intentionally reserved by the
+authored policy. The forensics block reports that consumed headroom separately
+and retains a hard violation only when the observed interval falls below the
+base frame floor or has negative timestamp ordering. This is sender evidence,
+not proof that Sky sampled, rendered, or produced audio for the transition.
+
 The sender evidence is computed in raw QPC ticks before conversion:
 
 ```text
@@ -142,7 +153,10 @@ Diagnostic mode may report sender-side start, completion, lateness, duration,
 and release-floor evidence. Production retains only bounded worker-local
 scalars and a fixed anomaly ring: hold-pair count/minima, pre-call and
 completion shrink maxima, below-frame count, release-gap minima/violations,
-same-call retriggers, anchor overwrites, unmatched Ups, and ring overwrites.
+headroom-consumption count/maximum, same-call retriggers, anchor overwrites,
+unmatched Ups, and ring overwrites. Structural anomalies and timing
+diagnostics have separate counters; the generic ring total is observability
+only and is not the sole qualification predicate.
 The production forensics block exposes an availability/version marker and
 never allocates, locks, samples QPC, or consults the diagnostic observer.
 These values are not game-onset or audio-onset measurements. The old estimator

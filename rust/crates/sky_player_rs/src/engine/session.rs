@@ -791,14 +791,22 @@ impl NativeDispatchSession {
                 .production_completion_hold_below_frame_count,
             production_release_gap_samples: local.production_release_gap_samples,
             production_min_release_gap_ticks: local.production_min_release_gap_ticks,
+            production_release_visibility_floor_ticks: local
+                .production_release_visibility_floor_ticks,
             production_release_gap_below_policy_count: local
                 .production_release_gap_below_policy_count,
+            production_release_headroom_consumed_count: local
+                .production_release_headroom_consumed_count,
+            production_max_release_headroom_consumed_ticks: local
+                .production_max_release_headroom_consumed_ticks,
             production_same_call_same_key_retrigger_count: local
                 .production_same_call_same_key_retrigger_count,
             production_anchor_overwrite_count: local.production_anchor_overwrite_count,
             production_unmatched_up_count: local.production_unmatched_up_count,
             production_anomaly_ring_overwrite_count: local.production_anomaly_ring_overwrite_count,
             production_forensics_anomaly_count: local.production_forensics_anomaly_count,
+            production_structural_anomaly_count: local.production_structural_anomaly_count,
+            production_timing_diagnostic_count: local.production_timing_diagnostic_count,
             last_missed_down_reason: last_missed_down_reason(
                 local.last_missed_down_valid,
                 local.last_missed_down_reason_code,

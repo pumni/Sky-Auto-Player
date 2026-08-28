@@ -441,13 +441,153 @@ fn production_forensics_pairs_fixed_sender_evidence_and_release_gap() {
         &mut metrics,
     );
     assert!(metrics.production_forensics_available);
-    assert_eq!(metrics.production_forensics_version, 1);
+    assert_eq!(metrics.production_forensics_version, 2);
     assert_eq!(metrics.production_hold_pair_samples, 2);
     assert_eq!(metrics.production_release_gap_samples, 1);
     // Release-gap forensic evidence is measured at the actual Down pre-call
     // boundary: 35_617 - 18_150, not the authored target 35_500 - 18_150.
     assert_eq!(metrics.production_min_release_gap_ticks, 17_467);
+    assert_eq!(metrics.production_release_visibility_floor_ticks, 16_667);
+    assert_eq!(metrics.production_release_headroom_consumed_count, 0);
+    assert_eq!(metrics.production_max_release_headroom_consumed_ticks, 0);
+    assert_eq!(metrics.production_structural_anomaly_count, 0);
+    assert_eq!(metrics.production_timing_diagnostic_count, 0);
     assert_eq!(metrics.production_forensics_anomaly_count, 0);
+}
+
+#[test]
+fn production_forensics_authored_floor_can_consume_sender_headroom() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(
+        DurationTicks::from_raw(16_667),
+        DurationTicks::from_raw(17_467),
+    );
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_000,
+        18_800,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        35_467,
+        35_467,
+        35_467,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    // The authored target gap is exactly 17,467us, while the observed
+    // completion-to-next-pre-call interval is the 16,667us base floor.
+    assert_eq!(metrics.production_min_release_gap_ticks, 16_667);
+    assert_eq!(metrics.production_release_gap_below_policy_count, 0);
+    assert_eq!(metrics.production_release_headroom_consumed_count, 1);
+    assert_eq!(metrics.production_max_release_headroom_consumed_ticks, 800);
+    assert_eq!(metrics.production_structural_anomaly_count, 0);
+    assert_eq!(metrics.production_timing_diagnostic_count, 0);
+}
+
+#[test]
+fn production_forensics_below_base_visibility_floor_is_hard() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(
+        DurationTicks::from_raw(16_667),
+        DurationTicks::from_raw(17_467),
+    );
+    let mut metrics = WorkerMetricsLocal::default();
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        1_000,
+        1_000,
+        1_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        18_000,
+        18_000,
+        18_800,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        35_466,
+        35_466,
+        35_466,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_min_release_gap_ticks, 16_666);
+    assert_eq!(metrics.production_release_gap_below_policy_count, 1);
+    assert_eq!(metrics.production_release_headroom_consumed_count, 1);
+    assert_eq!(metrics.production_max_release_headroom_consumed_ticks, 801);
+    assert_eq!(metrics.production_structural_anomaly_count, 0);
+    assert_eq!(metrics.production_timing_diagnostic_count, 1);
+    assert_eq!(metrics.production_forensics_anomaly_count, 1);
+}
+
+#[test]
+fn production_forensics_polyphony_only_repeats_the_same_policy_math() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(
+        DurationTicks::from_raw(16_667),
+        DurationTicks::from_raw(17_467),
+    );
+    let mut metrics = WorkerMetricsLocal::default();
+    let chord = 0x7fff;
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, chord),
+        1_000,
+        1_000,
+        1_000,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(chord, 0),
+        18_000,
+        18_000,
+        18_800,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe_production(
+        &mut forensics,
+        PhysicalPacket::new(0, chord),
+        35_467,
+        35_467,
+        35_467,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_release_gap_samples, 15);
+    assert_eq!(metrics.production_min_release_gap_ticks, 16_667);
+    assert_eq!(metrics.production_release_gap_below_policy_count, 0);
+    assert_eq!(metrics.production_release_headroom_consumed_count, 15);
+    assert_eq!(metrics.production_max_release_headroom_consumed_ticks, 800);
 }
 
 #[test]
@@ -488,6 +628,8 @@ fn production_forensics_anomaly_ring_retains_boundary_payload() {
     assert_eq!(anomaly.aux_ticks, 1_000);
     assert_eq!(anomaly.delta_ticks, 29_000);
     assert_eq!(metrics.production_forensics_anomaly_count, 1);
+    assert_eq!(metrics.production_structural_anomaly_count, 1);
+    assert_eq!(metrics.production_timing_diagnostic_count, 0);
 }
 
 #[test]
@@ -533,6 +675,8 @@ fn production_forensics_preserves_negative_release_ordering_as_anomaly() {
     assert_eq!(anomaly.delta_ticks, 1_000);
     assert_eq!(metrics.production_release_gap_samples, 0);
     assert_eq!(metrics.production_release_gap_below_policy_count, 1);
+    assert_eq!(metrics.production_structural_anomaly_count, 1);
+    assert_eq!(metrics.production_timing_diagnostic_count, 0);
 }
 
 #[test]
