@@ -57,11 +57,14 @@ pub(super) struct StartupResources {
     pub(super) power_throttling_disabled: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn initialize_startup(
     priority_mode: PriorityMode,
     production_wait: bool,
     enable_waitable_timer: bool,
     enable_event_wait: bool,
+    requested_wait_policy: &'static str,
+    effective_wait_policy: &'static str,
     priority_acquired: &Mutex<String>,
     metrics: &SharedMetrics,
 ) -> StartupResources {
@@ -75,6 +78,9 @@ pub(super) fn initialize_startup(
     };
     let power_throttling_disabled = scheduling.is_power_active();
     *priority_acquired.lock() = scheduling.priority_label().to_string();
+    *metrics.requested_priority_mode.lock() = priority_mode.requested_label().to_string();
+    *metrics.requested_wait_policy.lock() = requested_wait_policy.to_string();
+    *metrics.effective_wait_policy.lock() = effective_wait_policy.to_string();
     let waiter = if production_wait {
         HybridWaiter::production()
     } else {

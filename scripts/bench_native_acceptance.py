@@ -45,7 +45,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 9
+BENCHMARK_SCHEMA_VERSION = 10
 TIMELINE_SEMANTICS_VERSION = 2
 KNOWN_TIMELINE_SEMANTICS = {
     "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
@@ -66,6 +66,9 @@ HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
 MIN_QUALIFICATION_PHYSICAL_BOUNDARIES = 10_000
 PRODUCTION_DOWN_LATE_GRACE_US = 500
+PRODUCTION_MIN_SPIN_THRESHOLD_US = 250
+PRODUCTION_MAX_SPIN_THRESHOLD_US = 1_000
+PRODUCTION_CALIBRATION_SAMPLES = 6
 
 PRODUCTION_CORRECTNESS_COUNTERS = (
     "production_release_gap_below_policy_count",
@@ -85,9 +88,7 @@ PRODUCTION_DIAGNOSTIC_COUNTERS = (
     "production_timing_diagnostic_count",
     "production_release_headroom_consumed_count",
 )
-PRODUCTION_DIAGNOSTIC_MAX_FIELDS = (
-    "production_max_release_headroom_consumed_ticks",
-)
+PRODUCTION_DIAGNOSTIC_MAX_FIELDS = ("production_max_release_headroom_consumed_ticks",)
 
 HARD_SCHEDULER_CUTOFF_COUNTERS = (
     "missed_down_boundaries",
@@ -186,7 +187,9 @@ def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
         return COLD_CYCLE_US
     if gap_profile != "hot":
         raise ValueError("gap_profile must be hot or cold")
-    return max(HOT_CYCLE_US, _same_key_cycle_us(game_fps=game_fps, gap_profile=gap_profile))
+    return max(
+        HOT_CYCLE_US, _same_key_cycle_us(game_fps=game_fps, gap_profile=gap_profile)
+    )
 
 
 def _materialized_hold_us(*, game_fps: int, gap_profile: str) -> int:
@@ -256,7 +259,9 @@ def _actions(
         # the first mask is released while the second mask is pressed.
         key_count = polyphony
         boundary_scan_codes = [
-            int(SKY_15_SCAN_CODES[(group * key_count + offset) % len(SKY_15_SCAN_CODES)])
+            int(
+                SKY_15_SCAN_CODES[(group * key_count + offset) % len(SKY_15_SCAN_CODES)]
+            )
             for group in range(count)
             for offset in range(key_count)
         ]
@@ -388,6 +393,7 @@ def _benchmark_config(
     frame_policy = FrameTimingPolicy.from_hold_frames(1.0, args.game_fps)
     frame_us = int(frame_policy.frame_us)
     release_gap_us = int(frame_policy.min_release_gap_us)
+    requested_wait_policy = getattr(args, "wait_policy", "legacy_test_wide_spin")
     require_focus = getattr(args, "require_focus", None)
     if require_focus is None:
         require_focus = args.backend == "sendinput"
@@ -399,16 +405,23 @@ def _benchmark_config(
         effective_lead_mode = "fixed"
         effective_fixed_lead_us = 0
         native_profile = "strict_timing_diagnostic"
+        effective_wait_policy = "production_calibrated"
     else:
         effective_priority = args.rt_priority_mode
         effective_adaptive_spin = not args.no_adaptive_spin
         effective_lead_mode = args.lead_mode
         effective_fixed_lead_us = args.fixed_lead_us
         native_profile = "mock_test"
+        effective_wait_policy = requested_wait_policy
     return {
         "backend": args.backend,
         "game_fps": args.game_fps,
         "rt_priority_mode": effective_priority,
+        "requested_rt_priority_mode": effective_priority,
+        "cli_rt_priority_mode": args.rt_priority_mode,
+        "requested_wait_policy": requested_wait_policy,
+        "effective_wait_policy": effective_wait_policy,
+        "wait_policy": effective_wait_policy,
         "adaptive_spin": effective_adaptive_spin,
         "waitable_timer": True,
         "event_wait": True,
@@ -643,7 +656,9 @@ def _validate_telemetry_integrity(
     combined_boundaries = scenario in {"mixed", "coalesced"}
     for record in records:
         if combined_boundaries and record.kind == "mixed":
-            consumed_authored_indices.update((record.event_index - 1, record.event_index))
+            consumed_authored_indices.update(
+                (record.event_index - 1, record.event_index)
+            )
         else:
             consumed_authored_indices.add(record.event_index)
     unconsumed_authored_indices = sorted(
@@ -654,11 +669,11 @@ def _validate_telemetry_integrity(
         "snapshot_status": None if snapshot is None else snapshot.get("status"),
         "snapshot_outcome": None if snapshot is None else snapshot.get("outcome"),
         "terminal_error": None if snapshot is None else snapshot.get("terminal_error"),
-        "generation_count": None if snapshot is None else snapshot.get("generation_count"),
+        "generation_count": None
+        if snapshot is None
+        else snapshot.get("generation_count"),
         "generation_status_counts": (
-            None
-            if snapshot is None
-            else snapshot.get("generation_status_counts", {})
+            None if snapshot is None else snapshot.get("generation_status_counts", {})
         ),
         "authored_action_count": len(actions),
         "trace_expected_count": len(actions),
@@ -707,9 +722,7 @@ def _correctness_counters(
 ) -> dict[str, int]:
     statuses = snapshot.get("generation_status_counts", {})
     release_pending = (
-        int(statuses.get("release_pending", 0))
-        if isinstance(statuses, dict)
-        else 0
+        int(statuses.get("release_pending", 0)) if isinstance(statuses, dict) else 0
     )
     release_outcome = snapshot.get("release_outcome")
     if not isinstance(release_outcome, dict):
@@ -763,20 +776,14 @@ def _correctness_counters(
         "hold_pair_sample_mismatch": hold_pair_sample_mismatch,
     }
     counters.update(
-        {
-            name: int(snapshot.get(name, 0))
-            for name in PRODUCTION_CORRECTNESS_COUNTERS
-        }
+        {name: int(snapshot.get(name, 0)) for name in PRODUCTION_CORRECTNESS_COUNTERS}
     )
     return counters
 
 
 def _forensics_diagnostics(snapshot: dict[str, Any]) -> dict[str, int]:
     return {
-        **{
-            name: int(snapshot.get(name, 0))
-            for name in PRODUCTION_DIAGNOSTIC_COUNTERS
-        },
+        **{name: int(snapshot.get(name, 0)) for name in PRODUCTION_DIAGNOSTIC_COUNTERS},
         **{
             name: int(snapshot.get(name, 0))
             for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
@@ -812,14 +819,16 @@ def _aggregate_forensics_diagnostics(runs: list[dict[str, Any]]) -> dict[str, in
     return {
         **{
             name: sum(
-                int(run.get("forensics_diagnostics", {}).get(name, 0))
-                for run in runs
+                int(run.get("forensics_diagnostics", {}).get(name, 0)) for run in runs
             )
             for name in PRODUCTION_DIAGNOSTIC_COUNTERS
         },
         **{
             name: max(
-                (int(run.get("forensics_diagnostics", {}).get(name, 0)) for run in runs),
+                (
+                    int(run.get("forensics_diagnostics", {}).get(name, 0))
+                    for run in runs
+                ),
                 default=0,
             )
             for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
@@ -831,8 +840,7 @@ def _qualification_dimensions(
     correctness: dict[str, int], forensics: dict[str, int]
 ) -> dict[str, Any]:
     hard_scheduler = {
-        name: int(correctness.get(name, 0))
-        for name in HARD_SCHEDULER_CUTOFF_COUNTERS
+        name: int(correctness.get(name, 0)) for name in HARD_SCHEDULER_CUTOFF_COUNTERS
     }
     hard_correctness = {
         name: int(value)
@@ -840,12 +848,10 @@ def _qualification_dimensions(
         if name not in HARD_SCHEDULER_CUTOFF_COUNTERS
     }
     transport_diagnostics = {
-        name: int(forensics.get(name, 0))
-        for name in PRODUCTION_DIAGNOSTIC_COUNTERS
+        name: int(forensics.get(name, 0)) for name in PRODUCTION_DIAGNOSTIC_COUNTERS
     }
     headroom_diagnostics = {
-        name: int(forensics.get(name, 0))
-        for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
+        name: int(forensics.get(name, 0)) for name in PRODUCTION_DIAGNOSTIC_MAX_FIELDS
     }
     return {
         "hard_correctness": hard_correctness,
@@ -896,17 +902,13 @@ def _release_forensics_summary(
     benchmark_config: dict[str, Any],
     qpc_frequency_hz: int,
 ) -> dict[str, Any]:
-    min_ticks = _aggregate_scalar_min_nonzero(
-        runs, "production_min_release_gap_ticks"
-    )
+    min_ticks = _aggregate_scalar_min_nonzero(runs, "production_min_release_gap_ticks")
     visibility_floor_ticks = _aggregate_scalar_max(
         runs, "production_release_visibility_floor_ticks"
     )
     diagnostics = _aggregate_forensics_diagnostics(runs)
     return {
-        "authored_release_gap_us": int(
-            benchmark_config["materialized_release_gap_us"]
-        ),
+        "authored_release_gap_us": int(benchmark_config["materialized_release_gap_us"]),
         "base_visibility_floor_us": int(
             benchmark_config["materialized_release_visibility_floor_us"]
         ),
@@ -936,7 +938,9 @@ def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     if report.get("run_validity") != "complete":
         reasons.append("incomplete_run_set")
-    if report.get("failed_dispatch_suites", 0) or report.get("failed_command_samples", 0):
+    if report.get("failed_dispatch_suites", 0) or report.get(
+        "failed_command_samples", 0
+    ):
         reasons.append("failed_run")
     if report.get("deadline_missed_before_send_count", 0):
         reasons.append("deadline_missed_before_send")
@@ -982,7 +986,10 @@ def _acceptance_failure_reasons(report: dict[str, Any]) -> list[str]:
     wake = report.get("wake_error_us")
     if fixed_hot_60 and isinstance(wake, dict):
         absolute = wake.get("absolute")
-        if isinstance(absolute, dict) and absolute.get("p99", 0) > ABSOLUTE_WAKE_P99_LIMIT_US:
+        if (
+            isinstance(absolute, dict)
+            and absolute.get("p99", 0) > ABSOLUTE_WAKE_P99_LIMIT_US
+        ):
             reasons.append("wake_p99_slo")
 
     pre_call = report.get("pre_call_lateness_us")
@@ -1136,7 +1143,9 @@ def _completion_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any
         signed = values_for(rows)
         return {
             "signed": _required_stats(signed, f"{name}.signed"),
-            "absolute": _required_stats([abs(value) for value in signed], f"{name}.absolute"),
+            "absolute": _required_stats(
+                [abs(value) for value in signed], f"{name}.absolute"
+            ),
             "late": _stats([value for value in signed if value > 0]),
             "early": _stats([-value for value in signed if value < 0]),
         }
@@ -1160,7 +1169,9 @@ def _pre_call_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any]:
     return report
 
 
-def _nonnegative_metric_report(rows: list[tuple[str, int]], name: str) -> dict[str, Any]:
+def _nonnegative_metric_report(
+    rows: list[tuple[str, int]], name: str
+) -> dict[str, Any]:
     values: list[int] = []
     for _kind, value in rows:
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -1186,20 +1197,28 @@ def _required_int(value: Any, name: str) -> int:
     return value
 
 
-def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[str, int]]]:
+def _trace_metric_rows(
+    records: list[TelemetryRecord],
+) -> dict[str, list[tuple[str, int]]]:
     rows: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
     for record in records:
         kind = record.kind
         wake_us = _required_int(record.wake_us, "wake_us")
         sender_started_us = _required_int(record.sender_started_us, "sender_started_us")
-        sender_completed_us = _required_int(record.sender_completed_us, "sender_completed_us")
+        sender_completed_us = _required_int(
+            record.sender_completed_us, "sender_completed_us"
+        )
         if sender_started_us < wake_us:
-            raise RuntimeError("invalid timestamp ordering: sender_started_us < wake_us")
+            raise RuntimeError(
+                "invalid timestamp ordering: sender_started_us < wake_us"
+            )
         if sender_completed_us < sender_started_us:
             raise RuntimeError(
                 "invalid timestamp ordering: sender_completed_us < sender_started_us"
             )
-        rows["wake_error_us"].append((kind, _required_int(record.wake_error_us, "wake_error_us")))
+        rows["wake_error_us"].append(
+            (kind, _required_int(record.wake_error_us, "wake_error_us"))
+        )
         rows["pre_call_lateness_us"].append(
             (
                 kind,
@@ -1209,14 +1228,22 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
                 ),
             )
         )
-        rows["pre_send_software_latency_us"].append(
-            (kind, sender_started_us - wake_us)
-        )
+        rows["pre_send_software_latency_us"].append((kind, sender_started_us - wake_us))
         rows["sendinput_call_duration_us"].append(
-            (kind, _required_int(record.sendinput_call_duration_us, "sendinput_call_duration_us"))
+            (
+                kind,
+                _required_int(
+                    record.sendinput_call_duration_us, "sendinput_call_duration_us"
+                ),
+            )
         )
         rows["core_post_send_duration_us"].append(
-            (kind, _required_int(record.core_post_send_duration_us, "core_post_send_duration_us"))
+            (
+                kind,
+                _required_int(
+                    record.core_post_send_duration_us, "core_post_send_duration_us"
+                ),
+            )
         )
         rows["sender_completion_error_us"].append(
             (
@@ -1266,13 +1293,22 @@ def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
                         [value for row_kind, value in rows if row_kind == kind], name
                     ),
                     "absolute": _required_stats(
-                        [abs(value) for row_kind, value in rows if row_kind == kind], name
+                        [abs(value) for row_kind, value in rows if row_kind == kind],
+                        name,
                     ),
                     "late": _stats(
-                        [value for row_kind, value in rows if row_kind == kind and value > 0]
+                        [
+                            value
+                            for row_kind, value in rows
+                            if row_kind == kind and value > 0
+                        ]
                     ),
                     "early": _stats(
-                        [-value for row_kind, value in rows if row_kind == kind and value < 0]
+                        [
+                            -value
+                            for row_kind, value in rows
+                            if row_kind == kind and value < 0
+                        ]
                     ),
                 }
                 for kind in ("down", "up")
@@ -1310,6 +1346,138 @@ def _aggregate_scalar_max(runs: list[dict[str, Any]], name: str) -> int:
     return max((int(run.get(name, 0)) for run in runs), default=0)
 
 
+def _unique_run_values(runs: list[dict[str, Any]], name: str) -> list[Any]:
+    values: list[Any] = []
+    for run in runs:
+        value = run.get(name)
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def _aggregate_runtime_provenance(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate startup provenance while preserving mixed-host outcomes."""
+
+    if not runs:
+        raise RuntimeError("runtime provenance requires at least one dispatch run")
+    scalar_names = (
+        "requested_rt_priority_mode",
+        "requested_wait_policy",
+        "effective_wait_policy",
+        "spin_threshold_source",
+    )
+    scalar_values = {name: _unique_run_values(runs, name) for name in scalar_names}
+    acquired_priorities = _unique_run_values(runs, "acquired_priority")
+    calibration_sample_counts = _unique_run_values(
+        runs, "startup_calibration_sample_count"
+    )
+    return {
+        "requested_rt_priority_mode": scalar_values["requested_rt_priority_mode"][0]
+        if len(scalar_values["requested_rt_priority_mode"]) == 1
+        else scalar_values["requested_rt_priority_mode"],
+        "acquired_priority": acquired_priorities[0]
+        if len(acquired_priorities) == 1
+        else "mixed",
+        "acquired_priorities": acquired_priorities,
+        "requested_wait_policy": scalar_values["requested_wait_policy"][0]
+        if len(scalar_values["requested_wait_policy"]) == 1
+        else scalar_values["requested_wait_policy"],
+        "effective_wait_policy": scalar_values["effective_wait_policy"][0]
+        if len(scalar_values["effective_wait_policy"]) == 1
+        else scalar_values["effective_wait_policy"],
+        "startup_calibration_executed": all(
+            bool(run["startup_calibration_executed"]) for run in runs
+        ),
+        "startup_calibration_sample_count": calibration_sample_counts[0]
+        if len(calibration_sample_counts) == 1
+        else calibration_sample_counts,
+        "startup_wake_error_p50_us": _aggregate_scalar_max(
+            runs, "startup_wake_error_p50_us"
+        ),
+        "startup_wake_error_p95_us": _aggregate_scalar_max(
+            runs, "startup_wake_error_p95_us"
+        ),
+        "startup_wake_error_p99_us": _aggregate_scalar_max(
+            runs, "startup_wake_error_p99_us"
+        ),
+        "startup_wake_error_max_us": _aggregate_scalar_max(
+            runs, "startup_wake_error_max_us"
+        ),
+        "startup_wake_error_robust_us": _aggregate_scalar_max(
+            runs, "startup_wake_error_robust_us"
+        ),
+        "effective_spin_threshold_us": _aggregate_scalar_max(
+            runs, "effective_spin_threshold_us"
+        ),
+        "spin_threshold_source": scalar_values["spin_threshold_source"][0]
+        if len(scalar_values["spin_threshold_source"]) == 1
+        else scalar_values["spin_threshold_source"],
+        "priority_active": all(run["acquired_priority"] != "off" for run in runs),
+        "calibration_provenance_valid": all(
+            bool(run["runtime_provenance"]["calibration_provenance_valid"])
+            for run in runs
+        ),
+        "legacy_provenance_valid": all(
+            bool(run["runtime_provenance"]["legacy_provenance_valid"]) for run in runs
+        ),
+    }
+
+
+def _scheduling_qualification(
+    runs: list[dict[str, Any]],
+    *,
+    backend: str,
+    acceptance_clean: bool,
+    physical_boundaries: int,
+) -> dict[str, Any]:
+    provenance = _aggregate_runtime_provenance(runs)
+    dispatch_path_clean = acceptance_clean and all(
+        all(value == 0 for value in run["correctness"].values()) for run in runs
+    )
+    sender_cutoff_clean = all(
+        int(run.get("missed_down_boundaries", 0)) == 0
+        and int(run.get("pre_call_hold_shrink_over_grace_count", 0)) == 0
+        for run in runs
+    )
+    waiter_timing_clean = all(
+        int(run.get("missed_down_boundaries", 0)) == 0
+        and int(run.get("pre_call_hold_shrink_over_grace_count", 0)) == 0
+        and bool(run.get("_metric_rows", {}).get("pre_call_lateness_us", []))
+        for run in runs
+    )
+    effective_wait_policy = provenance["effective_wait_policy"]
+    production_mode = effective_wait_policy == "production_calibrated"
+    status = "qualified"
+    if not production_mode:
+        status = "legacy_test_support_only"
+    elif not provenance["priority_active"]:
+        status = "inconclusive_priority_fallback"
+    elif not provenance["calibration_provenance_valid"]:
+        status = "inconclusive_calibration_fallback"
+    elif not sender_cutoff_clean:
+        status = "cutoff_failure"
+    elif not dispatch_path_clean or not waiter_timing_clean:
+        status = "dispatch_or_waiter_failure"
+    elif physical_boundaries < MIN_QUALIFICATION_PHYSICAL_BOUNDARIES:
+        status = "inconclusive_insufficient_boundaries"
+    elif backend == "sendinput":
+        status = "qualified"
+    return {
+        "waiter_timing_clean": waiter_timing_clean,
+        "dispatch_path_clean": dispatch_path_clean,
+        "sender_cutoff_clean": sender_cutoff_clean,
+        "priority_qualification": provenance["priority_active"],
+        "calibration_provenance_valid": provenance["calibration_provenance_valid"],
+        "statistics_eligible": (
+            status == "qualified"
+            and acceptance_clean
+            and physical_boundaries >= MIN_QUALIFICATION_PHYSICAL_BOUNDARIES
+        ),
+        "status": status,
+        "provenance": provenance,
+    }
+
+
 def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
     return _completion_error_report_pairs(
         [
@@ -1336,11 +1504,11 @@ def _peak_working_set_bytes() -> int | None:
                 check=True,
                 timeout=5,
             )
-        except (OSError, subprocess.SubprocessError):
+        except OSError, subprocess.SubprocessError:
             continue
         try:
             return int(result.stdout.strip().splitlines()[-1])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             return None
     return None
 
@@ -1353,6 +1521,7 @@ def _new_session(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    wait_policy: str = "legacy_test_wide_spin",
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
@@ -1392,6 +1561,7 @@ def _new_session(
             enable_dispatch_cost_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
             down_late_grace_us=PRODUCTION_DOWN_LATE_GRACE_US,
+            wait_policy=wait_policy,
         )
     if backend != "sendinput":
         raise ValueError(f"unsupported native benchmark backend: {backend}")
@@ -1495,7 +1665,9 @@ def _real_input_target_hwnd(*, require_focus: bool = True) -> int:
     except ValueError as exc:
         raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer") from exc
     if hwnd <= 0 or hwnd > (1 << 63) - 1:
-        raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer in the platform handle range")
+        raise RuntimeError(
+            "SKY_NATIVE_TARGET_HWND must be a positive integer in the platform handle range"
+        )
     return hwnd
 
 
@@ -1508,6 +1680,99 @@ def _arm_acceptance_session(session: Any, *, backend: str) -> None:
         session.start()
 
 
+def _runtime_provenance(
+    snapshot: dict[str, Any],
+    *,
+    backend: str,
+    requested_wait_policy: str,
+) -> dict[str, Any]:
+    """Validate and project startup scheduling provenance without hiding it.
+
+    A mock production-calibrated run is a waiter/scheduler qualification seam,
+    not a production transport claim.  Priority fallback and calibration
+    fallback remain visible and make the qualification dimension inconclusive;
+    they are never silently upgraded to the requested policy.
+    """
+
+    def required_string(name: str) -> str:
+        value = snapshot.get(name)
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"native snapshot provenance field {name} is missing")
+        return value
+
+    def required_int(name: str) -> int:
+        value = snapshot.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise RuntimeError(f"native snapshot provenance field {name} is invalid")
+        return value
+
+    calibration_executed = snapshot.get("startup_calibration_executed")
+    if not isinstance(calibration_executed, bool):
+        raise RuntimeError(
+            "native snapshot provenance field startup_calibration_executed is invalid"
+        )
+
+    requested_priority = required_string("requested_rt_priority_mode")
+    acquired_priority = required_string("rt_priority_acquired")
+    snapshot_requested_wait_policy = required_string("requested_wait_policy")
+    effective_wait_policy = required_string("effective_wait_policy")
+    source = required_string("spin_threshold_source")
+    sample_count = required_int("startup_calibration_sample_count")
+    threshold_us = required_int("effective_spin_threshold_us")
+    wake_stats = {
+        name: required_int(name)
+        for name in (
+            "startup_wake_error_p50_us",
+            "startup_wake_error_p95_us",
+            "startup_wake_error_p99_us",
+            "startup_wake_error_max_us",
+            "startup_wake_error_robust_us",
+        )
+    }
+    expected_wait_policy = (
+        "production_calibrated" if backend == "sendinput" else requested_wait_policy
+    )
+    calibration_provenance_valid = (
+        expected_wait_policy == "production_calibrated"
+        and snapshot_requested_wait_policy == "production_calibrated"
+        and effective_wait_policy == "production_calibrated"
+        and calibration_executed
+        and sample_count == PRODUCTION_CALIBRATION_SAMPLES
+        and source == "production_startup_calibration"
+        and PRODUCTION_MIN_SPIN_THRESHOLD_US
+        <= threshold_us
+        <= PRODUCTION_MAX_SPIN_THRESHOLD_US
+    )
+    legacy_provenance_valid = (
+        expected_wait_policy == "legacy_test_wide_spin"
+        and snapshot_requested_wait_policy == "legacy_test_wide_spin"
+        and effective_wait_policy == "legacy_test_wide_spin"
+        and not calibration_executed
+        and source == "legacy_test_wide_spin"
+        and threshold_us == 20_000
+    )
+    return {
+        "requested_rt_priority_mode": requested_priority,
+        "acquired_priority": acquired_priority,
+        "requested_wait_policy": snapshot_requested_wait_policy,
+        "effective_wait_policy": effective_wait_policy,
+        "startup_calibration_executed": calibration_executed,
+        "startup_calibration_sample_count": sample_count,
+        **wake_stats,
+        "effective_spin_threshold_us": threshold_us,
+        "spin_threshold_source": source,
+        "priority_active": acquired_priority != "off",
+        "calibration_provenance_valid": calibration_provenance_valid,
+        "legacy_provenance_valid": legacy_provenance_valid,
+        "production_wait_qualification": (
+            expected_wait_policy == "production_calibrated"
+            and calibration_provenance_valid
+            and acquired_priority != "off"
+        ),
+        "expected_wait_policy": expected_wait_policy,
+    }
+
+
 def _run_dispatch(
     actions: list[tuple[int, str, int, list[int], str]],
     polyphony: int,
@@ -1517,6 +1782,7 @@ def _run_dispatch(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    wait_policy: str = "legacy_test_wide_spin",
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
@@ -1536,6 +1802,7 @@ def _run_dispatch(
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
+        wait_policy=wait_policy,
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
@@ -1559,7 +1826,9 @@ def _run_dispatch(
             # boundary and looks like missing telemetry (303/528 records).
             session.heartbeat()
             if time.perf_counter() >= startup_deadline:
-                raise RuntimeError("native worker did not publish startup-ready boundary")
+                raise RuntimeError(
+                    "native worker did not publish startup-ready boundary"
+                )
             time.sleep(0.001)
 
         # Polling and heartbeat publication are supervisor work only; the
@@ -1583,6 +1852,11 @@ def _run_dispatch(
         telemetry = json.loads(session.take_telemetry_json())
         if not isinstance(telemetry, dict):
             raise RuntimeError("native telemetry envelope must be an object")
+        runtime_provenance = _runtime_provenance(
+            snapshot,
+            backend=backend,
+            requested_wait_policy=wait_policy,
+        )
         records = materialize_native_trace(
             _normalize_historical_native_trace(
                 telemetry,
@@ -1607,7 +1881,9 @@ def _run_dispatch(
             raise RuntimeError("warmup cycles must leave measurement records")
         measurement_records = records[warmup_record_count:]
         metric_rows = _trace_metric_rows(measurement_records)
-        sender_errors = [value for _, value in metric_rows["sender_completion_error_us"]]
+        sender_errors = [
+            value for _, value in metric_rows["sender_completion_error_us"]
+        ]
         lead_by_polyphony = {
             str(record.native_polyphony): int(record.applied_lead_us)
             for record in records
@@ -1616,7 +1892,9 @@ def _run_dispatch(
         completion_error_rows = [
             (
                 record.kind,
-                _required_int(record.sender_completion_error_us, "sender_completion_error_us"),
+                _required_int(
+                    record.sender_completion_error_us, "sender_completion_error_us"
+                ),
             )
             for record in measurement_records
         ]
@@ -1632,19 +1910,26 @@ def _run_dispatch(
             "measurement_records": len(measurement_records),
             "_snapshot": snapshot,
             "_telemetry": telemetry,
+            "runtime_provenance": runtime_provenance,
             "_telemetry_integrity": diagnostics,
-            "native_packet_size_counts": _native_packet_size_counts(measurement_records),
+            "native_packet_size_counts": _native_packet_size_counts(
+                measurement_records
+            ),
             "correctness": _correctness_counters(
                 snapshot,
                 diagnostics,
                 expected_hold_pair_samples=expected_hold_pair_samples,
             ),
             "forensics_diagnostics": _forensics_diagnostics(snapshot),
-            "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
+            "sender_completion_error_us": _required_stats(
+                sender_errors, "sender_completion_error_us"
+            ),
             "pre_call_lateness_us": _pre_call_error_report_pairs(
                 metric_rows["pre_call_lateness_us"]
             ),
-            "completion_error_us": _completion_error_report_pairs(completion_error_rows),
+            "completion_error_us": _completion_error_report_pairs(
+                completion_error_rows
+            ),
             "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
             "effective_spin_threshold_us": _required_int(
                 snapshot.get("effective_spin_threshold_us"),
@@ -1660,15 +1945,25 @@ def _run_dispatch(
             "chord_split_events": int(snapshot.get("chord_split_events", 0)),
             "chords_rejected": int(snapshot.get("chords_rejected", 0)),
             "authored_keys_rejected": int(snapshot.get("authored_keys_rejected", 0)),
-            "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
+            "sendinput_partial_events": int(
+                snapshot.get("sendinput_partial_events", 0)
+            ),
             "sendinput_zero_progress_failures": int(
                 snapshot.get("sendinput_zero_progress_failures", 0)
             ),
-            "sendinput_path_degraded": bool(snapshot.get("sendinput_path_degraded", False)),
-            "core_post_send_degraded": bool(snapshot.get("core_post_send_degraded", False)),
-            "observer_duration_max_us": int(snapshot.get("observer_duration_max_us", 0)),
+            "sendinput_path_degraded": bool(
+                snapshot.get("sendinput_path_degraded", False)
+            ),
+            "core_post_send_degraded": bool(
+                snapshot.get("core_post_send_degraded", False)
+            ),
+            "observer_duration_max_us": int(
+                snapshot.get("observer_duration_max_us", 0)
+            ),
             "wait_path_degraded": bool(snapshot.get("wait_path_degraded", False)),
-            "sendinput_warn_threshold_us": int(snapshot.get("sendinput_warn_threshold_us", 0)),
+            "sendinput_warn_threshold_us": int(
+                snapshot.get("sendinput_warn_threshold_us", 0)
+            ),
             "core_post_send_warn_threshold_us": int(
                 snapshot.get("core_post_send_warn_threshold_us", 0)
             ),
@@ -1683,10 +1978,16 @@ def _run_dispatch(
             "lead_saturation_count_down": list(
                 snapshot.get("lead_saturation_count_down", [])
             ),
-            "lead_saturation_count_up": list(snapshot.get("lead_saturation_count_up", [])),
-            "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
+            "lead_saturation_count_up": list(
+                snapshot.get("lead_saturation_count_up", [])
+            ),
+            "positive_residual_at_cap": int(
+                snapshot.get("positive_residual_at_cap", 0)
+            ),
             "lead_by_polyphony": lead_by_polyphony,
-            "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
+            "generation_status_counts": dict(
+                snapshot.get("generation_status_counts", {})
+            ),
             "missed_down_boundaries": int(snapshot.get("missed_down_boundaries", 0)),
             "missed_down_keys": int(snapshot.get("missed_down_keys", 0)),
             "missed_backlog_boundaries": int(
@@ -1698,9 +1999,7 @@ def _run_dispatch(
             "hold_pair_samples": int(snapshot.get("hold_pair_samples", 0)),
             "expected_hold_pair_samples": expected_hold_pair_samples,
             "min_pre_call_hold_us": int(snapshot.get("min_pre_call_hold_us", 0)),
-            "min_completion_hold_us": int(
-                snapshot.get("min_completion_hold_us", 0)
-            ),
+            "min_completion_hold_us": int(snapshot.get("min_completion_hold_us", 0)),
             "max_pre_call_hold_shrink_us": int(
                 snapshot.get("max_pre_call_hold_shrink_us", 0)
             ),
@@ -1710,9 +2009,7 @@ def _run_dispatch(
             "pre_call_hold_shrink_over_grace_count": int(
                 snapshot.get("pre_call_hold_shrink_over_grace_count", 0)
             ),
-            "hold_unmatched_up_count": int(
-                snapshot.get("hold_unmatched_up_count", 0)
-            ),
+            "hold_unmatched_up_count": int(snapshot.get("hold_unmatched_up_count", 0)),
             "hold_anchor_overwrite_count": int(
                 snapshot.get("hold_anchor_overwrite_count", 0)
             ),
@@ -1767,11 +2064,41 @@ def _run_dispatch(
             "production_timing_diagnostic_count": int(
                 snapshot.get("production_timing_diagnostic_count", 0)
             ),
-            "observer_dropped_records": int(snapshot.get("observer_dropped_samples", 0)),
+            "observer_dropped_records": int(
+                snapshot.get("observer_dropped_samples", 0)
+            ),
             "outcome": snapshot.get("outcome"),
             "startup_latency_us": _required_int(
                 snapshot.get("startup_latency_us"), "startup_latency_us"
             ),
+            "requested_rt_priority_mode": runtime_provenance[
+                "requested_rt_priority_mode"
+            ],
+            "acquired_priority": runtime_provenance["acquired_priority"],
+            "requested_wait_policy": runtime_provenance["requested_wait_policy"],
+            "effective_wait_policy": runtime_provenance["effective_wait_policy"],
+            "startup_calibration_executed": runtime_provenance[
+                "startup_calibration_executed"
+            ],
+            "startup_calibration_sample_count": runtime_provenance[
+                "startup_calibration_sample_count"
+            ],
+            "startup_wake_error_p50_us": runtime_provenance[
+                "startup_wake_error_p50_us"
+            ],
+            "startup_wake_error_p95_us": runtime_provenance[
+                "startup_wake_error_p95_us"
+            ],
+            "startup_wake_error_p99_us": runtime_provenance[
+                "startup_wake_error_p99_us"
+            ],
+            "startup_wake_error_max_us": runtime_provenance[
+                "startup_wake_error_max_us"
+            ],
+            "startup_wake_error_robust_us": runtime_provenance[
+                "startup_wake_error_robust_us"
+            ],
+            "spin_threshold_source": runtime_provenance["spin_threshold_source"],
         }
         result["worker_cpu_ratio_ppm"] = _ratio_ppm(
             result["worker_cpu_time_us"], result["playback_wall_time_us"]
@@ -1811,6 +2138,7 @@ def _measure_command_interrupt(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    wait_policy: str = "legacy_test_wide_spin",
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
@@ -1828,6 +2156,7 @@ def _measure_command_interrupt(
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
+        wait_policy=wait_policy,
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
@@ -1845,7 +2174,10 @@ def _measure_command_interrupt(
     commit_deadline = time.perf_counter() + 2.0
     while True:
         progress = dict(session.snapshot())
-        if progress.get("recent_latencies_us") or int(progress.get("active_count", 0)) > 0:
+        if (
+            progress.get("recent_latencies_us")
+            or int(progress.get("active_count", 0)) > 0
+        ):
             break
         if bool(progress.get("is_finished")):
             session.join(timeout_ms=5_000)
@@ -1914,6 +2246,7 @@ def _measure_preroll_pause_cancellation(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    wait_policy: str = "legacy_test_wide_spin",
 ) -> dict[str, Any]:
     """Verify the locked pre-roll Pause cancellation contract."""
     key = [int(SKY_15_SCAN_CODES[0])]
@@ -1924,6 +2257,7 @@ def _measure_preroll_pause_cancellation(
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
+        wait_policy=wait_policy,
     )
     session.start()
     deadline = time.perf_counter() + 2.0
@@ -2042,6 +2376,15 @@ def _parse_args() -> argparse.Namespace:
         help="real-time priority policy (default: off)",
     )
     parser.add_argument(
+        "--wait-policy",
+        choices=("legacy_test_wide_spin", "production_calibrated"),
+        default="legacy_test_wide_spin",
+        help=(
+            "mock waiter policy; production_calibrated uses the production "
+            "HybridWaiter and startup calibration (default: legacy_test_wide_spin)"
+        ),
+    )
+    parser.add_argument(
         "--lead-mode",
         choices=("fixed", "adaptive"),
         default="fixed",
@@ -2082,9 +2425,7 @@ def _resolve_mock_latency_values(
     ):
         raise SystemExit("mock latency values are only valid with --backend mock")
 
-    base_latency_us = (
-        80 if mock_base_latency_us is None else mock_base_latency_us
-    )
+    base_latency_us = 80 if mock_base_latency_us is None else mock_base_latency_us
     per_key_latency_us = (
         40 if mock_per_key_latency_us is None else mock_per_key_latency_us
     )
@@ -2134,7 +2475,8 @@ def _assert_correctness(run: dict[str, Any]) -> None:
         )
     statuses = run["generation_status_counts"]
     nonterminal = sum(
-        int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending")
+        int(statuses.get(name, 0))
+        for name in ("scheduled", "active", "release_pending")
     )
     if nonterminal:
         raise RuntimeError(
@@ -2209,9 +2551,13 @@ def _assert_comparison_contract(
             raise SystemExit("SAME_SEMANTICS requires timeline semantics version 2")
     else:
         if baseline_sha != TRANSPORT_REFERENCE_SHA:
-            raise SystemExit("TRANSPORT_REFERENCE requires the canonical 109f1c33 reference")
+            raise SystemExit(
+                "TRANSPORT_REFERENCE requires the canonical 109f1c33 reference"
+            )
         if candidate_semantics != 2 or baseline_semantics != 1:
-            raise SystemExit("TRANSPORT_REFERENCE requires candidate v2 and reference v1")
+            raise SystemExit(
+                "TRANSPORT_REFERENCE requires candidate v2 and reference v1"
+            )
 
 
 def _assert_report_correctness(report: dict[str, Any]) -> None:
@@ -2285,8 +2631,7 @@ def _assert_absolute_pre_call_slo(report: dict[str, Any]) -> None:
     late_over_2ms_count = metric.get("late_over_2ms_count")
     if late_over_2ms_count != 0:
         raise SystemExit(
-            "pre-call lateness safety SLO failed: "
-            f">2ms={late_over_2ms_count}"
+            f"pre-call lateness safety SLO failed: >2ms={late_over_2ms_count}"
         )
     p99 = _metric_at(metric, ("late", "p99"))
     p999 = _metric_at(metric, ("late", "p999"))
@@ -2305,7 +2650,10 @@ def _assert_absolute_pre_call_slo(report: dict[str, Any]) -> None:
 def _qualification_boundary_gate(*, backend: str, measured_boundaries: int) -> bool:
     """Return whether a report has enough physical samples for qualification."""
 
-    return backend != "sendinput" or measured_boundaries >= MIN_QUALIFICATION_PHYSICAL_BOUNDARIES
+    return (
+        backend != "sendinput"
+        or measured_boundaries >= MIN_QUALIFICATION_PHYSICAL_BOUNDARIES
+    )
 
 
 def _assert_minimum_qualification_boundaries(
@@ -2330,7 +2678,9 @@ def _comparison_metadata(
         try:
             baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise SystemExit(f"cannot read benchmark baseline provenance: {exc}") from exc
+            raise SystemExit(
+                f"cannot read benchmark baseline provenance: {exc}"
+            ) from exc
         if not isinstance(baseline, dict):
             raise SystemExit("benchmark baseline provenance must be an object")
         reference_sha = _report_sha(baseline)
@@ -2342,11 +2692,11 @@ def _comparison_metadata(
         "comparison_role": comparison_role,
         "timeline_semantics_version": TIMELINE_SEMANTICS_VERSION,
     }
+
+
 def _resolve_repeat_counts(args: argparse.Namespace) -> tuple[int, int]:
     if args.repeats is not None and args.dispatch_repeats is not None:
-        raise SystemExit(
-            "--repeats and --dispatch-repeats are ambiguous; use one"
-        )
+        raise SystemExit("--repeats and --dispatch-repeats are ambiguous; use one")
     dispatch_repeats = (
         args.dispatch_repeats
         if args.dispatch_repeats is not None
@@ -2369,7 +2719,8 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 9"
+            "legacy baseline is incompatible; regenerate with benchmark schema version "
+            f"{BENCHMARK_SCHEMA_VERSION}"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -2391,6 +2742,10 @@ def _assert_baseline_compatible(
     required_config = (
         "backend",
         "rt_priority_mode",
+        "requested_rt_priority_mode",
+        "requested_wait_policy",
+        "effective_wait_policy",
+        "wait_policy",
         "adaptive_spin",
         "waitable_timer",
         "event_wait",
@@ -2432,7 +2787,10 @@ def _assert_baseline_compatible(
         raise SystemExit("baseline is incompatible; it is not statistics-eligible")
     if baseline.get("excluded_runs") != 0:
         raise SystemExit("baseline is incompatible; excluded runs are not allowed")
-    if baseline.get("statistics_eligible") is not True or report.get("statistics_eligible") is not True:
+    if (
+        baseline.get("statistics_eligible") is not True
+        or report.get("statistics_eligible") is not True
+    ):
         raise SystemExit("baseline and candidate must be statistics-eligible")
 
 
@@ -2482,7 +2840,9 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
     try:
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot read benchmark baseline {baseline_path}: {exc}") from exc
+        raise SystemExit(
+            f"cannot read benchmark baseline {baseline_path}: {exc}"
+        ) from exc
 
     _assert_baseline_compatible(report, baseline)
     _assert_report_correctness(report)
@@ -2564,7 +2924,11 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
             relative_fraction=relative,
             absolute_floor=floor,
         )
-    for section in ("worker_cpu_ratio_ppm", "process_cpu_ratio_ppm", "spin_cpu_ratio_ppm"):
+    for section in (
+        "worker_cpu_ratio_ppm",
+        "process_cpu_ratio_ppm",
+        "spin_cpu_ratio_ppm",
+    ):
         for field, relative in (("p50", 0.05), ("p95", 0.05), ("max", 0.10)):
             _assert_metric_threshold(
                 report,
@@ -2580,7 +2944,11 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         relative_fraction=0.05,
         absolute_floor=2 * 1024 * 1024,
     )
-    for field, relative, floor in (("p50", 0.05, 100), ("p99", 0.10, 250), ("max", 0.15, 500)):
+    for field, relative, floor in (
+        ("p50", 0.05, 100),
+        ("p99", 0.10, 250),
+        ("max", 0.15, 500),
+    ):
         _assert_metric_threshold(
             report,
             baseline,
@@ -2611,7 +2979,11 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
                 relative_fraction=relative,
                 absolute_floor=floor,
             )
-        for section in ("worker_cpu_ratio_ppm", "process_cpu_ratio_ppm", "spin_cpu_ratio_ppm"):
+        for section in (
+            "worker_cpu_ratio_ppm",
+            "process_cpu_ratio_ppm",
+            "spin_cpu_ratio_ppm",
+        ):
             for field, relative in (("p50", 0.05), ("p95", 0.05), ("max", 0.10)):
                 _assert_metric_threshold(
                     observed_poly,
@@ -2708,7 +3080,9 @@ def main() -> int:
     def next_timeout_ms() -> int:
         remaining = run_deadline - time.monotonic() - 5.0
         if remaining <= 0:
-            raise RuntimeError("native acceptance budget expired before cleanup reserve")
+            raise RuntimeError(
+                "native acceptance budget expired before cleanup reserve"
+            )
         return max(1_000, min(60_000, math.ceil(remaining * 1_000)))
 
     successful_suites: list[dict[str, Any]] = []
@@ -2746,6 +3120,7 @@ def main() -> int:
                     mock_per_key_latency_us=mock_per_key_latency_us,
                     adaptive_spin=not args.no_adaptive_spin,
                     rt_priority_mode=args.rt_priority_mode,
+                    wait_policy=args.wait_policy,
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
@@ -2819,6 +3194,14 @@ def main() -> int:
                     failure_correctness,
                     failure_forensics,
                 )
+                try:
+                    failure["runtime_provenance"] = _runtime_provenance(
+                        snapshot,
+                        backend=args.backend,
+                        requested_wait_policy=args.wait_policy,
+                    )
+                except RuntimeError as provenance_error:
+                    failure["runtime_provenance_error"] = str(provenance_error)
             failures.append(failure)
             suite_results.append(
                 BenchmarkRunResult(
@@ -2844,6 +3227,7 @@ def main() -> int:
                     mock_per_key_latency_us=mock_per_key_latency_us,
                     adaptive_spin=not args.no_adaptive_spin,
                     rt_priority_mode=args.rt_priority_mode,
+                    wait_policy=args.wait_policy,
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
                     game_fps=args.game_fps,
@@ -2885,6 +3269,11 @@ def main() -> int:
             "label": args.label,
             "backend": args.backend,
             "native_build_flavor": benchmark_config["native_build_flavor"],
+            "scheduling_evidence_scope": (
+                "production_calibrated_hybrid_waiter_mock_transport"
+                if benchmark_config["effective_wait_policy"] == "production_calibrated"
+                else "legacy_test_support_wide_spin"
+            ),
             "actions_per_polyphony": _actions_per_polyphony(
                 actions=args.actions,
                 scenario=args.scenario,
@@ -2909,6 +3298,23 @@ def main() -> int:
             "excluded_runs": 0,
             "failures": failures + command_failures,
             "qualification_dimensions": _aggregate_failure_dimensions(failures),
+            "runtime_provenance": {
+                "requested_rt_priority_mode": benchmark_config[
+                    "requested_rt_priority_mode"
+                ],
+                "requested_wait_policy": benchmark_config["requested_wait_policy"],
+                "effective_wait_policy": benchmark_config["effective_wait_policy"],
+                "status": "unavailable_failed_run_set",
+            },
+            "scheduling_qualification": {
+                "status": "invalid_run_set",
+                "statistics_eligible": False,
+                "waiter_timing_clean": False,
+                "dispatch_path_clean": False,
+                "sender_cutoff_clean": False,
+                "priority_qualification": False,
+                "calibration_provenance_valid": False,
+            },
             "mock_latency_model": {
                 "base_us": mock_base_latency_us,
                 "per_key_us": mock_per_key_latency_us,
@@ -2933,9 +3339,7 @@ def main() -> int:
         return 1
 
     dispatch_runs = [
-        run
-        for suite in successful_suites
-        for run in suite["dispatch"].values()
+        run for suite in successful_suites for run in suite["dispatch"].values()
     ]
     physical_boundaries = sum(run["measurement_records"] for run in dispatch_runs)
     by_polyphony: dict[str, Any] = {}
@@ -2964,6 +3368,7 @@ def main() -> int:
             "fps": args.game_fps,
             "latency_class": args.gap_profile,
             "priority_mode": benchmark_config["rt_priority_mode"],
+            "runtime_provenance": _aggregate_runtime_provenance(runs),
             "lead_mode": benchmark_config["lead_mode"],
             "actions": len(actions),
             "warmup_cycles": args.warmup_cycles,
@@ -2978,13 +3383,13 @@ def main() -> int:
             "pre_send_software_latency_us": _aggregate_metric(
                 runs, "pre_send_software_latency_us"
             ),
-            "pre_call_lateness_us": _aggregate_metric(
-                runs, "pre_call_lateness_us"
-            ),
+            "pre_call_lateness_us": _aggregate_metric(runs, "pre_call_lateness_us"),
             "sendinput_call_duration_us": _aggregate_metric(
                 runs, "sendinput_call_duration_us"
             ),
-            "core_post_send_duration_us": _aggregate_metric(runs, "core_post_send_duration_us"),
+            "core_post_send_duration_us": _aggregate_metric(
+                runs, "core_post_send_duration_us"
+            ),
             "sender_completion_error_us": _aggregate_metric(
                 runs, "sender_completion_error_us"
             ),
@@ -3054,28 +3459,44 @@ def main() -> int:
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
             "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
-            "playback_wall_time_us": _stats([run["playback_wall_time_us"] for run in runs]),
+            "playback_wall_time_us": _stats(
+                [run["playback_wall_time_us"] for run in runs]
+            ),
             "spin_duty_cycle_ppm": _stats([run["spin_duty_cycle_ppm"] for run in runs]),
-            "worker_cpu_ratio_ppm": _stats([run["worker_cpu_ratio_ppm"] for run in runs]),
-            "process_cpu_ratio_ppm": _stats([run["process_cpu_ratio_ppm"] for run in runs]),
+            "worker_cpu_ratio_ppm": _stats(
+                [run["worker_cpu_ratio_ppm"] for run in runs]
+            ),
+            "process_cpu_ratio_ppm": _stats(
+                [run["process_cpu_ratio_ppm"] for run in runs]
+            ),
             "spin_cpu_ratio_ppm": _stats([run["spin_cpu_ratio_ppm"] for run in runs]),
             "peak_rss_bytes": _required_stats(
-                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None],
+                [
+                    run["peak_rss_bytes"]
+                    for run in runs
+                    if run["peak_rss_bytes"] is not None
+                ],
                 "peak_rss_bytes",
             ),
             "keys_dropped": sum(run["keys_dropped"] for run in runs),
             "failed_release_count": sum(run["failed_release_count"] for run in runs),
             "chord_split_events": sum(run["chord_split_events"] for run in runs),
             "chords_rejected": sum(run["chords_rejected"] for run in runs),
-            "authored_keys_rejected": sum(run["authored_keys_rejected"] for run in runs),
+            "authored_keys_rejected": sum(
+                run["authored_keys_rejected"] for run in runs
+            ),
             "sendinput_partial_events": sum(
                 run["sendinput_partial_events"] for run in runs
             ),
             "sendinput_zero_progress_failures": sum(
                 run["sendinput_zero_progress_failures"] for run in runs
             ),
-            "sendinput_path_degraded": any(run["sendinput_path_degraded"] for run in runs),
-            "core_post_send_degraded": any(run["core_post_send_degraded"] for run in runs),
+            "sendinput_path_degraded": any(
+                run["sendinput_path_degraded"] for run in runs
+            ),
+            "core_post_send_degraded": any(
+                run["core_post_send_degraded"] for run in runs
+            ),
             "wait_path_degraded": any(run["wait_path_degraded"] for run in runs),
             "sendinput_warn_threshold_us": _stats(
                 [run["sendinput_warn_threshold_us"] for run in runs]
@@ -3118,6 +3539,14 @@ def main() -> int:
         poly_report["qualification_dimensions"] = _qualification_dimensions(
             poly_report["correctness"], poly_report["forensics_diagnostics"]
         )
+        poly_report["scheduling_qualification"] = _scheduling_qualification(
+            runs,
+            backend=args.backend,
+            acceptance_clean=all(
+                all(value == 0 for value in run["correctness"].values()) for run in runs
+            ),
+            physical_boundaries=poly_report["physical_boundaries"],
+        )
         if args.scenario in {"mixed", "coalesced"}:
             for field in MIXED_POLY_TIMING_FIELDS:
                 poly_report.pop(field, None)
@@ -3143,9 +3572,7 @@ def main() -> int:
         "scenario": args.scenario,
         "game_fps": args.game_fps,
         "materialized_min_hold_us": benchmark_config["materialized_min_hold_us"],
-        "materialized_release_gap_us": benchmark_config[
-            "materialized_release_gap_us"
-        ],
+        "materialized_release_gap_us": benchmark_config["materialized_release_gap_us"],
         "materialized_release_visibility_floor_us": benchmark_config[
             "materialized_release_visibility_floor_us"
         ],
@@ -3198,16 +3625,12 @@ def main() -> int:
             dispatch_runs, "sender_completion_error_us"
         ),
         "wake_error": _aggregate_metric(dispatch_runs, "wake_error_us"),
-        "pre_send": _aggregate_metric(
-            dispatch_runs, "pre_send_software_latency_us"
-        ),
+        "pre_send": _aggregate_metric(dispatch_runs, "pre_send_software_latency_us"),
         "sendinput": _aggregate_metric(dispatch_runs, "sendinput_call_duration_us"),
         "core_post_send": _aggregate_metric(
             dispatch_runs, "core_post_send_duration_us"
         ),
-        "observer": _stats(
-            [run["observer_duration_max_us"] for run in dispatch_runs]
-        ),
+        "observer": _stats([run["observer_duration_max_us"] for run in dispatch_runs]),
         "sender_completion_error": _aggregate_metric(
             dispatch_runs, "sender_completion_error_us"
         ),
@@ -3291,7 +3714,11 @@ def main() -> int:
         ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
         "peak_rss_bytes": _required_stats(
-            [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None],
+            [
+                run["peak_rss_bytes"]
+                for run in dispatch_runs
+                if run["peak_rss_bytes"] is not None
+            ],
             "peak_rss_bytes",
         ),
         "command_observation_latency_us": _stats(
@@ -3313,7 +3740,9 @@ def main() -> int:
             [run["spin_cpu_ratio_ppm"] for run in dispatch_runs]
         ),
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
-        "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
+        "failed_release_count": sum(
+            run["failed_release_count"] for run in dispatch_runs
+        ),
         "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),
         "chords_rejected": sum(run["chords_rejected"] for run in dispatch_runs),
         "authored_keys_rejected": sum(
@@ -3328,7 +3757,9 @@ def main() -> int:
         "sendinput_path_degraded": any(
             run["sendinput_path_degraded"] for run in dispatch_runs
         ),
-        "core_post_send_degraded": any(run["core_post_send_degraded"] for run in dispatch_runs),
+        "core_post_send_degraded": any(
+            run["core_post_send_degraded"] for run in dispatch_runs
+        ),
         "wait_path_degraded": any(run["wait_path_degraded"] for run in dispatch_runs),
         "sendinput_warn_threshold_us": _stats(
             [run["sendinput_warn_threshold_us"] for run in dispatch_runs]
@@ -3359,7 +3790,9 @@ def main() -> int:
         if args.backend == "mock"
         else None,
         "by_polyphony": by_polyphony,
-        "native_packet_size_counts": _aggregate_native_packet_size_counts(dispatch_runs),
+        "native_packet_size_counts": _aggregate_native_packet_size_counts(
+            dispatch_runs
+        ),
         "evidence_scope": (
             "sender_pre_call" if args.backend == "sendinput" else "sender_completion"
         ),
@@ -3378,6 +3811,15 @@ def main() -> int:
         "backend_evidence": "real_sendinput_strict_diagnostic_pre_call"
         if args.backend == "sendinput"
         else "deterministic_coordinator_delivery_simulation",
+        "scheduling_evidence_scope": (
+            "production_sendinput_strict_diagnostic"
+            if args.backend == "sendinput"
+            else (
+                "production_calibrated_hybrid_waiter_mock_transport"
+                if benchmark_config["effective_wait_policy"] == "production_calibrated"
+                else "legacy_test_support_wide_spin"
+            )
+        ),
         "host_fingerprint": host_info,
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
@@ -3390,14 +3832,36 @@ def main() -> int:
     report["qualification_dimensions"] = _qualification_dimensions(
         report["correctness"], report["forensics_diagnostics"]
     )
+    runtime_provenance = _aggregate_runtime_provenance(dispatch_runs)
+    report["runtime_provenance"] = runtime_provenance
+    for name in (
+        "requested_rt_priority_mode",
+        "acquired_priority",
+        "requested_wait_policy",
+        "effective_wait_policy",
+        "startup_calibration_executed",
+        "startup_calibration_sample_count",
+        "startup_wake_error_p50_us",
+        "startup_wake_error_p95_us",
+        "startup_wake_error_p99_us",
+        "startup_wake_error_max_us",
+        "startup_wake_error_robust_us",
+        "spin_threshold_source",
+    ):
+        report[name] = runtime_provenance[name]
     acceptance_failure_reasons = _acceptance_failure_reasons(report)
     report["acceptance_clean"] = not acceptance_failure_reasons
     report["acceptance_failure_reasons"] = acceptance_failure_reasons
-    report["statistics_eligible"] = (
-        report["acceptance_clean"]
-        and _qualification_boundary_gate(
-            backend=args.backend, measured_boundaries=physical_boundaries
-        )
+    report["statistics_eligible"] = report[
+        "acceptance_clean"
+    ] and _qualification_boundary_gate(
+        backend=args.backend, measured_boundaries=physical_boundaries
+    )
+    report["scheduling_qualification"] = _scheduling_qualification(
+        dispatch_runs,
+        backend=args.backend,
+        acceptance_clean=report["acceptance_clean"],
+        physical_boundaries=physical_boundaries,
     )
     encoded = json.dumps(report, indent=2)
     print(encoded)

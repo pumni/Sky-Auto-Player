@@ -10,6 +10,67 @@ pub(crate) const CALIBRATION_SAMPLES: usize = 6;
 pub(crate) const CALIBRATION_MAX_STARTUP_BUDGET_US: u64 = 20_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestWaitPolicy {
+    /// Historical test-support behavior. Existing tests use the wide spin
+    /// window to avoid making host timer jitter part of their assertions.
+    LegacyTestWideSpin,
+    /// Test-only qualification policy that follows the shipping waiter and
+    /// one-shot startup calibration without enabling production transport.
+    ProductionCalibrated,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl TestWaitPolicy {
+    pub(crate) fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "legacy_test_wide_spin" => Ok(Self::LegacyTestWideSpin),
+            "production_calibrated" => Ok(Self::ProductionCalibrated),
+            _ => Err("wait_policy must be legacy_test_wide_spin or production_calibrated"),
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::LegacyTestWideSpin => "legacy_test_wide_spin",
+            Self::ProductionCalibrated => "production_calibrated",
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpinThresholdSource {
+    Unknown = 0,
+    ProductionStartupCalibration = 1,
+    TestFixedOverride = 2,
+    LegacyTestWideSpin = 3,
+    ProductionFallback = 4,
+}
+
+impl SpinThresholdSource {
+    pub(crate) const fn from_raw(value: u8) -> Self {
+        match value {
+            1 => Self::ProductionStartupCalibration,
+            2 => Self::TestFixedOverride,
+            3 => Self::LegacyTestWideSpin,
+            4 => Self::ProductionFallback,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::ProductionStartupCalibration => "production_startup_calibration",
+            Self::TestFixedOverride => "test_fixed_override",
+            Self::LegacyTestWideSpin => "legacy_test_wide_spin",
+            Self::ProductionFallback => "production_startup_fallback",
+        }
+    }
+}
+
 pub(crate) fn validate_timing_constants() -> Result<(), String> {
     if STARTUP_READINESS_RESERVE_US <= DEFAULT_SPIN_THRESHOLD_US {
         return Err("startup readiness reserve must be greater than spin threshold".to_string());
@@ -176,6 +237,8 @@ impl Default for WorkerConfig {
                 supervisor_lease_timeout_us: 0,
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
+                #[cfg(any(test, feature = "test-support"))]
+                test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
             },
             telemetry: TelemetryOptions {
                 mode: TelemetryMode::Ring,
@@ -213,6 +276,38 @@ pub(crate) struct WaitOptions {
     /// targets or the production wait policy.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) test_spin_threshold_us: Option<u64>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) test_wait_policy: TestWaitPolicy,
+}
+
+impl WaitOptions {
+    pub(crate) fn production_wait_policy(&self, backend_is_production: bool) -> bool {
+        if backend_is_production {
+            return true;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            matches!(self.test_wait_policy, TestWaitPolicy::ProductionCalibrated)
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn requested_wait_policy_label(&self, backend_is_production: bool) -> &'static str {
+        if backend_is_production {
+            return "production_calibrated";
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.test_wait_policy.label()
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            "production_calibrated"
+        }
+    }
 }
 
 pub(crate) struct TelemetryOptions {
@@ -226,7 +321,10 @@ pub(crate) struct PriorityOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US};
+    use super::{
+        DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US, TestWaitPolicy,
+        WaitOptions,
+    };
 
     #[test]
     fn production_wait_policy_has_bounded_spin_threshold() {
@@ -239,5 +337,20 @@ mod tests {
     fn production_profile_has_no_deferred_observer() {
         assert!(!DispatchProfile::Production.observer_enabled());
         assert!(DispatchProfile::StrictTimingDiagnostic.observer_enabled());
+    }
+
+    #[test]
+    fn production_calibrated_test_policy_has_no_legacy_spin_override() {
+        let options = WaitOptions {
+            enable_waitable_timer: true,
+            enable_event_wait: true,
+            supervisor_lease_timeout_us: 0,
+            test_spin_threshold_us: None,
+            test_wait_policy: TestWaitPolicy::ProductionCalibrated,
+        };
+
+        assert_eq!(options.test_wait_policy.label(), "production_calibrated");
+        assert!(options.production_wait_policy(false));
+        assert_eq!(options.test_spin_threshold_us, None);
     }
 }

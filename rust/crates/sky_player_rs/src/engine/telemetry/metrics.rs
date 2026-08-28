@@ -149,6 +149,12 @@ pub struct WorkerMetricsLocal {
     pub recovered_zero_progress_retries: u64,
     pub recovered_partial_up_retries: u64,
     pub recovered_zero_progress_but_late: u64,
+    /// Startup-only calibration provenance. These scalar values are written
+    /// before dispatch and are never touched by the precision path.
+    pub startup_calibration_executed: bool,
+    pub startup_calibration_sample_count: u64,
+    pub startup_wake_error_robust_us: u64,
+    pub spin_threshold_source: u8,
     pub effective_spin_threshold_us: u64,
     pub wake_error_p50_us: u64,
     pub wake_error_p95_us: u64,
@@ -435,6 +441,11 @@ pub(crate) struct SharedMetrics {
     pub(crate) is_paused: AtomicBool,
     pub(crate) panicked: AtomicBool,
     pub(crate) last_error: Mutex<Option<String>>,
+    /// Startup-only provenance. These strings are written before dispatch
+    /// begins and read from snapshots, never from the precision path.
+    pub(crate) requested_priority_mode: Mutex<String>,
+    pub(crate) requested_wait_policy: Mutex<String>,
+    pub(crate) effective_wait_policy: Mutex<String>,
     pub(crate) wait_strategy_acquired: Mutex<String>,
     pub(crate) terminal_error: Mutex<Option<String>>,
     pub(crate) secondary_errors: Mutex<Vec<String>>,

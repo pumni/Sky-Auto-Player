@@ -103,6 +103,8 @@ impl NativeDispatchSessionPy {
                 supervisor_lease_timeout_us,
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
+                #[cfg(any(test, feature = "test-support"))]
+                test_wait_policy: crate::engine::TestWaitPolicy::ProductionCalibrated,
             },
             telemetry: TelemetryOptions {
                 mode: parsed_telemetry_mode,
@@ -483,11 +485,34 @@ impl NativeDispatchSessionPy {
         dict.set_item("outcome", snap.outcome)?;
         dict.set_item("startup_ready", snap.startup_ready)?;
         dict.set_item("startup_latency_us", snap.startup_latency_us)?;
+        dict.set_item(
+            "requested_rt_priority_mode",
+            snap.requested_rt_priority_mode,
+        )?;
         dict.set_item("rt_priority_acquired", snap.rt_priority_acquired)?;
+        dict.set_item("requested_wait_policy", snap.requested_wait_policy)?;
+        dict.set_item("effective_wait_policy", snap.effective_wait_policy)?;
+        dict.set_item(
+            "startup_calibration_executed",
+            snap.startup_calibration_executed,
+        )?;
+        dict.set_item(
+            "startup_calibration_sample_count",
+            snap.startup_calibration_sample_count,
+        )?;
+        dict.set_item("startup_wake_error_p50_us", snap.startup_wake_error_p50_us)?;
+        dict.set_item("startup_wake_error_p95_us", snap.startup_wake_error_p95_us)?;
+        dict.set_item("startup_wake_error_p99_us", snap.startup_wake_error_p99_us)?;
+        dict.set_item("startup_wake_error_max_us", snap.startup_wake_error_max_us)?;
+        dict.set_item(
+            "startup_wake_error_robust_us",
+            snap.startup_wake_error_robust_us,
+        )?;
         dict.set_item(
             "effective_spin_threshold_us",
             snap.effective_spin_threshold_us,
         )?;
+        dict.set_item("spin_threshold_source", snap.spin_threshold_source)?;
         dict.set_item("wake_error_p50_us", snap.wake_error_p50_us)?;
         dict.set_item("wake_error_p95_us", snap.wake_error_p95_us)?;
         dict.set_item("wake_error_p99_us", snap.wake_error_p99_us)?;

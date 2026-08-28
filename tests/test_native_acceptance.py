@@ -78,7 +78,9 @@ def test_sendinput_qualification_rejects_test_support_wheel(
         )
 
 
-def test_real_acceptance_arms_production_session_without_test_support_start_alias() -> None:
+def test_real_acceptance_arms_production_session_without_test_support_start_alias() -> (
+    None
+):
     class FakeProductionSession:
         def __init__(self) -> None:
             self.calls: list[tuple[str, int]] = []
@@ -162,11 +164,19 @@ def test_benchmark_default_priority_policy_is_off(
     assert ACCEPTANCE._parse_args().rt_priority_mode == "off"
 
 
+def test_benchmark_default_wait_policy_is_legacy_test_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["bench_native_acceptance.py"])
+    assert ACCEPTANCE._parse_args().wait_policy == "legacy_test_wide_spin"
+
+
 def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> None:
     args = SimpleNamespace(
         backend="sendinput",
         game_fps=60,
         rt_priority_mode="off",
+        wait_policy="legacy_test_wide_spin",
         no_adaptive_spin=True,
         lead_mode="adaptive",
         fixed_lead_us=0,
@@ -191,6 +201,56 @@ def test_real_backend_uses_effective_native_settings_and_materialized_hold() -> 
     assert config["materialized_release_visibility_floor_us"] == 16_667
     assert config["sender_headroom_us"] == 800
     assert config["down_late_grace_us"] == 500
+
+
+def test_mock_production_wait_policy_is_explicitly_effective() -> None:
+    args = SimpleNamespace(
+        backend="mock",
+        game_fps=60,
+        rt_priority_mode="auto",
+        wait_policy="production_calibrated",
+        no_adaptive_spin=False,
+        lead_mode="fixed",
+        fixed_lead_us=0,
+        gap_profile="hot",
+        warmup_cycles=8,
+        actions=128,
+    )
+    config = ACCEPTANCE._benchmark_config(
+        args=args,
+        polyphonies=[1],
+        mock_base_latency_us=80,
+        mock_per_key_latency_us=40,
+    )
+    assert config["requested_wait_policy"] == "production_calibrated"
+    assert config["effective_wait_policy"] == "production_calibrated"
+    assert config["wait_policy"] == "production_calibrated"
+
+
+def test_runtime_provenance_requires_production_calibration_for_qualification() -> None:
+    snapshot = {
+        "requested_rt_priority_mode": "auto",
+        "rt_priority_acquired": "off",
+        "requested_wait_policy": "production_calibrated",
+        "effective_wait_policy": "production_calibrated",
+        "startup_calibration_executed": True,
+        "startup_calibration_sample_count": 6,
+        "startup_wake_error_p50_us": 100,
+        "startup_wake_error_p95_us": 200,
+        "startup_wake_error_p99_us": 300,
+        "startup_wake_error_max_us": 400,
+        "startup_wake_error_robust_us": 450,
+        "effective_spin_threshold_us": 500,
+        "spin_threshold_source": "production_startup_calibration",
+    }
+    provenance = ACCEPTANCE._runtime_provenance(
+        snapshot,
+        backend="mock",
+        requested_wait_policy="production_calibrated",
+    )
+    assert provenance["calibration_provenance_valid"] is True
+    assert provenance["priority_active"] is False
+    assert provenance["production_wait_qualification"] is False
 
 
 def test_sendinput_qualification_requires_at_least_10000_physical_boundaries() -> None:
@@ -218,6 +278,10 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
         "backend": "mock",
         "game_fps": 60,
         "rt_priority_mode": "off",
+        "requested_rt_priority_mode": "off",
+        "requested_wait_policy": "legacy_test_wide_spin",
+        "effective_wait_policy": "legacy_test_wide_spin",
+        "wait_policy": "legacy_test_wide_spin",
         "adaptive_spin": True,
         "waitable_timer": True,
         "event_wait": True,
@@ -227,21 +291,21 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
         "polyphony": [1, 2, 3, 5, 8, 15],
         "lead_mode": "fixed",
         "fixed_lead_us": 0,
-            "gap_profile": "hot",
-            "warmup_cycles": 8,
-            "start_delay_us": 0,
-            "scenario": "paired",
-            "native_profile": "mock_test",
-            "native_build_flavor": "test_support",
-            "require_focus": False,
-            "materialized_min_hold_us": 17_467,
-            "materialized_release_gap_us": 17_467,
-            "materialized_release_visibility_floor_us": 16_667,
-            "sender_headroom_us": 800,
-            "down_late_grace_us": 500,
-        }
+        "gap_profile": "hot",
+        "warmup_cycles": 8,
+        "start_delay_us": 0,
+        "scenario": "paired",
+        "native_profile": "mock_test",
+        "native_build_flavor": "test_support",
+        "require_focus": False,
+        "materialized_min_hold_us": 17_467,
+        "materialized_release_gap_us": 17_467,
+        "materialized_release_visibility_floor_us": 16_667,
+        "sender_headroom_us": 800,
+        "down_late_grace_us": 500,
+    }
     report = {
-        "benchmark_schema_version": 9,
+        "benchmark_schema_version": ACCEPTANCE.BENCHMARK_SCHEMA_VERSION,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
@@ -278,14 +342,14 @@ def test_schema_seven_baseline_requires_matching_timing_domain_and_config() -> N
 
 def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
     candidate = {
-        "benchmark_schema_version": 9,
+        "benchmark_schema_version": ACCEPTANCE.BENCHMARK_SCHEMA_VERSION,
         "candidate_sha": "candidate-sha",
         "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
         "timeline_semantics_version": 2,
     }
     baseline = {
-        "benchmark_schema_version": 9,
+        "benchmark_schema_version": ACCEPTANCE.BENCHMARK_SCHEMA_VERSION,
         "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
         "timeline_semantics_version": 1,
     }
@@ -310,12 +374,18 @@ def test_unknown_missing_timeline_semantics_is_rejected() -> None:
 
 
 def test_known_historical_sha_maps_missing_timeline_semantics() -> None:
-    assert ACCEPTANCE._timeline_semantics_version(
-        {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
-    ) == 1
-    assert ACCEPTANCE._timeline_semantics_version(
-        {"candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA}
-    ) == 2
+    assert (
+        ACCEPTANCE._timeline_semantics_version(
+            {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
+        )
+        == 1
+    )
+    assert (
+        ACCEPTANCE._timeline_semantics_version(
+            {"candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA}
+        )
+        == 2
+    )
 
 
 def test_absolute_fixed_hot_wake_slo_is_exact() -> None:
@@ -386,7 +456,9 @@ def test_expected_hold_pair_samples_simulate_authored_generations() -> None:
     assert ACCEPTANCE._expected_hold_pair_samples(mixed, "coalesced") == 4
 
 
-def test_expected_hold_pair_samples_canonicalize_same_timestamp_up_before_down() -> None:
+def test_expected_hold_pair_samples_canonicalize_same_timestamp_up_before_down() -> (
+    None
+):
     authored_order_is_down_first = [
         (0, "down", 0, [1], "down-a"),
         (2, "down", 10, [1], "down-b"),
@@ -494,7 +566,9 @@ assert info["rustc_version"].startswith("rustc 1.98.0 "), info
         env=child_env,
         check=False,
     )
-    assert result.returncode == 0, f"child stdout={result.stdout}\nchild stderr={result.stderr}"
+    assert result.returncode == 0, (
+        f"child stdout={result.stdout}\nchild stderr={result.stderr}"
+    )
 
 
 def test_completion_hold_is_transport_diagnostic_not_acceptance_gate() -> None:
@@ -612,18 +686,18 @@ def test_zero_hold_samples_cannot_pass_completeness_gate() -> None:
             "telemetry_integrity_failures",
             "sender_integrity_failures",
             "unexpected_transport_failures",
-        "authored_trace_missing_duplicate_mismatch",
-        "missed_down_boundaries",
-        "missed_down_keys",
-        "pre_call_hold_shrink_over_grace_count",
+            "authored_trace_missing_duplicate_mismatch",
+            "missed_down_boundaries",
+            "missed_down_keys",
+            "pre_call_hold_shrink_over_grace_count",
             "hold_unmatched_up_count",
-        "hold_anchor_overwrite_count",
-        "production_release_gap_below_policy_count",
-        "production_same_call_same_key_retrigger_count",
-        "production_anchor_overwrite_count",
-        "production_unmatched_up_count",
-        "production_structural_anomaly_count",
-        "hold_pair_sample_mismatch",
+            "hold_anchor_overwrite_count",
+            "production_release_gap_below_policy_count",
+            "production_same_call_same_key_retrigger_count",
+            "production_anchor_overwrite_count",
+            "production_unmatched_up_count",
+            "production_structural_anomaly_count",
+            "hold_pair_sample_mismatch",
         ),
         0,
     )
@@ -755,7 +829,9 @@ def test_hot_and_cold_action_spacing() -> None:
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
 
 
-def test_same_key_min_cycle_materializes_one_physical_key_and_exact_boundaries() -> None:
+def test_same_key_min_cycle_materializes_one_physical_key_and_exact_boundaries() -> (
+    None
+):
     count = 5
     actions = ACCEPTANCE._actions(
         count,
@@ -819,10 +895,14 @@ def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
         )
 
 
-def test_warmup_records_are_integrity_input_but_measurement_slice_excludes_them() -> None:
+def test_warmup_records_are_integrity_input_but_measurement_slice_excludes_them() -> (
+    None
+):
     actions = ACCEPTANCE._actions(3, 1)
     assert len(actions) == 6
-    records = [SimpleNamespace(event_index=index, kind=kind) for index, kind, *_ in actions]
+    records = [
+        SimpleNamespace(event_index=index, kind=kind) for index, kind, *_ in actions
+    ]
     diagnostics = ACCEPTANCE._validate_telemetry_integrity(
         actions=actions,
         telemetry={"attempted": 6, "accepted": 6, "dropped": 0, "truncated": False},
@@ -845,9 +925,12 @@ def test_warmup_record_count_follows_actual_native_layout(
     actions = ACCEPTANCE._actions(8, polyphony, scenario=scenario)
 
     assert ACCEPTANCE._warmup_record_count(actions, scenario, 8) == expected_records
-    assert ACCEPTANCE._aggregate_warmup_records(
-        [{"warmup_records": expected_records}, {"warmup_records": expected_records}]
-    ) == expected_records * 2
+    assert (
+        ACCEPTANCE._aggregate_warmup_records(
+            [{"warmup_records": expected_records}, {"warmup_records": expected_records}]
+        )
+        == expected_records * 2
+    )
 
 
 def test_command_interrupt_artifact_uses_the_actual_one_key_fixture() -> None:
@@ -855,7 +938,13 @@ def test_command_interrupt_artifact_uses_the_actual_one_key_fixture() -> None:
 
     assert actions == [
         (0, "down", 100_000, [int(ACCEPTANCE.SKY_15_SCAN_CODES[0])], "interrupt-down"),
-        (1, "up", 10_000_000, [int(ACCEPTANCE.SKY_15_SCAN_CODES[0])], "interrupt-cleanup"),
+        (
+            1,
+            "up",
+            10_000_000,
+            [int(ACCEPTANCE.SKY_15_SCAN_CODES[0])],
+            "interrupt-cleanup",
+        ),
     ]
     assert ACCEPTANCE._command_interrupt_polyphony(actions) == 1
 
@@ -878,16 +967,22 @@ def test_cpu_ratio_is_computed_per_run() -> None:
 
 
 def test_threshold_uses_relative_bound_and_absolute_floor() -> None:
-    assert ACCEPTANCE.allowed_value(
-        100,
-        relative_fraction=0.05,
-        absolute_floor=5,
-    ) == 105
-    assert ACCEPTANCE.allowed_value(
-        1,
-        relative_fraction=0.05,
-        absolute_floor=5,
-    ) == 6
+    assert (
+        ACCEPTANCE.allowed_value(
+            100,
+            relative_fraction=0.05,
+            absolute_floor=5,
+        )
+        == 105
+    )
+    assert (
+        ACCEPTANCE.allowed_value(
+            1,
+            relative_fraction=0.05,
+            absolute_floor=5,
+        )
+        == 6
+    )
 
 
 def test_rss_regression_uses_two_mib_floor() -> None:
@@ -1052,7 +1147,9 @@ def test_negative_mock_latency_is_rejected() -> None:
         )
 
 
-def _integrity_fixture() -> tuple[list[tuple[int, str, int, list[int], str]], dict, list]:
+def _integrity_fixture() -> tuple[
+    list[tuple[int, str, int, list[int], str]], dict, list
+]:
     actions = [
         (10, "down", 0, [21], "down"),
         (11, "up", 5_000, [21], "up"),
@@ -1104,9 +1201,14 @@ def test_complete_native_telemetry_passes_one_to_one_validation() -> None:
             ),
             "kind_mismatches",
         ),
-        (lambda actions, telemetry, records: telemetry.__setitem__("dropped", 1), "dropped"),
         (
-            lambda actions, telemetry, records: telemetry.__setitem__("truncated", True),
+            lambda actions, telemetry, records: telemetry.__setitem__("dropped", 1),
+            "dropped",
+        ),
+        (
+            lambda actions, telemetry, records: telemetry.__setitem__(
+                "truncated", True
+            ),
             "truncated",
         ),
         (
@@ -1186,9 +1288,7 @@ def test_partial_repetition_set_is_invalid_and_not_statistics_eligible() -> None
         for index in range(4)
     ]
     results.append(
-        ACCEPTANCE.BenchmarkRunResult(
-            4, 1, None, {"error": "telemetry incomplete"}
-        )
+        ACCEPTANCE.BenchmarkRunResult(4, 1, None, {"error": "telemetry incomplete"})
     )
 
     summary = ACCEPTANCE._run_validity_summary(5, results)

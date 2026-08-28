@@ -1,6 +1,8 @@
 use super::conversion::{parse_schedule_with_allowlist, validate_schedule_timing};
 use super::session::{EffectiveSessionConfig, NativeDispatchSessionPy};
 use super::*;
+#[cfg(any(test, feature = "test-support"))]
+use crate::engine::TestWaitPolicy;
 use crate::engine::{
     FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
     WaitOptions,
@@ -30,7 +32,8 @@ impl TestDispatchSessionPy {
         enable_dispatch_cost_lead = true,
         fault_mode = "none",
         min_release_gap_us = None,
-        down_late_grace_us = StrictU64(0)
+        down_late_grace_us = StrictU64(0),
+        wait_policy = "legacy_test_wide_spin"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -50,10 +53,12 @@ impl TestDispatchSessionPy {
         fault_mode: &str,
         min_release_gap_us: Option<StrictU64>,
         down_late_grace_us: StrictU64,
+        wait_policy: &str,
     ) -> PyResult<Self> {
         let _ = (enable_adaptive_spin, enable_dispatch_cost_lead);
         let min_hold_us = min_hold_us.0;
         let down_late_grace_us = down_late_grace_us.0;
+        let test_wait_policy = TestWaitPolicy::parse(wait_policy).map_err(PyValueError::new_err)?;
         let game_fps = u16::try_from(game_fps.0)
             .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
         if !(15..=240).contains(&game_fps) {
@@ -146,7 +151,13 @@ impl TestDispatchSessionPy {
                 enable_event_wait,
                 supervisor_lease_timeout_us: 3_000_000,
                 #[cfg(any(test, feature = "test-support"))]
-                test_spin_threshold_us: Some(20_000),
+                test_spin_threshold_us: matches!(
+                    test_wait_policy,
+                    TestWaitPolicy::LegacyTestWideSpin
+                )
+                .then_some(20_000),
+                #[cfg(any(test, feature = "test-support"))]
+                test_wait_policy,
             },
             telemetry: TelemetryOptions {
                 mode: crate::engine::TelemetryMode::Ring,

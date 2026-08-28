@@ -57,6 +57,8 @@ fn test_session_options(
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
             test_spin_threshold_us: Some(20_000),
+            #[cfg(any(test, feature = "test-support"))]
+            test_wait_policy: super::TestWaitPolicy::LegacyTestWideSpin,
         },
         telemetry: TelemetryOptions {
             mode: TelemetryMode::Ring,

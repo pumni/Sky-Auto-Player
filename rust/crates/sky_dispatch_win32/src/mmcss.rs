@@ -116,6 +116,20 @@ impl MmcssGuard {
     }
 }
 
+impl PriorityMode {
+    /// Stable provenance label for the requested policy. This is distinct
+    /// from the acquired label because Auto may fall back from MMCSS.
+    pub const fn requested_label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Mmcss => "mmcss",
+            Self::TimeCritical => "time_critical",
+            Self::Highest => "highest",
+            Self::Off => "off",
+        }
+    }
+}
+
 impl Drop for MmcssGuard {
     fn drop(&mut self) {
         #[cfg(windows)]

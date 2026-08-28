@@ -13,8 +13,8 @@ use super::{
     initialize_startup, load_target_stamp, release_state_verified, wait_failure_message,
 };
 use crate::engine::config::{
-    CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, DispatchProfile,
-    STARTUP_READINESS_RESERVE_US,
+    CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, STARTUP_READINESS_RESERVE_US,
+    SpinThresholdSource,
 };
 use std::sync::atomic::Ordering;
 
@@ -107,6 +107,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     };
 
     let core = &mut worker.core;
+    let config = &worker.config;
+    let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
+    let production_wait = config.wait.production_wait_policy(backend_is_production);
+    let requested_wait_policy = config
+        .wait
+        .requested_wait_policy_label(backend_is_production);
+    let effective_wait_policy = if production_wait {
+        "production_calibrated"
+    } else {
+        "legacy_test_wide_spin"
+    };
 
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
@@ -152,19 +163,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         power_throttling_disabled,
     } = initialize_startup(
         worker.config.priority.mode,
-        matches!(&worker.config.backend, &BackendConfig::Production),
-        worker.config.wait.enable_waitable_timer,
-        worker.config.wait.enable_event_wait,
+        production_wait,
+        config.wait.enable_waitable_timer,
+        config.wait.enable_event_wait,
+        requested_wait_policy,
+        effective_wait_policy,
         priority_acquired,
         metrics,
     );
-    let config = &worker.config;
-    let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
-    if let Err(error) = validate_production_wait_backend(
-        backend_is_production,
-        &config.wait,
-        waiter.initial_failure(),
-    ) {
+    if let Err(error) =
+        validate_production_wait_backend(production_wait, &config.wait, waiter.initial_failure())
+    {
         return admission_failure(&mut backend, metrics, error);
     }
     core.metrics.power_throttling_disabled = power_throttling_disabled;
@@ -417,31 +426,62 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             .as_u64()
             .saturating_sub(startup_reserve_ticks.as_u64()),
     );
-    let calibration_stats =
-        if backend_is_production && matches!(config.profile, DispatchProfile::Production) {
-            startup_wake_probe(
-                &waiter,
-                qpc_clock,
-                interrupt,
-                initial_now_ticks,
-                startup_deadline_ticks,
+    let calibration_stats = if production_wait {
+        startup_wake_probe(
+            &waiter,
+            qpc_clock,
+            interrupt,
+            initial_now_ticks,
+            startup_deadline_ticks,
+        )
+    } else {
+        None
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    let (effective_spin_threshold_us, spin_threshold_source) =
+        if let Some(threshold_us) = config.wait.test_spin_threshold_us {
+            let source = if threshold_us == 20_000 {
+                SpinThresholdSource::LegacyTestWideSpin
+            } else {
+                SpinThresholdSource::TestFixedOverride
+            };
+            (threshold_us, source)
+        } else if calibration_stats.is_some() {
+            (
+                super::timing::select_spin_threshold_us(calibration_stats),
+                SpinThresholdSource::ProductionStartupCalibration,
             )
         } else {
-            None
+            (
+                super::timing::select_spin_threshold_us(None),
+                SpinThresholdSource::ProductionFallback,
+            )
         };
-    #[cfg(any(test, feature = "test-support"))]
-    let effective_spin_threshold_us = config
-        .wait
-        .test_spin_threshold_us
-        .unwrap_or_else(|| super::timing::select_spin_threshold_us(calibration_stats));
     #[cfg(not(any(test, feature = "test-support")))]
-    let effective_spin_threshold_us = super::timing::select_spin_threshold_us(calibration_stats);
+    let (effective_spin_threshold_us, spin_threshold_source) = if calibration_stats.is_some() {
+        (
+            super::timing::select_spin_threshold_us(calibration_stats),
+            SpinThresholdSource::ProductionStartupCalibration,
+        )
+    } else {
+        (
+            super::timing::select_spin_threshold_us(None),
+            SpinThresholdSource::ProductionFallback,
+        )
+    };
+    core.metrics.startup_calibration_executed = calibration_stats.is_some();
+    core.metrics.startup_calibration_sample_count = calibration_stats
+        .as_ref()
+        .map(|_| CALIBRATION_SAMPLES as u64)
+        .unwrap_or(0);
+    core.metrics.spin_threshold_source = spin_threshold_source as u8;
     core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     if let Some(stats) = calibration_stats {
         core.metrics.wake_error_p50_us = stats.p50_us;
         core.metrics.wake_error_p95_us = stats.p95_us;
         core.metrics.wake_error_p99_us = stats.p99_us;
         core.metrics.wake_error_max_us = stats.max_us;
+        core.metrics.startup_wake_error_robust_us = stats.robust_us;
     }
     let effective_spin_threshold_ticks =
         match qpc_clock.duration_from_us(effective_spin_threshold_us) {
@@ -629,6 +669,8 @@ mod tests {
             supervisor_lease_timeout_us: 0,
             #[cfg(any(test, feature = "test-support"))]
             test_spin_threshold_us: None,
+            #[cfg(any(test, feature = "test-support"))]
+            test_wait_policy: crate::engine::TestWaitPolicy::LegacyTestWideSpin,
         }
     }
 

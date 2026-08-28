@@ -12,6 +12,8 @@ mod worker;
 pub use config::DispatchProfile;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use config::StartupOrderingHook;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub(crate) use config::{
     BackendConfig, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,

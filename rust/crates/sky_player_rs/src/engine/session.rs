@@ -110,6 +110,9 @@ impl NativeDispatchSession {
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
         let metrics = Arc::new(SharedMetrics::default());
+        *metrics.requested_priority_mode.lock() = "unknown".to_string();
+        *metrics.requested_wait_policy.lock() = "unknown".to_string();
+        *metrics.effective_wait_policy.lock() = "unknown".to_string();
         let mut initial_metrics = metrics.snapshot.load();
         initial_metrics.total_us = total_us;
         let _ = metrics.snapshot.try_publish(&initial_metrics);
@@ -824,8 +827,41 @@ impl NativeDispatchSession {
             recovered_zero_progress_retries: local.recovered_zero_progress_retries,
             recovered_partial_up_retries: local.recovered_partial_up_retries,
             outcome: self.terminal_outcome().map(str::to_string),
+            requested_rt_priority_mode: self
+                .shared
+                .publication
+                .metrics
+                .requested_priority_mode
+                .lock()
+                .clone(),
             rt_priority_acquired: self.shared.publication.priority_acquired.lock().clone(),
+            requested_wait_policy: self
+                .shared
+                .publication
+                .metrics
+                .requested_wait_policy
+                .lock()
+                .clone(),
+            effective_wait_policy: self
+                .shared
+                .publication
+                .metrics
+                .effective_wait_policy
+                .lock()
+                .clone(),
+            startup_calibration_executed: local.startup_calibration_executed,
+            startup_calibration_sample_count: local.startup_calibration_sample_count,
+            startup_wake_error_p50_us: local.wake_error_p50_us,
+            startup_wake_error_p95_us: local.wake_error_p95_us,
+            startup_wake_error_p99_us: local.wake_error_p99_us,
+            startup_wake_error_max_us: local.wake_error_max_us,
+            startup_wake_error_robust_us: local.startup_wake_error_robust_us,
             effective_spin_threshold_us: local.effective_spin_threshold_us,
+            spin_threshold_source: crate::engine::config::SpinThresholdSource::from_raw(
+                local.spin_threshold_source,
+            )
+            .label()
+            .to_string(),
             wake_error_p50_us: local.wake_error_p50_us,
             wake_error_p95_us: local.wake_error_p95_us,
             wake_error_p99_us: local.wake_error_p99_us,
