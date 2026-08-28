@@ -855,6 +855,42 @@ def _qualification_dimensions(
     }
 
 
+def _aggregate_failure_dimensions(
+    failures: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    """Keep failed-run raw counters visible without treating diagnostics as hard."""
+
+    dimensions = (
+        "hard_correctness",
+        "hard_scheduler_cutoff",
+        "transport_diagnostics",
+        "headroom_consumption_diagnostics",
+    )
+    aggregate: dict[str, dict[str, int]] = {name: {} for name in dimensions}
+    for failure in failures:
+        failure_dimensions = failure.get("qualification_dimensions")
+        if not isinstance(failure_dimensions, dict):
+            continue
+        for dimension in dimensions:
+            values = failure_dimensions.get(dimension)
+            if not isinstance(values, dict):
+                continue
+            for name, value in values.items():
+                if not isinstance(value, int) or isinstance(value, bool):
+                    continue
+                if dimension == "headroom_consumption_diagnostics" and name in {
+                    "production_max_release_headroom_consumed_ticks"
+                }:
+                    aggregate[dimension][name] = max(
+                        aggregate[dimension].get(name, 0), value
+                    )
+                else:
+                    aggregate[dimension][name] = (
+                        aggregate[dimension].get(name, 0) + value
+                    )
+    return aggregate
+
+
 def _release_forensics_summary(
     runs: list[dict[str, Any]],
     benchmark_config: dict[str, Any],
@@ -2768,6 +2804,21 @@ def main() -> int:
                 "error": f"{type(original).__name__}: {original}",
                 "validation_diagnostics": diagnostics,
             }
+            if snapshot is not None:
+                failure_correctness = _correctness_counters(
+                    snapshot,
+                    diagnostics or {},
+                    expected_hold_pair_samples=int(
+                        snapshot.get("hold_pair_samples", 0)
+                    ),
+                )
+                failure_forensics = _forensics_diagnostics(snapshot)
+                failure["raw_correctness_counters"] = failure_correctness
+                failure["raw_forensics_diagnostics"] = failure_forensics
+                failure["qualification_dimensions"] = _qualification_dimensions(
+                    failure_correctness,
+                    failure_forensics,
+                )
             failures.append(failure)
             suite_results.append(
                 BenchmarkRunResult(
@@ -2857,6 +2908,7 @@ def main() -> int:
             "acceptance_failure_reasons": ["failed_run"],
             "excluded_runs": 0,
             "failures": failures + command_failures,
+            "qualification_dimensions": _aggregate_failure_dimensions(failures),
             "mock_latency_model": {
                 "base_us": mock_base_latency_us,
                 "per_key_us": mock_per_key_latency_us,
