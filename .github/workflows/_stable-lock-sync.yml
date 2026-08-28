@@ -1,0 +1,40 @@
+name: Sync stable lock metadata
+
+on:
+  push:
+    branches:
+      - release/v3.5.0-stable
+
+permissions:
+  contents: write
+
+jobs:
+  sync-lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout stable-prep branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.14.7+freethreaded"
+
+      - name: Regenerate lock metadata
+        run: uv lock
+
+      - name: Commit lockfile if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- uv.lock; then
+            echo "uv.lock already synchronized"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore(release): sync v3.5.0 lock metadata"
+          git push origin HEAD:release/v3.5.0-stable
