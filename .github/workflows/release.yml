@@ -22,7 +22,7 @@ env:
 
 jobs:
   release:
-    name: Build + attest + publish
+    name: Build + attest + draft
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -154,7 +154,7 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
 
-      - name: Create or update GitHub Release
+      - name: Create draft GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: |
@@ -163,7 +163,9 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
           body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
           generate_release_notes: false
-          draft: ${{ steps.verlock.outputs.is_prerelease != 'true' }}
+          # Every release starts as a draft. Publish only the exact artifact that
+          # has completed RC/stable qualification; never rebuild between states.
+          draft: true
           prerelease: ${{ steps.verlock.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

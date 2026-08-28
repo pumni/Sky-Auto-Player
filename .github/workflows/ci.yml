@@ -108,6 +108,16 @@ jobs:
         with:
           run-runtime-audit: "false"
 
+      - name: Python dependency audit
+        run: uv audit --frozen
+
+      - name: RustSec dependency audit
+        env:
+          CARGO_AUDIT_VERSION: 0.22.2
+        run: |
+          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          cargo audit --file rust/Cargo.lock
+
       - name: Repository verification — static
         run: uv run python scripts/check.py static
 

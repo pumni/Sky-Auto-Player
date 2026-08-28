@@ -31,10 +31,19 @@ SHA256 and `MANIFEST.json` verify the bytes and file set delivered by that
 release; they are integrity checks, not independent publisher authentication.
 
 Prerelease tags (`vX.Y.ZrcN`, `vX.Y.Z.devN`, and equivalent PEP 440 forms) are
-published as GitHub prereleases for beta-channel validation. Stable tags are
-published only after the repository's exact-artifact, manifest, provenance,
-fresh-install, and Defender qualification gates pass. Published tags and
-assets are immutable; fixes require a new version.
+created as draft GitHub releases and published as prereleases for beta-channel
+validation only after qualification. Stable tags are published only after the
+repository's exact-artifact, manifest, provenance, fresh-install, and Defender
+qualification gates pass. Published tags and assets are immutable; fixes
+require a new version.
+
+Release publication is draft-first. A version tag runs the release workflow,
+which builds and attests the exact ZIP, sidecar, and manifest, then creates a
+draft GitHub Release. The draft is the qualification input: it is published
+as a prerelease or stable release only after exact-artifact and platform
+qualification pass. Assets are not replaced and the tag is not moved between
+draft creation and publication; a failed qualification requires a new version
+or RC instead.
 
 ## 2. Runtime ownership
 
