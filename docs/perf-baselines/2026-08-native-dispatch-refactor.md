@@ -87,7 +87,7 @@ This phase is useful evidence for the frozen-plan and admission/commit path,
 but it uses deterministic direct QPC boundary crossing. Its process-CPU result
 must not be interpreted as production waiter CPU evidence.
 
-## Native acceptance harness
+## Native acceptance harness (historical snapshot)
 
 The earlier two-repeat hot diagnostic was invalid because the test-support
 session defaulted to `down_late_grace_us=0` while the production materialized
@@ -113,7 +113,12 @@ dispatch, dropped keys, transport failures, and cleanup failures.
 
 For transparency, the default hot 60 FPS diagnostic after the policy fix still
 reported `production_completion_hold_below_frame_count=4` and was therefore
-invalid; its pre-call shrink-over-grace count was zero. No invariant or
-threshold was weakened to obtain the clean cold-gap qualification result. The
-older baseline and invalid-run artifacts remain at
+invalid under the then-current strict completion gate; its pre-call
+shrink-over-grace count was zero. The follow-up evidence reclassifies this
+post-`SendInput` completion width as transport diagnostics only, while keeping
+target/pre-call, release-gap, transport, and cleanup checks hard. No invariant
+or threshold was weakened to obtain the clean cold-gap qualification result.
+The detailed follow-up report is
+[`2026-08-native-dispatch-followup.md`](2026-08-native-dispatch-followup.md).
+The older baseline and invalid-run artifacts remain at
 `C:\Users\PE4CE_~1\AppData\Local\Temp\sky-auto-player-acceptance-artifacts-20260828`.
