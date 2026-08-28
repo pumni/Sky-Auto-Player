@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import subprocess
 
 import pytest
@@ -13,7 +12,8 @@ _SYNTHETIC_SHARING_VIOLATION = "being used by another process"
 _MAX_SELF_TEST_ATTEMPTS = 3
 
 
-def _run_result_polling_self_test(script: pathlib.Path) -> subprocess.CompletedProcess[str]:
+def _run_result_polling_self_test(script: str) -> subprocess.CompletedProcess[str]:
+    script_parent = os.path.dirname(script)
     return subprocess.run(
         [
             "pwsh",
@@ -23,11 +23,11 @@ def _run_result_polling_self_test(script: pathlib.Path) -> subprocess.CompletedP
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(script),
+            script,
             "-FromPackage",
-            str(script.parent / "unused-from.zip"),
+            os.path.join(script_parent, "unused-from.zip"),
             "-ToPackage",
-            str(script.parent / "unused-to.zip"),
+            os.path.join(script_parent, "unused-to.zip"),
             "-SelfTestResultPolling",
         ],
         capture_output=True,
@@ -45,7 +45,8 @@ def test_result_polling_ignores_intermediate_success() -> None:
     if os.name != "nt":
         pytest.skip("requires Windows PowerShell")
 
-    script = pathlib.Path(__file__).parents[1] / "scripts" / "test_windows_updater_e2e.ps1"
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    script = os.path.join(repo_root, "scripts", "test_windows_updater_e2e.ps1")
     completed: subprocess.CompletedProcess[str] | None = None
     for _ in range(_MAX_SELF_TEST_ATTEMPTS):
         completed = _run_result_polling_self_test(script)
