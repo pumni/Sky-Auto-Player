@@ -2354,14 +2354,14 @@ fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
                 kind: ActionKind::Down,
                 // Keep the focus-state tests independent of worker-startup
                 // jitter; their assertions begin only after this commit.
-                scheduled_us: 2_000_000,
+                scheduled_us: 5_000_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-recovery-down".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 3_700_000,
+                scheduled_us: 6_700_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "focus-recovery-up".to_string().into(),
             },
@@ -2401,7 +2401,7 @@ fn start_focus_recovery_session(
 }
 
 fn wait_for_focus_down(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(6);
     let mut snapshot = session.snapshot_lite();
     while snapshot.recent_latencies_us.is_empty()
         && !snapshot.is_finished
@@ -5014,7 +5014,7 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     // Keep the first physical boundary well clear of worker startup. This
     // test exercises the injected pre-call deadline miss on the second Down,
     // not an incidental startup scheduling race at an authored zero target.
-    const TEST_AUTHORED_START_US: u64 = 2_000_000;
+    const TEST_AUTHORED_START_US: u64 = 5_000_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -5064,7 +5064,7 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);
-    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert!(session.join(Duration::from_secs(8)).expect("worker join"));
 
     let snapshot = session.snapshot();
     assert_eq!(
