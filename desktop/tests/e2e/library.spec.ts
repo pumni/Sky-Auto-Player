@@ -93,3 +93,35 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(dialog).toBeHidden();
   await expect(settingsButton).toBeFocused();
 });
+
+test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Diagnostics' });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole('tab', { name: 'Performance' })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await drawer.getByRole('tab', { name: 'Timing' }).click();
+  await expect(drawer.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
+  await expect(drawer).toContainText(/No timing samples|Latest maximum lateness/);
+  await drawer.getByRole('tab', { name: 'Events' }).click();
+  await expectNoSeriousAccessibilityViolations(page);
+  await drawer.getByRole('button', { name: 'Close diagnostics' }).click();
+  await expect(drawer).toBeHidden();
+});
+
+test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Open calibration' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Timing calibration' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Start quick calibration' }).click();
+  await expect(dialog).toContainText('Calibration complete');
+  await expectNoSeriousAccessibilityViolations(page);
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeHidden();
+});

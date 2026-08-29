@@ -77,4 +77,29 @@ describe('desktop application shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Core executable is missing');
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
   });
+
+  it('opens bounded diagnostics and the safe calibration dialog', async () => {
+    render(<App bridge={createMockBridge()} />);
+    await screen.findByRole('option', { name: /Aurora Landing/ });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open diagnostics' }));
+    expect(await screen.findByRole('dialog', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Performance' })).toBeInTheDocument();
+    fireEvent.click(
+      screen
+        .getByRole('dialog', { name: 'Diagnostics' })
+        .querySelector('button[aria-label="Close diagnostics"]') as HTMLButtonElement,
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Diagnostics' })).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open calibration' }));
+    expect(await screen.findByRole('dialog', { name: 'Timing calibration' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start quick calibration' }));
+    expect(await screen.findByText('Calibration complete')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Timing calibration' })).toBeNull(),
+    );
+  });
 });

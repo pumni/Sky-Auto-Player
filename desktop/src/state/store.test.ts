@@ -292,4 +292,64 @@ describe('desktop store', () => {
     expect(store.getState().playback.state).toBe('finished');
     expect(store.getState().playback.songTitle).toBeNull();
   });
+
+  it('keeps diagnostics samples, events, and logs bounded', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().setDiagnosticsEnabled(true));
+    store.setState({ diagnostics: { ...store.getState().diagnostics, open: true } });
+
+    for (let index = 0; index < 601; index += 1) {
+      store.getState().applyEvent({
+        v: 1,
+        name: 'diagnostics.snapshot',
+        payload: {
+          seq: index,
+          max_lateness_us: index,
+          p50_ms: 0.1,
+          p95_ms: 0.2,
+          sigma_onset_ms: 0.1,
+          late_2ms: 0,
+          late_5ms: 0,
+          late_10ms: 0,
+          active_keys: 0,
+          stuck_keys: 0,
+          keys_dropped: 0,
+          chord_split_events: 0,
+          backend_status: 'healthy',
+          release_max_us: null,
+          release_late_2ms: null,
+          session_id: null,
+        },
+      });
+    }
+    for (let index = 0; index < 501; index += 1) {
+      store.getState().applyEvent({
+        v: 1,
+        name: 'playback.state_changed',
+        payload: {
+          session_id: `${index.toString(16).padStart(31, '0')}a`,
+          song_id: 'b'.repeat(32),
+          state: 'playing',
+          physical: false,
+          message: null,
+          outcome: null,
+        },
+      });
+    }
+
+    expect(store.getState().diagnostics.samples).toHaveLength(600);
+    expect(store.getState().diagnostics.events).toHaveLength(500);
+    expect(store.getState().diagnostics.logs).toHaveLength(200);
+  });
+
+  it('drives calibration through typed progress and terminal events', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().startCalibration('quick'));
+    await waitFor(() => expect(store.getState().calibration.state).toBe('succeeded'));
+    expect(store.getState().calibration.operationId).toMatch(/^[0-9a-f]{32}$/);
+    expect(store.getState().calibration.result?.outcome).toBe('succeeded');
+    expect(store.getState().calibration.result?.source).toBe('mock');
+  });
 });

@@ -21,6 +21,7 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
   const open = useStore((store: StoreState) => store.settingsOpen);
   const setOpen = useStore((store: StoreState) => store.setSettingsOpen);
   const patchSettings = useStore((store: StoreState) => store.patchSettings);
+  const setCalibrationOpen = useStore((store: StoreState) => store.setCalibrationOpen);
   const dialogRef = useRef<HTMLElement>(null);
   const wasOpen = useRef(false);
   useEffect(() => {
@@ -145,6 +146,22 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
               />{' '}
               Verbose fallback HUD
             </label>
+          </div>
+          <div className="settings-section">
+            <h3>Native timing</h3>
+            <p className="settings-note">
+              Run a safe, testable timing calibration for this machine.
+            </p>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setCalibrationOpen(true);
+              }}
+            >
+              Open calibration
+            </button>
           </div>
           <p className="settings-note">Settings are validated and persisted by the local Core.</p>
         </Dialog>

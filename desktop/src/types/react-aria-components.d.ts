@@ -40,4 +40,22 @@ declare module 'react-aria-components' {
   export const Dialog: (
     props: HTMLAttributes<HTMLElement> & RefAttributes<HTMLElement>,
   ) => ReactElement | null;
+
+  export interface TabsProps extends HTMLAttributes<HTMLDivElement> {
+    defaultSelectedKey?: string;
+  }
+
+  export const Tabs: (props: TabsProps & RefAttributes<HTMLDivElement>) => ReactElement | null;
+
+  export const TabList: (
+    props: HTMLAttributes<HTMLElement> & RefAttributes<HTMLElement>,
+  ) => ReactElement | null;
+
+  export const Tab: (
+    props: HTMLAttributes<HTMLButtonElement> & { id: string } & RefAttributes<HTMLButtonElement>,
+  ) => ReactElement | null;
+
+  export const TabPanel: (
+    props: HTMLAttributes<HTMLElement> & { id: string } & RefAttributes<HTMLElement>,
+  ) => ReactElement | null;
 }

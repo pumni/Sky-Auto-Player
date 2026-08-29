@@ -1,4 +1,4 @@
-import { Pause, Play, SkipForward, Square } from 'lucide-react';
+import { Activity, Pause, Play, SkipForward, Square } from 'lucide-react';
 import { useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
@@ -33,6 +33,8 @@ export function PlayerDock({ useStore }: PlayerDockProps) {
   const resume = useStore((store: DesktopStore) => store.resumePlayback);
   const skip = useStore((store: DesktopStore) => store.skipPlayback);
   const patchSettings = useStore((store: DesktopStore) => store.patchSettings);
+  const diagnosticsOpen = useStore((store: DesktopStore) => store.diagnostics.open);
+  const setDiagnosticsOpen = useStore((store: DesktopStore) => store.setDiagnosticsOpen);
   const [dryRun, setDryRun] = useState(true);
 
   const prepareAndMaybeStart = async () => {
@@ -155,6 +157,15 @@ export function PlayerDock({ useStore }: PlayerDockProps) {
       {snapshot && active && (
         <span className="dock-progress">{progress(snapshot.current_us, snapshot.total_us)}</span>
       )}
+      <button
+        className="icon-button dock-diagnostics-button"
+        type="button"
+        aria-label={diagnosticsOpen ? 'Close diagnostics' : 'Open diagnostics'}
+        aria-pressed={diagnosticsOpen}
+        onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
+      >
+        <Activity size={15} aria-hidden="true" />
+      </button>
       {playback.prepared?.admission === 'confirmation_required' && (
         <div className="risk-confirmation" role="dialog" aria-label="Playback confirmation">
           <span>{playback.prepared.risk.headline}</span>
