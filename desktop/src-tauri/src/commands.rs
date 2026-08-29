@@ -46,6 +46,43 @@ pub struct SettingsPatch {
     pub playback_defaults: Option<PlaybackPatch>,
 }
 
+#[derive(Debug, Serialize)]
+struct CoreDetailParams {
+    song_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreViewportParams {
+    generation: u64,
+    first_index: u64,
+    last_index: i64,
+    selected_song_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CorePlaybackPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold_frames: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tempo_scale: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fps: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreSettingsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telemetry_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verbose_hud: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback_defaults: Option<CorePlaybackPatch>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeBuildDto {
     pub native_build_commit: String,
@@ -192,7 +229,14 @@ pub fn get_song_detail(
     state: State<'_, AppState>,
     params: CatalogDetailRequest,
 ) -> Result<SongDetailDto, String> {
-    request(&state, "catalog.detail", params)
+    request(
+        &state,
+        "catalog.detail",
+        CoreDetailParams {
+            song_id: params.song_id,
+            generation: params.generation,
+        },
+    )
 }
 
 #[tauri::command]
@@ -205,7 +249,16 @@ pub fn set_library_viewport(
     state: State<'_, AppState>,
     params: CatalogViewportRequest,
 ) -> Result<CatalogViewportDto, String> {
-    request(&state, "catalog.set_viewport", params)
+    request(
+        &state,
+        "catalog.set_viewport",
+        CoreViewportParams {
+            generation: params.generation,
+            first_index: params.first_index,
+            last_index: params.last_index,
+            selected_song_id: params.selected_song_id,
+        },
+    )
 }
 
 #[tauri::command]
@@ -218,7 +271,21 @@ pub fn patch_settings(
     state: State<'_, AppState>,
     params: SettingsPatch,
 ) -> Result<SettingsDto, String> {
-    request(&state, "settings.patch", params)
+    let playback_defaults = params.playback_defaults.map(|playback| CorePlaybackPatch {
+        hold_frames: playback.hold_frames,
+        tempo_scale: playback.tempo_scale,
+        fps: playback.fps,
+    });
+    request(
+        &state,
+        "settings.patch",
+        CoreSettingsPatch {
+            theme: params.theme,
+            telemetry_enabled: params.telemetry_enabled,
+            verbose_hud: params.verbose_hud,
+            playback_defaults,
+        },
+    )
 }
 
 #[tauri::command]
