@@ -7,6 +7,15 @@ import type {
   CatalogViewportDto,
   CatalogViewportRequest,
   NativeBuildDto,
+  PlaybackConfigDto,
+  PlaybackCommandAckDto,
+  PlaybackDecision,
+  PlaybackDecisionAcceptanceDto,
+  PlaybackPrepareRequest,
+  PlaybackSessionCommandRequest,
+  PlaybackSessionDto,
+  PreparedPlaybackDto,
+  PlaybackStartRequest,
   PlaybackDefaultsDto,
   PlaybackOptionSetsDto,
   PlaybackPatch as GeneratedPlaybackPatch,
@@ -70,6 +79,15 @@ export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
 };
 
 export type UiEvent = GeneratedUiEvent;
+export type PlaybackConfig = PlaybackConfigDto;
+export type PlaybackCommandAck = PlaybackCommandAckDto;
+export type PlaybackPrepare = PlaybackPrepareRequest;
+export type PlaybackDecisionAcceptance = PlaybackDecisionAcceptanceDto;
+export type PlaybackDecisionId = PlaybackDecision;
+export type PreparedPlayback = PreparedPlaybackDto;
+export type PlaybackStart = PlaybackStartRequest;
+export type PlaybackSession = PlaybackSessionDto;
+export type PlaybackSessionCommand = PlaybackSessionCommandRequest;
 
 export type Unsubscribe = () => void;
 
@@ -81,6 +99,12 @@ export interface DesktopBridge {
   setLibraryViewport(request: ViewportRequest): Promise<ViewportResult>;
   getSettings(): Promise<Settings>;
   patchSettings(patch: SettingsPatch): Promise<Settings>;
+  preparePlayback(request: PlaybackPrepare): Promise<PreparedPlayback>;
+  startPlayback(request: PlaybackStart): Promise<PlaybackSession>;
+  stopPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
+  pausePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
+  resumePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
+  skipPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   subscribeUiEvents(listener: (event: UiEvent) => void): Promise<Unsubscribe>;
   shutdown(): Promise<void>;
 }

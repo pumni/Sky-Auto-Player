@@ -84,6 +84,14 @@ h3 {
 .icon-button:hover {
   background: var(--surface-hover);
 }
+.player-dock .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding-inline: 9px;
+  font-size: 11px;
+}
 .inline-error {
   color: var(--danger);
   font-size: 12px;

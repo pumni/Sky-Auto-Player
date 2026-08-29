@@ -26,6 +26,12 @@ pub fn run() {
             commands::set_library_viewport,
             commands::get_settings,
             commands::patch_settings,
+            commands::prepare_playback,
+            commands::start_playback,
+            commands::stop_playback,
+            commands::pause_playback,
+            commands::resume_playback,
+            commands::skip_playback,
             commands::subscribe_ui_events,
             commands::shutdown,
         ])
@@ -66,9 +72,13 @@ mod ipc_tests {
         command
     }
 
-    fn request(body: serde_json::Value, callback: u32) -> tauri::webview::InvokeRequest {
+    fn request(
+        command: &str,
+        body: serde_json::Value,
+        callback: u32,
+    ) -> tauri::webview::InvokeRequest {
         tauri::webview::InvokeRequest {
-            cmd: "search_songs".into(),
+            cmd: command.into(),
             callback: tauri::ipc::CallbackFn(callback),
             error: tauri::ipc::CallbackFn(callback + 1),
             url: if cfg!(any(windows, target_os = "android")) {
@@ -102,6 +112,7 @@ mod ipc_tests {
         let valid = tauri::test::get_ipc_response(
             &webview,
             request(
+                "search_songs",
                 json!({
                     "params": {
                         "query": "Aurora",
@@ -119,6 +130,7 @@ mod ipc_tests {
         let wrong = tauri::test::get_ipc_response(
             &webview,
             request(
+                "search_songs",
                 json!({
                     "request": {
                         "query": "Aurora",
@@ -131,5 +143,209 @@ mod ipc_tests {
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");
         supervisor.shutdown();
+    }
+
+    #[test]
+    fn generated_tauri_handler_decodes_playback_command_payloads() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::prepare_playback,
+                super::commands::start_playback,
+                super::commands::stop_playback,
+                super::commands::pause_playback,
+                super::commands::resume_playback,
+                super::commands::skip_playback,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
+        app.state::<AppState>()
+            .inner()
+            .install_ready_for_test(supervisor.clone());
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let song_id = "c".repeat(32);
+        let prepared = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({
+                    "params": {
+                        "songId": song_id,
+                        "generation": 1,
+                        "config": {
+                            "hold_frames": 1.0,
+                            "tempo_scale": 1.0,
+                            "fps": 60,
+                            "dry_run": true
+                        }
+                    }
+                }),
+                10,
+            ),
+        )
+        .expect("playback params envelope should reach command");
+        let prepared_value: serde_json::Value = prepared.deserialize().expect("prepared JSON");
+        assert_eq!(prepared_value["prepared_id"], "a".repeat(32));
+
+        let started = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_playback",
+                json!({
+                    "params": {
+                        "preparedId": "a".repeat(32),
+                        "decisions": []
+                    }
+                }),
+                12,
+            ),
+        )
+        .expect("playback start params envelope should reach command");
+        let started_value: serde_json::Value = started.deserialize().expect("session JSON");
+        assert_eq!(started_value["session_id"], "b".repeat(32));
+
+        for (callback, command) in [
+            (16, "stop_playback"),
+            (18, "pause_playback"),
+            (20, "resume_playback"),
+            (22, "skip_playback"),
+        ] {
+            tauri::test::get_ipc_response(
+                &webview,
+                request(
+                    command,
+                    json!({"params": {"sessionId": "b".repeat(32)}}),
+                    callback,
+                ),
+            )
+            .unwrap_or_else(|error| panic!("{command} params envelope should decode: {error}"));
+        }
+
+        let wrong = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({
+                    "request": {
+                        "songId": song_id,
+                        "generation": 1,
+                        "config": {
+                            "hold_frames": 1.0,
+                            "tempo_scale": 1.0,
+                            "fps": 60,
+                            "dry_run": true
+                        }
+                    }
+                }),
+                14,
+            ),
+        );
+        assert!(wrong.is_err(), "legacy request envelope must fail");
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn generated_tauri_handler_runs_real_core_dry_run_lifecycle() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::bootstrap,
+                super::commands::search_songs,
+                super::commands::prepare_playback,
+                super::commands::start_playback,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let bootstrap =
+            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 30))
+                .expect("real Core bootstrap");
+        let bootstrap_value: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
+        let generation = bootstrap_value["catalog_generation"]
+            .as_u64()
+            .expect("catalog generation");
+
+        let search = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({
+                    "params": {
+                        "query": "blue",
+                        "offset": 0,
+                        "limit": 1,
+                        "generation": generation
+                    }
+                }),
+                34,
+            ),
+        )
+        .expect("real Core search");
+        let search_value: serde_json::Value = search.deserialize().expect("search JSON");
+        let song_id = search_value["items"][0]["song_id"]
+            .as_str()
+            .expect("opaque song ID")
+            .to_owned();
+
+        let prepared = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({
+                    "params": {
+                        "songId": song_id,
+                        "generation": generation,
+                        "config": {
+                            "hold_frames": 1.0,
+                            "tempo_scale": 1.0,
+                            "fps": 60,
+                            "dry_run": true
+                        }
+                    }
+                }),
+                38,
+            ),
+        )
+        .expect("real Core dry-run prepare");
+        let prepared_value: serde_json::Value = prepared.deserialize().expect("prepare JSON");
+        let prepared_id = prepared_value["prepared_id"]
+            .as_str()
+            .expect("opaque prepared ID")
+            .to_owned();
+        let decisions = prepared_value["decisions"]
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item["decision"].as_str())
+            .map(|decision| json!([{"decision": decision, "accepted": true}]))
+            .unwrap_or_else(|| json!([]));
+
+        let started = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_playback",
+                json!({
+                    "params": {
+                        "preparedId": prepared_id,
+                        "decisions": decisions
+                    }
+                }),
+                42,
+            ),
+        )
+        .expect("real Core dry-run start");
+        let started_value: serde_json::Value = started.deserialize().expect("start JSON");
+        assert_eq!(started_value["state"], "starting");
+
+        let shutdown = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 46))
+            .expect("real Core shutdown");
+        let shutdown_value: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
+        assert!(shutdown_value.is_null());
     }
 }

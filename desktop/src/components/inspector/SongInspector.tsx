@@ -99,7 +99,8 @@ export function SongInspector({ useStore }: SongInspectorProps) {
         )}
       </div>
       <p className="nonphysical-note">
-        Playback controls will be enabled after the desktop playback safety review.
+        Use the Player Dock below to prepare a dry-run or request playback with the selected
+        settings.
       </p>
     </section>
   );

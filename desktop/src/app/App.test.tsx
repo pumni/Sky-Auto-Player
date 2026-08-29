@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import { App } from './App';
 
 describe('desktop application shell', () => {
+  afterEach(() => cleanup());
+
   it('renders library, inspector, and settings through the bridge', async () => {
     render(<App bridge={createMockBridge()} />);
     expect(screen.getByText('Opening your library…')).toBeInTheDocument();
@@ -45,6 +47,22 @@ describe('desktop application shell', () => {
       expect(
         screen
           .getAllByRole('option', { name: /Aurora Landing/ })
+          .some((option) => option.getAttribute('aria-selected') === 'true'),
+      ).toBe(true),
+    );
+  });
+
+  it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {
+    render(<App bridge={createMockBridge()} />);
+    const list = await screen.findByRole('listbox', { name: 'Songs' });
+    list.focus();
+
+    fireEvent.keyDown(list, { key: 'End' });
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('option', { name: /Song 500/ })
           .some((option) => option.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );

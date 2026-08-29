@@ -54,6 +54,24 @@ def fatal(message: str = "fake Core failure") -> None:
     )
 
 
+def playback_state(*, physical: bool) -> None:
+    emit(
+        {
+            "v": 1,
+            "type": "event",
+            "name": "playback.state_changed",
+            "payload": {
+                "session_id": "b" * 32,
+                "song_id": "c" * 32,
+                "state": "playing",
+                "physical": physical,
+                "message": None,
+                "outcome": None,
+            },
+        }
+    )
+
+
 def response(request_id: int, result: Any = None) -> None:
     emit(
         {
@@ -75,6 +93,77 @@ def command_result(item: dict[str, Any]) -> Any:
             "limit": int(item.get("params", {}).get("limit", 200)),
             "total": 0,
             "generation": 1,
+        }
+    if method == "playback.prepare":
+        params = item.get("params", {})
+        song_id = params.get("song_id", "c" * 32)
+        return {
+            "prepared_id": "a" * 32,
+            "song": {
+                "song_id": song_id,
+                "title": "Fake Song",
+                "duration_us": 100,
+                "note_count": 1,
+                "format_label": "JSON",
+                "risk": {
+                    "level": "low",
+                    "headline": "Low timing risk",
+                    "reasons": [],
+                    "recommendations": [],
+                },
+                "recommendation": None,
+            },
+            "config": params.get("config", {
+                "hold_frames": 1.0,
+                "tempo_scale": 1.0,
+                "fps": 60,
+                "dry_run": True,
+            }),
+            "admission": "ready",
+            "risk": {
+                "level": "low",
+                "headline": "Low timing risk",
+                "reasons": [],
+                "recommendations": [],
+            },
+            "decisions": [],
+            "plan_fingerprint": "fake-plan",
+            "variants": [
+                {
+                    "decision": "proceed",
+                    "config": params.get("config", {
+                        "hold_frames": 1.0,
+                        "tempo_scale": 1.0,
+                        "fps": 60,
+                        "dry_run": True,
+                    }),
+                    "plan_fingerprint": "fake-plan",
+                }
+            ],
+            "error_code": None,
+            "error_message": None,
+        }
+    if method == "playback.start":
+        return {
+            "session_id": "b" * 32,
+            "prepared_id": item.get("params", {}).get("prepared_id", "a" * 32),
+            "song_id": "c" * 32,
+            "state": "starting",
+            "config": {
+                "hold_frames": 1.0,
+                "tempo_scale": 1.0,
+                "fps": 60,
+                "dry_run": True,
+            },
+            "plan_fingerprint": "fake-plan",
+        }
+    if method in {"playback.stop", "playback.pause", "playback.resume", "playback.skip"}:
+        return {
+            "accepted": True,
+            "session_id": "b" * 32,
+            "state": "playing",
+            "pending_command": None,
+            "reason": None,
         }
     return {}
 
@@ -118,6 +207,17 @@ def serve(mode: str) -> None:
     if mode == "fatal_after_ready":
         fatal("fatal after ready")
         time.sleep(30)
+        return
+    if mode == "physical_active_exit":
+        playback_state(physical=True)
+        return
+    if mode == "physical_active_fatal":
+        playback_state(physical=True)
+        fatal("fatal during physical playback")
+        time.sleep(30)
+        return
+    if mode == "dry_run_active_exit":
+        playback_state(physical=False)
         return
     if mode == "eof_after_ready":
         return

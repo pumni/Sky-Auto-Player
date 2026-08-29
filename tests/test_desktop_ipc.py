@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from sky_music.config import AppConfig
 from sky_music.infrastructure import desktop_ipc as desktop_ipc_package
 from sky_music.infrastructure.desktop_ipc import protocol
 from sky_music.infrastructure.desktop_ipc.server import DesktopCoreServer
+from sky_music.orchestration import desktop_playback as playback_module
 from sky_music.orchestration import settings_service as settings_module
 from sky_music.orchestration.catalog_service import CatalogService, song_id_for_path
 from sky_music.orchestration.native_admission import RustBuildInfo
@@ -31,7 +33,9 @@ NATIVE_INFO = RustBuildInfo(
 )
 
 
-def _request(method: str, params: Mapping[str, object] | None = None, request_id: int = 1) -> dict[str, object]:
+def _request(
+    method: str, params: Mapping[str, object] | None = None, request_id: int = 1
+) -> dict[str, object]:
     return {
         "v": 1,
         "id": request_id,
@@ -51,7 +55,9 @@ def _server(tmp_path: Path) -> DesktopCoreServer:
 
 
 def _call(server: DesktopCoreServer, request: dict[str, object]) -> dict[str, object]:
-    return server.handle_request(protocol.parse_request_frame(protocol.encode_frame(request)))
+    return server.handle_request(
+        protocol.parse_request_frame(protocol.encode_frame(request))
+    )
 
 
 def _output_messages(output: io.BytesIO) -> list[dict[str, object]]:
@@ -67,9 +73,13 @@ def test_protocol_constants_and_package_exports() -> None:
 
 def test_protocol_rejects_bad_version_unknown_fields_duplicates_and_nonfinite() -> None:
     with pytest.raises(protocol.ProtocolError, match="unsupported protocol version"):
-        protocol.parse_request_frame(protocol.encode_frame({**_request("settings.get"), "v": 2}))
+        protocol.parse_request_frame(
+            protocol.encode_frame({**_request("settings.get"), "v": 2})
+        )
     with pytest.raises(protocol.ProtocolError, match="unknown fields"):
-        protocol.parse_request_frame(protocol.encode_frame({**_request("settings.get"), "extra": True}))
+        protocol.parse_request_frame(
+            protocol.encode_frame({**_request("settings.get"), "extra": True})
+        )
     with pytest.raises(protocol.ProtocolError, match="duplicate JSON key"):
         protocol.parse_request_frame(
             b'{"v":1,"id":1,"type":"request","method":"settings.get","params":{},"params":{}}\n'
@@ -150,7 +160,9 @@ def test_catalog_search_is_path_free_and_supports_offset_limit(tmp_path: Path) -
         (tmp_path / f"{title}.txt").write_text("", encoding="utf-8")
     server = _server(tmp_path)
 
-    response = _call(server, _request("catalog.search", {"query": "", "offset": 1, "limit": 1}))
+    response = _call(
+        server, _request("catalog.search", {"query": "", "offset": 1, "limit": 1})
+    )
 
     result = response["result"]
     assert isinstance(result, dict)
@@ -179,7 +191,9 @@ def test_catalog_detail_is_structured_and_does_not_leak_path(tmp_path: Path) -> 
     server = _server(tmp_path)
     _call(server, _request("catalog.search"))
 
-    response = _call(server, _request("catalog.detail", {"song_id": song_id_for_path(song_path)}))
+    response = _call(
+        server, _request("catalog.detail", {"song_id": song_id_for_path(song_path)})
+    )
 
     result = response["result"]
     assert isinstance(result, dict)
@@ -195,7 +209,10 @@ def test_catalog_reload_returns_response_then_changed_event(tmp_path: Path) -> N
     output = io.BytesIO()
     requests = b"".join(
         protocol.encode_frame(request)
-        for request in (_request("catalog.reload"), _request("app.shutdown", request_id=2))
+        for request in (
+            _request("catalog.reload"),
+            _request("app.shutdown", request_id=2),
+        )
     )
 
     assert server.serve(io.BytesIO(requests), output, stderr=io.StringIO()) == 0
@@ -230,7 +247,9 @@ def test_catalog_generation_is_checked_for_viewport_and_search(tmp_path: Path) -
     assert stale["error"]["code"] == "stale_generation"  # type: ignore[index]
 
 
-def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(tmp_path: Path) -> None:
+def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(
+    tmp_path: Path,
+) -> None:
     server = _server(tmp_path)
     bootstrap = _call(server, _request("app.bootstrap"))
     generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
@@ -239,13 +258,33 @@ def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(tmp_
         server,
         _request(
             "catalog.set_viewport",
-            {"generation": generation, "first_index": 0, "last_index": -1, "selected_song_id": None},
+            {
+                "generation": generation,
+                "first_index": 0,
+                "last_index": -1,
+                "selected_song_id": None,
+            },
         ),
     )
     invalid_ranges = (
-        {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": None},
-        {"generation": generation, "first_index": 1, "last_index": -1, "selected_song_id": None},
-        {"generation": generation, "first_index": 0, "last_index": -2, "selected_song_id": None},
+        {
+            "generation": generation,
+            "first_index": 0,
+            "last_index": 0,
+            "selected_song_id": None,
+        },
+        {
+            "generation": generation,
+            "first_index": 1,
+            "last_index": -1,
+            "selected_song_id": None,
+        },
+        {
+            "generation": generation,
+            "first_index": 0,
+            "last_index": -2,
+            "selected_song_id": None,
+        },
     )
     rejected = [
         _call(server, _request("catalog.set_viewport", params))
@@ -256,7 +295,9 @@ def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(tmp_
     assert all(response["error"]["code"] == "invalid_params" for response in rejected)  # type: ignore[index]
 
 
-def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path) -> None:
+def test_catalog_viewport_rejects_unknown_selection_and_overscan(
+    tmp_path: Path,
+) -> None:
     song = tmp_path / "Alpha.txt"
     song.write_text("", encoding="utf-8")
     server = _server(tmp_path)
@@ -268,7 +309,12 @@ def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path)
         server,
         _request(
             "catalog.set_viewport",
-            {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": song_id},
+            {
+                "generation": generation,
+                "first_index": 0,
+                "last_index": 0,
+                "selected_song_id": song_id,
+            },
         ),
     )
     unknown_selection = _call(
@@ -287,7 +333,12 @@ def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path)
         server,
         _request(
             "catalog.set_viewport",
-            {"generation": generation, "first_index": 0, "last_index": 1, "selected_song_id": None},
+            {
+                "generation": generation,
+                "first_index": 0,
+                "last_index": 1,
+                "selected_song_id": None,
+            },
         ),
     )
 
@@ -296,7 +347,9 @@ def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path)
     assert overscan["error"]["code"] == "invalid_params"  # type: ignore[index]
 
 
-def test_settings_patch_uses_service_and_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_patch_uses_service_and_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     writes: list[AppConfig] = []
     monkeypatch.setattr(settings_module, "save_config", lambda cfg: writes.append(cfg))
     server = _server(tmp_path)
@@ -321,7 +374,9 @@ def test_settings_patch_uses_service_and_is_atomic(tmp_path: Path, monkeypatch: 
     before = server.settings_service.snapshot()
     invalid = _call(
         server,
-        _request("settings.patch", {"playback_defaults": {"tempo_scale": 0.9, "fps": True}}),
+        _request(
+            "settings.patch", {"playback_defaults": {"tempo_scale": 0.9, "fps": True}}
+        ),
     )
 
     assert invalid["ok"] is False
@@ -339,7 +394,9 @@ def test_unknown_method_and_invalid_params_are_responses() -> None:
     assert invalid["error"]["code"] == "invalid_params"  # type: ignore[index]
 
 
-def test_server_eof_is_graceful_and_stdout_contains_protocol_only(tmp_path: Path) -> None:
+def test_server_eof_is_graceful_and_stdout_contains_protocol_only(
+    tmp_path: Path,
+) -> None:
     server = _server(tmp_path)
     output = io.BytesIO()
     errors = io.StringIO()
@@ -348,6 +405,43 @@ def test_server_eof_is_graceful_and_stdout_contains_protocol_only(tmp_path: Path
     messages = _output_messages(output)
     assert messages[0]["name"] == "core.ready"
     assert errors.getvalue() == ""
+
+
+def test_server_eof_requests_playback_cleanup_before_exit(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+
+    class PlaybackStub:
+        calls = 0
+
+        def shutdown(self) -> bool:
+            self.calls += 1
+            return True
+
+    playback = PlaybackStub()
+    server.playback = playback  # type: ignore[assignment]
+    assert server.serve(io.BytesIO(), io.BytesIO(), stderr=io.StringIO()) == 0
+    assert playback.calls == 1
+
+
+def test_lifecycle_event_overflow_fails_closed_without_growing_buffer(
+    tmp_path: Path,
+) -> None:
+    server = _server(tmp_path)
+    payload = {
+        "session_id": "a" * 32,
+        "song_id": "b" * 32,
+        "outcome": "finished",
+        "total_us": 0,
+        "message": "finished",
+    }
+    for _ in range(128):
+        server._publish_event("playback.finished", payload)
+    server._publish_event("playback.finished", payload)
+
+    assert len(server.drain_events()) == 128
+    assert server.event_buffer_overflowed is True
+    response = _call(server, _request("settings.get"))
+    assert response["error"]["code"] == "event_buffer_overflow"  # type: ignore[index]
 
 
 def test_server_malformed_frame_emits_bounded_fatal_on_stdout(tmp_path: Path) -> None:
@@ -363,13 +457,18 @@ def test_server_malformed_frame_emits_bounded_fatal_on_stdout(tmp_path: Path) ->
     assert errors.getvalue()
 
 
-def test_parent_loss_stops_reader_without_waiting_for_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parent_loss_stops_reader_without_waiting_for_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class BlockingStream:
         def read(self, _size: int) -> bytes:
             threading.Event().wait(10)
             return b""
 
-    monkeypatch.setattr("sky_music.infrastructure.desktop_ipc.server.parent_process_alive", lambda _pid: False)
+    monkeypatch.setattr(
+        "sky_music.infrastructure.desktop_ipc.server.parent_process_alive",
+        lambda _pid: False,
+    )
     server = DesktopCoreServer(
         settings_service=SettingsService(AppConfig(songs_dir=str(tmp_path))),
         catalog_service=CatalogService(tmp_path),
@@ -382,11 +481,15 @@ def test_parent_loss_stops_reader_without_waiting_for_stdin(tmp_path: Path, monk
     assert _output_messages(output)[0]["name"] == "core.ready"
 
 
-def test_run_desktop_core_admits_runtime_before_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_desktop_core_admits_runtime_before_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from sky_music.cli import desktop_core
 
     calls: list[str] = []
-    monkeypatch.setattr(desktop_core, "load_config", lambda: AppConfig(songs_dir=str(tmp_path)))
+    monkeypatch.setattr(
+        desktop_core, "load_config", lambda: AppConfig(songs_dir=str(tmp_path))
+    )
 
     def runtime_guard() -> None:
         calls.append("runtime")
@@ -458,7 +561,9 @@ server = DesktopCoreServer(
 raise SystemExit(server.serve(sys.stdin.buffer, sys.stdout.buffer, stderr=sys.stderr))
 """
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), env.get("PYTHONPATH", "")]))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(source_root), env.get("PYTHONPATH", "")])
+    )
     input_data = protocol.encode_frame(_request("app.shutdown"))
 
     completed = subprocess.run(
@@ -496,20 +601,34 @@ def test_exact_core_main_entrypoint_smoke_with_real_admission() -> None:
     assert song_path.is_file()
     song_id = song_id_for_path(song_path)
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), env.get("PYTHONPATH", "")]))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(source_root), env.get("PYTHONPATH", "")])
+    )
     requests = b"".join(
         protocol.encode_frame(request)
         for request in (
             _request("app.bootstrap", request_id=1),
-            _request("catalog.search", {"query": "blue", "offset": 0, "limit": 1}, request_id=2),
-            _request("catalog.detail", {"song_id": song_id, "generation": 1}, request_id=3),
+            _request(
+                "catalog.search",
+                {"query": "blue", "offset": 0, "limit": 1},
+                request_id=2,
+            ),
+            _request(
+                "catalog.detail", {"song_id": song_id, "generation": 1}, request_id=3
+            ),
             _request("settings.get", request_id=4),
             _request("app.shutdown", request_id=5),
         )
     )
 
     completed = subprocess.run(
-        [sys.executable, str(source_root / "core_main.py"), "--desktop-worker", "--install-root", str(repository_root)],
+        [
+            sys.executable,
+            str(source_root / "core_main.py"),
+            "--desktop-worker",
+            "--install-root",
+            str(repository_root),
+        ],
         input=requests,
         capture_output=True,
         env=env,
@@ -537,3 +656,705 @@ def test_exact_core_main_entrypoint_smoke_with_real_admission() -> None:
         "result": {"shutdown": True},
     }
     assert all(message.get("v") == 1 for message in messages)
+
+
+def test_exact_core_main_entrypoint_runs_dry_run_playback_lifecycle() -> None:
+    """Exercise core_main.py through prepare/start/events without physical input."""
+    from sky_music.orchestration.native_admission import (
+        NativeAdmissionError,
+        require_rust_core,
+    )
+
+    try:
+        require_rust_core()
+    except NativeAdmissionError as exc:
+        pytest.skip(f"native free-threaded test wheel is unavailable: {exc}")
+
+    repository_root = Path(__file__).parents[1]
+    source_root = repository_root / "src"
+    song_path = repository_root / "songs" / "blue.json"
+    song_id = song_id_for_path(song_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(source_root), env.get("PYTHONPATH", "")])
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(source_root / "core_main.py"),
+            "--desktop-worker",
+            "--install-root",
+            str(repository_root),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=repository_root,
+        bufsize=0,
+    )
+    messages: list[dict[str, object]] = []
+
+    def read_message() -> dict[str, object]:
+        assert process.stdout is not None
+        line = process.stdout.readline()
+        assert line, "Core closed stdout before completing the dry-run lifecycle"
+        message = json.loads(line)
+        assert message.get("v") == 1
+        assert message.get("type") in {"event", "response"}
+        messages.append(message)
+        return message
+
+    def send(request: dict[str, object]) -> None:
+        assert process.stdin is not None
+        process.stdin.write(protocol.encode_frame(request))
+        process.stdin.flush()
+
+    try:
+        ready = read_message()
+        assert ready["name"] == "core.ready"
+        send(_request("app.bootstrap", request_id=1))
+        bootstrap = read_message()
+        assert bootstrap["id"] == 1
+        generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
+
+        send(
+            _request(
+                "playback.prepare",
+                {
+                    "song_id": song_id,
+                    "generation": generation,
+                    "config": {
+                        "hold_frames": 1,
+                        "tempo_scale": 1,
+                        "fps": 60,
+                        "dry_run": True,
+                    },
+                },
+                request_id=2,
+            )
+        )
+        prepared_response = read_message()
+        assert prepared_response["id"] == 2
+        prepared = prepared_response["result"]
+        assert isinstance(prepared, dict)
+        assert prepared["admission"] in {"ready", "confirmation_required"}
+        decisions = (
+            [{"decision": prepared["decisions"][0]["decision"], "accepted": True}]  # type: ignore[index]
+            if prepared["admission"] == "confirmation_required"
+            else []
+        )
+
+        send(
+            _request(
+                "playback.start",
+                {"prepared_id": prepared["prepared_id"], "decisions": decisions},
+                request_id=3,
+            )
+        )  # type: ignore[index]
+        start_response = read_message()
+        assert start_response["id"] == 3
+        assert start_response["result"]["state"] == "starting"  # type: ignore[index]
+
+        finished = False
+        while not finished:
+            message = read_message()
+            finished = message.get("name") == "playback.finished"
+
+        send(_request("app.shutdown", request_id=4))
+        shutdown = read_message()
+        assert shutdown["id"] == 4
+        assert shutdown["result"] == {"shutdown": True}
+        # The production supervisor closes its inherited stdin while reaping
+        # the child. Mirror that final pipe lifecycle so the reader thread can
+        # observe EOF before this standalone smoke waits for exit.
+        assert process.stdin is not None
+        process.stdin.close()
+        return_code = process.wait(timeout=10)
+        stderr_output = (
+            process.stderr.read().decode(errors="replace")
+            if process.stderr is not None
+            else ""
+        )
+        assert return_code == 0, stderr_output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+    assert all(message.get("v") == 1 for message in messages)
+
+
+def _playback_server(
+    tmp_path: Path, *, repeat: bool = False
+) -> tuple[DesktopCoreServer, str]:
+    notes = (
+        [{"time": 0, "key": "Key0"}, {"time": 1, "key": "Key0"}]
+        if repeat
+        else [{"time": 0, "key": "Key0"}, {"time": 100, "key": "Key1"}]
+    )
+    song_path = tmp_path / "Playback.json"
+    song_path.write_text(
+        json.dumps({"name": "Playback", "songNotes": notes}), encoding="utf-8"
+    )
+    server = _server(tmp_path)
+    bootstrap = _call(server, _request("app.bootstrap"))
+    assert bootstrap["ok"] is True
+    return server, song_id_for_path(song_path)
+
+
+def _wait_for_playback_event(
+    server: DesktopCoreServer,
+    name: str,
+    *,
+    timeout: float = 2.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for message in server.drain_events():
+            if message.get("name") == name:
+                return message
+        time.sleep(0.01)
+    raise AssertionError(f"did not receive {name} within {timeout}s")
+
+
+def _wait_for_playback_state(
+    server: DesktopCoreServer,
+    state: str,
+    *,
+    timeout: float = 2.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for message in server.drain_events():
+            if (
+                message.get("name") == "playback.state_changed"
+                and isinstance(message.get("payload"), dict)
+                and message["payload"].get("state") == state  # type: ignore[index]
+            ):
+                return message
+        time.sleep(0.01)
+    raise AssertionError(f"did not receive playback state {state} within {timeout}s")
+
+
+def test_playback_prepare_start_and_stop_use_opaque_identity_and_dry_run(
+    tmp_path: Path,
+) -> None:
+    server, song_id = _playback_server(tmp_path)
+    config = {"hold_frames": 1, "tempo_scale": 1, "fps": 60, "dry_run": True}
+
+    stale = _call(
+        server,
+        _request(
+            "playback.prepare", {"song_id": song_id, "generation": 2, "config": config}
+        ),
+    )
+    assert stale["ok"] is False
+    assert stale["error"]["code"] == "stale_generation"  # type: ignore[index]
+
+    invalid = server.handle_request(
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {**config, "tempo_scale": float("nan")},
+            },
+        )
+    )
+    assert invalid["ok"] is False
+    assert invalid["error"]["code"] == "invalid_params"  # type: ignore[index]
+
+    prepared_response = _call(
+        server,
+        _request(
+            "playback.prepare", {"song_id": song_id, "generation": 1, "config": config}
+        ),
+    )
+    prepared = prepared_response["result"]
+    assert prepared_response["ok"] is True
+    assert isinstance(prepared, dict)
+    prepared_id = prepared["prepared_id"]
+    assert isinstance(prepared_id, str) and len(prepared_id) == 32
+    assert str(tmp_path) not in json.dumps(prepared_response)
+
+    tampered = _call(
+        server,
+        _request("playback.start", {"prepared_id": "0" * 32, "decisions": []}),
+    )
+    assert tampered["error"]["code"] == "prepared_not_found"  # type: ignore[index]
+
+    started = _call(
+        server,
+        _request("playback.start", {"prepared_id": prepared_id, "decisions": []}),
+    )
+    assert started["ok"] is True
+    session = started["result"]
+    assert isinstance(session, dict)
+    session_id = session["session_id"]
+    assert isinstance(session_id, str) and len(session_id) == 32
+    _wait_for_playback_event(server, "playback.finished")
+
+    # Stop remains idempotent for the just-finished session, while a foreign
+    # session ID remains fail-closed.
+    repeated_stop = _call(server, _request("playback.stop", {"session_id": session_id}))
+    assert repeated_stop["ok"] is True
+    foreign_stop = _call(server, _request("playback.stop", {"session_id": "f" * 32}))
+    assert foreign_stop["ok"] is False
+    assert foreign_stop["error"]["code"] == "no_active_session"  # type: ignore[index]
+
+
+def test_blocked_prepare_never_creates_a_startable_plan(tmp_path: Path) -> None:
+    server, song_id = _playback_server(tmp_path, repeat=True)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1.5,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": False,
+                },
+            },
+        ),
+    )
+    result = prepared["result"]
+    assert isinstance(result, dict)
+    assert result["admission"] == "blocked"
+    assert result["prepared_id"] is None
+
+
+def test_confirmation_required_uses_one_exact_typed_decision_and_is_retryable(
+    tmp_path: Path,
+) -> None:
+    server, song_id = _playback_server(tmp_path, repeat=True)
+    request = {
+        "song_id": song_id,
+        "generation": 1,
+        "config": {"hold_frames": 1.5, "tempo_scale": 1, "fps": 60, "dry_run": True},
+    }
+    prepared = _call(server, _request("playback.prepare", request))["result"]
+    assert isinstance(prepared, dict)
+    prepared_id = prepared["prepared_id"]
+    assert prepared["admission"] == "confirmation_required"
+    variants = {variant["decision"]: variant for variant in prepared["variants"]}  # type: ignore[index]
+    assert "proceed" in variants
+    assert prepared["plan_fingerprint"] == variants["proceed"]["plan_fingerprint"]  # type: ignore[index]
+
+    missing = _call(
+        server,
+        _request("playback.start", {"prepared_id": prepared_id, "decisions": []}),
+    )
+    assert missing["error"]["code"] == "confirmation_required"  # type: ignore[index]
+
+    unknown = _call(
+        server,
+        _request(
+            "playback.start",
+            {
+                "prepared_id": prepared_id,
+                "decisions": [{"decision": "confirmed", "accepted": True}],
+            },
+        ),
+    )
+    assert unknown["error"]["code"] == "confirmation_required"  # type: ignore[index]
+
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {
+                "prepared_id": prepared_id,
+                "decisions": [{"decision": "proceed", "accepted": True}],
+            },
+        ),
+    )
+    assert started["ok"] is True
+    _wait_for_playback_event(server, "playback.finished")
+
+
+def test_recommended_decision_uses_precomputed_immutable_variant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, song_id = _playback_server(tmp_path, repeat=True)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1.5,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": True,
+                },
+            },
+        ),
+    )["result"]
+    assert isinstance(prepared, dict)
+    variant_by_decision = {
+        variant["decision"]: variant for variant in prepared["variants"]
+    }  # type: ignore[index]
+    if "use_recommended" not in variant_by_decision:
+        pytest.skip("the deterministic analyzer did not produce a recommendation")
+
+    def no_rebuild(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("start must not rebuild a prepared plan")
+
+    monkeypatch.setattr(playback_module, "prepare_playback", no_rebuild)
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {
+                "prepared_id": prepared["prepared_id"],
+                "decisions": [{"decision": "use_recommended", "accepted": True}],
+            },
+        ),
+    )
+    assert started["ok"] is True
+    started_result = started.get("result")
+    assert isinstance(started_result, dict)
+    assert (
+        started_result.get("plan_fingerprint")
+        == variant_by_decision["use_recommended"]["plan_fingerprint"]
+    )  # type: ignore[index]
+    _wait_for_playback_event(server, "playback.finished")
+
+
+def test_supported_physical_controls_use_native_engine_boundary_without_input_in_test(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the desktop physical-session state machine with a test engine."""
+
+    class FakeEngine:
+        def __init__(
+            self, *, controls: object, renderer: object, **_kwargs: object
+        ) -> None:
+            self.controls = controls
+            self.renderer = renderer
+
+        def prepare_focus_for_playback(self) -> bool:
+            return True
+
+        def play(self) -> str:
+            paused = False
+            self.renderer.render(0.0, 0.2, "Playback", status="playing")  # type: ignore[attr-defined]
+            while True:
+                command = self.controls.poll()  # type: ignore[attr-defined]
+                if command == "pause":
+                    paused = not paused
+                    self.renderer.render(  # type: ignore[attr-defined]
+                        0.0,
+                        0.2,
+                        "Playback",
+                        status="paused" if paused else "playing",
+                    )
+                elif command == "skip":
+                    return "skipped"
+                elif command == "quit":
+                    return "quit"
+                time.sleep(0.005)
+
+    monkeypatch.setattr(playback_module, "PlaybackEngine", FakeEngine)
+    server, song_id = _playback_server(tmp_path)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": False,
+                },
+            },
+        ),
+    )["result"]
+    assert isinstance(prepared, dict)
+    decisions = (
+        [{"decision": prepared["decisions"][0]["decision"], "accepted": True}]  # type: ignore[index]
+        if prepared["admission"] == "confirmation_required"
+        else []
+    )
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared["prepared_id"], "decisions": decisions},  # type: ignore[index]
+        ),
+    )
+    assert started["ok"] is True
+    session = started["result"]
+    assert isinstance(session, dict)
+    session_id = session["session_id"]
+
+    _wait_for_playback_state(server, "playing")
+    paused = _call(server, _request("playback.pause", {"session_id": session_id}))
+    assert paused["ok"] is True
+    _wait_for_playback_state(server, "paused")
+    resumed = _call(server, _request("playback.resume", {"session_id": session_id}))
+    assert resumed["ok"] is True
+    _wait_for_playback_state(server, "playing")
+    skipped = _call(server, _request("playback.skip", {"session_id": session_id}))
+    assert skipped["ok"] is True
+    _wait_for_playback_state(server, "finished")
+
+
+def test_stop_during_starting_cancels_before_native_play_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    focus_entered = threading.Event()
+    release_focus = threading.Event()
+    play_called = threading.Event()
+
+    class BlockingFocusEngine:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def prepare_focus_for_playback(self) -> bool:
+            focus_entered.set()
+            release_focus.wait(2)
+            return True
+
+        def play(self) -> str:
+            play_called.set()
+            return "quit"
+
+    monkeypatch.setattr(playback_module, "PlaybackEngine", BlockingFocusEngine)
+    server, song_id = _playback_server(tmp_path)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": False,
+                },
+            },
+        ),
+    )["result"]
+    assert isinstance(prepared, dict)
+    decisions = (
+        [{"decision": prepared["decisions"][0]["decision"], "accepted": True}]  # type: ignore[index]
+        if prepared["admission"] == "confirmation_required"
+        else []
+    )
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared["prepared_id"], "decisions": decisions},  # type: ignore[index]
+        ),
+    )
+    assert started["ok"] is True
+    session_id = started["result"]["session_id"]  # type: ignore[index]
+    assert focus_entered.wait(1)
+
+    stopped = _call(server, _request("playback.stop", {"session_id": session_id}))
+    assert stopped["ok"] is True
+    release_focus.set()
+    finished = _wait_for_playback_event(server, "playback.finished")
+    payload = finished.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("outcome") == "quit"
+    assert not play_called.is_set()
+    assert not any(
+        message.get("name") == "playback.failed"
+        and isinstance(message.get("payload"), dict)
+        and message["payload"].get("code") == "illegal_transition"  # type: ignore[index]
+        for message in server.drain_events()
+    )
+
+
+def test_stdin_eof_requests_normal_cleanup_for_active_playback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playing = threading.Event()
+    stopped = threading.Event()
+
+    class EofCleanupEngine:
+        def __init__(
+            self, *, controls: object, renderer: object, **_kwargs: object
+        ) -> None:
+            self.controls = controls
+            self.renderer = renderer
+
+        def prepare_focus_for_playback(self) -> bool:
+            return True
+
+        def play(self) -> str:
+            self.renderer.render(0.0, 1.0, "Playback", status="playing")  # type: ignore[attr-defined]
+            playing.set()
+            while True:
+                command = self.controls.poll()  # type: ignore[attr-defined]
+                if command == "quit":
+                    stopped.set()
+                    return "quit"
+                time.sleep(0.005)
+
+    monkeypatch.setattr(playback_module, "PlaybackEngine", EofCleanupEngine)
+    server, song_id = _playback_server(tmp_path)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": False,
+                },
+            },
+        ),
+    )["result"]
+    assert isinstance(prepared, dict)
+    decisions = (
+        [{"decision": prepared["decisions"][0]["decision"], "accepted": True}]  # type: ignore[index]
+        if prepared["admission"] == "confirmation_required"
+        else []
+    )
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared["prepared_id"], "decisions": decisions},  # type: ignore[index]
+        ),
+    )
+    assert started["ok"] is True
+    assert playing.wait(1)
+
+    assert server.serve(io.BytesIO(), io.BytesIO(), stderr=io.StringIO()) == 0
+    assert stopped.is_set()
+
+
+def test_pause_resume_are_acknowledged_without_toggle_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause_command_seen = threading.Event()
+    release_pause = threading.Event()
+
+    class ExplicitControlEngine:
+        def __init__(
+            self, *, controls: object, renderer: object, **_kwargs: object
+        ) -> None:
+            self.controls = controls
+            self.renderer = renderer
+            self.pauses = 0
+
+        def prepare_focus_for_playback(self) -> bool:
+            return True
+
+        def play(self) -> str:
+            self.renderer.render(0.0, 10.0, "Playback", status="playing")  # type: ignore[attr-defined]
+            while True:
+                command = self.controls.poll()  # type: ignore[attr-defined]
+                if command == "pause":
+                    self.pauses += 1
+                    pause_command_seen.set()
+                    if self.pauses == 1:
+                        release_pause.wait(2)
+                        self.renderer.render(0.0, 10.0, "Playback", status="paused")  # type: ignore[attr-defined]
+                    else:
+                        self.renderer.render(0.0, 10.0, "Playback", status="playing")  # type: ignore[attr-defined]
+                elif command == "quit":
+                    return "quit"
+                elif command == "skip":
+                    return "skipped"
+                time.sleep(0.005)
+
+    monkeypatch.setattr(playback_module, "PlaybackEngine", ExplicitControlEngine)
+    server, song_id = _playback_server(tmp_path)
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": False,
+                },
+            },
+        ),
+    )["result"]
+    assert isinstance(prepared, dict)
+    decisions = (
+        [{"decision": prepared["decisions"][0]["decision"], "accepted": True}]  # type: ignore[index]
+        if prepared["admission"] == "confirmation_required"
+        else []
+    )
+    started = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared["prepared_id"], "decisions": decisions},  # type: ignore[index]
+        ),
+    )
+    assert started["ok"] is True, started
+    session_id = started["result"]["session_id"]  # type: ignore[index]
+    _wait_for_playback_state(server, "playing")
+
+    first_pause = _call(server, _request("playback.pause", {"session_id": session_id}))
+    assert first_pause["result"]["pending_command"] == "pause"  # type: ignore[index]
+    assert pause_command_seen.wait(1)
+    second_pause = _call(server, _request("playback.pause", {"session_id": session_id}))
+    assert second_pause["ok"] is True
+    assert second_pause["result"]["reason"] == "already_pending"  # type: ignore[index]
+
+    release_pause.set()
+    _wait_for_playback_state(server, "paused")
+    resume_before_ack = _call(
+        server, _request("playback.resume", {"session_id": session_id})
+    )
+    assert resume_before_ack["result"]["pending_command"] == "resume"  # type: ignore[index]
+    duplicate_resume = _call(
+        server, _request("playback.resume", {"session_id": session_id})
+    )
+    assert duplicate_resume["result"]["reason"] == "already_pending"  # type: ignore[index]
+
+    stopped = _call(server, _request("playback.stop", {"session_id": session_id}))
+    assert stopped["ok"] is True
+    _wait_for_playback_event(server, "playback.finished")
+
+
+def test_playback_snapshot_buffer_is_latest_wins_and_bounded(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+    for seq in range(1000):
+        server._publish_event(
+            "playback.snapshot",
+            {"session_id": "a" * 32, "seq": seq},
+        )
+    events = server.drain_events()
+    assert len(events) == 1
+    assert events[0]["payload"]["seq"] == 999  # type: ignore[index]

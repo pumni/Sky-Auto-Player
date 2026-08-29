@@ -7,6 +7,12 @@ import type {
   SearchResult,
   Settings,
   SettingsPatch,
+  PlaybackPrepare,
+  PlaybackCommandAck,
+  PlaybackStart,
+  PlaybackSessionCommand,
+  PlaybackSession,
+  PreparedPlayback,
   SongDetail,
   UiEvent,
   Unsubscribe,
@@ -38,6 +44,17 @@ export function createTauriBridge(): DesktopBridge {
       call<ViewportResult>('set_library_viewport', request),
     getSettings: () => call<Settings>('get_settings'),
     patchSettings: (patch: SettingsPatch) => call<Settings>('patch_settings', patch),
+    preparePlayback: (request: PlaybackPrepare) =>
+      call<PreparedPlayback>('prepare_playback', request),
+    startPlayback: (request: PlaybackStart) => call<PlaybackSession>('start_playback', request),
+    stopPlayback: (request: PlaybackSessionCommand) =>
+      call<PlaybackCommandAck>('stop_playback', request),
+    pausePlayback: (request: PlaybackSessionCommand) =>
+      call<PlaybackCommandAck>('pause_playback', request),
+    resumePlayback: (request: PlaybackSessionCommand) =>
+      call<PlaybackCommandAck>('resume_playback', request),
+    skipPlayback: (request: PlaybackSessionCommand) =>
+      call<PlaybackCommandAck>('skip_playback', request),
     subscribeUiEvents: async (listener): Promise<Unsubscribe> => {
       const channel = new Channel<CoreChannelEvent>();
       channel.onmessage = (event) => listener(normalizeEvent(event));

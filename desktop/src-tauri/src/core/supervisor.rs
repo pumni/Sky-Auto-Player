@@ -3,19 +3,24 @@ use super::request_registry::{Completion, PendingRegistry};
 use crate::ui_events::{CoreFatalPayload, UiEvent};
 use serde::Serialize;
 use serde_json::Value;
+use sky_dispatch_win32::emergency_release_canonical;
 use std::io::{self, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BUFFERED_EVENTS: usize = 128;
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+static TEST_CHILD_REAPED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy)]
 struct SupervisorTimeouts {
@@ -73,6 +78,11 @@ pub struct CoreSupervisor {
     ready: Mutex<Option<Receiver<Result<(), String>>>>,
     events: Mutex<EventState>,
     shutdown_requested: AtomicBool,
+    physical_session_active: AtomicBool,
+    emergency_release_done: AtomicBool,
+    emergency_release: fn() -> sky_dispatch_win32::input::ReleaseAllOutcome,
+    #[cfg(test)]
+    track_child_reaped: bool,
     timeouts: SupervisorTimeouts,
 }
 
@@ -104,10 +114,21 @@ impl CoreSupervisor {
         command: &mut Command,
         timeouts: SupervisorTimeouts,
     ) -> Result<Arc<Self>, SupervisorError> {
+        Self::spawn_process_with_release(command, timeouts, emergency_release_canonical, false)
+    }
+
+    fn spawn_process_with_release(
+        command: &mut Command,
+        timeouts: SupervisorTimeouts,
+        emergency_release: fn() -> sky_dispatch_win32::input::ReleaseAllOutcome,
+        track_child_reaped: bool,
+    ) -> Result<Arc<Self>, SupervisorError> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(not(test))]
+        let _ = track_child_reaped;
         let mut child = command
             .spawn()
             .map_err(|error| SupervisorError::Launch(error.to_string()))?;
@@ -133,7 +154,12 @@ impl CoreSupervisor {
             ready: Mutex::new(Some(ready_receiver)),
             events: Mutex::new(EventState::default()),
             shutdown_requested: AtomicBool::new(false),
+            physical_session_active: AtomicBool::new(false),
+            emergency_release_done: AtomicBool::new(false),
+            emergency_release,
             timeouts,
+            #[cfg(test)]
+            track_child_reaped,
         });
         Self::spawn_reader(Arc::clone(&supervisor), stdout, ready_sender);
         Self::spawn_stderr_drainer(stderr);
@@ -210,6 +236,18 @@ impl CoreSupervisor {
                                         break;
                                     }
                                     CoreEvent::CatalogChanged(_) => supervisor.publish_event(event),
+                                    CoreEvent::PlaybackStateChanged(ref payload) => {
+                                        supervisor.update_physical_session(
+                                            payload.physical,
+                                            payload.state.as_str(),
+                                        );
+                                        supervisor.publish_event(event);
+                                    }
+                                    CoreEvent::PlaybackSnapshot(_)
+                                    | CoreEvent::PlaybackFinished(_)
+                                    | CoreEvent::PlaybackFailed(_) => {
+                                        supervisor.publish_event(event)
+                                    }
                                 },
                                 Err(error) => {
                                     supervisor.protocol_fatal(&error.to_string(), &ready_sender);
@@ -264,13 +302,17 @@ impl CoreSupervisor {
                         .expect("Core child poisoned")
                         .try_wait();
                     match status {
-                        Ok(Some(status)) => break Ok(status),
+                        Ok(Some(status)) => {
+                            supervisor.note_child_termination();
+                            break Ok(status);
+                        }
                         Ok(None) => thread::sleep(CHILD_POLL_INTERVAL),
                         Err(error) => break Err(error),
                     }
                 };
                 if status.is_err() || !supervisor.shutdown_requested.load(Ordering::Acquire) {
                     supervisor.pending.fail_all("Core process exited");
+                    supervisor.emergency_release_if_needed();
                     let mut lifecycle = supervisor.lifecycle.lock().expect("lifecycle poisoned");
                     if *lifecycle != CoreLifecycle::Fatal {
                         *lifecycle = CoreLifecycle::Exited;
@@ -288,7 +330,7 @@ impl CoreSupervisor {
             code: "protocol_error".into(),
             message: message.to_owned(),
         }));
-        self.terminate_child();
+        self.terminate_child_before_emergency_release();
     }
 
     fn inbound_core_fatal(
@@ -300,16 +342,12 @@ impl CoreSupervisor {
             CoreEvent::Fatal(payload) => payload.message.as_str(),
             _ => "Core reported a fatal error",
         };
-        // Hold the lifecycle lock until the original event is buffered. This
-        // makes the terminal transition observable as one ordered operation:
-        // callers that see Fatal can also immediately observe the fatal event.
-        let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        *lifecycle = CoreLifecycle::Fatal;
+        self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending
             .fail_all(&format!("Core reported fatal error: {message}"));
         let _ = ready_sender.send(Err(message.to_owned()));
         self.publish_event(event);
-        self.terminate_child();
+        self.terminate_child_before_emergency_release();
     }
 
     fn transition_to_ready(&self) -> bool {
@@ -321,31 +359,132 @@ impl CoreSupervisor {
         true
     }
 
+    fn update_physical_session(&self, physical: bool, state: &str) {
+        if !physical {
+            return;
+        }
+        if matches!(state, "starting" | "playing" | "paused" | "stopping") {
+            if state == "starting" {
+                self.emergency_release_done.store(false, Ordering::Release);
+            }
+            self.physical_session_active.store(true, Ordering::Release);
+        } else if matches!(state, "finished" | "failed" | "cancelled") {
+            self.physical_session_active.store(false, Ordering::Release);
+        }
+    }
+
+    fn emergency_release_if_needed(&self) {
+        if !self.physical_session_active.load(Ordering::Acquire) {
+            return;
+        }
+        if self
+            .emergency_release_done
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let _ = (self.emergency_release)();
+            self.physical_session_active.store(false, Ordering::Release);
+        }
+    }
+
     fn publish_event(&self, event: CoreEvent) {
         let ui_event = event.into_ui_event();
         let mut events = self.events.lock().expect("event buffer poisoned");
-        if events.buffered.len() >= MAX_BUFFERED_EVENTS {
-            events.buffered.remove(0);
+        if events.overflowed {
+            return;
         }
-        events.buffered.push(ui_event.clone());
-        if let Some(channel) = events.channel.as_ref() {
-            let _ = channel.send(ui_event);
+
+        // The replay buffer is only for events produced before a usable UI
+        // subscriber exists. Once live delivery is installed, retaining a
+        // second copy would turn the bounded backlog into lifetime history.
+        if let Some(channel) = events.channel.clone() {
+            if channel.send(ui_event).is_err() {
+                events.channel = None;
+                events.overflowed = true;
+                drop(events);
+                self.event_delivery_fatal();
+            }
+            return;
+        }
+
+        let snapshot_session_id = match &ui_event {
+            UiEvent::PlaybackSnapshot { payload, .. } => Some(payload.session_id.as_str()),
+            _ => None,
+        };
+        if let Some(session_id) = snapshot_session_id {
+            if let Some(index) = events.buffered.iter().rposition(|buffered| {
+                matches!(
+                    buffered,
+                    UiEvent::PlaybackSnapshot { payload, .. }
+                        if payload.session_id == session_id
+                )
+            }) {
+                events.buffered[index] = ui_event;
+            } else if events.buffered.len() < MAX_BUFFERED_EVENTS {
+                events.buffered.push(ui_event);
+            }
+            return;
+        }
+
+        // Before subscription, lifecycle events are retained in order. A
+        // buffered snapshot may be reclaimed to preserve that lifecycle
+        // ordering, but lifecycle events themselves are never silently lost.
+        if events.buffered.len() >= MAX_BUFFERED_EVENTS
+            && let Some(index) = events
+                .buffered
+                .iter()
+                .position(|buffered| matches!(buffered, UiEvent::PlaybackSnapshot { .. }))
+        {
+            events.buffered.remove(index);
+        }
+        if events.buffered.len() < MAX_BUFFERED_EVENTS {
+            events.buffered.push(ui_event);
+        } else {
+            // There is no safe way to drop a lifecycle event. Mark the
+            // replay history unusable and fail closed for future command
+            // and subscription calls instead of silently losing state.
+            events.overflowed = true;
         }
     }
 
     pub fn subscribe(&self, channel: tauri::ipc::Channel<UiEvent>) -> Result<(), SupervisorError> {
         let mut events = self.events.lock().expect("event buffer poisoned");
+        if events.overflowed {
+            return Err(SupervisorError::Unavailable(
+                "Core event history overflowed its bounded capacity".into(),
+            ));
+        }
         for event in &events.buffered {
-            channel
-                .send(event.clone())
-                .map_err(|error| SupervisorError::Request(error.to_string()))?;
+            if let Err(error) = channel.send(event.clone()) {
+                events.channel = None;
+                events.overflowed = true;
+                let message = error.to_string();
+                drop(events);
+                self.event_delivery_fatal();
+                return Err(SupervisorError::Request(message));
+            }
         }
         events.channel = Some(channel);
+        events.buffered.clear();
         Ok(())
+    }
+
+    fn event_delivery_fatal(&self) {
+        self.set_lifecycle(CoreLifecycle::Fatal);
+        self.pending.fail_all("UI event channel delivery failed");
+        self.terminate_child_before_emergency_release();
     }
 
     pub fn lifecycle(&self) -> CoreLifecycle {
         *self.lifecycle.lock().expect("lifecycle poisoned")
+    }
+
+    #[cfg(test)]
+    fn event_history_overflowed(&self) -> bool {
+        self.events
+            .lock()
+            .expect("event buffer poisoned")
+            .overflowed
     }
 
     pub fn request<P: Serialize>(&self, method: &str, params: P) -> Result<Value, SupervisorError> {
@@ -354,6 +493,16 @@ impl CoreSupervisor {
             return Err(SupervisorError::Unavailable(format!(
                 "Core state is {lifecycle:?}"
             )));
+        }
+        if self
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .overflowed
+        {
+            return Err(SupervisorError::Unavailable(
+                "Core event history overflowed its bounded capacity".into(),
+            ));
         }
         let timeout = if method == "catalog.reload" {
             self.timeouts.reload
@@ -433,8 +582,16 @@ impl CoreSupervisor {
             return;
         }
         self.set_lifecycle(CoreLifecycle::ShuttingDown);
-        let _ = self.request_inner("app.shutdown", serde_json::json!({}), self.timeouts.request);
-        self.terminate_child();
+        let shutdown_result =
+            self.request_inner("app.shutdown", serde_json::json!({}), self.timeouts.request);
+        if shutdown_result.is_err() {
+            // Normal app shutdown lets the Core/native session clean itself up.
+            // The canonical allowlisted release is only a fallback when that
+            // graceful boundary is unavailable.
+            self.terminate_child_before_emergency_release();
+        } else {
+            self.terminate_child();
+        }
     }
 
     fn set_lifecycle(&self, lifecycle: CoreLifecycle) {
@@ -446,12 +603,66 @@ impl CoreSupervisor {
             let _ = child.kill();
         }
     }
+
+    fn terminate_child_before_emergency_release(&self) {
+        // A physical Core may still be dispatching while a fail-closed path is
+        // unwinding. Stop and boundedly reap it before sending the final
+        // canonical key-up, so the worker cannot issue another key-down after
+        // emergency cleanup. If termination cannot be confirmed before the
+        // budget expires, emergency release is still the last-resort safety
+        // action.
+        let _terminated = self.terminate_child_bounded();
+        self.emergency_release_if_needed();
+    }
+
+    fn terminate_child_bounded(&self) -> bool {
+        let deadline = Instant::now() + CHILD_TERMINATION_TIMEOUT;
+        let mut kill_attempted = false;
+
+        loop {
+            let status = match self.child.lock() {
+                Ok(mut child) => child.try_wait(),
+                Err(_) => return false,
+            };
+            match status {
+                Ok(Some(_)) => {
+                    self.note_child_termination();
+                    return true;
+                }
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+
+            if !kill_attempted {
+                if let Ok(mut child) = self.child.lock() {
+                    let _ = child.kill();
+                } else {
+                    return false;
+                }
+                kill_attempted = true;
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            thread::sleep(CHILD_POLL_INTERVAL.min(remaining));
+        }
+    }
+
+    fn note_child_termination(&self) {
+        #[cfg(test)]
+        if self.track_child_reaped {
+            TEST_CHILD_REAPED.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 #[derive(Default)]
 struct EventState {
     buffered: Vec<UiEvent>,
     channel: Option<tauri::ipc::Channel<UiEvent>>,
+    overflowed: bool,
 }
 
 impl Drop for CoreSupervisor {
@@ -465,11 +676,20 @@ impl Drop for CoreSupervisor {
 
 #[cfg(test)]
 mod tests {
-    use super::{CoreLifecycle, CoreSupervisor, SupervisorError, SupervisorTimeouts};
-    use crate::ui_events::UiEvent;
+    use super::super::protocol::CoreEvent;
+    use super::{
+        CoreLifecycle, CoreSupervisor, MAX_BUFFERED_EVENTS, SupervisorError, SupervisorTimeouts,
+    };
+    use crate::ui_events::{
+        PlaybackEventState, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
+        PlaybackSnapshotPayload, UiEvent,
+    };
     use serde_json::json;
+    use sky_dispatch_win32::input::ReleaseAllOutcome;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -504,6 +724,38 @@ mod tests {
             .unwrap_or_else(|error| panic!("fake Core did not become ready: {error}"))
     }
 
+    static EMERGENCY_RELEASE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static EMERGENCY_RELEASE_ORDER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+    static EMERGENCY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_emergency_release() -> ReleaseAllOutcome {
+        if !super::TEST_CHILD_REAPED.load(Ordering::SeqCst) {
+            EMERGENCY_RELEASE_ORDER_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+        }
+        EMERGENCY_RELEASE_CALLS.fetch_add(1, Ordering::SeqCst);
+        ReleaseAllOutcome {
+            attempted_mask: 0,
+            transport_anomaly: false,
+            released_successfully: true,
+            stuck_mask: 0,
+            verification_inconclusive: false,
+            attempts: 1,
+        }
+    }
+
+    fn start_with_test_release(mode: &str) -> std::sync::Arc<CoreSupervisor> {
+        super::TEST_CHILD_REAPED.store(false, Ordering::SeqCst);
+        EMERGENCY_RELEASE_ORDER_VIOLATIONS.store(0, Ordering::SeqCst);
+        let mut command = fake_core(mode);
+        CoreSupervisor::spawn_process_with_release(
+            &mut command,
+            short_timeouts(),
+            test_emergency_release,
+            true,
+        )
+        .unwrap_or_else(|error| panic!("fake Core did not become ready: {error}"))
+    }
+
     fn eventually(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -513,6 +765,16 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         predicate()
+    }
+
+    fn finished_event(total_us: u64) -> CoreEvent {
+        CoreEvent::PlaybackFinished(PlaybackFinishedPayload {
+            session_id: "b".repeat(32),
+            song_id: "c".repeat(32),
+            outcome: "finished".into(),
+            total_us,
+            message: "finished".into(),
+        })
     }
 
     #[test]
@@ -566,6 +828,15 @@ mod tests {
             supervisor.lifecycle() == CoreLifecycle::Fatal
         }));
         assert!(!supervisor.lifecycle().accepts_requests());
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .iter()
+                .any(|event| matches!(event, UiEvent::CoreFatal { .. }))
+        }));
         let events = supervisor.events.lock().expect("event buffer poisoned");
         let fatal = events
             .buffered
@@ -665,6 +936,285 @@ mod tests {
         assert!(eventually(Duration::from_secs(1), || {
             supervisor.lifecycle().is_terminal()
         }));
+    }
+
+    #[test]
+    fn unexpected_active_physical_core_loss_releases_once() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("physical_active_exit");
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle() == CoreLifecycle::Fatal
+        }));
+        assert!(eventually(Duration::from_secs(1), || {
+            EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst) == 1
+        }));
+        supervisor.shutdown();
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn fatal_active_physical_core_loss_releases_once() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("physical_active_fatal");
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle() == CoreLifecycle::Fatal
+        }));
+        assert!(eventually(Duration::from_secs(1), || {
+            EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst) == 1
+        }));
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn protocol_fatal_reaps_before_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("normal");
+        supervisor.update_physical_session(true, "playing");
+        let (ready_sender, ready_receiver) = mpsc::channel();
+
+        supervisor.protocol_fatal("malformed protocol", &ready_sender);
+
+        assert!(matches!(
+            ready_receiver.try_recv(),
+            Ok(Err(message)) if message == "malformed protocol"
+        ));
+        assert_eq!(supervisor.lifecycle(), CoreLifecycle::Fatal);
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn dry_run_core_loss_does_not_use_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("dry_run_active_exit");
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle() == CoreLifecycle::Fatal
+        }));
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_graceful_shutdown_reaps_before_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("force_shutdown");
+        supervisor.update_physical_session(true, "playing");
+
+        supervisor.shutdown();
+
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn normal_core_shutdown_does_not_use_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("normal");
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn snapshot_history_is_coalesced_without_evicting_the_lifecycle_budget() {
+        let supervisor = start("normal");
+        for seq in 1..=1_000 {
+            supervisor.publish_event(CoreEvent::PlaybackSnapshot(PlaybackSnapshotPayload {
+                session_id: "b".repeat(32),
+                seq,
+                state: PlaybackEventState::Playing,
+                song_id: "c".repeat(32),
+                title: "Fake Song".into(),
+                current_us: seq,
+                total_us: 1_000,
+                pre_roll_remaining_us: 0,
+                focus_state: PlaybackFocusState::Focused,
+                health: PlaybackHealthState::Healthy,
+                input_path_degraded: false,
+                message: None,
+            }));
+        }
+        let events = supervisor.events.lock().expect("event buffer poisoned");
+        assert!(events.buffered.len() <= 128);
+        let snapshots: Vec<_> = events
+            .buffered
+            .iter()
+            .filter_map(|event| match event {
+                UiEvent::PlaybackSnapshot { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].seq, 1_000);
+        drop(events);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn successful_subscription_replays_and_clears_backlog() {
+        let supervisor = start("normal");
+        supervisor
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .buffered
+            .clear();
+        for total_us in 1..=3 {
+            supervisor.publish_event(finished_event(total_us));
+        }
+
+        let delivered = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |body| {
+            let payload = match body {
+                tauri::ipc::InvokeResponseBody::Json(raw) => {
+                    serde_json::from_str::<serde_json::Value>(&raw)?
+                }
+                tauri::ipc::InvokeResponseBody::Raw(raw) => {
+                    serde_json::from_slice::<serde_json::Value>(&raw)?
+                }
+            };
+            delivered_for_channel
+                .lock()
+                .expect("delivered events poisoned")
+                .push(payload["payload"]["total_us"].as_u64().expect("total_us"));
+            Ok(())
+        });
+
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+        assert_eq!(
+            *delivered.lock().expect("delivered events poisoned"),
+            [1, 2, 3]
+        );
+        assert!(
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .is_empty()
+        );
+        assert!(!supervisor.event_history_overflowed());
+
+        supervisor.publish_event(finished_event(4));
+        assert_eq!(
+            *delivered.lock().expect("delivered events poisoned"),
+            [1, 2, 3, 4]
+        );
+        assert!(!supervisor.event_history_overflowed());
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn live_subscription_does_not_fill_replay_history_or_block_stop() {
+        let supervisor = start("tauri_commands");
+        supervisor
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .buffered
+            .clear();
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |_| {
+            delivered_for_channel.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+
+        for total_us in 1..=(MAX_BUFFERED_EVENTS * 2 + 1) as u64 {
+            supervisor.publish_event(finished_event(total_us));
+        }
+
+        assert_eq!(
+            delivered.load(Ordering::SeqCst),
+            MAX_BUFFERED_EVENTS * 2 + 1
+        );
+        assert!(
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .is_empty()
+        );
+        assert!(!supervisor.event_history_overflowed());
+        let stop = supervisor
+            .request("playback.stop", json!({"session_id": "b".repeat(32)}))
+            .expect("stop remains usable after live delivery");
+        assert_eq!(stop["accepted"], true);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn failed_live_subscription_delivery_fails_closed_and_releases_active_session() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("normal");
+        let fail_delivery = Arc::new(AtomicBool::new(false));
+        let fail_delivery_for_channel = Arc::clone(&fail_delivery);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |_| {
+            if fail_delivery_for_channel.load(Ordering::Acquire) {
+                Err(tauri::Error::Io(std::io::Error::other("channel closed")))
+            } else {
+                Ok(())
+            }
+        });
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+        supervisor.update_physical_session(true, "playing");
+        fail_delivery.store(true, Ordering::Release);
+
+        supervisor.publish_event(finished_event(1));
+
+        assert_eq!(supervisor.lifecycle(), CoreLifecycle::Fatal);
+        assert!(supervisor.event_history_overflowed());
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+        assert!(supervisor.request("playback.stop", json!({})).is_err());
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lifecycle_history_overflow_fails_closed_without_growing() {
+        let supervisor = start("normal");
+        for _ in 0..(MAX_BUFFERED_EVENTS + 1) {
+            supervisor.publish_event(CoreEvent::PlaybackFinished(PlaybackFinishedPayload {
+                session_id: "b".repeat(32),
+                song_id: "c".repeat(32),
+                outcome: "finished".into(),
+                total_us: 0,
+                message: "finished".into(),
+            }));
+        }
+        let events = supervisor.events.lock().expect("event buffer poisoned");
+        assert_eq!(events.buffered.len(), MAX_BUFFERED_EVENTS);
+        drop(events);
+        assert!(supervisor.event_history_overflowed());
+        assert!(matches!(
+            supervisor.request("catalog.search", json!({})),
+            Err(SupervisorError::Unavailable(message)) if message.contains("overflowed")
+        ));
+        supervisor.shutdown();
     }
 
     #[test]

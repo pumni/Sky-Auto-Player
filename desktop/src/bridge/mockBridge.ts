@@ -71,8 +71,26 @@ function initialSettings(): Settings {
 export function createMockBridge(): DesktopBridge {
   let generation = 1;
   let settings = initialSettings();
+  let activeSession: { sessionId: string; songId: string } | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
+  const emitPlaybackState = (
+    session: { sessionId: string; songId: string },
+    state: 'playing' | 'paused' | 'stopping' | 'finished',
+  ) => {
+    emit({
+      v: 1,
+      name: 'playback.state_changed',
+      payload: {
+        session_id: session.sessionId,
+        song_id: session.songId,
+        state,
+        physical: false,
+        message: null,
+        outcome: state === 'finished' ? 'finished' : null,
+      },
+    });
+  };
 
   return {
     async bootstrap() {
@@ -169,6 +187,149 @@ export function createMockBridge(): DesktopBridge {
             }),
       };
       return settings;
+    },
+    async preparePlayback(request) {
+      const found = rows.find((item) => item.song_id === request.songId);
+      if (!found) throw new Error('song was not found');
+      const risk = found.risk_level === 'low' ? 'low' : 'medium';
+      return {
+        prepared_id: `prepared-${found.song_id}`,
+        song: {
+          song_id: found.song_id,
+          title: found.title,
+          duration_us: found.duration_us ?? 0,
+          note_count: found.note_count ?? 0,
+          format_label: 'TXT',
+          risk: {
+            level: risk,
+            headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
+            reasons: risk === 'low' ? [] : ['Dense note transitions may need a slower tempo.'],
+            recommendations: ['Keep the selected settings.'],
+          },
+          recommendation: null,
+        },
+        config: request.config,
+        admission: risk === 'low' ? 'ready' : 'confirmation_required',
+        risk: {
+          level: risk,
+          headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
+          reasons: risk === 'low' ? [] : ['Dense note transitions may need a slower tempo.'],
+          recommendations: ['Keep the selected settings.'],
+        },
+        decisions:
+          risk === 'low'
+            ? []
+            : [
+                { decision: 'proceed', label: 'Proceed with current settings' },
+                { decision: 'use_recommended', label: 'Use recommended settings' },
+                { decision: 'dry_run', label: 'Run a dry-run first' },
+              ],
+        plan_fingerprint: 'mock-plan',
+        variants:
+          risk === 'low'
+            ? [
+                {
+                  decision: 'proceed',
+                  config: request.config,
+                  plan_fingerprint: 'mock-plan',
+                },
+              ]
+            : [
+                {
+                  decision: 'proceed',
+                  config: request.config,
+                  plan_fingerprint: 'mock-plan',
+                },
+                {
+                  decision: 'use_recommended',
+                  config: request.config,
+                  plan_fingerprint: 'mock-recommended-plan',
+                },
+                {
+                  decision: 'dry_run',
+                  config: { ...request.config, dry_run: true },
+                  plan_fingerprint: 'mock-dry-run-plan',
+                },
+              ],
+        error_code: null,
+        error_message: null,
+      };
+    },
+    async startPlayback(request) {
+      const session = {
+        sessionId: 'b'.repeat(32),
+        songId: request.preparedId.replace('prepared-', ''),
+      };
+      activeSession = session;
+      setTimeout(() => emitPlaybackState(session, 'playing'), 0);
+      return {
+        session_id: session.sessionId,
+        prepared_id: request.preparedId,
+        song_id: session.songId,
+        state: 'starting',
+        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: false },
+        plan_fingerprint: request.decisions.some((item) => item.decision === 'use_recommended')
+          ? 'mock-recommended-plan'
+          : request.decisions.some((item) => item.decision === 'dry_run')
+            ? 'mock-dry-run-plan'
+            : 'mock-plan',
+      };
+    },
+    async stopPlayback(request) {
+      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      const session = activeSession;
+      activeSession = null;
+      setTimeout(() => {
+        emitPlaybackState(session, 'stopping');
+        emitPlaybackState(session, 'finished');
+      }, 0);
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'stopping',
+        pending_command: null,
+        reason: null,
+      };
+    },
+    async pausePlayback(request) {
+      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      const session = activeSession;
+      setTimeout(() => emitPlaybackState(session, 'paused'), 0);
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'playing',
+        pending_command: 'pause',
+        reason: null,
+      };
+    },
+    async resumePlayback(request) {
+      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      const session = activeSession;
+      setTimeout(() => emitPlaybackState(session, 'playing'), 0);
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'paused',
+        pending_command: 'resume',
+        reason: null,
+      };
+    },
+    async skipPlayback(request) {
+      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      const session = activeSession;
+      activeSession = null;
+      setTimeout(() => {
+        emitPlaybackState(session, 'stopping');
+        emitPlaybackState(session, 'finished');
+      }, 0);
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'stopping',
+        pending_command: null,
+        reason: null,
+      };
     },
     async subscribeUiEvents(listener) {
       listeners.add(listener);

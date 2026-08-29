@@ -1,4 +1,7 @@
-use crate::ui_events::{CatalogChangedPayload, CoreFatalPayload, CoreReadyPayload, UiEvent};
+use crate::ui_events::{
+    CatalogChangedPayload, CoreFatalPayload, CoreReadyPayload, PlaybackFailedPayload,
+    PlaybackFinishedPayload, PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
+};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -29,6 +32,10 @@ pub enum CoreEvent {
     Ready(CoreReadyPayload),
     Fatal(CoreFatalPayload),
     CatalogChanged(CatalogChangedPayload),
+    PlaybackStateChanged(PlaybackStateChangedPayload),
+    PlaybackSnapshot(PlaybackSnapshotPayload),
+    PlaybackFinished(PlaybackFinishedPayload),
+    PlaybackFailed(PlaybackFailedPayload),
 }
 
 impl CoreEvent {
@@ -43,6 +50,22 @@ impl CoreEvent {
                 payload,
             },
             Self::CatalogChanged(payload) => UiEvent::CatalogChanged {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::PlaybackStateChanged(payload) => UiEvent::PlaybackStateChanged {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::PlaybackSnapshot(payload) => UiEvent::PlaybackSnapshot {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::PlaybackFinished(payload) => UiEvent::PlaybackFinished {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::PlaybackFailed(payload) => UiEvent::PlaybackFailed {
                 v: DESKTOP_PROTOCOL_VERSION,
                 payload,
             },
@@ -247,6 +270,30 @@ fn parse_event(name: &str, payload: Value) -> Result<CoreEvent, ProtocolError> {
             UiEvent::validate_catalog_changed(&value)
                 .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
             Ok(CoreEvent::CatalogChanged(value))
+        }
+        "playback.state_changed" => {
+            let value: PlaybackStateChangedPayload = decode(name, payload)?;
+            UiEvent::validate_playback_state_changed(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::PlaybackStateChanged(value))
+        }
+        "playback.snapshot" => {
+            let value: PlaybackSnapshotPayload = decode(name, payload)?;
+            UiEvent::validate_playback_snapshot(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::PlaybackSnapshot(value))
+        }
+        "playback.finished" => {
+            let value: PlaybackFinishedPayload = decode(name, payload)?;
+            UiEvent::validate_playback_finished(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::PlaybackFinished(value))
+        }
+        "playback.failed" => {
+            let value: PlaybackFailedPayload = decode(name, payload)?;
+            UiEvent::validate_playback_failed(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::PlaybackFailed(value))
         }
         other => Err(ProtocolError::Invalid(format!(
             "unsupported event name: {other}"
@@ -457,6 +504,69 @@ mod tests {
             )),
             Ok(CoreMessage::Event(CoreEvent::CatalogChanged(_)))
         ));
+        let playback_ids = serde_json::json!({
+            "session_id": "b".repeat(32),
+            "song_id": "c".repeat(32),
+        });
+        assert!(matches!(
+            parse_message(&event_frame(
+                "playback.state_changed",
+                serde_json::json!({
+                    "session_id": playback_ids["session_id"],
+                    "song_id": playback_ids["song_id"],
+                    "state": "playing",
+                    "physical": false,
+                    "message": null,
+                    "outcome": null
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::PlaybackStateChanged(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "playback.snapshot",
+                serde_json::json!({
+                    "session_id": playback_ids["session_id"],
+                    "seq": 1,
+                    "state": "playing",
+                    "song_id": playback_ids["song_id"],
+                    "title": "Aurora",
+                    "current_us": 10,
+                    "total_us": 100,
+                    "pre_roll_remaining_us": 0,
+                    "focus_state": "focused",
+                    "health": "healthy",
+                    "input_path_degraded": false,
+                    "message": null
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::PlaybackSnapshot(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "playback.finished",
+                serde_json::json!({
+                    "session_id": playback_ids["session_id"],
+                    "song_id": playback_ids["song_id"],
+                    "outcome": "finished",
+                    "total_us": 100,
+                    "message": "done"
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::PlaybackFinished(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "playback.failed",
+                serde_json::json!({
+                    "session_id": playback_ids["session_id"],
+                    "song_id": playback_ids["song_id"],
+                    "code": "native_error",
+                    "message": "failed"
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::PlaybackFailed(_)))
+        ));
     }
 
     #[test]
@@ -489,6 +599,35 @@ mod tests {
                         "rustc_version": "1.98.0",
                         "win32_backend": "true"
                     }
+                }),
+            ),
+            event_frame(
+                "playback.state_changed",
+                serde_json::json!({
+                    "session_id": "b".repeat(32),
+                    "song_id": "c".repeat(32),
+                    "state": "unknown",
+                    "physical": false,
+                    "message": null,
+                    "outcome": null
+                }),
+            ),
+            event_frame(
+                "playback.snapshot",
+                serde_json::json!({
+                    "session_id": "b".repeat(32),
+                    "seq": 1,
+                    "state": "playing",
+                    "song_id": "c".repeat(32),
+                    "title": "Aurora",
+                    "current_us": 10,
+                    "total_us": 100,
+                    "pre_roll_remaining_us": 0,
+                    "focus_state": "focused",
+                    "health": "healthy",
+                    "input_path_degraded": false,
+                    "message": null,
+                    "extra": true
                 }),
             ),
         ];

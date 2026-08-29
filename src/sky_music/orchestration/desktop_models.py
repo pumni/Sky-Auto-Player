@@ -8,7 +8,14 @@ from typing import Literal
 RiskLevel = Literal["low", "medium", "high", "unknown"]
 MetadataState = Literal["pending", "ready", "error"]
 Admission = Literal["ready", "confirmation_required", "blocked"]
+PlaybackDecision = Literal["proceed", "use_recommended", "dry_run"]
+PlaybackControl = Literal["stop", "pause", "resume", "skip"]
+PlaybackPendingControl = Literal["pause", "resume"]
 PlaybackState = Literal[
+    "idle",
+    "ready",
+    "awaiting_confirmation",
+    "starting",
     "preparing",
     "countdown",
     "playing",
@@ -16,6 +23,8 @@ PlaybackState = Literal[
     "focus_lost",
     "stopping",
     "finished",
+    "cancelled",
+    "failed",
     "error",
 ]
 FocusState = Literal["focused", "unfocused", "waiting"]
@@ -105,18 +114,63 @@ class SongDetailDto:
 
 @dataclass(frozen=True, slots=True)
 class RiskDecisionDto:
-    decision: str
+    decision: PlaybackDecision
     label: str
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedPlaybackDto:
-    prepared_id: str
+    prepared_id: str | None
     song: SongDetailDto
     config: PlaybackConfigDto
     admission: Admission
     risk: RiskSummaryDto
     decisions: tuple[RiskDecisionDto, ...]
+    plan_fingerprint: str | None = None
+    variants: tuple[PlaybackPlanVariantDto, ...] = ()
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackPlanVariantDto:
+    decision: PlaybackDecision
+    config: PlaybackConfigDto
+    plan_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackDecisionAcceptanceDto:
+    decision: PlaybackDecision
+    accepted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackSessionDto:
+    session_id: str
+    prepared_id: str
+    song_id: str
+    state: PlaybackState
+    config: PlaybackConfigDto
+    plan_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackCommandAckDto:
+    accepted: bool
+    session_id: str
+    state: PlaybackState
+    pending_command: PlaybackPendingControl | None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackFinishedDto:
+    session_id: str
+    song_id: str
+    outcome: str
+    total_us: int
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,9 +215,17 @@ __all__ = [
     "HealthState",
     "MetadataState",
     "NativeBuildDto",
+    "PlaybackCommandAckDto",
     "PlaybackConfigDto",
+    "PlaybackControl",
+    "PlaybackDecision",
+    "PlaybackDecisionAcceptanceDto",
+    "PlaybackFinishedDto",
     "PlaybackOptionSetsDto",
+    "PlaybackPendingControl",
+    "PlaybackPlanVariantDto",
     "PlaybackRecommendationDto",
+    "PlaybackSessionDto",
     "PlaybackSnapshotDto",
     "PlaybackState",
     "PreparedPlaybackDto",
