@@ -1,0 +1,29 @@
+html[data-theme='minimalist'] {
+  --accent: #a7b7cb;
+  --accent-hover: #c4d0df;
+  --accent-cyan: #d0d8e5;
+}
+html[data-theme='slate'] {
+  --accent: #6ca7d8;
+  --accent-hover: #83b8e3;
+  --accent-cyan: #79d5e8;
+}
+html[data-theme='cyberpunk'] {
+  --accent: #ef62d2;
+  --accent-hover: #f17adf;
+  --accent-cyan: #54f4ec;
+}
+html[data-theme='classic'] {
+  --accent: #d8a85b;
+  --accent-hover: #e1b875;
+  --accent-cyan: #8cc7cf;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

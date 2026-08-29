@@ -82,5 +82,12 @@ _site/
 # Rust build artifacts
 rust/target/
 
+# Desktop frontend/build artifacts
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/test-results/
+
 # Local benchmark worktree; never commit the linked checkout.
 .bench-worktree/
