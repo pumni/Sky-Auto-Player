@@ -14,10 +14,12 @@ from sky_music.config import (
     load_config,
     normalize_fps_value,
     normalize_hold_frames,
-    persist_playback_defaults,
     save_config,
 )
-from sky_music.domain.hold_timing import DEFAULT_HOLD_FRAMES
+from sky_music.domain.hold_timing import (
+    DEFAULT_HOLD_FRAMES,
+    validate_hold_frames,
+)
 
 THEME_IDS: frozenset[str] = frozenset({"aurora", "minimalist", "slate", "cyberpunk", "classic"})
 BACKGROUND_MODES: frozenset[str] = frozenset({"transparent", "painted"})
@@ -115,6 +117,47 @@ def _normalized_interval(value: object) -> int:
     return max(0, value)
 
 
+def _normalized_bool(value: object, default: bool = False) -> bool:
+    return value if type(value) is bool else default
+
+
+def _validate_write_tempo(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("tempo_scale must be a finite positive number")
+    candidate = float(value)
+    if not math.isfinite(candidate) or candidate <= 0:
+        raise ValueError("tempo_scale must be a finite positive number")
+    return candidate
+
+
+def _validate_write_hold_frames(value: object) -> float:
+    try:
+        return validate_hold_frames(value)
+    except ValueError as exc:
+        raise ValueError("hold_frames must be one of 1.0, 1.25, or 1.5") from exc
+
+
+def _validate_write_fps(value: object) -> int:
+    if type(value) is not int or value not in VALID_FPS:
+        raise ValueError(f"fps must be one of {VALID_FPS}")
+    return value
+
+
+def _validate_write_bool(value: object, field: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{field} must be a boolean")
+    return value
+
+
+def _validate_write_theme(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("theme must be a known theme ID")
+    normalized = value.strip().casefold()
+    if normalized not in THEME_IDS:
+        raise ValueError("theme must be a known theme ID")
+    return normalized
+
+
 def normalize_application_settings(cfg: AppConfig) -> ApplicationSettings:
     """Convert an ``AppConfig`` into the validated adapter-facing view."""
     hotkeys = cfg.hotkeys
@@ -126,11 +169,11 @@ def normalize_application_settings(cfg: AppConfig) -> ApplicationSettings:
         default_hold_frames=normalize_hold_frames(cfg.default_hold_frames, DEFAULT_HOLD_FRAMES),
         default_tempo_scale=_normalized_tempo(cfg.default_tempo_scale),
         game_fps=normalize_fps_value(cfg.game_fps if cfg.game_fps in VALID_FPS else DEFAULT_GAME_FPS),
-        telemetry_enabled=bool(cfg.telemetry_enabled_by_default),
-        verbose_hud=bool(cfg.verbose_hud),
+        telemetry_enabled=_normalized_bool(cfg.telemetry_enabled_by_default),
+        verbose_hud=_normalized_bool(cfg.verbose_hud),
         songs_dir=Path(cfg.songs_dir),
         sky_process_names=_normalized_process_names(cfg.sky_process_names),
-        allow_title_fallback=bool(cfg.allow_title_fallback),
+        allow_title_fallback=_normalized_bool(cfg.allow_title_fallback),
         hotkeys=HotkeySettings(
             pause=str(hotkeys.pause),
             skip=str(hotkeys.skip),
@@ -143,7 +186,7 @@ def normalize_application_settings(cfg: AppConfig) -> ApplicationSettings:
             prompt_on_high_risk=bool(safety.prompt_on_high_risk),
         ),
         update_preferences=UpdatePreferences(
-            auto_check=bool(update.auto_check),
+            auto_check=_normalized_bool(update.auto_check, default=True),
             channel=update.channel if update.channel in {"stable", "beta"} else "stable",
             skip_version=str(update.skip_version),
             check_interval_s=_normalized_interval(update.check_interval_s),
@@ -171,27 +214,54 @@ class SettingsService:
         tempo_scale: float,
         fps: int,
     ) -> ApplicationSettings:
-        persist_playback_defaults(
-            self._cfg,
-            hold_frames=hold_frames,
-            tempo_scale=tempo_scale,
-            fps=fps,
-        )
+        normalized_hold_frames = _validate_write_hold_frames(hold_frames)
+        normalized_tempo_scale = _validate_write_tempo(tempo_scale)
+        normalized_fps = _validate_write_fps(fps)
+        self._cfg.default_hold_frames = normalized_hold_frames
+        self._cfg.default_tempo_scale = normalized_tempo_scale
+        self._cfg.game_fps = normalized_fps
+        save_config(self._cfg)
         return self.snapshot()
 
+    def set_hold_frames(self, hold_frames: float) -> ApplicationSettings:
+        settings = self.snapshot()
+        return self.update_playback_defaults(
+            hold_frames=hold_frames,
+            tempo_scale=settings.default_tempo_scale,
+            fps=settings.game_fps,
+        )
+
+    def set_tempo_scale(self, tempo_scale: float) -> ApplicationSettings:
+        settings = self.snapshot()
+        return self.update_playback_defaults(
+            hold_frames=settings.default_hold_frames,
+            tempo_scale=tempo_scale,
+            fps=settings.game_fps,
+        )
+
+    def set_fps(self, fps: int) -> ApplicationSettings:
+        settings = self.snapshot()
+        return self.update_playback_defaults(
+            hold_frames=settings.default_hold_frames,
+            tempo_scale=settings.default_tempo_scale,
+            fps=fps,
+        )
+
     def set_theme(self, theme: str) -> ApplicationSettings:
-        normalized = _normalized_theme(theme)
+        normalized = _validate_write_theme(theme)
         self._cfg.theme = normalized
         save_config(self._cfg)
         return self.snapshot()
 
     def set_telemetry_enabled(self, enabled: bool) -> ApplicationSettings:
-        self._cfg.telemetry_enabled_by_default = bool(enabled)
+        self._cfg.telemetry_enabled_by_default = _validate_write_bool(
+            enabled, "telemetry_enabled"
+        )
         save_config(self._cfg)
         return self.snapshot()
 
     def set_verbose_hud(self, enabled: bool) -> ApplicationSettings:
-        self._cfg.verbose_hud = bool(enabled)
+        self._cfg.verbose_hud = _validate_write_bool(enabled, "verbose_hud")
         save_config(self._cfg)
         return self.snapshot()
 

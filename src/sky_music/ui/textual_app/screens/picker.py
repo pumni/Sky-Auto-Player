@@ -22,12 +22,6 @@ from textual.widgets import DataTable, Input
 from sky_music.config import (
     AppConfig,
     load_config,
-    persist_calibration_defaults,
-    persist_default_fps,
-    persist_default_hold_frames,
-    persist_default_tempo,
-    resolve_game_fps,
-    save_config,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import BackgroundScope, ExecutorResource
@@ -45,7 +39,6 @@ from sky_music.ui.picker import (
     TEMPO_OPTIONS,
     SongPickerResult,
 )
-from sky_music.ui.picker_helpers import save_theme
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
     pad_text,
@@ -492,7 +485,6 @@ class PickerScreen(Screen[SongPickerResult]):
         self._apply_catalog_choices(message.choices)
 
     def _apply_catalog_choices(self, choices: list[SongChoice]) -> None:
-        self._catalog_service.replace_paths(choice.path for choice in choices)
         self.choices = choices
         self.filtered = rank_song_choices(self.choices, self.search_query)
         self._render_table()
@@ -1095,8 +1087,8 @@ class PickerScreen(Screen[SongPickerResult]):
         if value is None:
             self._focus_table()
             return
-        self.hold_frames = float(cast(float, value))
-        persist_default_hold_frames(self.cfg, self.hold_frames)
+        settings = self.settings_service.set_hold_frames(float(cast(float, value)))
+        self.hold_frames = settings.default_hold_frames
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_hold_frames_changed(self.hold_frames)
 
@@ -1109,8 +1101,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             return
         assert value is not None
-        self.tempo_scale = cast(float, value)
-        persist_default_tempo(self.cfg, self.tempo_scale)
+        settings = self.settings_service.set_tempo_scale(cast(float, value))
+        self.tempo_scale = settings.default_tempo_scale
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_tempo_changed(self.tempo_scale)
 
@@ -1130,8 +1122,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             return
         assert value is not None
-        self.fps = resolve_game_fps(cast(int, value))
-        persist_default_fps(self.cfg, self.fps)
+        settings = self.settings_service.set_fps(cast(int, value))
+        self.fps = settings.game_fps
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_fps_changed(self.fps)
 
@@ -1143,9 +1135,10 @@ class PickerScreen(Screen[SongPickerResult]):
         if value is None:
             self._focus_table()
             return
-        self.active_theme = self._normalize_theme_name(str(value))
-        save_theme(self.active_theme)
-        self.cfg.theme = self.active_theme
+        if not isinstance(value, str):
+            raise ValueError("theme selection must be a theme ID")
+        settings = self.settings_service.set_theme(value)
+        self.active_theme = settings.theme
         self._apply_theme_class()
         self._render_status()
         self._render_table()
@@ -1464,15 +1457,14 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             cast(PickerAppHost, self.app).on_picker_snapshot_calibration_state(None)
             return
-        persist_calibration_defaults(
-            self.cfg,
+        settings = self.settings_service.update_playback_defaults(
             hold_frames=value.hold_frames,
             tempo_scale=value.tempo_scale,
             fps=value.fps,
         )
-        self.hold_frames = value.hold_frames
-        self.tempo_scale = value.tempo_scale
-        self.fps = resolve_game_fps(value.fps)
+        self.hold_frames = settings.default_hold_frames
+        self.tempo_scale = settings.default_tempo_scale
+        self.fps = settings.game_fps
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_snapshot_calibration_state(value)
 
@@ -1485,16 +1477,14 @@ class PickerScreen(Screen[SongPickerResult]):
     def action_toggle_hud(self) -> None:
         self.verbose_hud = not self.verbose_hud
         cast(PickerAppHost, self.app).on_picker_verbose_hud_changed(self.verbose_hud)
-        self.cfg.verbose_hud = self.verbose_hud
-        save_config(self.cfg)
+        self.settings_service.set_verbose_hud(self.verbose_hud)
         self._render_status()
         self._focus_table()
 
     def action_toggle_telemetry(self) -> None:
         self.telemetry_enabled = not self.telemetry_enabled
         cast(PickerAppHost, self.app).on_picker_telemetry_enabled_changed(self.telemetry_enabled)
-        self.cfg.telemetry_enabled_by_default = self.telemetry_enabled
-        save_config(self.cfg)
+        self.settings_service.set_telemetry_enabled(self.telemetry_enabled)
         self._render_status()
         self._focus_table()
 

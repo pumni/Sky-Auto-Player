@@ -20,10 +20,11 @@ def load_saved_theme() -> str:
     return load_config().theme
 
 def save_theme(theme_name: str) -> None:
-    from sky_music.config import load_config, save_config
-    cfg = load_config()
-    cfg.theme = theme_name
-    save_config(cfg)
+    # Legacy helper retained for CLI/TUI callers; persistence remains owned by
+    # the shared application settings service.
+    from sky_music.orchestration.settings_service import SettingsService
+
+    SettingsService().set_theme(theme_name)
 
 def load_song_choices() -> list[Path]:
     # Keep this legacy path-based helper for CLI/TUI callers, while the shared

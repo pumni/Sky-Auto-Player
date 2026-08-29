@@ -31,9 +31,20 @@ class PlaybackConfigDto:
 
 
 @dataclass(frozen=True, slots=True)
-class OptionSetDto:
-    name: str
-    values: tuple[str, ...]
+class NativeBuildDto:
+    native_build_commit: str
+    native_version: str
+    schema_version: int
+    native_abi: str
+    rustc_version: str
+    win32_backend: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackOptionSetsDto:
+    hold_frames: tuple[float, ...]
+    tempo_scales: tuple[float, ...]
+    fps: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,9 +58,9 @@ class UpdatePreferencesDto:
 class BootstrapDto:
     app_version: str
     protocol_version: int
-    native_build: str
+    native_build: NativeBuildDto
     playback_defaults: PlaybackConfigDto
-    option_sets: tuple[OptionSetDto, ...]
+    option_sets: PlaybackOptionSetsDto
     theme: str
     telemetry_enabled: bool
     update_preferences: UpdatePreferencesDto
@@ -67,22 +78,35 @@ class SongRowDto:
 
 
 @dataclass(frozen=True, slots=True)
+class RiskSummaryDto:
+    level: RiskLevel
+    headline: str
+    reasons: tuple[str, ...]
+    recommendations: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackRecommendationDto:
+    recommended_hold_frames: float | None
+    recommended_tempo_scale: float | None
+    summary: str
+
+
+@dataclass(frozen=True, slots=True)
 class SongDetailDto:
     song_id: str
     title: str
     duration_us: int | None
     note_count: int | None
     format_label: str
-    risk: RiskLevel
-    recommendation: str
+    risk: RiskSummaryDto
+    recommendation: PlaybackRecommendationDto | None
 
 
 @dataclass(frozen=True, slots=True)
-class RiskSummaryDto:
-    level: RiskLevel
-    headline: str
-    reasons: tuple[str, ...]
-    recommendations: tuple[str, ...]
+class RiskDecisionDto:
+    decision: str
+    label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +116,7 @@ class PreparedPlaybackDto:
     config: PlaybackConfigDto
     admission: Admission
     risk: RiskSummaryDto
-    decisions: tuple[str, ...]
+    decisions: tuple[RiskDecisionDto, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +144,8 @@ class DiagnosticsSnapshotDto:
     late_2ms: int
     late_5ms: int
     late_10ms: int
-    active_keys: tuple[str, ...]
-    stuck_keys: tuple[str, ...]
+    active_keys: int
+    stuck_keys: int
     keys_dropped: int
     chord_split_events: int
     backend_status: str
@@ -136,11 +160,14 @@ __all__ = [
     "FocusState",
     "HealthState",
     "MetadataState",
-    "OptionSetDto",
+    "NativeBuildDto",
     "PlaybackConfigDto",
+    "PlaybackOptionSetsDto",
+    "PlaybackRecommendationDto",
     "PlaybackSnapshotDto",
     "PlaybackState",
     "PreparedPlaybackDto",
+    "RiskDecisionDto",
     "RiskLevel",
     "RiskSummaryDto",
     "SongDetailDto",

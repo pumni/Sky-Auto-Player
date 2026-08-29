@@ -189,7 +189,9 @@ class CatalogService:
             by_id[entry.song_id] = entry
             entries.append(entry)
 
-        entries.sort(key=lambda entry: (entry.search_key, entry.title.casefold(), str(entry.path).casefold()))
+        # Keep the legacy stable sort key.  ``list.sort`` preserves the scan
+        # order for exact ties, which is part of the existing picker behavior.
+        entries.sort(key=lambda entry: (entry.search_key, entry.title.casefold()))
         with self._lock:
             self._generation += 1
             self._entries = tuple(entries)
@@ -203,9 +205,8 @@ class CatalogService:
 
     def entries(self, *, generation: int | None = None) -> tuple[CatalogEntry, ...]:
         """Return backend entries for trusted in-process adapters such as Textual."""
-        self._check_generation(generation)
-        with self._lock:
-            return self._entries
+        _generation, entries = self._entries_snapshot(generation)
+        return entries
 
     def search(
         self,
@@ -218,10 +219,17 @@ class CatalogService:
         """Return an accent-insensitive fuzzy-search page without paths."""
         _validate_page(page, page_size)
         normalized = _validate_query(query)
-        entries = self.search_entries(normalized, generation=generation)
+        catalog_generation, entries = self._entries_snapshot(generation)
+        if normalized:
+            ranked_indices = self.rank_search_keys(
+                [entry.search_key for entry in entries],
+                normalized,
+                score_cutoff=FUZZY_SCORE_CUTOFF,
+            )
+            entries = tuple(entries[index] for index in ranked_indices)
         start = page * page_size
         items = tuple(CatalogRow(entry.song_id, entry.title) for entry in entries[start : start + page_size])
-        return CatalogPage(items, page, page_size, len(entries), self.generation)
+        return CatalogPage(items, page, page_size, len(entries), catalog_generation)
 
     def search_entries(
         self,
@@ -234,9 +242,7 @@ class CatalogService:
         normalized = _validate_query(query)
         if not 0 <= score_cutoff <= 100:
             raise CatalogError("catalog score_cutoff must be between 0 and 100")
-        self._check_generation(generation)
-        with self._lock:
-            entries = self._entries
+        _catalog_generation, entries = self._entries_snapshot(generation)
         if not normalized:
             return entries
         ranked_indices = self.rank_search_keys(
@@ -278,7 +284,6 @@ class CatalogService:
 
     def path_for_song_id(self, song_id: str, *, generation: int | None = None) -> Path:
         """Resolve an opaque ID to its backend path, rejecting malformed IDs."""
-        self._check_generation(generation)
         if (
             not isinstance(song_id, str)
             or len(song_id) != 32
@@ -286,13 +291,23 @@ class CatalogService:
         ):
             raise CatalogLookupError("malformed song ID")
         with self._lock:
+            self._check_generation_locked(generation)
             entry = self._by_id.get(song_id)
         if entry is None:
             raise CatalogLookupError("unknown song ID")
         return entry.path
 
-    def _check_generation(self, generation: int | None) -> None:
-        if generation is not None and generation != self.generation:
+    def _entries_snapshot(
+        self,
+        generation: int | None,
+    ) -> tuple[int, tuple[CatalogEntry, ...]]:
+        """Read one generation and its entries as a linearizable snapshot."""
+        with self._lock:
+            self._check_generation_locked(generation)
+            return self._generation, self._entries
+
+    def _check_generation_locked(self, generation: int | None) -> None:
+        if generation is not None and generation != self._generation:
             raise CatalogGenerationError("catalog generation is stale")
 
 

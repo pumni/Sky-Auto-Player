@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from textual.widgets import Input
 
+import sky_music.orchestration.settings_service as settings_service_module
 from sky_music.config import AppConfig
 from sky_music.infrastructure.background import WorkerSnapshot
 from sky_music.infrastructure.calibration_loader import CalibrationStatus
@@ -98,6 +99,9 @@ def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
         assert table.row_count == len(SONGS)  # type: ignore[attr-defined]
+        picker = app._find_picker_screen()
+        assert picker is not None
+        assert picker._catalog_service.generation == 1
         await pilot.pause()
         await pilot.press("escape")
 
@@ -236,7 +240,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
-        picker_module,
+        settings_service_module,
         "save_config",
         lambda cfg: saves.append((cfg.verbose_hud, cfg.telemetry_enabled_by_default)),
     )
@@ -376,7 +380,11 @@ def test_hold_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     # the test's fake-instance count assertion would silently fail.
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(picker_module, "persist_default_hold_frames", lambda _cfg, hold: persisted.append(hold))
+    monkeypatch.setattr(
+        settings_service_module,
+        "save_config",
+        lambda cfg: persisted.append(cfg.default_hold_frames),
+    )
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_hold()
@@ -401,9 +409,15 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
     persisted_theme: list[str] = []
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(picker_module, "persist_default_tempo", lambda _cfg, tempo: persisted_tempo.append(tempo))
-    monkeypatch.setattr(picker_module, "persist_default_fps", lambda _cfg, fps: persisted_fps.append(fps))
-    monkeypatch.setattr(picker_module, "save_theme", lambda theme: persisted_theme.append(theme))
+    monkeypatch.setattr(
+        settings_service_module,
+        "save_config",
+        lambda cfg: (
+            persisted_tempo.append(cfg.default_tempo_scale),
+            persisted_fps.append(cfg.game_fps),
+            persisted_theme.append(cfg.theme),
+        ),
+    )
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_tempo()
@@ -425,9 +439,9 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert persisted_tempo == [0.90]
-    assert persisted_fps == [30]
-    assert persisted_theme == ["minimalist"]
+    assert persisted_tempo == [0.90, 0.90, 0.90]
+    assert persisted_fps == [60, 30, 30]
+    assert persisted_theme == ["aurora", "aurora", "minimalist"]
 
 
 def test_fps_menu_has_no_auto() -> None:
@@ -550,7 +564,7 @@ def test_hud_and_telemetry_toggles_save_config(monkeypatch) -> None:
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
-        picker_module,
+        settings_service_module,
         "save_config",
         lambda cfg: saves.append((cfg.verbose_hud, cfg.telemetry_enabled_by_default)),
     )
@@ -659,9 +673,11 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
         lambda: summary,
     )
     monkeypatch.setattr(
-        picker_module,
-        "persist_calibration_defaults",
-        lambda _cfg, *, hold_frames, tempo_scale, fps: persisted.append((hold_frames, tempo_scale, fps)),
+        settings_service_module,
+        "save_config",
+        lambda cfg: persisted.append(
+            (cfg.default_hold_frames, cfg.default_tempo_scale, cfg.game_fps)
+        ),
     )
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:

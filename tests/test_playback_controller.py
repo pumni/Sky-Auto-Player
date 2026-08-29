@@ -1,7 +1,7 @@
 from sky_music.config import AppConfig
 from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.ui.textual_app.playback_controller import (
+from sky_music.orchestration.playback_controller import (
     PlaybackError,
     PlaybackPlan,
     prepare_playback,
