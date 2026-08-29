@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sky Auto Player",
+  "version": "3.5.0",
+  "identifier": "com.skyautoplayer.desktop",
+  "build": {
+    "beforeDevCommand": "bun run dev -- --host 127.0.0.1",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Sky Auto Player",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 920,
+        "minHeight": 620,
+        "resizable": true,
+        "maximizable": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"],
+    "targets": "all"
+  }
+}
