@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,18 @@ from sky_music.domain.hold_timing import (
 
 THEME_IDS: frozenset[str] = frozenset({"aurora", "minimalist", "slate", "cyberpunk", "classic"})
 BACKGROUND_MODES: frozenset[str] = frozenset({"transparent", "painted"})
+HOLD_FRAME_OPTIONS: tuple[float, ...] = (1.0, 1.25, 1.5)
+TEMPO_SCALE_OPTIONS: tuple[float, ...] = (0.90, 0.95, 1.00, 1.05, 1.10)
+PATCHABLE_SETTINGS: frozenset[str] = frozenset(
+    {
+        "default_hold_frames",
+        "default_tempo_scale",
+        "game_fps",
+        "theme",
+        "telemetry_enabled",
+        "verbose_hud",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +216,12 @@ class SettingsService:
     def snapshot(self) -> ApplicationSettings:
         return normalize_application_settings(self._cfg)
 
+    def config_snapshot(self) -> AppConfig:
+        """Return a detached config for trusted read-only orchestration work."""
+        from copy import deepcopy
+
+        return deepcopy(self._cfg)
+
     def reload(self) -> ApplicationSettings:
         self._cfg = load_config(force_reload=True)
         return self.snapshot()
@@ -265,9 +284,61 @@ class SettingsService:
         save_config(self._cfg)
         return self.snapshot()
 
+    def patch(self, values: Mapping[str, object]) -> ApplicationSettings:
+        """Atomically validate and persist the supported application settings."""
+        if not isinstance(values, Mapping):
+            raise ValueError("settings patch must be an object")
+        unknown = [
+            key for key in values if not isinstance(key, str) or key not in PATCHABLE_SETTINGS
+        ]
+        if unknown:
+            labels = ", ".join(sorted(str(key) for key in unknown))
+            raise ValueError(f"unsupported settings: {labels}")
+
+        normalized: dict[str, object] = {}
+        if "default_hold_frames" in values:
+            normalized["default_hold_frames"] = _validate_write_hold_frames(
+                values["default_hold_frames"]
+            )
+        if "default_tempo_scale" in values:
+            normalized["default_tempo_scale"] = _validate_write_tempo(
+                values["default_tempo_scale"]
+            )
+        if "game_fps" in values:
+            normalized["game_fps"] = _validate_write_fps(values["game_fps"])
+        if "theme" in values:
+            normalized["theme"] = _validate_write_theme(values["theme"])
+        if "telemetry_enabled" in values:
+            normalized["telemetry_enabled"] = _validate_write_bool(
+                values["telemetry_enabled"], "telemetry_enabled"
+            )
+        if "verbose_hud" in values:
+            normalized["verbose_hud"] = _validate_write_bool(
+                values["verbose_hud"], "verbose_hud"
+            )
+
+        if "default_hold_frames" in normalized:
+            self._cfg.default_hold_frames = normalized["default_hold_frames"]  # type: ignore[assignment]
+        if "default_tempo_scale" in normalized:
+            self._cfg.default_tempo_scale = normalized["default_tempo_scale"]  # type: ignore[assignment]
+        if "game_fps" in normalized:
+            self._cfg.game_fps = normalized["game_fps"]  # type: ignore[assignment]
+        if "theme" in normalized:
+            self._cfg.theme = normalized["theme"]  # type: ignore[assignment]
+        if "telemetry_enabled" in normalized:
+            self._cfg.telemetry_enabled_by_default = normalized["telemetry_enabled"]  # type: ignore[assignment]
+        if "verbose_hud" in normalized:
+            self._cfg.verbose_hud = normalized["verbose_hud"]  # type: ignore[assignment]
+        if normalized:
+            save_config(self._cfg)
+        return self.snapshot()
+
 
 __all__ = [
     "BACKGROUND_MODES",
+    "HOLD_FRAME_OPTIONS",
+    "PATCHABLE_SETTINGS",
+    "TEMPO_SCALE_OPTIONS",
     "THEME_IDS",
     "ApplicationSettings",
     "HotkeySettings",
