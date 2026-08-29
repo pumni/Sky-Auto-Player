@@ -74,6 +74,17 @@ class CatalogPage:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogWindow:
+    """An offset/limit window from one immutable catalog generation."""
+
+    items: tuple[CatalogRow, ...]
+    offset: int
+    limit: int
+    total: int
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogSnapshot:
     """The complete path-free catalog view after one successful scan."""
 
@@ -231,6 +242,31 @@ class CatalogService:
         items = tuple(CatalogRow(entry.song_id, entry.title) for entry in entries[start : start + page_size])
         return CatalogPage(items, page, page_size, len(entries), catalog_generation)
 
+    def search_window(
+        self,
+        query: str = "",
+        *,
+        offset: int = 0,
+        limit: int = DEFAULT_PAGE_SIZE,
+        generation: int | None = None,
+    ) -> CatalogWindow:
+        """Return an arbitrary offset/limit window from one catalog snapshot."""
+        if type(offset) is not int or offset < 0:
+            raise CatalogError("catalog offset must be a non-negative integer")
+        _validate_page(0, limit)
+        normalized = _validate_query(query)
+        catalog_generation, entries = self._entries_snapshot(generation)
+        if normalized:
+            ranked_indices = self.rank_search_keys(
+                [entry.search_key for entry in entries],
+                normalized,
+                score_cutoff=FUZZY_SCORE_CUTOFF,
+            )
+            entries = tuple(entries[index] for index in ranked_indices)
+        window = entries[offset : offset + limit]
+        items = tuple(CatalogRow(entry.song_id, entry.title) for entry in window)
+        return CatalogWindow(items, offset, limit, len(entries), catalog_generation)
+
     def search_entries(
         self,
         query: str = "",
@@ -325,6 +361,7 @@ __all__ = [
     "CatalogRow",
     "CatalogService",
     "CatalogSnapshot",
+    "CatalogWindow",
     "canonical_path",
     "normalize_search_text",
     "normalized_canonical_path",
