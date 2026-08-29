@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { DesktopStoreHook, DesktopStore } from '../../state/store';
 
 interface LibraryPanelProps {
@@ -21,6 +21,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const error = useStore((store: DesktopStore) => store.library.error);
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
+  const [activeIndex, setActiveIndex] = useState(0);
   const virtualizer = useVirtualizer({
     count: total,
     getScrollElement: () => parentRef.current,
@@ -41,6 +42,47 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   useEffect(() => {
     void setViewport(first, last);
   }, [first, last, setViewport]);
+
+  useEffect(() => {
+    setActiveIndex((current) => (total === 0 ? 0 : Math.min(current, total - 1)));
+  }, [total]);
+
+  const activeRow = rows[activeIndex];
+  const moveActive = (nextIndex: number) => {
+    const next = Math.max(0, Math.min(total - 1, nextIndex));
+    setActiveIndex(next);
+    virtualizer.scrollToIndex(next, { align: 'auto' });
+    const row = rows[next];
+    if (row) void selectSong(row.song_id);
+  };
+
+  const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (total === 0) return;
+    const selectedIndex = selectedSongId
+      ? rows.findIndex((row) => row?.song_id === selectedSongId)
+      : -1;
+    const current = selectedIndex >= 0 ? selectedIndex : activeIndex;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActive(current + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActive(current - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      moveActive(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      moveActive(total - 1);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      const row = rows[current];
+      if (row) {
+        event.preventDefault();
+        setActiveIndex(current);
+        void selectSong(row.song_id);
+      }
+    }
+  };
 
   return (
     <section className="library-panel" aria-labelledby="library-title">
@@ -65,7 +107,16 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
           <span className="muted">Try another search or reload the library.</span>
         </div>
       ) : (
-        <div ref={parentRef} className="virtual-list" role="listbox" aria-label="Songs">
+        <div
+          ref={parentRef}
+          className="virtual-list"
+          role="listbox"
+          aria-label="Songs"
+          aria-activedescendant={activeRow ? `song-option-${activeRow.song_id}` : undefined}
+          aria-multiselectable="false"
+          tabIndex={0}
+          onKeyDown={onListKeyDown}
+        >
           <div className="virtual-list-inner" style={{ height: virtualizer.getTotalSize() }}>
             {renderedItems.map((virtualRow) => {
               const row = rows[virtualRow.index];
@@ -85,11 +136,19 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
               return (
                 <button
                   key={row.song_id}
+                  id={`song-option-${row.song_id}`}
                   className={`song-row${selected ? ' is-selected' : ''}`}
                   type="button"
                   role="option"
                   aria-selected={selected}
-                  onClick={() => void selectSong(row.song_id)}
+                  aria-setsize={total}
+                  aria-posinset={virtualRow.index + 1}
+                  tabIndex={-1}
+                  onFocus={() => setActiveIndex(virtualRow.index)}
+                  onClick={() => {
+                    setActiveIndex(virtualRow.index);
+                    void selectSong(row.song_id);
+                  }}
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
                   <span className="song-row-title">{row.title}</span>

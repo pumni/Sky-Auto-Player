@@ -1,6 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
+import type { SettingsPatch } from '../bridge/DesktopBridge';
 import { createDesktopStore } from './store';
 
 describe('desktop store', () => {
@@ -108,5 +109,33 @@ describe('desktop store', () => {
     await act(async () => store.getState().setViewport(200, 220));
     expect(viewportCalls).toBe(0);
     expect(store.getState().library.rows[200]?.title).toBe('Song 212');
+  });
+
+  it('serializes settings mutations in user-intent order and preserves fields', async () => {
+    const bridge = createMockBridge();
+    const originalPatch = bridge.patchSettings;
+    const calls: SettingsPatch[] = [];
+    let releaseFirst: (() => void) | undefined;
+    bridge.patchSettings = async (patch) => {
+      calls.push(patch);
+      if (calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return originalPatch(patch);
+    };
+    const store = createDesktopStore(bridge);
+
+    const first = store.getState().patchSettings({ theme: 'slate' });
+    const second = store.getState().patchSettings({ verboseHud: true });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ theme: 'slate' });
+
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(calls).toEqual([{ theme: 'slate' }, { verboseHud: true }]);
+    expect(store.getState().settings?.theme).toBe('slate');
+    expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 });

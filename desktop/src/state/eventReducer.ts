@@ -14,11 +14,10 @@ export const initialEventState: EventState = {
 
 export function reduceEvent(state: EventState, event: UiEvent): EventState {
   if (event.name === 'catalog.changed') {
-    const payload = event.payload as { generation: number; total: number };
     return {
       ...state,
-      catalogGeneration: payload.generation,
-      catalogTotal: payload.total,
+      catalogGeneration: event.payload.generation,
+      catalogTotal: event.payload.total,
     };
   }
   if (event.name === 'core.fatal') {

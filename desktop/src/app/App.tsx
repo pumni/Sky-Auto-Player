@@ -37,9 +37,6 @@ export function App({ bridge }: AppProps) {
         event.preventDefault();
         document.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
       }
-      if (event.key === 'Escape' && settingsOpen) {
-        useStore.getState().setSettingsOpen(false);
-      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

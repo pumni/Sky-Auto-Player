@@ -45,6 +45,7 @@ export interface DesktopStore {
 
 export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
+  let settingsMutationTail: Promise<void> = Promise.resolve();
   const pageSize = 200;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
@@ -297,15 +298,24 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       async patchSettings(patch) {
-        set({ settingsState: 'loading' });
-        try {
-          const settings = await bridge.patchSettings(patch);
-          set({ settings, settingsState: 'ready' });
-          document.documentElement.dataset.theme = settings.theme;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          set({ settingsState: 'fatal', fatal: message });
-        }
+        const mutation = settingsMutationTail.then(async () => {
+          set({ settingsState: 'loading' });
+          try {
+            const settings = await bridge.patchSettings(patch);
+            set({ settings, settingsState: 'ready' });
+            document.documentElement.dataset.theme = settings.theme;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            set({ settingsState: 'fatal', fatal: message });
+          }
+        });
+        // Keep the queue alive after an individual mutation fails. Later user
+        // intent must still be applied in order.
+        settingsMutationTail = mutation.then(
+          () => undefined,
+          () => undefined,
+        );
+        return mutation;
       },
 
       setSettingsOpen(open) {

@@ -69,20 +69,7 @@ export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
   metadata_state: 'pending' | 'ready' | 'error';
 };
 
-export interface CatalogChangedEvent {
-  generation: number;
-  total: number;
-}
-
-export interface CoreFatalEvent {
-  code: string;
-  message: string;
-}
-
-export type UiEvent =
-  | { v: number; name: 'catalog.changed'; payload: CatalogChangedEvent }
-  | { v: number; name: 'core.fatal'; payload: CoreFatalEvent }
-  | { v: number; name: string; payload: Record<string, unknown> };
+export type UiEvent = GeneratedUiEvent;
 
 export type Unsubscribe = () => void;
 

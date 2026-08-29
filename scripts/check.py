@@ -131,6 +131,23 @@ GROUPS: dict[str, tuple[Check, ...]] = {
             (sys.executable, "scripts/generate_desktop_bindings.py"),
         ),
         Check(
+            "desktop Tauri command decoder tests",
+            (
+                "cargo",
+                "test",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                "sky_desktop_shell",
+                "--lib",
+                "--no-default-features",
+                "--features",
+                "tauri-test",
+                "generated_tauri_handler_decodes_params_envelope",
+                "--locked",
+            ),
+        ),
+        Check(
             "desktop generated bindings are clean",
             ("git", "diff", "--exit-code", "--", "desktop/src/bridge/generated"),
         ),

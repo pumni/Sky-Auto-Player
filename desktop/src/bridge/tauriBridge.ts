@@ -1,8 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   Bootstrap,
-  CatalogChangedEvent,
-  CoreFatalEvent,
   DesktopBridge,
   DetailRequest,
   SearchRequest,
@@ -16,23 +14,9 @@ import type {
   ViewportResult,
 } from './DesktopBridge';
 
-type CoreChannelEvent = {
-  v: number;
-  name: string;
-  payload: Record<string, unknown>;
-};
+type CoreChannelEvent = UiEvent;
 
 function normalizeEvent(event: CoreChannelEvent): UiEvent {
-  if (event.name === 'catalog.changed') {
-    return {
-      v: event.v,
-      name: event.name,
-      payload: event.payload as unknown as CatalogChangedEvent,
-    };
-  }
-  if (event.name === 'core.fatal') {
-    return { v: event.v, name: event.name, payload: event.payload as unknown as CoreFatalEvent };
-  }
   return event;
 }
 

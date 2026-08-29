@@ -1,4 +1,3 @@
-import { Button } from 'react-aria-components';
 import type { ReactNode } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../state/store';
 
@@ -10,7 +9,6 @@ interface BootstrapGateProps {
 export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
   const status = useStore((store: DesktopStore) => store.bootstrapState);
   const fatal = useStore((store: DesktopStore) => store.fatal);
-  const initialize = useStore((store: DesktopStore) => store.initialize);
 
   if (status === 'loading' || status === 'idle') {
     return (
@@ -31,9 +29,7 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
         <p className="eyebrow">CORE UNAVAILABLE</p>
         <h1>Sky Auto Player could not start.</h1>
         <p className="fatal-message">{fatal ?? 'The local Core returned an unknown error.'}</p>
-        <Button className="button button-primary" onPress={() => void initialize()}>
-          Try again
-        </Button>
+        <p className="muted">Close and reopen the application after correcting the Core setup.</p>
       </main>
     );
   }
