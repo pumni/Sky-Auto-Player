@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ NATIVE_INFO = RustBuildInfo(
 )
 
 
-def _request(method: str, params: dict[str, object] | None = None, request_id: int = 1) -> dict[str, object]:
+def _request(method: str, params: Mapping[str, object] | None = None, request_id: int = 1) -> dict[str, object]:
     return {
         "v": 1,
         "id": request_id,
