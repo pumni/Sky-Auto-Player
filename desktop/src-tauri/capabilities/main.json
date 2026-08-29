@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "Minimum permissions for the local Sky Auto Player desktop window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": []
 }
