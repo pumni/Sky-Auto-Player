@@ -222,8 +222,35 @@ export function createMockBridge(): DesktopBridge {
             : [
                 { decision: 'proceed', label: 'Proceed with current settings' },
                 { decision: 'use_recommended', label: 'Use recommended settings' },
+                { decision: 'dry_run', label: 'Run a dry-run first' },
               ],
         plan_fingerprint: 'mock-plan',
+        variants:
+          risk === 'low'
+            ? [
+                {
+                  decision: 'proceed',
+                  config: request.config,
+                  plan_fingerprint: 'mock-plan',
+                },
+              ]
+            : [
+                {
+                  decision: 'proceed',
+                  config: request.config,
+                  plan_fingerprint: 'mock-plan',
+                },
+                {
+                  decision: 'use_recommended',
+                  config: request.config,
+                  plan_fingerprint: 'mock-recommended-plan',
+                },
+                {
+                  decision: 'dry_run',
+                  config: { ...request.config, dry_run: true },
+                  plan_fingerprint: 'mock-dry-run-plan',
+                },
+              ],
         error_code: null,
         error_message: null,
       };
@@ -240,6 +267,12 @@ export function createMockBridge(): DesktopBridge {
         prepared_id: request.preparedId,
         song_id: session.songId,
         state: 'starting',
+        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: false },
+        plan_fingerprint: request.decisions.some((item) => item.decision === 'use_recommended')
+          ? 'mock-recommended-plan'
+          : request.decisions.some((item) => item.decision === 'dry_run')
+            ? 'mock-dry-run-plan'
+            : 'mock-plan',
       };
     },
     async stopPlayback(request) {
@@ -250,19 +283,37 @@ export function createMockBridge(): DesktopBridge {
         emitPlaybackState(session, 'stopping');
         emitPlaybackState(session, 'finished');
       }, 0);
-      return { accepted: true, session_id: request.sessionId, state: 'stopping' };
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'stopping',
+        pending_command: null,
+        reason: null,
+      };
     },
     async pausePlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
       const session = activeSession;
       setTimeout(() => emitPlaybackState(session, 'paused'), 0);
-      return { accepted: true, session_id: request.sessionId, state: 'paused' };
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'playing',
+        pending_command: 'pause',
+        reason: null,
+      };
     },
     async resumePlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
       const session = activeSession;
       setTimeout(() => emitPlaybackState(session, 'playing'), 0);
-      return { accepted: true, session_id: request.sessionId, state: 'playing' };
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'paused',
+        pending_command: 'resume',
+        reason: null,
+      };
     },
     async skipPlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
@@ -272,7 +323,13 @@ export function createMockBridge(): DesktopBridge {
         emitPlaybackState(session, 'stopping');
         emitPlaybackState(session, 'finished');
       }, 0);
-      return { accepted: true, session_id: request.sessionId, state: 'finished' };
+      return {
+        accepted: true,
+        session_id: request.sessionId,
+        state: 'stopping',
+        pending_command: null,
+        reason: null,
+      };
     },
     async subscribeUiEvents(listener) {
       listeners.add(listener);

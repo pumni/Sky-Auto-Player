@@ -65,6 +65,7 @@ pub struct PlaybackPrepareRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackConfigDto {
     pub hold_frames: f64,
     pub tempo_scale: f64,
@@ -75,9 +76,69 @@ pub struct PlaybackConfigDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackDecisionAcceptanceDto {
-    pub decision: String,
+    pub decision: PlaybackDecision,
     pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackAdmission {
+    Ready,
+    ConfirmationRequired,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackDecision {
+    Proceed,
+    UseRecommended,
+    DryRun,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackSessionState {
+    Starting,
+    Playing,
+    Paused,
+    Stopping,
+    Finished,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackControl {
+    Stop,
+    Pause,
+    Resume,
+    Skip,
+}
+
+impl PlaybackControl {
+    fn method(self) -> &'static str {
+        match self {
+            Self::Stop => "playback.stop",
+            Self::Pause => "playback.pause",
+            Self::Resume => "playback.resume",
+            Self::Skip => "playback.skip",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackPendingControl {
+    Pause,
+    Resume,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -252,32 +313,58 @@ pub struct SongDetailDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[serde(deny_unknown_fields)]
 pub struct RiskDecisionDto {
-    pub decision: String,
+    pub decision: PlaybackDecision,
     pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackPlanVariantDto {
+    pub decision: PlaybackDecision,
+    pub config: PlaybackConfigDto,
+    pub plan_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
 pub struct PreparedPlaybackDto {
     pub prepared_id: Option<String>,
     pub song: SongDetailDto,
     pub config: PlaybackConfigDto,
-    pub admission: String,
+    pub admission: PlaybackAdmission,
     pub risk: RiskSummaryDto,
     pub decisions: Vec<RiskDecisionDto>,
     pub plan_fingerprint: Option<String>,
+    pub variants: Vec<PlaybackPlanVariantDto>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackSessionDto {
     pub session_id: String,
     pub prepared_id: String,
     pub song_id: String,
-    pub state: String,
+    pub state: PlaybackSessionState,
+    pub config: PlaybackConfigDto,
+    pub plan_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackCommandAckDto {
+    pub accepted: bool,
+    pub session_id: String,
+    pub state: PlaybackSessionState,
+    pub pending_command: Option<PlaybackPendingControl>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -474,12 +561,12 @@ pub async fn start_playback(
 
 async fn playback_session_command(
     state: State<'_, AppState>,
-    method: &'static str,
+    control: PlaybackControl,
     params: PlaybackSessionCommandRequest,
-) -> Result<serde_json::Value, String> {
+) -> Result<PlaybackCommandAckDto, String> {
     blocking_request(
         state,
-        method,
+        control.method(),
         CorePlaybackSessionParams {
             session_id: params.session_id,
         },
@@ -491,32 +578,32 @@ async fn playback_session_command(
 pub async fn stop_playback(
     state: State<'_, AppState>,
     params: PlaybackSessionCommandRequest,
-) -> Result<serde_json::Value, String> {
-    playback_session_command(state, "playback.stop", params).await
+) -> Result<PlaybackCommandAckDto, String> {
+    playback_session_command(state, PlaybackControl::Stop, params).await
 }
 
 #[tauri::command]
 pub async fn pause_playback(
     state: State<'_, AppState>,
     params: PlaybackSessionCommandRequest,
-) -> Result<serde_json::Value, String> {
-    playback_session_command(state, "playback.pause", params).await
+) -> Result<PlaybackCommandAckDto, String> {
+    playback_session_command(state, PlaybackControl::Pause, params).await
 }
 
 #[tauri::command]
 pub async fn resume_playback(
     state: State<'_, AppState>,
     params: PlaybackSessionCommandRequest,
-) -> Result<serde_json::Value, String> {
-    playback_session_command(state, "playback.resume", params).await
+) -> Result<PlaybackCommandAckDto, String> {
+    playback_session_command(state, PlaybackControl::Resume, params).await
 }
 
 #[tauri::command]
 pub async fn skip_playback(
     state: State<'_, AppState>,
     params: PlaybackSessionCommandRequest,
-) -> Result<serde_json::Value, String> {
-    playback_session_command(state, "playback.skip", params).await
+) -> Result<PlaybackCommandAckDto, String> {
+    playback_session_command(state, PlaybackControl::Skip, params).await
 }
 
 #[tauri::command]
@@ -546,4 +633,33 @@ pub async fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
     .await
     .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlaybackCommandAckDto;
+    use serde_json::json;
+
+    #[test]
+    fn playback_command_ack_is_typed_and_rejects_unknown_fields() {
+        let value = serde_json::from_value::<PlaybackCommandAckDto>(json!({
+            "accepted": true,
+            "session_id": "a".repeat(32),
+            "state": "playing",
+            "pending_command": "pause",
+            "reason": null,
+        }))
+        .expect("valid playback acknowledgement");
+        assert!(value.accepted);
+
+        let unknown = serde_json::from_value::<PlaybackCommandAckDto>(json!({
+            "accepted": true,
+            "session_id": "a".repeat(32),
+            "state": "playing",
+            "pending_command": null,
+            "reason": null,
+            "extra": true,
+        }));
+        assert!(unknown.is_err());
+    }
 }

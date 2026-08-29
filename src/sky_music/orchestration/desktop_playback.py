@@ -18,7 +18,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, cast
 
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
@@ -27,9 +27,13 @@ from sky_music.orchestration.catalog_service import (
     CatalogLookupError,
 )
 from sky_music.orchestration.desktop_models import (
+    PlaybackCommandAckDto,
     PlaybackConfigDto,
+    PlaybackDecision,
     PlaybackDecisionAcceptanceDto,
     PlaybackFinishedDto,
+    PlaybackPendingControl,
+    PlaybackPlanVariantDto,
     PlaybackRecommendationDto,
     PlaybackSessionDto,
     PlaybackSnapshotDto,
@@ -51,6 +55,7 @@ from sky_music.orchestration.playback_controller import (
     PlaybackError,
     PlaybackPlan,
     prepare_playback,
+    rebuild_with,
 )
 
 MAX_PREPARED_PLANS = 64
@@ -73,9 +78,14 @@ class DesktopPlaybackControls:
     def __init__(self) -> None:
         self._commands: queue.Queue[str] = queue.Queue(maxsize=32)
         self._closed = threading.Event()
+        self._stop_requested = threading.Event()
 
     def push(self, command: str) -> None:
         if self._closed.is_set():
+            return
+        if command == "quit":
+            self._stop_requested.set()
+        elif self._stop_requested.is_set():
             return
         try:
             self._commands.put_nowait(command)
@@ -92,6 +102,15 @@ class DesktopPlaybackControls:
                     self._commands.put_nowait(command)
 
     def poll(self) -> str | None:
+        # Stop is a priority command. This prevents a queued pause/resume/skip
+        # from overtaking a user stop request at the native adapter boundary.
+        if self._stop_requested.is_set():
+            while True:
+                try:
+                    self._commands.get_nowait()
+                except queue.Empty:
+                    break
+            return "quit"
         try:
             return self._commands.get_nowait()
         except queue.Empty:
@@ -103,6 +122,9 @@ class DesktopPlaybackControls:
     def close(self) -> None:
         self._closed.set()
 
+    def request_stop(self) -> None:
+        self.push("quit")
+
 
 @dataclass(frozen=True, slots=True)
 class _PreparedRecord:
@@ -112,6 +134,7 @@ class _PreparedRecord:
     settings_fingerprint: str
     plan: PlaybackPlan
     dto: PreparedPlaybackDto
+    variants: dict[PlaybackDecision, PlaybackPlan]
 
 
 @dataclass(slots=True)
@@ -120,10 +143,13 @@ class _ActiveSession:
     prepared_id: str
     song_id: str
     plan: PlaybackPlan
+    config: PlaybackConfigDto
     dry_run: bool
     controls: DesktopPlaybackControls
     worker: threading.Thread | None = None
     state: PlaybackState = "starting"
+    stop_requested: bool = False
+    pending_control: PlaybackPendingControl | None = None
 
 
 _LEGAL_TRANSITIONS: dict[PlaybackState, frozenset[PlaybackState]] = {
@@ -167,7 +193,18 @@ class _SnapshotRenderer:
         # snapshot is deliberately the small bounded progress view below.
         return None
 
-    def render(self, current_seconds: float, total_seconds: float, _song_name: str, *, status: str, pre_roll_remaining_us: int = 0, input_path_degraded: bool = False, backend_health: object | None = None, **_kwargs: object) -> None:
+    def render(
+        self,
+        current_seconds: float,
+        total_seconds: float,
+        _song_name: str,
+        *,
+        status: str,
+        pre_roll_remaining_us: int = 0,
+        input_path_degraded: bool = False,
+        backend_health: object | None = None,
+        **_kwargs: object,
+    ) -> None:
         self._seq += 1
         current_us = max(0, round(current_seconds * 1_000_000))
         total_us = max(0, round(total_seconds * 1_000_000))
@@ -178,7 +215,13 @@ class _SnapshotRenderer:
             "paused": "paused",
             "playing": "playing",
         }.get(status, "playing")  # type: ignore[assignment]
-        focus_state = "unfocused" if status == "focus_lost" else "waiting" if status == "waiting_for_focus" else "focused"
+        focus_state = (
+            "unfocused"
+            if status == "focus_lost"
+            else "waiting"
+            if status == "waiting_for_focus"
+            else "focused"
+        )
         health = "degraded" if input_path_degraded else "healthy"
         if backend_health is not None and getattr(backend_health, "last_error", None):
             health = "error"
@@ -197,7 +240,9 @@ class _SnapshotRenderer:
         )
         if self._on_state is not None:
             self._on_state(state)
-        self._publish("playback.snapshot", asdict(snapshot) | {"session_id": self._session_id})
+        self._publish(
+            "playback.snapshot", asdict(snapshot) | {"session_id": self._session_id}
+        )
 
     def finish(self, _message: str) -> None:
         return None
@@ -256,7 +301,11 @@ class DesktopPlaybackService:
         recommendation = PlaybackRecommendationDto(
             recommended_hold_frames=plan.risk_report.suggested_hold_frames,
             recommended_tempo_scale=plan.risk_report.suggested_tempo_scale,
-            summary=(plan.risk_report.recommendations[0] if plan.risk_report.recommendations else "Keep the selected settings."),
+            summary=(
+                plan.risk_report.recommendations[0]
+                if plan.risk_report.recommendations
+                else "Keep the selected settings."
+            ),
         )
         return SongDetailDto(
             song_id="",
@@ -269,9 +318,15 @@ class DesktopPlaybackService:
         )
 
     @staticmethod
-    def _fingerprint(song_id: str, plan: PlaybackPlan, config: PlaybackConfigDto) -> str:
+    def _fingerprint(
+        song_id: str, plan: PlaybackPlan, config: PlaybackConfigDto
+    ) -> str:
         actions = [
-            [str(action.kind), int(action.at_us), [int(code) for code in action.scan_codes]]
+            [
+                str(action.kind),
+                int(action.at_us),
+                [int(code) for code in action.scan_codes],
+            ]
             for action in plan.actions
         ]
         payload = {
@@ -284,7 +339,9 @@ class DesktopPlaybackService:
             },
             "actions": actions,
         }
-        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     def invalidate_catalog(self, generation: int) -> None:
         with self._lock:
@@ -304,19 +361,34 @@ class DesktopPlaybackService:
         config: Mapping[str, object],
         resolve_path: Callable[..., Any],
     ) -> dict[str, object]:
-        if type(song_id) is not str or len(song_id) != 32 or any(c not in "0123456789abcdef" for c in song_id):
-            raise DesktopPlaybackError("invalid_params", "song_id must be a canonical opaque ID")
+        if (
+            type(song_id) is not str
+            or len(song_id) != 32
+            or any(c not in "0123456789abcdef" for c in song_id)
+        ):
+            raise DesktopPlaybackError(
+                "invalid_params", "song_id must be a canonical opaque ID"
+            )
         if type(generation) is not int or generation < 0:
-            raise DesktopPlaybackError("invalid_params", "generation must be a non-negative integer")
+            raise DesktopPlaybackError(
+                "invalid_params", "generation must be a non-negative integer"
+            )
         allowed = {"hold_frames", "tempo_scale", "fps", "dry_run"}
         if set(config) - allowed or set(config) != allowed:
-            raise DesktopPlaybackError("invalid_params", "playback config must contain exactly hold_frames, tempo_scale, fps, and dry_run")
+            raise DesktopPlaybackError(
+                "invalid_params",
+                "playback config must contain exactly hold_frames, tempo_scale, fps, and dry_run",
+            )
         values = dict(config)
         if type(values["dry_run"]) is not bool:
             raise DesktopPlaybackError("invalid_params", "dry_run must be boolean")
-        if isinstance(values["hold_frames"], bool) or not isinstance(values["hold_frames"], (int, float)):
+        if isinstance(values["hold_frames"], bool) or not isinstance(
+            values["hold_frames"], (int, float)
+        ):
             raise DesktopPlaybackError("invalid_params", "hold_frames must be numeric")
-        if isinstance(values["tempo_scale"], bool) or not isinstance(values["tempo_scale"], (int, float)):
+        if isinstance(values["tempo_scale"], bool) or not isinstance(
+            values["tempo_scale"], (int, float)
+        ):
             raise DesktopPlaybackError("invalid_params", "tempo_scale must be numeric")
         if type(values["fps"]) is not int:
             raise DesktopPlaybackError("invalid_params", "fps must be an integer")
@@ -328,18 +400,30 @@ class DesktopPlaybackService:
         )
         try:
             path = resolve_path(song_id, generation=generation)
-            if not math.isfinite(playback_config.hold_frames) or playback_config.hold_frames <= 0:
-                raise DesktopPlaybackError("invalid_params", "hold_frames must be finite and positive")
-            if not math.isfinite(playback_config.tempo_scale) or playback_config.tempo_scale <= 0:
-                raise DesktopPlaybackError("invalid_params", "tempo_scale must be finite and positive")
+            if (
+                not math.isfinite(playback_config.hold_frames)
+                or playback_config.hold_frames <= 0
+            ):
+                raise DesktopPlaybackError(
+                    "invalid_params", "hold_frames must be finite and positive"
+                )
+            if (
+                not math.isfinite(playback_config.tempo_scale)
+                or playback_config.tempo_scale <= 0
+            ):
+                raise DesktopPlaybackError(
+                    "invalid_params", "tempo_scale must be finite and positive"
+                )
             session = PlaybackSessionContext(
                 hold_frames=playback_config.hold_frames,
                 tempo_scale=playback_config.tempo_scale,
                 fps=playback_config.fps,
             )
             cfg = self._settings_service.config_snapshot()
-            plan_result = prepare_playback(path, session, cfg, is_dry_run=playback_config.dry_run)
-        except (CatalogGenerationError, CatalogLookupError):
+            plan_result = prepare_playback(
+                path, session, cfg, is_dry_run=playback_config.dry_run
+            )
+        except CatalogGenerationError, CatalogLookupError:
             raise
         except DesktopPlaybackError:
             raise
@@ -392,11 +476,6 @@ class DesktopPlaybackService:
 
         plan = plan_result
         risk = self._risk(plan)
-        decisions = () if risk.level == "low" else (
-            RiskDecisionDto("proceed", "Proceed with current settings"),
-            RiskDecisionDto("use_recommended", "Use recommended settings"),
-            RiskDecisionDto("dry_run", "Run a dry-run first"),
-        )
         prepared_id = self._opaque_id()
         detail = self._song_detail(plan, risk)
         detail = SongDetailDto(
@@ -408,6 +487,69 @@ class DesktopPlaybackService:
             risk=detail.risk,
             recommendation=detail.recommendation,
         )
+        base_fingerprint = self._fingerprint(song_id, plan, playback_config)
+        variants: dict[PlaybackDecision, PlaybackPlan] = {"proceed": plan}
+        variant_dtos: list[PlaybackPlanVariantDto] = [
+            PlaybackPlanVariantDto("proceed", playback_config, base_fingerprint)
+        ]
+        decisions_list: list[RiskDecisionDto] = []
+        if risk.level != "low":
+            decisions_list.append(
+                RiskDecisionDto("proceed", "Proceed with current settings")
+            )
+            recommended_hold = plan.risk_report.suggested_hold_frames
+            recommended_tempo = plan.risk_report.suggested_tempo_scale
+            if recommended_hold is not None or recommended_tempo is not None:
+                recommended = rebuild_with(
+                    plan,
+                    hold_frames=recommended_hold,
+                    tempo=recommended_tempo,
+                    is_dry_run=playback_config.dry_run,
+                )
+                if isinstance(recommended, PlaybackPlan):
+                    recommended_config = PlaybackConfigDto(
+                        hold_frames=recommended.session.hold_frames,
+                        tempo_scale=recommended.session.tempo_scale,
+                        fps=playback_config.fps,
+                        dry_run=playback_config.dry_run,
+                    )
+                    variants["use_recommended"] = recommended
+                    variant_dtos.append(
+                        PlaybackPlanVariantDto(
+                            "use_recommended",
+                            recommended_config,
+                            self._fingerprint(song_id, recommended, recommended_config),
+                        )
+                    )
+                    decisions_list.append(
+                        RiskDecisionDto("use_recommended", "Use recommended settings")
+                    )
+            if not playback_config.dry_run:
+                dry_run_config = PlaybackConfigDto(
+                    hold_frames=playback_config.hold_frames,
+                    tempo_scale=playback_config.tempo_scale,
+                    fps=playback_config.fps,
+                    dry_run=True,
+                )
+                dry_run_plan = prepare_playback(
+                    plan.song,
+                    plan.session,
+                    plan.cfg,
+                    is_dry_run=True,
+                )
+                if isinstance(dry_run_plan, PlaybackPlan):
+                    variants["dry_run"] = dry_run_plan
+                    variant_dtos.append(
+                        PlaybackPlanVariantDto(
+                            "dry_run",
+                            dry_run_config,
+                            self._fingerprint(song_id, dry_run_plan, dry_run_config),
+                        )
+                    )
+                    decisions_list.append(
+                        RiskDecisionDto("dry_run", "Run a dry-run first")
+                    )
+        decisions = tuple(decisions_list)
         dto = PreparedPlaybackDto(
             prepared_id=prepared_id,
             song=detail,
@@ -415,7 +557,8 @@ class DesktopPlaybackService:
             admission="ready" if not decisions else "confirmation_required",
             risk=risk,
             decisions=decisions,
-            plan_fingerprint=self._fingerprint(song_id, plan, playback_config),
+            plan_fingerprint=base_fingerprint,
+            variants=tuple(variant_dtos),
         )
         record = _PreparedRecord(
             prepared_id=prepared_id,
@@ -424,6 +567,7 @@ class DesktopPlaybackService:
             settings_fingerprint=self._settings_fingerprint(cfg),
             plan=plan,
             dto=dto,
+            variants=variants,
         )
         with self._lock:
             self._prepared[prepared_id] = record
@@ -442,7 +586,9 @@ class DesktopPlaybackService:
         with self._lock:
             if self._active is not active:
                 return
-            if state != active.state and state not in _LEGAL_TRANSITIONS.get(active.state, frozenset()):
+            if state != active.state and state not in _LEGAL_TRANSITIONS.get(
+                active.state, frozenset()
+            ):
                 raise DesktopPlaybackError(
                     "illegal_transition",
                     f"cannot transition playback from {active.state} to {state}",
@@ -460,13 +606,58 @@ class DesktopPlaybackService:
 
     def _on_native_state(self, active: _ActiveSession, state: PlaybackState) -> None:
         with self._lock:
-            if self._active is not active or active.state == state:
+            if self._active is not active:
+                return
+            if (active.pending_control == "pause" and state == "paused") or (
+                active.pending_control == "resume" and state == "playing"
+            ):
+                active.pending_control = None
+            if active.state == state:
                 return
             # A stop request owns the terminal transition. A late native
             # progress frame must not move the session out of Stopping.
             if active.state == "stopping":
                 return
         self._emit_state(active, state)
+
+    def _commit_playing(self, active: _ActiveSession) -> bool:
+        """Atomically admit the native worker into Playing after focus prep."""
+        with self._lock:
+            if (
+                self._active is not active
+                or active.stop_requested
+                or active.state == "stopping"
+            ):
+                return False
+            active.state = "playing"
+        self._publish_event(
+            "playback.state_changed",
+            {
+                "session_id": active.session_id,
+                "song_id": active.song_id,
+                "state": "playing",
+                "physical": not active.dry_run,
+                "message": None,
+                "outcome": None,
+            },
+        )
+        return True
+
+    def _finish_before_play(self, active: _ActiveSession) -> None:
+        """Finish a stop that won before the native engine was admitted."""
+        self._emit_state(active, "finished", outcome=PLAYBACK_QUIT)
+        self._publish_event(
+            "playback.finished",
+            asdict(
+                PlaybackFinishedDto(
+                    session_id=active.session_id,
+                    song_id=active.song_id,
+                    outcome=PLAYBACK_QUIT,
+                    total_us=int(active.plan.sched_meta.playback_duration_us),
+                    message="Playback stopped before start",
+                )
+            ),
+        )
 
     def _run(self, active: _ActiveSession) -> None:
         plan = active.plan
@@ -483,7 +674,10 @@ class DesktopPlaybackService:
                     plan.song.name,
                     on_state=lambda state: self._on_native_state(active, state),
                 ),
-                telemetry_enabled=bool(self._settings_service.snapshot().telemetry_enabled or active.dry_run),
+                telemetry_enabled=bool(
+                    self._settings_service.snapshot().telemetry_enabled
+                    or active.dry_run
+                ),
                 require_focus=not active.dry_run,
                 hold_label=plan.session.display_hold_label(),
                 hold_frames=plan.session.hold_frames,
@@ -498,15 +692,31 @@ class DesktopPlaybackService:
                 pre_roll_us=0,
             )
             if not active.dry_run and not engine.prepare_focus_for_playback():
-                raise DesktopPlaybackError("focus_rejected", "The validated Sky window could not be focused")
-            self._emit_state(active, "playing")
+                with self._lock:
+                    stop_won = active.stop_requested or active.state == "stopping"
+                if stop_won:
+                    self._finish_before_play(active)
+                    return
+                raise DesktopPlaybackError(
+                    "focus_rejected", "The validated Sky window could not be focused"
+                )
+            if not self._commit_playing(active):
+                self._finish_before_play(active)
+                return
             outcome = str(engine.play())
             if outcome in (PLAYBACK_QUIT, PLAYBACK_SKIPPED):
                 self._emit_state(active, "finished", outcome=outcome)
             elif outcome == PLAYBACK_SHUTDOWN_TIMEOUT:
-                self._emit_state(active, "failed", message="native playback shutdown timed out", outcome=outcome)
+                self._emit_state(
+                    active,
+                    "failed",
+                    message="native playback shutdown timed out",
+                    outcome=outcome,
+                )
             else:
-                self._emit_state(active, "finished", outcome=outcome or PLAYBACK_FINISHED)
+                self._emit_state(
+                    active, "finished", outcome=outcome or PLAYBACK_FINISHED
+                )
             self._publish_event(
                 "playback.finished",
                 asdict(
@@ -515,68 +725,135 @@ class DesktopPlaybackService:
                         song_id=active.song_id,
                         outcome=outcome,
                         total_us=int(plan.sched_meta.playback_duration_us),
-                        message="Playback finished" if outcome == PLAYBACK_FINISHED else f"Playback {outcome}",
+                        message="Playback finished"
+                        if outcome == PLAYBACK_FINISHED
+                        else f"Playback {outcome}",
                     )
                 ),
             )
         except DesktopPlaybackError as exc:
-            self._emit_state(active, "failed", message=exc.message)
-            self._publish_event("playback.failed", {"session_id": active.session_id, "song_id": active.song_id, "code": exc.code, "message": exc.message})
+            with self._lock:
+                stop_won = active.stop_requested or active.state == "stopping"
+            if stop_won:
+                self._finish_before_play(active)
+            else:
+                self._emit_state(active, "failed", message=exc.message)
+                self._publish_event(
+                    "playback.failed",
+                    {
+                        "session_id": active.session_id,
+                        "song_id": active.song_id,
+                        "code": exc.code,
+                        "message": exc.message,
+                    },
+                )
         except (ImportError, NativeDispatchError, RuntimeError, ValueError) as exc:
             message = str(exc)[:MAX_EVENT_TEXT_BYTES]
-            self._emit_state(active, "failed", message=message)
-            self._publish_event("playback.failed", {"session_id": active.session_id, "song_id": active.song_id, "code": "native_error", "message": message})
+            with self._lock:
+                stop_won = active.stop_requested or active.state == "stopping"
+            if stop_won:
+                self._finish_before_play(active)
+            else:
+                self._emit_state(active, "failed", message=message)
+                self._publish_event(
+                    "playback.failed",
+                    {
+                        "session_id": active.session_id,
+                        "song_id": active.song_id,
+                        "code": "native_error",
+                        "message": message,
+                    },
+                )
         finally:
             with self._lock:
                 if self._active is active:
                     self._last_terminal = (active.session_id, active.state)
                     self._active = None
 
-    def start(self, *, prepared_id: str, decisions: list[Mapping[str, object]]) -> dict[str, object]:
-        if type(prepared_id) is not str or len(prepared_id) != 32 or any(c not in "0123456789abcdef" for c in prepared_id):
+    def start(
+        self, *, prepared_id: str, decisions: list[Mapping[str, object]]
+    ) -> dict[str, object]:
+        if (
+            type(prepared_id) is not str
+            or len(prepared_id) != 32
+            or any(c not in "0123456789abcdef" for c in prepared_id)
+        ):
             raise DesktopPlaybackError("invalid_params", "prepared_id is invalid")
         if not isinstance(decisions, list) or len(decisions) > MAX_DECISION_COUNT:
-            raise DesktopPlaybackError("invalid_params", "decisions must be a bounded array")
+            raise DesktopPlaybackError(
+                "invalid_params", "decisions must be a bounded array"
+            )
         accepted: list[PlaybackDecisionAcceptanceDto] = []
         for item in decisions:
-            if not isinstance(item, Mapping) or set(item) != {"decision", "accepted"} or type(item.get("decision")) is not str or type(item.get("accepted")) is not bool:
-                raise DesktopPlaybackError("invalid_params", "each decision must contain decision and accepted")
-            accepted.append(PlaybackDecisionAcceptanceDto(str(item["decision"]), bool(item["accepted"])))
+            if (
+                not isinstance(item, Mapping)
+                or set(item) != {"decision", "accepted"}
+                or type(item.get("decision")) is not str
+                or type(item.get("accepted")) is not bool
+            ):
+                raise DesktopPlaybackError(
+                    "invalid_params", "each decision must contain decision and accepted"
+                )
+            raw_decision = item["decision"]
+            accepted.append(
+                PlaybackDecisionAcceptanceDto(
+                    cast(PlaybackDecision, raw_decision),
+                    bool(item["accepted"]),
+                )
+            )
         with self._lock:
             if self._active is not None:
-                raise DesktopPlaybackError("session_active", "another playback session is active")
+                raise DesktopPlaybackError(
+                    "session_active", "another playback session is active"
+                )
             record = self._prepared.get(prepared_id)
             if record is None:
-                raise DesktopPlaybackError("prepared_not_found", "prepared playback is stale or already consumed")
+                raise DesktopPlaybackError(
+                    "prepared_not_found",
+                    "prepared playback is stale or already consumed",
+                )
             required = {item.decision for item in record.dto.decisions}
             selected = [item.decision for item in accepted if item.accepted]
             if record.dto.admission == "blocked":
-                raise DesktopPlaybackError("playback_blocked", record.dto.error_message or "playback is blocked")
-            if (
-                record.dto.admission == "confirmation_required"
-                and (
-                    len(accepted) != 1
-                    or len(selected) != 1
-                    or accepted[0].decision not in required
-                    or not accepted[0].accepted
+                raise DesktopPlaybackError(
+                    "playback_blocked",
+                    record.dto.error_message or "playback is blocked",
                 )
+            if record.dto.admission == "confirmation_required" and (
+                len(accepted) != 1
+                or len(selected) != 1
+                or accepted[0].decision not in required
+                or not accepted[0].accepted
             ):
-                raise DesktopPlaybackError("confirmation_required", "an exact risk decision is required")
-            if record.dto.admission == "ready" and accepted:
-                raise DesktopPlaybackError("invalid_confirmation", "ready playback accepts no risk decisions")
-            selected_decision = selected[0] if selected else None
-            effective_plan = record.plan
-            if selected_decision == "use_recommended":
-                effective_plan = prepare_playback(
-                    record.plan.song,
-                    record.plan.session.with_hold_frames(record.plan.risk_report.suggested_hold_frames).with_tempo(
-                        record.plan.risk_report.suggested_tempo_scale
-                    ),
-                    record.plan.cfg,
-                    is_dry_run=record.dto.config.dry_run,
+                raise DesktopPlaybackError(
+                    "confirmation_required", "an exact risk decision is required"
                 )
-                if isinstance(effective_plan, PlaybackError):
-                    raise DesktopPlaybackError("recommendation_failed", effective_plan.message)
+            if record.dto.admission == "ready" and accepted:
+                raise DesktopPlaybackError(
+                    "invalid_confirmation", "ready playback accepts no risk decisions"
+                )
+            selected_decision = cast(
+                PlaybackDecision, selected[0] if selected else "proceed"
+            )
+            effective_plan = record.variants.get(selected_decision)
+            if effective_plan is None:
+                raise DesktopPlaybackError(
+                    "invalid_confirmation",
+                    "the selected risk decision has no prepared plan",
+                )
+            effective_variant = next(
+                (
+                    variant
+                    for variant in record.dto.variants
+                    if variant.decision == selected_decision
+                ),
+                None,
+            )
+            if effective_variant is None:
+                raise DesktopPlaybackError(
+                    "invalid_confirmation",
+                    "the selected risk decision has no prepared fingerprint",
+                )
             # Consume only after all admission checks and any recommendation
             # rebuild succeed. A rejected confirmation can therefore be
             # retried with the same immutable prepared plan.
@@ -587,15 +864,27 @@ class DesktopPlaybackService:
                 prepared_id=prepared_id,
                 song_id=record.song_id,
                 plan=effective_plan,
-                dry_run=record.dto.config.dry_run or (selected_decision == "dry_run"),
+                config=effective_variant.config,
+                dry_run=effective_variant.config.dry_run,
                 controls=DesktopPlaybackControls(),
             )
             self._active = active
             self._emit_state(active, "starting")
-            worker = threading.Thread(target=self._run, args=(active,), name="desktop-playback", daemon=True)
+            worker = threading.Thread(
+                target=self._run, args=(active,), name="desktop-playback", daemon=True
+            )
             active.worker = worker
             worker.start()
-        return asdict(PlaybackSessionDto(session_id=session_id, prepared_id=prepared_id, song_id=record.song_id, state="starting"))
+        return asdict(
+            PlaybackSessionDto(
+                session_id=session_id,
+                prepared_id=prepared_id,
+                song_id=record.song_id,
+                state="starting",
+                config=effective_variant.config,
+                plan_fingerprint=effective_variant.plan_fingerprint,
+            )
+        )
 
     def _require_active(self, session_id: str) -> _ActiveSession:
         if type(session_id) is not str or len(session_id) != 32:
@@ -603,9 +892,13 @@ class DesktopPlaybackService:
         with self._lock:
             active = self._active
             if active is None:
-                raise DesktopPlaybackError("no_active_session", "there is no active playback session")
+                raise DesktopPlaybackError(
+                    "no_active_session", "there is no active playback session"
+                )
             if active.session_id != session_id:
-                raise DesktopPlaybackError("stale_session", "session_id is stale or foreign")
+                raise DesktopPlaybackError(
+                    "stale_session", "session_id is stale or foreign"
+                )
             return active
 
     def command(self, *, session_id: str, command: str) -> dict[str, object]:
@@ -616,40 +909,105 @@ class DesktopPlaybackService:
                 and self._last_terminal is not None
                 and self._last_terminal[0] == session_id
             ):
-                return {"accepted": True, "session_id": session_id, "state": self._last_terminal[1]}
-        active = self._require_active(session_id)
+                return asdict(
+                    PlaybackCommandAckDto(
+                        True, session_id, self._last_terminal[1], None
+                    )
+                )
+            active = self._require_active(session_id)
+            return self._command_locked(active, session_id, command)
+
+    def _command_locked(
+        self, active: _ActiveSession, session_id: str, command: str
+    ) -> dict[str, object]:
         if command == "stop":
             if active.state not in {"starting", "playing", "paused"}:
-                return {"accepted": True, "session_id": session_id, "state": active.state}
+                return asdict(
+                    PlaybackCommandAckDto(
+                        True, session_id, active.state, active.pending_control
+                    )
+                )
+            active.stop_requested = True
+            active.pending_control = None
             self._emit_state(active, "stopping")
-            active.controls.push("quit")
+            active.controls.request_stop()
         elif command == "pause":
             if active.state != "playing":
-                raise DesktopPlaybackError("illegal_transition", "pause requires a playing session")
+                raise DesktopPlaybackError(
+                    "illegal_transition", "pause requires a playing session"
+                )
+            if active.pending_control == "pause":
+                return asdict(
+                    PlaybackCommandAckDto(
+                        True,
+                        session_id,
+                        active.state,
+                        active.pending_control,
+                        "already_pending",
+                    )
+                )
+            if active.pending_control is not None:
+                raise DesktopPlaybackError(
+                    "control_pending",
+                    "another playback control is awaiting acknowledgement",
+                )
+            active.pending_control = "pause"
             active.controls.push("pause")
         elif command == "resume":
             if active.state != "paused":
-                raise DesktopPlaybackError("illegal_transition", "resume requires a paused session")
+                raise DesktopPlaybackError(
+                    "illegal_transition", "resume requires a paused session"
+                )
+            if active.pending_control == "resume":
+                return asdict(
+                    PlaybackCommandAckDto(
+                        True,
+                        session_id,
+                        active.state,
+                        active.pending_control,
+                        "already_pending",
+                    )
+                )
+            if active.pending_control is not None:
+                raise DesktopPlaybackError(
+                    "control_pending",
+                    "another playback control is awaiting acknowledgement",
+                )
+            active.pending_control = "resume"
             active.controls.push("pause")
         elif command == "skip":
             if active.state not in {"starting", "playing", "paused"}:
-                raise DesktopPlaybackError("illegal_transition", "skip requires an active session")
+                raise DesktopPlaybackError(
+                    "illegal_transition", "skip requires an active session"
+                )
+            active.pending_control = None
             active.controls.push("skip")
         else:
-            raise DesktopPlaybackError("unknown_command", "unsupported playback command")
-        return {"accepted": True, "session_id": session_id, "state": active.state}
+            raise DesktopPlaybackError(
+                "unknown_command", "unsupported playback command"
+            )
+        return asdict(
+            PlaybackCommandAckDto(
+                True, session_id, active.state, active.pending_control
+            )
+        )
 
     def shutdown(self, timeout: float = 5.0) -> bool:
         with self._lock:
             active = self._active
-        if active is None:
-            return True
-        if active.state in {"starting", "playing", "paused"}:
-            self._emit_state(active, "stopping")
-            active.controls.push("quit")
-        if active.worker is not None:
-            active.worker.join(timeout=max(0.0, timeout))
-            return not active.worker.is_alive()
+            if active is None:
+                return True
+            if active.state in {"starting", "playing", "paused"}:
+                active.stop_requested = True
+                active.pending_control = None
+                self._emit_state(active, "stopping")
+                active.controls.request_stop()
+            worker = active.worker
+        if worker is not None:
+            if worker is threading.current_thread():
+                return False
+            worker.join(timeout=max(0.0, timeout))
+            return not worker.is_alive()
         return True
 
 

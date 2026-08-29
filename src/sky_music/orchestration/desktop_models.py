@@ -8,6 +8,9 @@ from typing import Literal
 RiskLevel = Literal["low", "medium", "high", "unknown"]
 MetadataState = Literal["pending", "ready", "error"]
 Admission = Literal["ready", "confirmation_required", "blocked"]
+PlaybackDecision = Literal["proceed", "use_recommended", "dry_run"]
+PlaybackControl = Literal["stop", "pause", "resume", "skip"]
+PlaybackPendingControl = Literal["pause", "resume"]
 PlaybackState = Literal[
     "idle",
     "ready",
@@ -111,7 +114,7 @@ class SongDetailDto:
 
 @dataclass(frozen=True, slots=True)
 class RiskDecisionDto:
-    decision: str
+    decision: PlaybackDecision
     label: str
 
 
@@ -124,13 +127,21 @@ class PreparedPlaybackDto:
     risk: RiskSummaryDto
     decisions: tuple[RiskDecisionDto, ...]
     plan_fingerprint: str | None = None
+    variants: tuple[PlaybackPlanVariantDto, ...] = ()
     error_code: str | None = None
     error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
+class PlaybackPlanVariantDto:
+    decision: PlaybackDecision
+    config: PlaybackConfigDto
+    plan_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlaybackDecisionAcceptanceDto:
-    decision: str
+    decision: PlaybackDecision
     accepted: bool
 
 
@@ -140,6 +151,17 @@ class PlaybackSessionDto:
     prepared_id: str
     song_id: str
     state: PlaybackState
+    config: PlaybackConfigDto
+    plan_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackCommandAckDto:
+    accepted: bool
+    session_id: str
+    state: PlaybackState
+    pending_command: PlaybackPendingControl | None
+    reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,10 +215,15 @@ __all__ = [
     "HealthState",
     "MetadataState",
     "NativeBuildDto",
+    "PlaybackCommandAckDto",
     "PlaybackConfigDto",
+    "PlaybackControl",
+    "PlaybackDecision",
     "PlaybackDecisionAcceptanceDto",
     "PlaybackFinishedDto",
     "PlaybackOptionSetsDto",
+    "PlaybackPendingControl",
+    "PlaybackPlanVariantDto",
     "PlaybackRecommendationDto",
     "PlaybackSessionDto",
     "PlaybackSnapshotDto",

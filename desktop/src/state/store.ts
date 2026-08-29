@@ -10,6 +10,7 @@ import type {
   SongRow,
   UiEvent,
   PlaybackConfig,
+  PlaybackDecisionId,
   PlaybackDecisionAcceptance,
   PlaybackPrepare,
   PreparedPlayback,
@@ -42,6 +43,8 @@ export interface DesktopStore {
   playback: {
     state: PlaybackUiState;
     sessionId: string | null;
+    songTitle: string | null;
+    pendingCommand: 'pause' | 'resume' | null;
     prepared: PreparedPlayback | null;
     snapshot: Extract<UiEvent, { name: 'playback.snapshot' }>['payload'] | null;
     error: string | null;
@@ -54,7 +57,7 @@ export interface DesktopStore {
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<void>;
   prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;
-  startPreparedPlayback: (decision?: string) => Promise<void>;
+  startPreparedPlayback: (decision?: PlaybackDecisionId) => Promise<void>;
   stopPlayback: () => Promise<void>;
   pausePlayback: () => Promise<void>;
   resumePlayback: () => Promise<void>;
@@ -64,7 +67,16 @@ export interface DesktopStore {
 
 export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
+  let prepareRequestEpoch = 0;
+  let startRequestEpoch = 0;
+  let pendingStart: {
+    epoch: number;
+    preparedId: string;
+    songId: string;
+    songTitle: string;
+  } | null = null;
   let settingsMutationTail: Promise<void> = Promise.resolve();
+  const retiredSessionIds = new Set<string>();
   const pageSize = 200;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
@@ -72,6 +84,30 @@ export function createDesktopStore(bridge: DesktopBridge) {
   const cacheKey = (query: string, generation: number) => `${generation}\u0000${query}`;
 
   return create<DesktopStore>((set, get) => {
+    const acceptsSessionEvent = (sessionId: string, songId: string): boolean => {
+      const current = get().playback;
+      if (retiredSessionIds.has(sessionId)) return false;
+      if (current.sessionId === sessionId) return true;
+      if (
+        pendingStart &&
+        pendingStart.songId === songId &&
+        (current.state === 'idle' || current.state === 'finished' || current.state === 'failed')
+      ) {
+        // The Core may publish the first state/terminal event before the
+        // start promise continuation runs. Bind that event to the pending
+        // start, while still rejecting events from an unrelated song/session.
+        return true;
+      }
+      return !current.sessionId && pendingStart?.songId === songId;
+    };
+
+    const bindSessionTitle = (sessionId: string, songId: string): string | null => {
+      const current = get().playback;
+      if (current.sessionId === sessionId && current.songTitle) return current.songTitle;
+      if (pendingStart?.songId === songId) return pendingStart.songTitle;
+      return current.songTitle;
+    };
+
     const mergePage = (result: SearchResult, token: number): boolean => {
       const current = get().library;
       if (current.searchRequestGeneration !== token) return false;
@@ -168,7 +204,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
       settings: null,
       settingsState: 'idle',
       settingsOpen: false,
-      playback: { state: 'idle', sessionId: null, prepared: null, snapshot: null, error: null },
+      playback: {
+        state: 'idle',
+        sessionId: null,
+        songTitle: null,
+        pendingCommand: null,
+        prepared: null,
+        snapshot: null,
+        error: null,
+      },
 
       async initialize() {
         if (get().bootstrapState === 'loading' || get().bootstrapState === 'ready') return;
@@ -213,6 +257,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (event.name === 'catalog.changed') {
           if (eventState.catalogGeneration <= get().library.generation) return;
           detailRequestToken += 1;
+          prepareRequestEpoch += 1;
           set({
             library: {
               ...get().library,
@@ -230,11 +275,20 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
         if (event.name === 'playback.state_changed') {
           const current = get().playback;
-          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
+          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
+          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
+              songTitle,
+              pendingCommand:
+                (current.pendingCommand === 'pause' && event.payload.state === 'paused') ||
+                (current.pendingCommand === 'resume' && event.payload.state === 'playing')
+                  ? null
+                  : current.pendingCommand,
+              snapshot: current.sessionId === event.payload.session_id ? current.snapshot : null,
               state:
                 event.payload.state === 'failed'
                   ? 'failed'
@@ -244,11 +298,18 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } else if (event.name === 'playback.snapshot') {
           const current = get().playback;
-          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
+          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
+              songTitle: event.payload.title,
+              pendingCommand:
+                (current.pendingCommand === 'pause' && event.payload.state === 'paused') ||
+                (current.pendingCommand === 'resume' && event.payload.state === 'playing')
+                  ? null
+                  : current.pendingCommand,
               state: event.payload.state as PlaybackUiState,
               snapshot: event.payload,
               error: event.payload.message,
@@ -256,22 +317,32 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } else if (event.name === 'playback.finished') {
           const current = get().playback;
-          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
+          retiredSessionIds.add(event.payload.session_id);
+          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
+          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
+              songTitle,
+              pendingCommand: null,
               state: 'finished',
               error: null,
             },
           });
         } else if (event.name === 'playback.failed') {
           const current = get().playback;
-          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
+          retiredSessionIds.add(event.payload.session_id);
+          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
+          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
+              songTitle,
+              pendingCommand: null,
               state: 'failed',
               error: `${event.payload.code}: ${event.payload.message}`,
             },
@@ -316,11 +387,22 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
       async selectSong(songId) {
         detailRequestToken += 1;
+        prepareRequestEpoch += 1;
         const token = detailRequestToken;
         const requestGeneration = get().library.generation;
+        const currentPlayback = get().playback;
+        const sessionIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(
+          currentPlayback.state,
+        );
         set({
           library: { ...get().library, selectedSongId: songId },
           detail: { state: 'loading', value: null, error: null },
+          playback: {
+            ...currentPlayback,
+            prepared: null,
+            songTitle: sessionIsActive ? currentPlayback.songTitle : null,
+            error: null,
+          },
         });
         try {
           const request = { songId } as { songId: string; generation?: number };
@@ -381,6 +463,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
               settingsState: 'ready',
               playback: { ...get().playback, prepared: null },
             });
+            prepareRequestEpoch += 1;
             document.documentElement.dataset.theme = settings.theme;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -416,10 +499,26 @@ export function createDesktopStore(bridge: DesktopBridge) {
           generation: get().library.generation,
           config,
         };
+        const requestEpoch = prepareRequestEpoch;
+        const requestGeneration = request.generation;
         try {
           const prepared = await bridge.preparePlayback(request);
+          if (
+            requestEpoch !== prepareRequestEpoch ||
+            get().library.selectedSongId !== selectedSongId ||
+            get().library.generation !== requestGeneration
+          ) {
+            return;
+          }
           set({ playback: { ...get().playback, prepared, error: prepared.error_message } });
         } catch (error) {
+          if (
+            requestEpoch !== prepareRequestEpoch ||
+            get().library.selectedSongId !== selectedSongId ||
+            get().library.generation !== requestGeneration
+          ) {
+            return;
+          }
           set({
             playback: {
               ...get().playback,
@@ -439,21 +538,36 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const decisions: PlaybackDecisionAcceptance[] = decision
           ? [{ decision, accepted: true }]
           : [];
+        const startEpoch = ++startRequestEpoch;
+        const preparedTitle = prepared.song.title;
+        pendingStart = {
+          epoch: startEpoch,
+          preparedId: prepared.prepared_id,
+          songId: prepared.song.song_id,
+          songTitle: preparedTitle,
+        };
         try {
           const session = await bridge.startPlayback({
             preparedId: prepared.prepared_id,
             decisions,
           });
+          if (startEpoch !== startRequestEpoch) return;
+          pendingStart = null;
+          const current = get().playback;
+          const boundToEarlyEvent = current.sessionId === session.session_id;
           set({
             playback: {
-              ...get().playback,
+              ...current,
               prepared: null,
               sessionId: session.session_id,
-              state: 'starting',
+              songTitle: current.songTitle ?? preparedTitle,
+              state: boundToEarlyEvent ? current.state : 'starting',
+              snapshot: boundToEarlyEvent ? current.snapshot : null,
               error: null,
             },
           });
         } catch (error) {
+          if (startEpoch === startRequestEpoch) pendingStart = null;
           set({
             playback: {
               ...get().playback,
@@ -468,6 +582,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (!sessionId) return;
         try {
           await bridge.stopPlayback({ sessionId });
+          set({ playback: { ...get().playback, pendingCommand: null } });
         } catch (error) {
           set({
             playback: {
@@ -482,7 +597,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const sessionId = get().playback.sessionId;
         if (!sessionId) return;
         try {
-          await bridge.pausePlayback({ sessionId });
+          const ack = await bridge.pausePlayback({ sessionId });
+          set({ playback: { ...get().playback, pendingCommand: ack.pending_command } });
         } catch (error) {
           set({
             playback: {
@@ -497,7 +613,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const sessionId = get().playback.sessionId;
         if (!sessionId) return;
         try {
-          await bridge.resumePlayback({ sessionId });
+          const ack = await bridge.resumePlayback({ sessionId });
+          set({ playback: { ...get().playback, pendingCommand: ack.pending_command } });
         } catch (error) {
           set({
             playback: {
@@ -513,6 +630,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (!sessionId) return;
         try {
           await bridge.skipPlayback({ sessionId });
+          set({ playback: { ...get().playback, pendingCommand: null } });
         } catch (error) {
           set({
             playback: {

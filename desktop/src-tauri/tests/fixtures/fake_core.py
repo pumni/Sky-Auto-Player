@@ -128,6 +128,18 @@ def command_result(item: dict[str, Any]) -> Any:
             },
             "decisions": [],
             "plan_fingerprint": "fake-plan",
+            "variants": [
+                {
+                    "decision": "proceed",
+                    "config": params.get("config", {
+                        "hold_frames": 1.0,
+                        "tempo_scale": 1.0,
+                        "fps": 60,
+                        "dry_run": True,
+                    }),
+                    "plan_fingerprint": "fake-plan",
+                }
+            ],
             "error_code": None,
             "error_message": None,
         }
@@ -137,6 +149,21 @@ def command_result(item: dict[str, Any]) -> Any:
             "prepared_id": item.get("params", {}).get("prepared_id", "a" * 32),
             "song_id": "c" * 32,
             "state": "starting",
+            "config": {
+                "hold_frames": 1.0,
+                "tempo_scale": 1.0,
+                "fps": 60,
+                "dry_run": True,
+            },
+            "plan_fingerprint": "fake-plan",
+        }
+    if method in {"playback.stop", "playback.pause", "playback.resume", "playback.skip"}:
+        return {
+            "accepted": True,
+            "session_id": "b" * 32,
+            "state": "playing",
+            "pending_command": None,
+            "reason": None,
         }
     return {}
 

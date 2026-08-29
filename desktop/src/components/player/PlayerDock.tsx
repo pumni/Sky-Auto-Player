@@ -19,7 +19,11 @@ export function PlayerDock({ useStore }: PlayerDockProps) {
   const playback = useStore((store: DesktopStore) => store.playback);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
   const selectedTitle = useStore(
-    (store: DesktopStore) => store.detail.value?.title ?? 'No song selected',
+    (store: DesktopStore) =>
+      store.playback.songTitle ??
+      store.playback.prepared?.song.title ??
+      store.detail.value?.title ??
+      'No song selected',
   );
   const settings = useStore((store: DesktopStore) => store.settings);
   const prepare = useStore((store: DesktopStore) => store.prepareSelectedPlayback);
@@ -33,7 +37,9 @@ export function PlayerDock({ useStore }: PlayerDockProps) {
 
   const prepareAndMaybeStart = async () => {
     await prepare({ dry_run: dryRun });
-    const prepared = useStore.getState().playback.prepared;
+    const current = useStore.getState();
+    const prepared = current.playback.prepared;
+    if (prepared?.song.song_id !== current.library.selectedSongId) return;
     if (prepared?.admission === 'ready') await start();
   };
 
@@ -62,11 +68,21 @@ export function PlayerDock({ useStore }: PlayerDockProps) {
         {active && playback.state !== 'stopping' && (
           <>
             {playback.state === 'paused' ? (
-              <button className="button" type="button" onClick={() => void resume()}>
+              <button
+                className="button"
+                type="button"
+                disabled={playback.pendingCommand !== null}
+                onClick={() => void resume()}
+              >
                 <Play size={14} aria-hidden="true" /> Resume
               </button>
             ) : (
-              <button className="button" type="button" onClick={() => void pause()}>
+              <button
+                className="button"
+                type="button"
+                disabled={playback.pendingCommand !== null}
+                onClick={() => void pause()}
+              >
                 <Pause size={14} aria-hidden="true" /> Pause
               </button>
             )}

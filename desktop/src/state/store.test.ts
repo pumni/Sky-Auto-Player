@@ -138,4 +138,158 @@ describe('desktop store', () => {
     expect(store.getState().settings?.theme).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
+
+  it('detaches a prepared plan when the selected song changes', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const [songA, songB] = store.getState().library.rows;
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    expect(store.getState().playback.prepared?.song.song_id).toBe(songA.song_id);
+
+    await act(async () => store.getState().selectSong(songB.song_id));
+    expect(store.getState().playback.prepared).toBeNull();
+  });
+
+  it('discards an in-flight prepare after selection changes', async () => {
+    let releasePrepare: (() => void) | undefined;
+    const bridge = createMockBridge();
+    const originalPrepare = bridge.preparePlayback;
+    bridge.preparePlayback = async (request) => {
+      const result = originalPrepare(request);
+      await new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      return result;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const [songA, songB] = store.getState().library.rows;
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    const pending = store.getState().prepareSelectedPlayback();
+    await act(async () => store.getState().selectSong(songB.song_id));
+    releasePrepare?.();
+    await pending;
+    expect(store.getState().playback.prepared).toBeNull();
+  });
+
+  it('keeps the prepared/active song title while browsing another song', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const [songA, songB] = store.getState().library.rows;
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await act(async () => store.getState().selectSong(songB.song_id));
+    expect(store.getState().playback.songTitle).toBe(songA.title);
+  });
+
+  it('binds a short session whose events arrive before start resolves', async () => {
+    const bridge = createMockBridge();
+    let listener: ((event: import('../bridge/DesktopBridge').UiEvent) => void) | undefined;
+    const originalSubscribe = bridge.subscribeUiEvents;
+    bridge.subscribeUiEvents = async (next) => {
+      listener = next;
+      return originalSubscribe(next);
+    };
+    const sessionId = 'e'.repeat(32);
+    bridge.startPlayback = async (request) => {
+      const songId = request.preparedId.replace('prepared-', '');
+      const started = {
+        session_id: sessionId,
+        prepared_id: request.preparedId,
+        song_id: songId,
+        state: 'starting' as const,
+        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: true },
+        plan_fingerprint: 'mock-plan',
+      };
+      listener?.({
+        v: 1,
+        name: 'playback.state_changed',
+        payload: {
+          session_id: sessionId,
+          song_id: songId,
+          state: 'starting',
+          physical: false,
+          message: null,
+          outcome: null,
+        },
+      });
+      listener?.({
+        v: 1,
+        name: 'playback.finished',
+        payload: {
+          session_id: sessionId,
+          song_id: songId,
+          outcome: 'finished',
+          total_us: 0,
+          message: 'finished',
+        },
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      return started;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = store.getState().library.rows[0];
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+
+    expect(store.getState().playback.sessionId).toBe(sessionId);
+    expect(store.getState().playback.state).toBe('finished');
+  });
+
+  it('rejects late events from a retired session after browsing another song', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const [songA, songB] = store.getState().library.rows;
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const sessionId = store.getState().playback.sessionId;
+    if (!sessionId) throw new Error('mock session did not start');
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'playback.finished',
+      payload: {
+        session_id: sessionId,
+        song_id: songA.song_id,
+        outcome: 'finished',
+        total_us: 0,
+        message: 'finished',
+      },
+    });
+    await act(async () => store.getState().selectSong(songB.song_id));
+    expect(store.getState().playback.songTitle).toBeNull();
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'playback.state_changed',
+      payload: {
+        session_id: sessionId,
+        song_id: songA.song_id,
+        state: 'playing',
+        physical: false,
+        message: null,
+        outcome: null,
+      },
+    });
+    expect(store.getState().playback.state).toBe('finished');
+    expect(store.getState().playback.songTitle).toBeNull();
+  });
 });

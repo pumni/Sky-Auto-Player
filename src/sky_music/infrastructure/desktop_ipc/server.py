@@ -57,7 +57,9 @@ from sky_music.orchestration.song_metadata_service import get_song_ui_metadata
 MAX_OFFSET = 1_000_000_000
 MAX_VIEWPORT_SPAN = 2_000
 MAX_BUFFERED_EVENTS = 128
-PATCH_FIELDS = frozenset({"theme", "telemetry_enabled", "verbose_hud", "playback_defaults"})
+PATCH_FIELDS = frozenset(
+    {"theme", "telemetry_enabled", "verbose_hud", "playback_defaults"}
+)
 PLAYBACK_PATCH_FIELDS = frozenset({"hold_frames", "tempo_scale", "fps"})
 SUPPORTED_METHODS = frozenset(
     {
@@ -98,7 +100,7 @@ def parent_process_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except PermissionError:
         return True
-    except (OSError, ProcessLookupError):
+    except OSError, ProcessLookupError:
         return False
     return True
 
@@ -109,14 +111,24 @@ def _object_params(raw_params: object, allowed: frozenset[str]) -> dict[str, obj
         raise CoreRequestError("invalid_params", "params must be an object")
     unknown = set(params) - allowed
     if unknown:
-        raise CoreRequestError("invalid_params", f"unknown params: {', '.join(sorted(unknown))}")
+        raise CoreRequestError(
+            "invalid_params", f"unknown params: {', '.join(sorted(unknown))}"
+        )
     return params
 
 
-def _required_text(params: Mapping[str, object], name: str, *, max_bytes: int = 1024) -> str:
+def _required_text(
+    params: Mapping[str, object], name: str, *, max_bytes: int = 1024
+) -> str:
     value = params.get(name)
-    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > max_bytes:
-        raise CoreRequestError("invalid_params", f"{name} must be a bounded non-empty string")
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > max_bytes
+    ):
+        raise CoreRequestError(
+            "invalid_params", f"{name} must be a bounded non-empty string"
+        )
     return value
 
 
@@ -125,14 +137,18 @@ def _optional_generation(params: Mapping[str, object]) -> int | None:
     if value is None:
         return None
     if type(value) is not int or value < 0:
-        raise CoreRequestError("invalid_params", "generation must be a non-negative integer")
+        raise CoreRequestError(
+            "invalid_params", "generation must be a non-negative integer"
+        )
     return value
 
 
 def _required_int(params: Mapping[str, object], name: str, *, minimum: int = 0) -> int:
     value = params.get(name)
     if type(value) is not int or value < minimum:
-        raise CoreRequestError("invalid_params", f"{name} must be an integer >= {minimum}")
+        raise CoreRequestError(
+            "invalid_params", f"{name} must be an integer >= {minimum}"
+        )
     return value
 
 
@@ -203,6 +219,7 @@ class DesktopCoreServer:
         self._shutdown_requested = False
         self._events: list[dict[str, object]] = []
         self._events_lock = threading.Lock()
+        self._event_buffer_overflowed = False
         self._viewport: dict[str, object] | None = None
         self._stop_event = threading.Event()
         self.playback = DesktopPlaybackService(
@@ -227,6 +244,11 @@ class DesktopCoreServer:
             self._events.clear()
         return events
 
+    @property
+    def event_buffer_overflowed(self) -> bool:
+        with self._events_lock:
+            return self._event_buffer_overflowed
+
     def _publish_event(self, name: str, payload: Mapping[str, object]) -> None:
         message = event(name, payload)
         with self._events_lock:
@@ -247,11 +269,23 @@ class DesktopCoreServer:
                     return
             elif len(self._events) >= MAX_BUFFERED_EVENTS:
                 snapshot_index = next(
-                    (index for index, item in enumerate(self._events) if item.get("name") == "playback.snapshot"),
+                    (
+                        index
+                        for index, item in enumerate(self._events)
+                        if item.get("name") == "playback.snapshot"
+                    ),
                     None,
                 )
                 if snapshot_index is not None:
                     self._events.pop(snapshot_index)
+                else:
+                    # Lifecycle events cannot be silently discarded. A
+                    # bounded replay buffer has no safe lossless policy once
+                    # it contains only lifecycle events, so fail closed and
+                    # let the server perform normal playback cleanup.
+                    self._event_buffer_overflowed = True
+                    self._shutdown_requested = True
+                    return
             self._events.append(message)
 
     def handle_request(self, request: Mapping[str, object]) -> dict[str, object]:
@@ -260,15 +294,26 @@ class DesktopCoreServer:
         if type(request_id) is not int:
             raise ProtocolError("invalid_id", "request id must be an integer")
         try:
+            if self.event_buffer_overflowed and request["method"] != "app.shutdown":
+                raise CoreRequestError(
+                    "event_buffer_overflow",
+                    "lifecycle event replay buffer exceeded its bounded capacity",
+                )
             result = self._dispatch(request["method"], request["params"])
         except CoreRequestError as exc:
             return response_error(request_id, exc.code, exc.message)
         except CatalogGenerationError:
-            return response_error(request_id, "stale_generation", "catalog generation is stale")
+            return response_error(
+                request_id, "stale_generation", "catalog generation is stale"
+            )
         except CatalogLookupError:
-            return response_error(request_id, "not_found", "song was not found in the catalog")
+            return response_error(
+                request_id, "not_found", "song was not found in the catalog"
+            )
         except CatalogError:
-            return response_error(request_id, "catalog_error", "catalog operation failed")
+            return response_error(
+                request_id, "catalog_error", "catalog operation failed"
+            )
         except ValueError as exc:
             return response_error(request_id, "invalid_params", str(exc))
         except Exception:
@@ -296,16 +341,24 @@ class DesktopCoreServer:
                 )
             return {"shutdown": True}
         if method == "catalog.search":
-            return self._search(_object_params(params, frozenset({"query", "offset", "limit", "generation"})))
+            return self._search(
+                _object_params(
+                    params, frozenset({"query", "offset", "limit", "generation"})
+                )
+            )
         if method == "catalog.detail":
-            return self._detail(_object_params(params, frozenset({"song_id", "generation"})))
+            return self._detail(
+                _object_params(params, frozenset({"song_id", "generation"}))
+            )
         if method == "catalog.reload":
             return self._reload(_object_params(params, frozenset()))
         if method == "catalog.set_viewport":
             return self._set_viewport(
                 _object_params(
                     params,
-                    frozenset({"generation", "first_index", "last_index", "selected_song_id"}),
+                    frozenset(
+                        {"generation", "first_index", "last_index", "selected_song_id"}
+                    ),
                 )
             )
         if method == "settings.get":
@@ -317,7 +370,12 @@ class DesktopCoreServer:
             return self._prepare_playback(params)
         if method == "playback.start":
             return self._start_playback(params)
-        if method in {"playback.stop", "playback.pause", "playback.resume", "playback.skip"}:
+        if method in {
+            "playback.stop",
+            "playback.pause",
+            "playback.resume",
+            "playback.skip",
+        }:
             return self._playback_command(method, params)
         raise CoreRequestError("unknown_method", "unknown desktop Core method")
 
@@ -363,7 +421,9 @@ class DesktopCoreServer:
         offset = params.get("offset", 0)
         limit = params.get("limit", 100)
         if type(offset) is not int or not 0 <= offset <= MAX_OFFSET:
-            raise CoreRequestError("invalid_params", "offset is outside the supported range")
+            raise CoreRequestError(
+                "invalid_params", "offset is outside the supported range"
+            )
         if type(limit) is not int or not 1 <= limit <= 200:
             raise CoreRequestError("invalid_params", "limit must be between 1 and 200")
         page = self.catalog_service.search_window(
@@ -403,8 +463,12 @@ class DesktopCoreServer:
             tempo_scale=settings.default_tempo_scale,
             fps=settings.game_fps,
         )
-        metadata = get_song_ui_metadata(path, session, self.settings_service.config_snapshot())
-        risk_level = metadata.risk if metadata.risk in {"low", "medium", "high"} else "unknown"
+        metadata = get_song_ui_metadata(
+            path, session, self.settings_service.config_snapshot()
+        )
+        risk_level = (
+            metadata.risk if metadata.risk in {"low", "medium", "high"} else "unknown"
+        )
         recommendations = tuple(metadata.warnings) if risk_level != "unknown" else ()
         reasons = () if risk_level == "low" else recommendations
         risk = RiskSummaryDto(
@@ -423,7 +487,11 @@ class DesktopCoreServer:
             recommendation = PlaybackRecommendationDto(
                 recommended_hold_frames=metadata.recommended_hold_frames,
                 recommended_tempo_scale=metadata.recommended_tempo_scale,
-                summary=(recommendations[0] if recommendations else "Keep the selected settings."),
+                summary=(
+                    recommendations[0]
+                    if recommendations
+                    else "Keep the selected settings."
+                ),
             )
         dto = SongDetailDto(
             song_id=song_id,
@@ -464,7 +532,9 @@ class DesktopCoreServer:
             or len(selected) != 32
             or any(char not in "0123456789abcdef" for char in selected)
         ):
-            raise CoreRequestError("invalid_params", "selected_song_id must be an opaque song ID or null")
+            raise CoreRequestError(
+                "invalid_params", "selected_song_id must be an opaque song ID or null"
+            )
 
         # Viewport indices are inclusive and deliberately fail closed.  The
         # only valid empty-catalog range is 0..-1; callers must not silently
@@ -486,8 +556,12 @@ class DesktopCoreServer:
                 "invalid_params",
                 "viewport range must be within the catalog and at most 2000 rows",
             )
-        if selected is not None and selected not in {entry.song_id for entry in entries}:
-            raise CoreRequestError("invalid_params", "selected_song_id is not in the catalog generation")
+        if selected is not None and selected not in {
+            entry.song_id for entry in entries
+        }:
+            raise CoreRequestError(
+                "invalid_params", "selected_song_id is not in the catalog generation"
+            )
         self._viewport = {
             "generation": generation,
             "first_index": first_index,
@@ -505,7 +579,9 @@ class DesktopCoreServer:
     def _patch_settings(self, params: Mapping[str, object]) -> dict[str, object]:
         unknown = set(params) - PATCH_FIELDS
         if unknown:
-            raise CoreRequestError("invalid_params", f"unsupported settings: {', '.join(sorted(unknown))}")
+            raise CoreRequestError(
+                "invalid_params", f"unsupported settings: {', '.join(sorted(unknown))}"
+            )
         translated: dict[str, object] = {}
         for field in ("theme", "telemetry_enabled", "verbose_hud"):
             if field in params:
@@ -513,7 +589,9 @@ class DesktopCoreServer:
         if "playback_defaults" in params:
             playback = params["playback_defaults"]
             if not isinstance(playback, dict):
-                raise CoreRequestError("invalid_params", "playback_defaults must be an object")
+                raise CoreRequestError(
+                    "invalid_params", "playback_defaults must be an object"
+                )
             unknown_playback = set(playback) - PLAYBACK_PATCH_FIELDS
             if unknown_playback:
                 raise CoreRequestError(
@@ -525,7 +603,9 @@ class DesktopCoreServer:
                 "tempo_scale": "default_tempo_scale",
                 "fps": "game_fps",
             }
-            translated.update({field_map[key]: value for key, value in playback.items()})
+            translated.update(
+                {field_map[key]: value for key, value in playback.items()}
+            )
         try:
             self.settings_service.patch(translated)
             self.playback.invalidate_settings()
@@ -543,8 +623,14 @@ class DesktopCoreServer:
         song_id = params["song_id"]
         generation = params["generation"]
         config = params["config"]
-        if type(song_id) is not str or type(generation) is not int or not isinstance(config, dict):
-            raise CoreRequestError("invalid_params", "invalid playback.prepare parameters")
+        if (
+            type(song_id) is not str
+            or type(generation) is not int
+            or not isinstance(config, dict)
+        ):
+            raise CoreRequestError(
+                "invalid_params", "invalid playback.prepare parameters"
+            )
         try:
             return self.playback.prepare(
                 song_id=song_id,
@@ -557,17 +643,23 @@ class DesktopCoreServer:
 
     def _start_playback(self, params: Mapping[str, object]) -> dict[str, object]:
         if set(params) != {"prepared_id", "decisions"}:
-            raise CoreRequestError("invalid_params", "playback.start requires prepared_id and decisions")
+            raise CoreRequestError(
+                "invalid_params", "playback.start requires prepared_id and decisions"
+            )
         prepared_id = params["prepared_id"]
         decisions = params["decisions"]
         if type(prepared_id) is not str or not isinstance(decisions, list):
-            raise CoreRequestError("invalid_params", "invalid playback.start parameters")
+            raise CoreRequestError(
+                "invalid_params", "invalid playback.start parameters"
+            )
         try:
             return self.playback.start(prepared_id=prepared_id, decisions=decisions)
         except DesktopPlaybackError as exc:
             raise CoreRequestError(exc.code, exc.message) from exc
 
-    def _playback_command(self, method: str, params: Mapping[str, object]) -> dict[str, object]:
+    def _playback_command(
+        self, method: str, params: Mapping[str, object]
+    ) -> dict[str, object]:
         if set(params) != {"session_id"}:
             raise CoreRequestError("invalid_params", f"{method} requires session_id")
         session_id = params["session_id"]
@@ -601,7 +693,9 @@ class DesktopCoreServer:
             finally:
                 queue.put(None)
 
-        reader = threading.Thread(target=read_worker, name="desktop-core-reader", daemon=True)
+        reader = threading.Thread(
+            target=read_worker, name="desktop-core-reader", daemon=True
+        )
         reader.start()
 
         parent_watch_stop = threading.Event()
@@ -612,11 +706,14 @@ class DesktopCoreServer:
             while not parent_watch_stop.wait(0.25):
                 if not parent_process_alive(self.parent_pid):
                     self.playback.shutdown()
+                    self._shutdown_requested = True
                     self._stop_event.set()
                     queue.put(None)
                     return
 
-        parent_thread = threading.Thread(target=parent_worker, name="desktop-core-parent-watch", daemon=True)
+        parent_thread = threading.Thread(
+            target=parent_worker, name="desktop-core-parent-watch", daemon=True
+        )
         parent_thread.start()
 
         exit_code = 0
@@ -627,16 +724,30 @@ class DesktopCoreServer:
                 try:
                     item = queue.get(timeout=0.05)
                 except Empty:
+                    if self.event_buffer_overflowed:
+                        self.playback.shutdown()
+                        break
                     continue
                 if item is None:
+                    # Inherited stdin EOF is a parent-loss/shutdown signal.
+                    # Give the active native session the same bounded cleanup
+                    # opportunity as an explicit app.shutdown request.
+                    self.playback.shutdown()
+                    self._shutdown_requested = True
                     break
                 if isinstance(item, ProtocolError):
-                    print(f"desktop Core protocol error: {item.message}", file=error_stream)
+                    print(
+                        f"desktop Core protocol error: {item.message}",
+                        file=error_stream,
+                    )
                     write_frame(
                         stdout,
                         event(
                             "core.fatal",
-                            {"code": bounded_text(item.code), "message": bounded_text(item.message)},
+                            {
+                                "code": bounded_text(item.code),
+                                "message": bounded_text(item.message),
+                            },
                         ),
                     )
                     exit_code = 2
@@ -645,14 +756,22 @@ class DesktopCoreServer:
                     request = parse_request_frame(item)
                 except ProtocolError as exc:
                     if exc.request_id is not None:
-                        write_frame(stdout, response_error(exc.request_id, exc.code, exc.message))
+                        write_frame(
+                            stdout,
+                            response_error(exc.request_id, exc.code, exc.message),
+                        )
                         continue
-                    print(f"desktop Core protocol error: {exc.message}", file=error_stream)
+                    print(
+                        f"desktop Core protocol error: {exc.message}", file=error_stream
+                    )
                     write_frame(
                         stdout,
                         event(
                             "core.fatal",
-                            {"code": bounded_text(exc.code), "message": bounded_text(exc.message)},
+                            {
+                                "code": bounded_text(exc.code),
+                                "message": bounded_text(exc.message),
+                            },
                         ),
                     )
                     exit_code = 2
@@ -669,6 +788,12 @@ class DesktopCoreServer:
         finally:
             parent_watch_stop.set()
             self._stop_event.set()
+            if not self._shutdown_requested or self.event_buffer_overflowed:
+                # Protocol/output failures must not bypass native playback
+                # cleanup. This is the preferred path; the Tauri emergency
+                # release remains a separate last-resort fallback.
+                self.playback.shutdown()
+                self._shutdown_requested = True
             # Shutdown may be requested while the inherited stdin pipe is
             # still open. Close our end so the bounded reader can leave its
             # blocking read before interpreter finalization; the parent owns

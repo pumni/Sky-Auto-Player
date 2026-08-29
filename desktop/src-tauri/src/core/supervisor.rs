@@ -412,15 +412,27 @@ impl CoreSupervisor {
             }
             if events.buffered.len() < MAX_BUFFERED_EVENTS {
                 events.buffered.push(ui_event.clone());
+            } else {
+                // There is no safe way to drop a lifecycle event. Mark the
+                // replay history unusable and fail closed for future command
+                // and subscription calls instead of silently losing state.
+                events.overflowed = true;
             }
         }
-        if let Some(channel) = events.channel.as_ref() {
-            let _ = channel.send(ui_event);
+        if let Some(channel) = events.channel.as_ref()
+            && channel.send(ui_event).is_err()
+        {
+            events.overflowed = true;
         }
     }
 
     pub fn subscribe(&self, channel: tauri::ipc::Channel<UiEvent>) -> Result<(), SupervisorError> {
         let mut events = self.events.lock().expect("event buffer poisoned");
+        if events.overflowed {
+            return Err(SupervisorError::Unavailable(
+                "Core event history overflowed its bounded capacity".into(),
+            ));
+        }
         for event in &events.buffered {
             channel
                 .send(event.clone())
@@ -434,12 +446,30 @@ impl CoreSupervisor {
         *self.lifecycle.lock().expect("lifecycle poisoned")
     }
 
+    #[cfg(test)]
+    fn event_history_overflowed(&self) -> bool {
+        self.events
+            .lock()
+            .expect("event buffer poisoned")
+            .overflowed
+    }
+
     pub fn request<P: Serialize>(&self, method: &str, params: P) -> Result<Value, SupervisorError> {
         let lifecycle = self.lifecycle();
         if !lifecycle.accepts_requests() {
             return Err(SupervisorError::Unavailable(format!(
                 "Core state is {lifecycle:?}"
             )));
+        }
+        if self
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .overflowed
+        {
+            return Err(SupervisorError::Unavailable(
+                "Core event history overflowed its bounded capacity".into(),
+            ));
         }
         let timeout = if method == "catalog.reload" {
             self.timeouts.reload
@@ -545,6 +575,7 @@ impl CoreSupervisor {
 struct EventState {
     buffered: Vec<UiEvent>,
     channel: Option<tauri::ipc::Channel<UiEvent>>,
+    overflowed: bool,
 }
 
 impl Drop for CoreSupervisor {
@@ -559,10 +590,12 @@ impl Drop for CoreSupervisor {
 #[cfg(test)]
 mod tests {
     use super::super::protocol::CoreEvent;
-    use super::{CoreLifecycle, CoreSupervisor, SupervisorError, SupervisorTimeouts};
+    use super::{
+        CoreLifecycle, CoreSupervisor, MAX_BUFFERED_EVENTS, SupervisorError, SupervisorTimeouts,
+    };
     use crate::ui_events::{
-        PlaybackEventState, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
-        UiEvent,
+        PlaybackEventState, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
+        PlaybackSnapshotPayload, UiEvent,
     };
     use serde_json::json;
     use sky_dispatch_win32::input::ReleaseAllOutcome;
@@ -870,6 +903,29 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].seq, 1_000);
         drop(events);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn lifecycle_history_overflow_fails_closed_without_growing() {
+        let supervisor = start("normal");
+        for _ in 0..(MAX_BUFFERED_EVENTS + 1) {
+            supervisor.publish_event(CoreEvent::PlaybackFinished(PlaybackFinishedPayload {
+                session_id: "b".repeat(32),
+                song_id: "c".repeat(32),
+                outcome: "finished".into(),
+                total_us: 0,
+                message: "finished".into(),
+            }));
+        }
+        let events = supervisor.events.lock().expect("event buffer poisoned");
+        assert_eq!(events.buffered.len(), MAX_BUFFERED_EVENTS);
+        drop(events);
+        assert!(supervisor.event_history_overflowed());
+        assert!(matches!(
+            supervisor.request("catalog.search", json!({})),
+            Err(SupervisorError::Unavailable(message)) if message.contains("overflowed")
+        ));
         supervisor.shutdown();
     }
 
