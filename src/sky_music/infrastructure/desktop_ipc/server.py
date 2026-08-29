@@ -393,9 +393,10 @@ class DesktopCoreServer:
         self._ensure_catalog()
         generation = _required_int(params, "generation")
         first_index = _required_int(params, "first_index")
-        last_index = _required_int(params, "last_index")
-        if last_index < first_index or last_index - first_index + 1 > MAX_VIEWPORT_SPAN:
-            raise CoreRequestError("invalid_params", "viewport range is invalid or too large")
+        raw_last_index = params.get("last_index")
+        if type(raw_last_index) is not int:
+            raise CoreRequestError("invalid_params", "last_index must be an integer")
+        last_index = raw_last_index
         selected = params.get("selected_song_id")
         if selected is not None and (
             not isinstance(selected, str)
@@ -403,7 +404,29 @@ class DesktopCoreServer:
             or any(char not in "0123456789abcdef" for char in selected)
         ):
             raise CoreRequestError("invalid_params", "selected_song_id must be an opaque song ID or null")
-        self.catalog_service.entries(generation=generation)
+
+        # Viewport indices are inclusive and deliberately fail closed.  The
+        # only valid empty-catalog range is 0..-1; callers must not silently
+        # overscan beyond a catalog generation that they have not observed.
+        entries = self.catalog_service.entries(generation=generation)
+        total = len(entries)
+        if total == 0:
+            if first_index != 0 or last_index != -1 or selected is not None:
+                raise CoreRequestError(
+                    "invalid_params",
+                    "empty catalog viewport must be 0..-1 with no selected song",
+                )
+        elif (
+            last_index < first_index
+            or last_index >= total
+            or last_index - first_index + 1 > MAX_VIEWPORT_SPAN
+        ):
+            raise CoreRequestError(
+                "invalid_params",
+                "viewport range must be within the catalog and at most 2000 rows",
+            )
+        if selected is not None and selected not in {entry.song_id for entry in entries}:
+            raise CoreRequestError("invalid_params", "selected_song_id is not in the catalog generation")
         self._viewport = {
             "generation": generation,
             "first_index": first_index,

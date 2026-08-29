@@ -202,7 +202,7 @@ def test_catalog_generation_is_checked_for_viewport_and_search(tmp_path: Path) -
             {
                 "generation": generation,
                 "first_index": 0,
-                "last_index": 10,
+                "last_index": -1,
                 "selected_song_id": None,
             },
         ),
@@ -212,6 +212,72 @@ def test_catalog_generation_is_checked_for_viewport_and_search(tmp_path: Path) -
     assert accepted["ok"] is True
     assert stale["ok"] is False
     assert stale["error"]["code"] == "stale_generation"  # type: ignore[index]
+
+
+def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+    bootstrap = _call(server, _request("app.bootstrap"))
+    generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
+
+    accepted_empty = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": -1, "selected_song_id": None},
+        ),
+    )
+    invalid_ranges = (
+        {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": None},
+        {"generation": generation, "first_index": 1, "last_index": -1, "selected_song_id": None},
+        {"generation": generation, "first_index": 0, "last_index": -2, "selected_song_id": None},
+    )
+    rejected = [
+        _call(server, _request("catalog.set_viewport", params))
+        for params in invalid_ranges
+    ]
+
+    assert accepted_empty["ok"] is True
+    assert all(response["error"]["code"] == "invalid_params" for response in rejected)  # type: ignore[index]
+
+
+def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path) -> None:
+    song = tmp_path / "Alpha.txt"
+    song.write_text("", encoding="utf-8")
+    server = _server(tmp_path)
+    bootstrap = _call(server, _request("app.bootstrap"))
+    generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
+    song_id = song_id_for_path(song)
+
+    accepted = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": song_id},
+        ),
+    )
+    unknown_selection = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {
+                "generation": generation,
+                "first_index": 0,
+                "last_index": 0,
+                "selected_song_id": "f" * 32,
+            },
+        ),
+    )
+    overscan = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": 1, "selected_song_id": None},
+        ),
+    )
+
+    assert accepted["ok"] is True
+    assert unknown_selection["error"]["code"] == "invalid_params"  # type: ignore[index]
+    assert overscan["error"]["code"] == "invalid_params"  # type: ignore[index]
 
 
 def test_settings_patch_uses_service_and_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -394,3 +460,55 @@ raise SystemExit(server.serve(sys.stdin.buffer, sys.stdout.buffer, stderr=sys.st
     assert messages[0]["name"] == "core.ready"
     assert messages[-1]["result"] == {"shutdown": True}
     assert completed.stderr == b""
+
+
+def test_exact_core_main_entrypoint_smoke_with_real_admission(tmp_path: Path) -> None:
+    """Exercise the production source path, not only DesktopCoreServer in isolation."""
+    from sky_music.orchestration.native_admission import (
+        NativeAdmissionError,
+        require_rust_core,
+    )
+
+    try:
+        require_rust_core()
+    except NativeAdmissionError as exc:
+        pytest.skip(f"native free-threaded test wheel is unavailable: {exc}")
+
+    repository_root = Path(__file__).parents[1]
+    source_root = repository_root / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), env.get("PYTHONPATH", "")]))
+    requests = b"".join(
+        protocol.encode_frame(request)
+        for request in (
+            _request("app.bootstrap", request_id=1),
+            _request("catalog.search", {"query": "", "offset": 0, "limit": 1}, request_id=2),
+            _request("app.shutdown", request_id=3),
+        )
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(source_root / "core_main.py"), "--desktop-worker", "--install-root", str(tmp_path)],
+        input=requests,
+        capture_output=True,
+        env=env,
+        cwd=repository_root,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    lines = completed.stdout.splitlines()
+    assert lines, "exact core entrypoint emitted no protocol frames"
+    messages = [json.loads(line) for line in lines]
+    assert messages[0]["name"] == "core.ready"
+    assert messages[1]["id"] == 1
+    assert messages[2]["id"] == 2
+    assert messages[-1] == {
+        "v": 1,
+        "id": 3,
+        "type": "response",
+        "ok": True,
+        "result": {"shutdown": True},
+    }
+    assert all(message.get("v") == 1 for message in messages)
