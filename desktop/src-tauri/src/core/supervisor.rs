@@ -329,11 +329,7 @@ impl CoreSupervisor {
             CoreEvent::Fatal(payload) => payload.message.as_str(),
             _ => "Core reported a fatal error",
         };
-        // Hold the lifecycle lock until the original event is buffered. This
-        // makes the terminal transition observable as one ordered operation:
-        // callers that see Fatal can also immediately observe the fatal event.
-        let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        *lifecycle = CoreLifecycle::Fatal;
+        self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending
             .fail_all(&format!("Core reported fatal error: {message}"));
         self.emergency_release_if_needed();
@@ -382,6 +378,23 @@ impl CoreSupervisor {
     fn publish_event(&self, event: CoreEvent) {
         let ui_event = event.into_ui_event();
         let mut events = self.events.lock().expect("event buffer poisoned");
+        if events.overflowed {
+            return;
+        }
+
+        // The replay buffer is only for events produced before a usable UI
+        // subscriber exists. Once live delivery is installed, retaining a
+        // second copy would turn the bounded backlog into lifetime history.
+        if let Some(channel) = events.channel.clone() {
+            if channel.send(ui_event).is_err() {
+                events.channel = None;
+                events.overflowed = true;
+                drop(events);
+                self.event_delivery_fatal();
+            }
+            return;
+        }
+
         let snapshot_session_id = match &ui_event {
             UiEvent::PlaybackSnapshot { payload, .. } => Some(payload.session_id.as_str()),
             _ => None,
@@ -394,34 +407,30 @@ impl CoreSupervisor {
                         if payload.session_id == session_id
                 )
             }) {
-                events.buffered[index] = ui_event.clone();
+                events.buffered[index] = ui_event;
             } else if events.buffered.len() < MAX_BUFFERED_EVENTS {
-                events.buffered.push(ui_event.clone());
+                events.buffered.push(ui_event);
             }
-        } else {
-            // State transitions and terminal events are lossless for an
-            // attached channel. Under late-subscriber pressure, reclaim a
-            // buffered snapshot before considering the bounded history full.
-            if events.buffered.len() >= MAX_BUFFERED_EVENTS
-                && let Some(index) = events
-                    .buffered
-                    .iter()
-                    .position(|buffered| matches!(buffered, UiEvent::PlaybackSnapshot { .. }))
-            {
-                events.buffered.remove(index);
-            }
-            if events.buffered.len() < MAX_BUFFERED_EVENTS {
-                events.buffered.push(ui_event.clone());
-            } else {
-                // There is no safe way to drop a lifecycle event. Mark the
-                // replay history unusable and fail closed for future command
-                // and subscription calls instead of silently losing state.
-                events.overflowed = true;
-            }
+            return;
         }
-        if let Some(channel) = events.channel.as_ref()
-            && channel.send(ui_event).is_err()
+
+        // Before subscription, lifecycle events are retained in order. A
+        // buffered snapshot may be reclaimed to preserve that lifecycle
+        // ordering, but lifecycle events themselves are never silently lost.
+        if events.buffered.len() >= MAX_BUFFERED_EVENTS
+            && let Some(index) = events
+                .buffered
+                .iter()
+                .position(|buffered| matches!(buffered, UiEvent::PlaybackSnapshot { .. }))
         {
+            events.buffered.remove(index);
+        }
+        if events.buffered.len() < MAX_BUFFERED_EVENTS {
+            events.buffered.push(ui_event);
+        } else {
+            // There is no safe way to drop a lifecycle event. Mark the
+            // replay history unusable and fail closed for future command
+            // and subscription calls instead of silently losing state.
             events.overflowed = true;
         }
     }
@@ -434,12 +443,25 @@ impl CoreSupervisor {
             ));
         }
         for event in &events.buffered {
-            channel
-                .send(event.clone())
-                .map_err(|error| SupervisorError::Request(error.to_string()))?;
+            if let Err(error) = channel.send(event.clone()) {
+                events.channel = None;
+                events.overflowed = true;
+                let message = error.to_string();
+                drop(events);
+                self.event_delivery_fatal();
+                return Err(SupervisorError::Request(message));
+            }
         }
         events.channel = Some(channel);
+        events.buffered.clear();
         Ok(())
+    }
+
+    fn event_delivery_fatal(&self) {
+        self.set_lifecycle(CoreLifecycle::Fatal);
+        self.pending.fail_all("UI event channel delivery failed");
+        self.emergency_release_if_needed();
+        self.terminate_child();
     }
 
     pub fn lifecycle(&self) -> CoreLifecycle {
@@ -601,8 +623,8 @@ mod tests {
     use sky_dispatch_win32::input::ReleaseAllOutcome;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -671,6 +693,16 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         predicate()
+    }
+
+    fn finished_event(total_us: u64) -> CoreEvent {
+        CoreEvent::PlaybackFinished(PlaybackFinishedPayload {
+            session_id: "b".repeat(32),
+            song_id: "c".repeat(32),
+            outcome: "finished".into(),
+            total_us,
+            message: "finished".into(),
+        })
     }
 
     #[test]
@@ -904,6 +936,136 @@ mod tests {
         assert_eq!(snapshots[0].seq, 1_000);
         drop(events);
         supervisor.shutdown();
+    }
+
+    #[test]
+    fn successful_subscription_replays_and_clears_backlog() {
+        let supervisor = start("normal");
+        supervisor
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .buffered
+            .clear();
+        for total_us in 1..=3 {
+            supervisor.publish_event(finished_event(total_us));
+        }
+
+        let delivered = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |body| {
+            let payload = match body {
+                tauri::ipc::InvokeResponseBody::Json(raw) => {
+                    serde_json::from_str::<serde_json::Value>(&raw)?
+                }
+                tauri::ipc::InvokeResponseBody::Raw(raw) => {
+                    serde_json::from_slice::<serde_json::Value>(&raw)?
+                }
+            };
+            delivered_for_channel
+                .lock()
+                .expect("delivered events poisoned")
+                .push(payload["payload"]["total_us"].as_u64().expect("total_us"));
+            Ok(())
+        });
+
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+        assert_eq!(
+            *delivered.lock().expect("delivered events poisoned"),
+            [1, 2, 3]
+        );
+        assert!(
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .is_empty()
+        );
+        assert!(!supervisor.event_history_overflowed());
+
+        supervisor.publish_event(finished_event(4));
+        assert_eq!(
+            *delivered.lock().expect("delivered events poisoned"),
+            [1, 2, 3, 4]
+        );
+        assert!(!supervisor.event_history_overflowed());
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn live_subscription_does_not_fill_replay_history_or_block_stop() {
+        let supervisor = start("tauri_commands");
+        supervisor
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .buffered
+            .clear();
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |_| {
+            delivered_for_channel.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+
+        for total_us in 1..=(MAX_BUFFERED_EVENTS * 2 + 1) as u64 {
+            supervisor.publish_event(finished_event(total_us));
+        }
+
+        assert_eq!(
+            delivered.load(Ordering::SeqCst),
+            MAX_BUFFERED_EVENTS * 2 + 1
+        );
+        assert!(
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .is_empty()
+        );
+        assert!(!supervisor.event_history_overflowed());
+        let stop = supervisor
+            .request("playback.stop", json!({"session_id": "b".repeat(32)}))
+            .expect("stop remains usable after live delivery");
+        assert_eq!(stop["accepted"], true);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn failed_live_subscription_delivery_fails_closed_and_releases_active_session() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("normal");
+        let fail_delivery = Arc::new(AtomicBool::new(false));
+        let fail_delivery_for_channel = Arc::clone(&fail_delivery);
+        let channel = tauri::ipc::Channel::<UiEvent>::new(move |_| {
+            if fail_delivery_for_channel.load(Ordering::Acquire) {
+                Err(tauri::Error::Io(std::io::Error::other("channel closed")))
+            } else {
+                Ok(())
+            }
+        });
+        supervisor
+            .subscribe(channel)
+            .expect("subscription succeeds");
+        supervisor.update_physical_session(true, "playing");
+        fail_delivery.store(true, Ordering::Release);
+
+        supervisor.publish_event(finished_event(1));
+
+        assert_eq!(supervisor.lifecycle(), CoreLifecycle::Fatal);
+        assert!(supervisor.event_history_overflowed());
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert!(supervisor.request("playback.stop", json!({})).is_err());
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
     }
 
     #[test]
