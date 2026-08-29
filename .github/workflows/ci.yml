@@ -153,16 +153,16 @@ jobs:
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
 
-      - name: Repository verification — Rust
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run python scripts/check.py rust
-
       - name: Rust — build wheel
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
+
+      - name: Repository verification — Rust
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: uv run python scripts/check.py rust
 
       - name: Repository verification — Python tests
         # Run windows-marked tests when present; skip only wall-clock `slow`.
