@@ -379,6 +379,15 @@ struct EventState {
     channel: Option<tauri::ipc::Channel<UiEvent>>,
 }
 
+impl Drop for CoreSupervisor {
+    fn drop(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::CoreLifecycle;
@@ -399,14 +408,5 @@ mod tests {
         assert!(!CoreLifecycle::ShuttingDown.is_terminal());
         assert!(CoreLifecycle::Exited.is_terminal());
         assert!(CoreLifecycle::Fatal.is_terminal());
-    }
-}
-
-impl Drop for CoreSupervisor {
-    fn drop(&mut self) {
-        self.shutdown_requested.store(true, Ordering::Release);
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-        }
     }
 }
