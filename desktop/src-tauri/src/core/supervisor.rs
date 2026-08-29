@@ -304,7 +304,11 @@ impl CoreSupervisor {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("Core reported a fatal error");
-        self.set_lifecycle(CoreLifecycle::Fatal);
+        // Hold the lifecycle lock until the original event is buffered. This
+        // makes the terminal transition observable as one ordered operation:
+        // callers that see Fatal can also immediately observe the fatal event.
+        let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
+        *lifecycle = CoreLifecycle::Fatal;
         self.pending
             .fail_all(&format!("Core reported fatal error: {message}"));
         let _ = ready_sender.send(Err(message.to_owned()));
