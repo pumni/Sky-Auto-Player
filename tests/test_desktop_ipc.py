@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ NATIVE_INFO = RustBuildInfo(
 )
 
 
-def _request(method: str, params: dict[str, object] | None = None, request_id: int = 1) -> dict[str, object]:
+def _request(method: str, params: Mapping[str, object] | None = None, request_id: int = 1) -> dict[str, object]:
     return {
         "v": 1,
         "id": request_id,
@@ -96,6 +97,21 @@ def test_protocol_rejects_oversized_frames_without_readline() -> None:
 
     with pytest.raises(protocol.ProtocolError, match="1 MiB"):
         protocol.encode_frame({"payload": "x" * (1024 * 1024)})
+
+
+def test_protocol_reader_progresses_on_an_open_buffered_pipe() -> None:
+    """A live inherited pipe must not wait for a full 4 KiB read."""
+    read_fd, write_fd = os.pipe()
+    reader_stream = io.BufferedReader(os.fdopen(read_fd, "rb", buffering=0))
+    writer_stream = os.fdopen(write_fd, "wb", buffering=0)
+    try:
+        writer_stream.write(protocol.encode_frame(_request("settings.get")))
+        writer_stream.flush()
+        frames = protocol.iter_bounded_frames(reader_stream)
+        assert next(frames) == protocol.encode_frame(_request("settings.get"))[:-1]
+    finally:
+        reader_stream.close()
+        writer_stream.close()
 
 
 def test_protocol_rejects_bad_envelope_types() -> None:
@@ -202,7 +218,7 @@ def test_catalog_generation_is_checked_for_viewport_and_search(tmp_path: Path) -
             {
                 "generation": generation,
                 "first_index": 0,
-                "last_index": 10,
+                "last_index": -1,
                 "selected_song_id": None,
             },
         ),
@@ -212,6 +228,72 @@ def test_catalog_generation_is_checked_for_viewport_and_search(tmp_path: Path) -
     assert accepted["ok"] is True
     assert stale["ok"] is False
     assert stale["error"]["code"] == "stale_generation"  # type: ignore[index]
+
+
+def test_catalog_viewport_is_fail_closed_for_empty_and_out_of_bounds_ranges(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+    bootstrap = _call(server, _request("app.bootstrap"))
+    generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
+
+    accepted_empty = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": -1, "selected_song_id": None},
+        ),
+    )
+    invalid_ranges = (
+        {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": None},
+        {"generation": generation, "first_index": 1, "last_index": -1, "selected_song_id": None},
+        {"generation": generation, "first_index": 0, "last_index": -2, "selected_song_id": None},
+    )
+    rejected = [
+        _call(server, _request("catalog.set_viewport", params))
+        for params in invalid_ranges
+    ]
+
+    assert accepted_empty["ok"] is True
+    assert all(response["error"]["code"] == "invalid_params" for response in rejected)  # type: ignore[index]
+
+
+def test_catalog_viewport_rejects_unknown_selection_and_overscan(tmp_path: Path) -> None:
+    song = tmp_path / "Alpha.txt"
+    song.write_text("", encoding="utf-8")
+    server = _server(tmp_path)
+    bootstrap = _call(server, _request("app.bootstrap"))
+    generation = bootstrap["result"]["catalog_generation"]  # type: ignore[index]
+    song_id = song_id_for_path(song)
+
+    accepted = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": 0, "selected_song_id": song_id},
+        ),
+    )
+    unknown_selection = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {
+                "generation": generation,
+                "first_index": 0,
+                "last_index": 0,
+                "selected_song_id": "f" * 32,
+            },
+        ),
+    )
+    overscan = _call(
+        server,
+        _request(
+            "catalog.set_viewport",
+            {"generation": generation, "first_index": 0, "last_index": 1, "selected_song_id": None},
+        ),
+    )
+
+    assert accepted["ok"] is True
+    assert unknown_selection["error"]["code"] == "invalid_params"  # type: ignore[index]
+    assert overscan["error"]["code"] == "invalid_params"  # type: ignore[index]
 
 
 def test_settings_patch_uses_service_and_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -394,3 +476,64 @@ raise SystemExit(server.serve(sys.stdin.buffer, sys.stdout.buffer, stderr=sys.st
     assert messages[0]["name"] == "core.ready"
     assert messages[-1]["result"] == {"shutdown": True}
     assert completed.stderr == b""
+
+
+def test_exact_core_main_entrypoint_smoke_with_real_admission() -> None:
+    """Exercise the production source path, not only DesktopCoreServer in isolation."""
+    from sky_music.orchestration.native_admission import (
+        NativeAdmissionError,
+        require_rust_core,
+    )
+
+    try:
+        require_rust_core()
+    except NativeAdmissionError as exc:
+        pytest.skip(f"native free-threaded test wheel is unavailable: {exc}")
+
+    repository_root = Path(__file__).parents[1]
+    source_root = repository_root / "src"
+    song_path = repository_root / "songs" / "blue.json"
+    assert song_path.is_file()
+    song_id = song_id_for_path(song_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), env.get("PYTHONPATH", "")]))
+    requests = b"".join(
+        protocol.encode_frame(request)
+        for request in (
+            _request("app.bootstrap", request_id=1),
+            _request("catalog.search", {"query": "blue", "offset": 0, "limit": 1}, request_id=2),
+            _request("catalog.detail", {"song_id": song_id, "generation": 1}, request_id=3),
+            _request("settings.get", request_id=4),
+            _request("app.shutdown", request_id=5),
+        )
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(source_root / "core_main.py"), "--desktop-worker", "--install-root", str(repository_root)],
+        input=requests,
+        capture_output=True,
+        env=env,
+        cwd=repository_root,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    lines = completed.stdout.splitlines()
+    assert lines, "exact core entrypoint emitted no protocol frames"
+    messages = [json.loads(line) for line in lines]
+    assert messages[0]["name"] == "core.ready"
+    assert messages[1]["id"] == 1
+    assert messages[2]["id"] == 2
+    assert messages[2]["result"]["items"][0]["song_id"] == song_id  # type: ignore[index]
+    assert messages[3]["id"] == 3
+    assert messages[3]["result"]["song_id"] == song_id  # type: ignore[index]
+    assert messages[4]["id"] == 4
+    assert messages[-1] == {
+        "v": 1,
+        "id": 5,
+        "type": "response",
+        "ok": True,
+        "result": {"shutdown": True},
+    }
+    assert all(message.get("v") == 1 for message in messages)

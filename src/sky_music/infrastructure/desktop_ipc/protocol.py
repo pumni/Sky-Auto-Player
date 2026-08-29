@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 DESKTOP_PROTOCOL_VERSION = 1
@@ -168,11 +168,17 @@ def event(name: str, payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def iter_bounded_frames(stream: Any) -> Iterable[bytes]:
+def iter_bounded_frames(stream: Any) -> Iterator[bytes]:
     """Yield newline-delimited frames without calling unbounded ``readline``."""
     pending = bytearray()
+    read_chunk = getattr(stream, "read1", None)
+    if not callable(read_chunk):
+        read_chunk = stream.read
     while True:
-        chunk = stream.read(_READ_CHUNK_BYTES)
+        # BufferedReader.read(size) may wait for size bytes while the inherited
+        # pipe remains open. read1() returns the bytes currently available and
+        # preserves request/response progress for short NDJSON frames.
+        chunk = read_chunk(_READ_CHUNK_BYTES)
         if chunk in (b"", ""):
             break
         if isinstance(chunk, str):

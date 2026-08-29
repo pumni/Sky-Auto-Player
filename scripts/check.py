@@ -22,6 +22,7 @@ class Check:
     label: str
     command: tuple[str, ...]
     env: tuple[tuple[str, str], ...] = ()
+    cwd: Path | None = None
 
 
 GROUPS: dict[str, tuple[Check, ...]] = {
@@ -100,9 +101,60 @@ GROUPS: dict[str, tuple[Check, ...]] = {
             ),
         ),
     ),
+    "desktop": (
+        Check(
+            "desktop frontend install",
+            ("bun", "install", "--frozen-lockfile"),
+            cwd=ROOT / "desktop",
+        ),
+        Check("desktop frontend checks", ("bun", "run", "check"), cwd=ROOT / "desktop"),
+        Check(
+            "desktop frontend e2e",
+            ("bun", "run", "test:e2e"),
+            cwd=ROOT / "desktop",
+        ),
+        Check(
+            "desktop Rust check",
+            (
+                "cargo",
+                "check",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                "sky_desktop_shell",
+                "--all-features",
+                "--locked",
+            ),
+        ),
+        Check(
+            "desktop Rust tests and bindings",
+            (sys.executable, "scripts/generate_desktop_bindings.py"),
+        ),
+        Check(
+            "desktop Tauri command decoder tests",
+            (
+                "cargo",
+                "test",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                "sky_desktop_shell",
+                "--lib",
+                "--no-default-features",
+                "--features",
+                "tauri-test",
+                "generated_tauri_handler_decodes_params_envelope",
+                "--locked",
+            ),
+        ),
+        Check(
+            "desktop generated bindings are clean",
+            ("git", "diff", "--exit-code", "--", "desktop/src/bridge/generated"),
+        ),
+    ),
 }
 
-DEFAULT_GROUPS: tuple[str, ...] = ("static", "tests", "rust")
+DEFAULT_GROUPS: tuple[str, ...] = ("static", "tests", "rust", "desktop")
 
 
 def _run(check: Check) -> None:
@@ -110,7 +162,7 @@ def _run(check: Check) -> None:
     env.update(check.env)
     rendered = subprocess.list2cmdline(check.command)
     print(f"\n[check] {check.label}\n        {rendered}", flush=True)
-    subprocess.run(check.command, cwd=ROOT, env=env, check=True)
+    subprocess.run(check.command, cwd=check.cwd or ROOT, env=env, check=True)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -122,7 +174,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="*",
         choices=tuple(GROUPS),
         metavar="GROUP",
-        help="verification group(s): static, tests, tests-full, rust; omit to run normal checks",
+        help="verification group(s): static, tests, tests-full, rust, desktop; omit to run normal checks",
     )
     return parser.parse_args(argv)
 
