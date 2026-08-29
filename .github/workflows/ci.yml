@@ -67,7 +67,7 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               # Winget is not currently supported; no manifest validation is run.
-              src/*|tests/*|scripts/*|rust/*|.github/workflows/*|.github/actions/*|.github/ISSUE_TEMPLATE/*)
+              src/*|tests/*|scripts/*|rust/*|desktop/*|.cargo/*|.github/workflows/*|.github/actions/*|.github/ISSUE_TEMPLATE/*)
                 relevant=true
                 break
                 ;;
@@ -167,6 +167,20 @@ jobs:
       - name: Repository verification — Python tests
         # Run windows-marked tests when present; skip only wall-clock `slow`.
         run: uv run python scripts/check.py tests
+
+      - name: Set up Bun for desktop verification
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install Chromium for desktop browser smoke
+        working-directory: desktop
+        run: bunx playwright install chromium
+
+      - name: Repository verification — desktop
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: uv run python scripts/check.py desktop
 
   packaged:
     name: Packaged frozen unsigned app smoke

@@ -4,3 +4,4 @@ src-tauri/gen/
 src/bridge/generated/
 test-results/
 playwright-report/
+src-tauri/capabilities/main.json
