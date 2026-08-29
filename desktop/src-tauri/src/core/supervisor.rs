@@ -10,13 +10,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BUFFERED_EVENTS: usize = 128;
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+static TEST_CHILD_REAPED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy)]
 struct SupervisorTimeouts {
@@ -77,6 +81,8 @@ pub struct CoreSupervisor {
     physical_session_active: AtomicBool,
     emergency_release_done: AtomicBool,
     emergency_release: fn() -> sky_dispatch_win32::input::ReleaseAllOutcome,
+    #[cfg(test)]
+    track_child_reaped: bool,
     timeouts: SupervisorTimeouts,
 }
 
@@ -108,18 +114,21 @@ impl CoreSupervisor {
         command: &mut Command,
         timeouts: SupervisorTimeouts,
     ) -> Result<Arc<Self>, SupervisorError> {
-        Self::spawn_process_with_release(command, timeouts, emergency_release_canonical)
+        Self::spawn_process_with_release(command, timeouts, emergency_release_canonical, false)
     }
 
     fn spawn_process_with_release(
         command: &mut Command,
         timeouts: SupervisorTimeouts,
         emergency_release: fn() -> sky_dispatch_win32::input::ReleaseAllOutcome,
+        track_child_reaped: bool,
     ) -> Result<Arc<Self>, SupervisorError> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(not(test))]
+        let _ = track_child_reaped;
         let mut child = command
             .spawn()
             .map_err(|error| SupervisorError::Launch(error.to_string()))?;
@@ -149,6 +158,8 @@ impl CoreSupervisor {
             emergency_release_done: AtomicBool::new(false),
             emergency_release,
             timeouts,
+            #[cfg(test)]
+            track_child_reaped,
         });
         Self::spawn_reader(Arc::clone(&supervisor), stdout, ready_sender);
         Self::spawn_stderr_drainer(stderr);
@@ -291,7 +302,10 @@ impl CoreSupervisor {
                         .expect("Core child poisoned")
                         .try_wait();
                     match status {
-                        Ok(Some(status)) => break Ok(status),
+                        Ok(Some(status)) => {
+                            supervisor.note_child_termination();
+                            break Ok(status);
+                        }
                         Ok(None) => thread::sleep(CHILD_POLL_INTERVAL),
                         Err(error) => break Err(error),
                     }
@@ -311,13 +325,12 @@ impl CoreSupervisor {
     fn protocol_fatal(&self, message: &str, ready_sender: &mpsc::Sender<Result<(), String>>) {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending.fail_all(message);
-        self.emergency_release_if_needed();
         let _ = ready_sender.send(Err(message.to_owned()));
         self.publish_event(CoreEvent::Fatal(CoreFatalPayload {
             code: "protocol_error".into(),
             message: message.to_owned(),
         }));
-        self.terminate_child();
+        self.terminate_child_before_emergency_release();
     }
 
     fn inbound_core_fatal(
@@ -332,10 +345,9 @@ impl CoreSupervisor {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending
             .fail_all(&format!("Core reported fatal error: {message}"));
-        self.emergency_release_if_needed();
         let _ = ready_sender.send(Err(message.to_owned()));
         self.publish_event(event);
-        self.terminate_child();
+        self.terminate_child_before_emergency_release();
     }
 
     fn transition_to_ready(&self) -> bool {
@@ -460,8 +472,7 @@ impl CoreSupervisor {
     fn event_delivery_fatal(&self) {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending.fail_all("UI event channel delivery failed");
-        self.emergency_release_if_needed();
-        self.terminate_child();
+        self.terminate_child_before_emergency_release();
     }
 
     pub fn lifecycle(&self) -> CoreLifecycle {
@@ -577,9 +588,10 @@ impl CoreSupervisor {
             // Normal app shutdown lets the Core/native session clean itself up.
             // The canonical allowlisted release is only a fallback when that
             // graceful boundary is unavailable.
-            self.emergency_release_if_needed();
+            self.terminate_child_before_emergency_release();
+        } else {
+            self.terminate_child();
         }
-        self.terminate_child();
     }
 
     fn set_lifecycle(&self, lifecycle: CoreLifecycle) {
@@ -589,6 +601,59 @@ impl CoreSupervisor {
     fn terminate_child(&self) {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
+        }
+    }
+
+    fn terminate_child_before_emergency_release(&self) {
+        // A physical Core may still be dispatching while a fail-closed path is
+        // unwinding. Stop and boundedly reap it before sending the final
+        // canonical key-up, so the worker cannot issue another key-down after
+        // emergency cleanup. If termination cannot be confirmed before the
+        // budget expires, emergency release is still the last-resort safety
+        // action.
+        let _terminated = self.terminate_child_bounded();
+        self.emergency_release_if_needed();
+    }
+
+    fn terminate_child_bounded(&self) -> bool {
+        let deadline = Instant::now() + CHILD_TERMINATION_TIMEOUT;
+        let mut kill_attempted = false;
+
+        loop {
+            let status = match self.child.lock() {
+                Ok(mut child) => child.try_wait(),
+                Err(_) => return false,
+            };
+            match status {
+                Ok(Some(_)) => {
+                    self.note_child_termination();
+                    return true;
+                }
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+
+            if !kill_attempted {
+                if let Ok(mut child) = self.child.lock() {
+                    let _ = child.kill();
+                } else {
+                    return false;
+                }
+                kill_attempted = true;
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            thread::sleep(CHILD_POLL_INTERVAL.min(remaining));
+        }
+    }
+
+    fn note_child_termination(&self) {
+        #[cfg(test)]
+        if self.track_child_reaped {
+            TEST_CHILD_REAPED.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -624,7 +689,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -660,9 +725,13 @@ mod tests {
     }
 
     static EMERGENCY_RELEASE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static EMERGENCY_RELEASE_ORDER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
     static EMERGENCY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_emergency_release() -> ReleaseAllOutcome {
+        if !super::TEST_CHILD_REAPED.load(Ordering::SeqCst) {
+            EMERGENCY_RELEASE_ORDER_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+        }
         EMERGENCY_RELEASE_CALLS.fetch_add(1, Ordering::SeqCst);
         ReleaseAllOutcome {
             attempted_mask: 0,
@@ -675,11 +744,14 @@ mod tests {
     }
 
     fn start_with_test_release(mode: &str) -> std::sync::Arc<CoreSupervisor> {
+        super::TEST_CHILD_REAPED.store(false, Ordering::SeqCst);
+        EMERGENCY_RELEASE_ORDER_VIOLATIONS.store(0, Ordering::SeqCst);
         let mut command = fake_core(mode);
         CoreSupervisor::spawn_process_with_release(
             &mut command,
             short_timeouts(),
             test_emergency_release,
+            true,
         )
         .unwrap_or_else(|error| panic!("fake Core did not become ready: {error}"))
     }
@@ -756,6 +828,15 @@ mod tests {
             supervisor.lifecycle() == CoreLifecycle::Fatal
         }));
         assert!(!supervisor.lifecycle().accepts_requests());
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor
+                .events
+                .lock()
+                .expect("event buffer poisoned")
+                .buffered
+                .iter()
+                .any(|event| matches!(event, UiEvent::CoreFatal { .. }))
+        }));
         let events = supervisor.events.lock().expect("event buffer poisoned");
         let fatal = events
             .buffered
@@ -865,9 +946,13 @@ mod tests {
         assert!(eventually(Duration::from_secs(1), || {
             supervisor.lifecycle() == CoreLifecycle::Fatal
         }));
+        assert!(eventually(Duration::from_secs(1), || {
+            EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst) == 1
+        }));
         supervisor.shutdown();
         supervisor.shutdown();
         assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -878,6 +963,31 @@ mod tests {
         assert!(eventually(Duration::from_secs(1), || {
             supervisor.lifecycle() == CoreLifecycle::Fatal
         }));
+        assert!(eventually(Duration::from_secs(1), || {
+            EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst) == 1
+        }));
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn protocol_fatal_reaps_before_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("normal");
+        supervisor.update_physical_session(true, "playing");
+        let (ready_sender, ready_receiver) = mpsc::channel();
+
+        supervisor.protocol_fatal("malformed protocol", &ready_sender);
+
+        assert!(matches!(
+            ready_receiver.try_recv(),
+            Ok(Err(message)) if message == "malformed protocol"
+        ));
+        assert_eq!(supervisor.lifecycle(), CoreLifecycle::Fatal);
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
         supervisor.shutdown();
         assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
     }
@@ -892,6 +1002,21 @@ mod tests {
         }));
         supervisor.shutdown();
         assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_graceful_shutdown_reaps_before_emergency_release() {
+        let _guard = EMERGENCY_TEST_LOCK.lock().expect("emergency test lock");
+        EMERGENCY_RELEASE_CALLS.store(0, Ordering::SeqCst);
+        let supervisor = start_with_test_release("force_shutdown");
+        supervisor.update_physical_session(true, "playing");
+
+        supervisor.shutdown();
+
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
+        supervisor.shutdown();
+        assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1063,6 +1188,7 @@ mod tests {
         assert_eq!(supervisor.lifecycle(), CoreLifecycle::Fatal);
         assert!(supervisor.event_history_overflowed());
         assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(EMERGENCY_RELEASE_ORDER_VIOLATIONS.load(Ordering::SeqCst), 0);
         assert!(supervisor.request("playback.stop", json!({})).is_err());
         supervisor.shutdown();
         assert_eq!(EMERGENCY_RELEASE_CALLS.load(Ordering::SeqCst), 1);
