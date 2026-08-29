@@ -1,3 +1,4 @@
+use crate::ui_events::{CatalogChangedPayload, CoreFatalPayload, CoreReadyPayload, UiEvent};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -23,10 +24,30 @@ pub struct CoreResponse {
     pub error: Option<CoreErrorPayload>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CoreEvent {
-    pub name: String,
-    pub payload: Value,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEvent {
+    Ready(CoreReadyPayload),
+    Fatal(CoreFatalPayload),
+    CatalogChanged(CatalogChangedPayload),
+}
+
+impl CoreEvent {
+    pub fn into_ui_event(self) -> UiEvent {
+        match self {
+            Self::Ready(payload) => UiEvent::CoreReady {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::Fatal(payload) => UiEvent::CoreFatal {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::CatalogChanged(payload) => UiEvent::CatalogChanged {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +215,45 @@ fn required_u64(object: &Map<String, Value>, name: &str) -> Result<u64, Protocol
         .ok_or_else(|| ProtocolError::Invalid(format!("{name} must be an unsigned integer")))
 }
 
+fn parse_event(name: &str, payload: Value) -> Result<CoreEvent, ProtocolError> {
+    fn decode<T>(name: &str, payload: Value) -> Result<T, ProtocolError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        serde_json::from_value(payload)
+            .map_err(|error| ProtocolError::Invalid(format!("invalid {name} payload: {error}")))
+    }
+
+    match name {
+        "core.ready" => {
+            let value: CoreReadyPayload = decode(name, payload)?;
+            if value.protocol_version != DESKTOP_PROTOCOL_VERSION {
+                return Err(ProtocolError::Invalid(
+                    "core.ready protocol_version does not match the desktop protocol".into(),
+                ));
+            }
+            UiEvent::validate_ready(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::Ready(value))
+        }
+        "core.fatal" => {
+            let value: CoreFatalPayload = decode(name, payload)?;
+            UiEvent::validate_fatal(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::Fatal(value))
+        }
+        "catalog.changed" => {
+            let value: CatalogChangedPayload = decode(name, payload)?;
+            UiEvent::validate_catalog_changed(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::CatalogChanged(value))
+        }
+        other => Err(ProtocolError::Invalid(format!(
+            "unsupported event name: {other}"
+        ))),
+    }
+}
+
 pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
     if frame.len() > MAX_OUTBOUND_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge(MAX_OUTBOUND_FRAME_BYTES));
@@ -256,13 +316,12 @@ pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
         }
         Some("event") => {
             ensure_fields(&object, &["v", "type", "name", "payload"])?;
-            Ok(CoreMessage::Event(CoreEvent {
-                name: required_string(&object, "name")?,
-                payload: object
-                    .get("payload")
-                    .cloned()
-                    .ok_or_else(|| ProtocolError::Invalid("event lacks payload".into()))?,
-            }))
+            let name = required_string(&object, "name")?;
+            let payload = object
+                .get("payload")
+                .cloned()
+                .ok_or_else(|| ProtocolError::Invalid("event lacks payload".into()))?;
+            Ok(CoreMessage::Event(parse_event(&name, payload)?))
         }
         Some(other) => Err(ProtocolError::Invalid(format!(
             "unsupported message type: {other}"
@@ -318,6 +377,31 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn ready_payload() -> Value {
+        serde_json::json!({
+            "app_version": "fake-core",
+            "protocol_version": 1,
+            "native_build": {
+                "native_build_commit": "a".repeat(40),
+                "native_version": "3.5.0",
+                "schema_version": 10,
+                "native_abi": "cp314t-win_amd64",
+                "rustc_version": "1.98.0",
+                "win32_backend": true
+            }
+        })
+    }
+
+    fn event_frame(name: &str, payload: Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "v": 1,
+            "type": "event",
+            "name": name,
+            "payload": payload
+        }))
+        .expect("event frame")
+    }
+
     #[test]
     fn parser_rejects_duplicate_keys_and_bad_version() {
         let duplicate =
@@ -354,9 +438,73 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_only_typed_bounded_events() {
+        assert!(matches!(
+            parse_message(&event_frame("core.ready", ready_payload())),
+            Ok(CoreMessage::Event(CoreEvent::Ready(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "core.fatal",
+                serde_json::json!({"code": "failure", "message": "bounded"})
+            )),
+            Ok(CoreMessage::Event(CoreEvent::Fatal(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "catalog.changed",
+                serde_json::json!({"generation": 2, "total": 500})
+            )),
+            Ok(CoreMessage::Event(CoreEvent::CatalogChanged(_)))
+        ));
+    }
+
+    #[test]
+    fn parser_rejects_unknown_or_malformed_events_fail_closed() {
+        let cases = [
+            event_frame("catalog.unknown", serde_json::json!({})),
+            event_frame("catalog.changed", serde_json::json!({"generation": 2})),
+            event_frame(
+                "catalog.changed",
+                serde_json::json!({"generation": "two", "total": 500}),
+            ),
+            event_frame(
+                "catalog.changed",
+                serde_json::json!({"generation": 2, "total": 500, "extra": true}),
+            ),
+            event_frame(
+                "core.fatal",
+                serde_json::json!({"code": "failure", "message": "bad", "extra": true}),
+            ),
+            event_frame(
+                "core.ready",
+                serde_json::json!({
+                    "app_version": "fake-core",
+                    "protocol_version": 1,
+                    "native_build": {
+                        "native_build_commit": "a".repeat(40),
+                        "native_version": "3.5.0",
+                        "schema_version": 10,
+                        "native_abi": "cp314t-win_amd64",
+                        "rustc_version": "1.98.0",
+                        "win32_backend": "true"
+                    }
+                }),
+            ),
+        ];
+        for frame in cases {
+            assert!(
+                parse_message(&frame).is_err(),
+                "malformed event was accepted: {}",
+                String::from_utf8_lossy(&frame)
+            );
+        }
+    }
+
+    #[test]
     fn bounded_reader_reads_chunks_and_rejects_oversized_output() {
-        let data = br#"{"v":1,"type":"event","name":"core.ready","payload":{}}
-{"v":1,"type":"event","name":"core.fatal","payload":{}}"#;
+        let data = br#"{"v":1,"type":"event","name":"core.ready","payload":{"app_version":"fake","protocol_version":1,"native_build":{"native_build_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","native_version":"3.5.0","schema_version":10,"native_abi":"cp314t-win_amd64","rustc_version":"1.98.0","win32_backend":true}}}
+{"v":1,"type":"event","name":"core.fatal","payload":{"code":"fake","message":"failure"}}"#;
         let mut reader = BoundedFrameReader::new(Cursor::new(data));
         assert!(reader.next_frame().unwrap().is_some());
         assert!(reader.next_frame().unwrap().is_some());

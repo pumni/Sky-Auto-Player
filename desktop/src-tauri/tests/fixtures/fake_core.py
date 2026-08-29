@@ -22,7 +22,25 @@ def raw(data: bytes) -> None:
 
 
 def ready() -> None:
-    emit({"v": 1, "type": "event", "name": "core.ready", "payload": {}})
+    emit(
+        {
+            "v": 1,
+            "type": "event",
+            "name": "core.ready",
+            "payload": {
+                "app_version": "fake-core",
+                "protocol_version": 1,
+                "native_build": {
+                    "native_build_commit": "a" * 40,
+                    "native_version": "3.5.0",
+                    "schema_version": 10,
+                    "native_abi": "cp314t-win_amd64",
+                    "rustc_version": "1.98.0",
+                    "win32_backend": True,
+                },
+            },
+        }
+    )
 
 
 def fatal(message: str = "fake Core failure") -> None:
@@ -46,6 +64,19 @@ def response(request_id: int, result: Any = None) -> None:
             "result": {} if result is None else result,
         }
     )
+
+
+def command_result(item: dict[str, Any]) -> Any:
+    method = item.get("method")
+    if method == "catalog.search":
+        return {
+            "items": [],
+            "offset": int(item.get("params", {}).get("offset", 0)),
+            "limit": int(item.get("params", {}).get("limit", 200)),
+            "total": 0,
+            "generation": 1,
+        }
+    return {}
 
 
 def request() -> dict[str, Any] | None:
@@ -81,7 +112,7 @@ def serve(mode: str) -> None:
 
     ready()
     if mode == "duplicate_ready":
-        emit({"v": 1, "type": "event", "name": "core.ready", "payload": {}})
+        ready()
         time.sleep(30)
         return
     if mode == "fatal_after_ready":
@@ -132,6 +163,9 @@ def serve(mode: str) -> None:
         if item.get("method") == "app.shutdown":
             response(int(item["id"]))
             return
+        if mode == "tauri_commands":
+            response(int(item["id"]), command_result(item))
+            continue
         response(
             int(item["id"]),
             {"method": item.get("method"), "params": item.get("params")},

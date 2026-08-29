@@ -1,9 +1,6 @@
-use super::protocol::{
-    BoundedFrameReader, CoreEvent, CoreMessage, DESKTOP_PROTOCOL_VERSION, MAX_REQUEST_ID,
-    encode_request,
-};
+use super::protocol::{BoundedFrameReader, CoreEvent, CoreMessage, MAX_REQUEST_ID, encode_request};
 use super::request_registry::{Completion, PendingRegistry};
-use crate::ui_events::UiEvent;
+use crate::ui_events::{CoreFatalPayload, UiEvent};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Write};
@@ -195,8 +192,8 @@ impl CoreSupervisor {
                                         }
                                     }
                                 }
-                                Ok(CoreMessage::Event(event)) => match event.name.as_str() {
-                                    "core.ready" => {
+                                Ok(CoreMessage::Event(event)) => match event {
+                                    CoreEvent::Ready(_) => {
                                         if supervisor.transition_to_ready() {
                                             supervisor.publish_event(event);
                                             let _ = ready_sender.send(Ok(()));
@@ -208,11 +205,11 @@ impl CoreSupervisor {
                                             break;
                                         }
                                     }
-                                    "core.fatal" => {
+                                    CoreEvent::Fatal(_) => {
                                         supervisor.inbound_core_fatal(event, &ready_sender);
                                         break;
                                     }
-                                    _ => supervisor.publish_event(event),
+                                    CoreEvent::CatalogChanged(_) => supervisor.publish_event(event),
                                 },
                                 Err(error) => {
                                     supervisor.protocol_fatal(&error.to_string(), &ready_sender);
@@ -287,10 +284,10 @@ impl CoreSupervisor {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending.fail_all(message);
         let _ = ready_sender.send(Err(message.to_owned()));
-        self.publish_event(CoreEvent {
-            name: "core.fatal".into(),
-            payload: serde_json::json!({"code": "protocol_error", "message": message}),
-        });
+        self.publish_event(CoreEvent::Fatal(CoreFatalPayload {
+            code: "protocol_error".into(),
+            message: message.to_owned(),
+        }));
         self.terminate_child();
     }
 
@@ -299,11 +296,10 @@ impl CoreSupervisor {
         event: CoreEvent,
         ready_sender: &mpsc::Sender<Result<(), String>>,
     ) {
-        let message = event
-            .payload
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("Core reported a fatal error");
+        let message = match &event {
+            CoreEvent::Fatal(payload) => payload.message.as_str(),
+            _ => "Core reported a fatal error",
+        };
         // Hold the lifecycle lock until the original event is buffered. This
         // makes the terminal transition observable as one ordered operation:
         // callers that see Fatal can also immediately observe the fatal event.
@@ -326,11 +322,7 @@ impl CoreSupervisor {
     }
 
     fn publish_event(&self, event: CoreEvent) {
-        let ui_event = UiEvent {
-            v: DESKTOP_PROTOCOL_VERSION,
-            name: event.name,
-            payload: event.payload,
-        };
+        let ui_event = event.into_ui_event();
         let mut events = self.events.lock().expect("event buffer poisoned");
         if events.buffered.len() >= MAX_BUFFERED_EVENTS {
             events.buffered.remove(0);
@@ -433,6 +425,13 @@ impl CoreSupervisor {
         if self.shutdown_requested.swap(true, Ordering::AcqRel) {
             return;
         }
+        if matches!(
+            self.lifecycle(),
+            CoreLifecycle::Fatal | CoreLifecycle::Exited
+        ) {
+            self.terminate_child();
+            return;
+        }
         self.set_lifecycle(CoreLifecycle::ShuttingDown);
         let _ = self.request_inner("app.shutdown", serde_json::json!({}), self.timeouts.request);
         self.terminate_child();
@@ -467,6 +466,7 @@ impl Drop for CoreSupervisor {
 #[cfg(test)]
 mod tests {
     use super::{CoreLifecycle, CoreSupervisor, SupervisorError, SupervisorTimeouts};
+    use crate::ui_events::UiEvent;
     use serde_json::json;
     use std::path::PathBuf;
     use std::process::Command;
@@ -570,9 +570,32 @@ mod tests {
         let fatal = events
             .buffered
             .iter()
-            .find(|event| event.name == "core.fatal")
+            .find_map(|event| match event {
+                UiEvent::CoreFatal { payload, .. } => Some(payload),
+                _ => None,
+            })
             .expect("original fatal event");
-        assert_eq!(fatal.payload["message"], "fatal after ready");
+        assert_eq!(fatal.message, "fatal after ready");
+    }
+
+    #[test]
+    fn shutdown_of_terminal_core_is_immediate_and_idempotent() {
+        let fatal = start("fatal_after_ready");
+        assert!(eventually(Duration::from_secs(1), || {
+            fatal.lifecycle() == CoreLifecycle::Fatal
+        }));
+        let started = Instant::now();
+        fatal.shutdown();
+        fatal.shutdown();
+        assert!(started.elapsed() < Duration::from_millis(250));
+
+        let exited = start("eof_after_ready");
+        assert!(eventually(Duration::from_secs(1), || {
+            exited.lifecycle() == CoreLifecycle::Fatal
+        }));
+        let started = Instant::now();
+        exited.shutdown();
+        assert!(started.elapsed() < Duration::from_millis(250));
     }
 
     #[test]

@@ -3,7 +3,6 @@ use crate::core::CoreSupervisor;
 use crate::ui_events::UiEvent;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
@@ -244,12 +243,30 @@ where
     P: Serialize + Send + 'static,
     R: DeserializeOwned + Send + 'static,
 {
-    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let supervisor = app_state.ensure_core_blocking()?;
         request_with_supervisor(&supervisor, method, params)
     })
     .await
     .map_err(|error| format!("Core worker failed: {error}"))?
+}
+
+async fn blocking_settings_request<P, R>(state: State<'_, AppState>, params: P) -> Result<R, String>
+where
+    P: Serialize + Send + 'static,
+    R: DeserializeOwned + Send + 'static,
+{
+    let app_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Tauri may run multiple async commands concurrently. Keep the
+        // persistence boundary FIFO even if callers bypass the frontend queue.
+        let _write_guard = app_state.lock_settings_writes();
+        let supervisor = app_state.ensure_core_blocking()?;
+        request_with_supervisor(&supervisor, "settings.patch", params)
+    })
+    .await
+    .map_err(|error| format!("Core settings worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -319,9 +336,8 @@ pub async fn patch_settings(
         tempo_scale: playback.tempo_scale,
         fps: playback.fps,
     });
-    blocking_request(
+    blocking_settings_request(
         state,
-        "settings.patch",
         CoreSettingsPatch {
             theme: params.theme,
             telemetry_enabled: params.telemetry_enabled,
@@ -337,8 +353,9 @@ pub async fn subscribe_ui_events(
     state: State<'_, AppState>,
     channel: Channel<UiEvent>,
 ) -> Result<(), String> {
-    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let supervisor = app_state.ensure_core_blocking()?;
         supervisor
             .subscribe(channel)
             .map_err(|error| error.to_string())
@@ -349,9 +366,13 @@ pub async fn subscribe_ui_events(
 
 #[tauri::command]
 pub async fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
-    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
-    tauri::async_runtime::spawn_blocking(move || supervisor.shutdown())
-        .await
-        .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
+    let app_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(supervisor) = app_state.supervisor() {
+            supervisor.shutdown();
+        }
+    })
+    .await
+    .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
     Ok(())
 }

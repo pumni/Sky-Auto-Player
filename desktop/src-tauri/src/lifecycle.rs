@@ -1,15 +1,19 @@
 use crate::app_state::AppState;
-use crate::core::CoreSupervisor;
-use tauri::{App, AppHandle, Manager};
+use tauri::{Manager, Runtime, Window};
 
-pub fn start_core(app: &App) -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = CoreSupervisor::spawn()?;
-    app.state::<AppState>().install(supervisor);
-    Ok(())
-}
-
-pub fn shutdown_core(app: &AppHandle) {
-    if let Ok(supervisor) = app.state::<AppState>().supervisor() {
-        supervisor.shutdown();
+pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
+    let app_handle = window.app_handle().clone();
+    let state = app_handle.state::<AppState>().inner().clone();
+    if !state.begin_close() {
+        return;
     }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(supervisor) = state.supervisor() {
+            supervisor.shutdown();
+        }
+        // `destroy` does not emit another CloseRequested event, so the
+        // bounded shutdown path cannot recurse through this callback.
+        let _ = window.destroy();
+    });
 }

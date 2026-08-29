@@ -7,16 +7,28 @@ rust-version.workspace = true
 authors.workspace = true
 build = "build.rs"
 
+[features]
+default = ["desktop-runtime"]
+desktop-runtime = [
+    "tauri/wry",
+    "tauri/compression",
+    "tauri/common-controls-v6",
+    "tauri/dynamic-acl",
+    "tauri/x11",
+    "tauri/dbus",
+]
+tauri-test = ["tauri/test"]
+
 [lib]
 name = "sky_desktop_shell_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = "=2.6.3"
+tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.5", default-features = false, features = [] }
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 thiserror = "2"
