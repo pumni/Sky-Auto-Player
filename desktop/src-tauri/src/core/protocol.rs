@@ -737,7 +737,7 @@ mod tests {
                     "release_max_us": null,
                     "release_late_2ms": null,
                     "session_id": null
-                })
+                }),
             ),
             event_frame(
                 "calibration.progress",
