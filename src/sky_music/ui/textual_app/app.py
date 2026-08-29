@@ -21,10 +21,16 @@ from sky_music.domain.session_context import (
     PlaybackSessionContext,
 )
 from sky_music.infrastructure.background import BackgroundCleanupError
+from sky_music.orchestration.playback_controller import (
+    PlaybackError,
+    PlaybackPlan,
+    prepare_playback,
+    rebuild_with,
+)
+from sky_music.orchestration.settings_service import SettingsService
 from sky_music.ui.picker import (
     SongPickerResult,
 )
-from sky_music.ui.picker_helpers import save_theme
 from sky_music.ui.textual_app.app_state import PlaybackMode
 from sky_music.ui.textual_app.display_widgets import GradientHeader
 from sky_music.ui.textual_app.keymap import COMMANDS
@@ -32,12 +38,6 @@ from sky_music.ui.textual_app.playback_app import (
     PlaybackCard,
     PlaybackCommandBridge,
     SnapshotRenderer,
-)
-from sky_music.ui.textual_app.playback_controller import (
-    PlaybackError,
-    PlaybackPlan,
-    prepare_playback,
-    rebuild_with,
 )
 from sky_music.ui.textual_app.screens.picker import (
     PendingRiskDecision,
@@ -101,6 +101,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             raise ValueError("countdown_seconds must be a non-negative integer")
         self.countdown_seconds = countdown_seconds
         self.cfg = cfg or load_config()
+        self.settings_service = SettingsService(self.cfg)
         self.scan_code_mode = scan_code_mode
 
         self.theme_name: str
@@ -161,15 +162,16 @@ class SkyPickerApp(App[SongPickerResult | None]):
         initial_fps: int | None,
         initial_dry_run: bool,
     ) -> None:
+        settings = self.settings_service.snapshot()
         self.hold_frames = float(initial_hold_frames)
         self.tempo_scale = initial_tempo
         self.dry_run = initial_dry_run
-        self.fps = resolve_game_fps(initial_fps if initial_fps is not None else self.cfg.game_fps)
-        self.verbose_hud = self.cfg.verbose_hud
-        self.telemetry_enabled = self.cfg.telemetry_enabled_by_default
-        self.active_theme = self._normalize_theme_name(theme_name or self.cfg.theme)
+        self.fps = resolve_game_fps(initial_fps if initial_fps is not None else settings.game_fps)
+        self.verbose_hud = settings.verbose_hud
+        self.telemetry_enabled = settings.telemetry_enabled
+        self.active_theme = self._normalize_theme_name(theme_name or settings.theme)
         self.background_mode = self._normalize_background_mode(
-            background_mode or self.cfg.ui_background_mode
+            background_mode or settings.ui_background_mode
         )
         self.theme_name = self.active_theme  # semantic alias
 
@@ -527,8 +529,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         # currently derives its own background mode from cfg/theme; keep the
         # parameter positional so future hosts can opt to react to it.
         self.active_theme = self._normalize_theme_name(theme_name)
-        save_theme(self.active_theme)
-        self.cfg.theme = self.active_theme
         self._apply_chrome_theme()
 
     def _apply_chrome_theme(self) -> None:
@@ -543,20 +543,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_picker_verbose_hud_changed(self, verbose_hud: bool) -> None:
         self.verbose_hud = verbose_hud
-        self.cfg.verbose_hud = verbose_hud
 
     def on_picker_telemetry_enabled_changed(self, telemetry_enabled: bool) -> None:
         self.telemetry_enabled = telemetry_enabled
-        self.cfg.telemetry_enabled_by_default = telemetry_enabled
 
     def _apply_calibration_choice(self, choice: CalibrationChoice) -> None:
-        from sky_music.config import persist_calibration_defaults
-        persist_calibration_defaults(
-            self.cfg,
-            hold_frames=choice.hold_frames,
-            tempo_scale=choice.tempo_scale,
-            fps=choice.fps,
-        )
         self.hold_frames = choice.hold_frames
         self.tempo_scale = choice.tempo_scale
         self.fps = resolve_game_fps(choice.fps)
@@ -873,12 +864,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if not main_mod:
             raise RuntimeError("Could not resolve main module to update runtime state.")
 
-        from sky_music.config import persist_playback_defaults
         from sky_music.domain.session_context import (
             PlaybackSessionContext,
             merge_session_with_overrides,
         )
-        user_cfg = load_config()
+        user_cfg = self.cfg
         updated_session = merge_session_with_overrides(
             main_mod.RUNTIME_STATE.session or PlaybackSessionContext.default(
                 tempo_scale=main_mod.RUNTIME_STATE.tempo_scale,
@@ -891,8 +881,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         main_mod.RUNTIME_STATE.apply_session(updated_session, user_cfg)
         main_mod.RUNTIME_STATE.dry_run = picker_result.action == "dry_run"
 
-        persist_playback_defaults(
-            user_cfg,
+        self.settings_service.update_playback_defaults(
             hold_frames=picker_result.hold_frames,
             tempo_scale=picker_result.tempo_scale,
             fps=picker_result.fps,
@@ -909,13 +898,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if not main_mod:
             raise RuntimeError("Could not resolve main module to update runtime state.")
 
-        from sky_music.config import persist_playback_defaults
-
-        user_cfg = load_config()
+        user_cfg = self.cfg
         main_mod.RUNTIME_STATE.apply_session(plan.session, user_cfg)
         main_mod.RUNTIME_STATE.dry_run = is_dry_run
-        persist_playback_defaults(
-            user_cfg,
+        self.settings_service.update_playback_defaults(
             hold_frames=plan.session.hold_frames,
             tempo_scale=plan.session.tempo_scale,
             fps=plan.session.fps,

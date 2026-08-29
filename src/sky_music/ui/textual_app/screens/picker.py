@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-from rapidfuzz import fuzz, process
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -23,26 +22,22 @@ from textual.widgets import DataTable, Input
 from sky_music.config import (
     AppConfig,
     load_config,
-    persist_calibration_defaults,
-    persist_default_fps,
-    persist_default_hold_frames,
-    persist_default_tempo,
-    resolve_game_fps,
-    save_config,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import BackgroundScope, ExecutorResource
+from sky_music.orchestration.catalog_service import CatalogService
+from sky_music.orchestration.settings_service import SettingsService
+from sky_music.orchestration.song_metadata_service import (
+    MetadataPrioritySnapshot,
+    clear_metadata_cache,
+    invalidate_policy_metadata,
+    peek_cached_song_ui_metadata,
+)
 from sky_music.ui.picker import (
     FPS_OPTIONS,
     HOLD_OPTIONS,
     TEMPO_OPTIONS,
     SongPickerResult,
-)
-from sky_music.ui.picker_helpers import save_theme
-from sky_music.ui.picker_metadata import (
-    clear_metadata_cache,
-    invalidate_policy_metadata,
-    peek_cached_song_ui_metadata,
 )
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
@@ -154,28 +149,11 @@ def rank_song_choices(
     *,
     score_cutoff: float = FUZZY_SCORE_CUTOFF,
 ) -> list[SongChoice]:
-    normalized = remove_accents(query).casefold().strip()
-    if not normalized:
-        return list(choices)
-
-    if len(normalized) == 1:
-        return [choice for choice in choices if normalized in choice.search_key]
-
-    choices_by_index = {index: choice.search_key for index, choice in enumerate(choices)}
-    matches = process.extract(
-        normalized,
-        choices_by_index,
-        scorer=fuzz.WRatio,
+    ranked_indices = CatalogService.rank_search_keys(
+        [choice.search_key for choice in choices],
+        query,
         score_cutoff=score_cutoff,
-        limit=None,
     )
-
-    scores: dict[int, float] = {int(index): float(score) for _key, score, index in matches}
-    for index, choice in enumerate(choices):
-        if normalized in choice.search_key:
-            scores[index] = max(scores.get(index, 0.0), 100.0)
-
-    ranked_indices = sorted(scores, key=lambda index: (-scores[index], index))
     return [choices[index] for index in ranked_indices]
 
 
@@ -203,26 +181,6 @@ class CalibrationChoice:
 class CatalogScanned(Message):
     choices: list[SongChoice]
     generation: int
-
-
-@dataclass(frozen=True, slots=True)
-class MetadataPrioritySnapshot:
-    selected: list[Path]
-    visible: list[Path]
-    overscan: list[Path]
-    filtered: list[Path]
-    
-    def ordered_paths(self) -> list[Path]:
-        priority: list[Path] = []
-        seen: set[Path] = set()
-        
-        for paths_list in (self.selected, self.visible, self.overscan, self.filtered):
-            for p in paths_list:
-                if p not in seen:
-                    priority.append(p)
-                    seen.add(p)
-                    
-        return priority
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,11 +309,14 @@ class PickerScreen(Screen[SongPickerResult]):
         self.dry_run = dry_run
         self.scan_code_mode = scan_code_mode
         self.cfg = cfg or load_config()
+        self.settings_service = SettingsService(self.cfg)
+        settings = self.settings_service.snapshot()
+        self._catalog_service = CatalogService(settings.songs_dir)
         self.fps = fps
         self.verbose_hud = verbose_hud
         self.telemetry_enabled = telemetry_enabled
-        self.active_theme = self._normalize_theme_name(theme_name or self.cfg.theme)
-        self.background_mode = self._normalize_background_mode(background_mode or self.cfg.ui_background_mode)
+        self.active_theme = self._normalize_theme_name(theme_name or settings.theme)
+        self.background_mode = self._normalize_background_mode(background_mode or settings.ui_background_mode)
         self.preview_visible = True
         self.show_notes = True
         self.show_risk = True
@@ -498,18 +459,19 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def _scan_catalog_worker(self, generation: int, force_refresh: bool = False) -> None:
         from sky_music.ui.picker_helpers import get_song_choices
-        from sky_music.ui.picker_theme import remove_accents
         
         if self._quiesced or self._catalog_generation != generation:
             return
             
         if self._provided_choices is None:
             paths = get_song_choices(force_refresh=force_refresh)
+            self._catalog_service.replace_paths(paths)
             new_choices = [
-                SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
-                for path in paths
+                SongChoice(path=entry.path, search_key=entry.search_key)
+                for entry in self._catalog_service.entries()
             ]
         else:
+            self._catalog_service.replace_paths(choice.path for choice in self._provided_choices)
             new_choices = list(self._provided_choices)
             
         if self._quiesced or self._catalog_generation != generation:
@@ -1125,8 +1087,8 @@ class PickerScreen(Screen[SongPickerResult]):
         if value is None:
             self._focus_table()
             return
-        self.hold_frames = float(cast(float, value))
-        persist_default_hold_frames(self.cfg, self.hold_frames)
+        settings = self.settings_service.set_hold_frames(float(cast(float, value)))
+        self.hold_frames = settings.default_hold_frames
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_hold_frames_changed(self.hold_frames)
 
@@ -1139,8 +1101,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             return
         assert value is not None
-        self.tempo_scale = cast(float, value)
-        persist_default_tempo(self.cfg, self.tempo_scale)
+        settings = self.settings_service.set_tempo_scale(cast(float, value))
+        self.tempo_scale = settings.default_tempo_scale
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_tempo_changed(self.tempo_scale)
 
@@ -1160,8 +1122,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             return
         assert value is not None
-        self.fps = resolve_game_fps(cast(int, value))
-        persist_default_fps(self.cfg, self.fps)
+        settings = self.settings_service.set_fps(cast(int, value))
+        self.fps = settings.game_fps
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_fps_changed(self.fps)
 
@@ -1173,9 +1135,10 @@ class PickerScreen(Screen[SongPickerResult]):
         if value is None:
             self._focus_table()
             return
-        self.active_theme = self._normalize_theme_name(str(value))
-        save_theme(self.active_theme)
-        self.cfg.theme = self.active_theme
+        if not isinstance(value, str):
+            raise ValueError("theme selection must be a theme ID")
+        settings = self.settings_service.set_theme(value)
+        self.active_theme = settings.theme
         self._apply_theme_class()
         self._render_status()
         self._render_table()
@@ -1494,15 +1457,14 @@ class PickerScreen(Screen[SongPickerResult]):
             self._focus_table()
             cast(PickerAppHost, self.app).on_picker_snapshot_calibration_state(None)
             return
-        persist_calibration_defaults(
-            self.cfg,
+        settings = self.settings_service.update_playback_defaults(
             hold_frames=value.hold_frames,
             tempo_scale=value.tempo_scale,
             fps=value.fps,
         )
-        self.hold_frames = value.hold_frames
-        self.tempo_scale = value.tempo_scale
-        self.fps = resolve_game_fps(value.fps)
+        self.hold_frames = settings.default_hold_frames
+        self.tempo_scale = settings.default_tempo_scale
+        self.fps = settings.game_fps
         self._replace_metadata_coordinator()
         cast(PickerAppHost, self.app).on_picker_snapshot_calibration_state(value)
 
@@ -1515,16 +1477,14 @@ class PickerScreen(Screen[SongPickerResult]):
     def action_toggle_hud(self) -> None:
         self.verbose_hud = not self.verbose_hud
         cast(PickerAppHost, self.app).on_picker_verbose_hud_changed(self.verbose_hud)
-        self.cfg.verbose_hud = self.verbose_hud
-        save_config(self.cfg)
+        self.settings_service.set_verbose_hud(self.verbose_hud)
         self._render_status()
         self._focus_table()
 
     def action_toggle_telemetry(self) -> None:
         self.telemetry_enabled = not self.telemetry_enabled
         cast(PickerAppHost, self.app).on_picker_telemetry_enabled_changed(self.telemetry_enabled)
-        self.cfg.telemetry_enabled_by_default = self.telemetry_enabled
-        save_config(self.cfg)
+        self.settings_service.set_telemetry_enabled(self.telemetry_enabled)
         self._render_status()
         self._focus_table()
 

@@ -9,7 +9,7 @@ from typing import Any, Protocol, cast
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import ResourceState, WorkerSnapshot
-from sky_music.ui.picker_metadata import (
+from sky_music.orchestration.song_metadata_service import (
     compute_song_ui_metadata_payloads,
     hydrate_persistent_metadata_for_paths,
     peek_cached_song_ui_metadata,
