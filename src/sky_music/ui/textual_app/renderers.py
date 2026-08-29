@@ -6,8 +6,8 @@ from pathlib import Path
 
 from rich.text import Text
 
+from sky_music.orchestration.song_metadata_service import SongUiMetadata
 from sky_music.ui.picker_helpers import SONG_DIR, SUPPORTED_EXTENSIONS
-from sky_music.ui.picker_metadata import SongUiMetadata
 from sky_music.ui.picker_theme import ThemePreset, get_match_span
 from sky_music.ui.text_render import cell_width, truncate_cells
 from sky_music.ui.textual_app.theme_css import TextualThemeTokens

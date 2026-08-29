@@ -21,6 +21,13 @@ from sky_music.domain.session_context import (
     PlaybackSessionContext,
 )
 from sky_music.infrastructure.background import BackgroundCleanupError
+from sky_music.orchestration.playback_controller import (
+    PlaybackError,
+    PlaybackPlan,
+    prepare_playback,
+    rebuild_with,
+)
+from sky_music.orchestration.settings_service import SettingsService
 from sky_music.ui.picker import (
     SongPickerResult,
 )
@@ -32,12 +39,6 @@ from sky_music.ui.textual_app.playback_app import (
     PlaybackCard,
     PlaybackCommandBridge,
     SnapshotRenderer,
-)
-from sky_music.ui.textual_app.playback_controller import (
-    PlaybackError,
-    PlaybackPlan,
-    prepare_playback,
-    rebuild_with,
 )
 from sky_music.ui.textual_app.screens.picker import (
     PendingRiskDecision,
@@ -101,6 +102,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             raise ValueError("countdown_seconds must be a non-negative integer")
         self.countdown_seconds = countdown_seconds
         self.cfg = cfg or load_config()
+        self.settings_service = SettingsService(self.cfg)
         self.scan_code_mode = scan_code_mode
 
         self.theme_name: str
@@ -161,15 +163,16 @@ class SkyPickerApp(App[SongPickerResult | None]):
         initial_fps: int | None,
         initial_dry_run: bool,
     ) -> None:
+        settings = self.settings_service.snapshot()
         self.hold_frames = float(initial_hold_frames)
         self.tempo_scale = initial_tempo
         self.dry_run = initial_dry_run
-        self.fps = resolve_game_fps(initial_fps if initial_fps is not None else self.cfg.game_fps)
-        self.verbose_hud = self.cfg.verbose_hud
-        self.telemetry_enabled = self.cfg.telemetry_enabled_by_default
-        self.active_theme = self._normalize_theme_name(theme_name or self.cfg.theme)
+        self.fps = resolve_game_fps(initial_fps if initial_fps is not None else settings.game_fps)
+        self.verbose_hud = settings.verbose_hud
+        self.telemetry_enabled = settings.telemetry_enabled
+        self.active_theme = self._normalize_theme_name(theme_name or settings.theme)
         self.background_mode = self._normalize_background_mode(
-            background_mode or self.cfg.ui_background_mode
+            background_mode or settings.ui_background_mode
         )
         self.theme_name = self.active_theme  # semantic alias
 

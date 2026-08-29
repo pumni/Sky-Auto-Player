@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-from rapidfuzz import fuzz, process
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -32,6 +31,14 @@ from sky_music.config import (
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import BackgroundScope, ExecutorResource
+from sky_music.orchestration.catalog_service import CatalogService
+from sky_music.orchestration.settings_service import SettingsService
+from sky_music.orchestration.song_metadata_service import (
+    MetadataPrioritySnapshot,
+    clear_metadata_cache,
+    invalidate_policy_metadata,
+    peek_cached_song_ui_metadata,
+)
 from sky_music.ui.picker import (
     FPS_OPTIONS,
     HOLD_OPTIONS,
@@ -39,11 +46,6 @@ from sky_music.ui.picker import (
     SongPickerResult,
 )
 from sky_music.ui.picker_helpers import save_theme
-from sky_music.ui.picker_metadata import (
-    clear_metadata_cache,
-    invalidate_policy_metadata,
-    peek_cached_song_ui_metadata,
-)
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
     pad_text,
@@ -154,28 +156,11 @@ def rank_song_choices(
     *,
     score_cutoff: float = FUZZY_SCORE_CUTOFF,
 ) -> list[SongChoice]:
-    normalized = remove_accents(query).casefold().strip()
-    if not normalized:
-        return list(choices)
-
-    if len(normalized) == 1:
-        return [choice for choice in choices if normalized in choice.search_key]
-
-    choices_by_index = {index: choice.search_key for index, choice in enumerate(choices)}
-    matches = process.extract(
-        normalized,
-        choices_by_index,
-        scorer=fuzz.WRatio,
+    ranked_indices = CatalogService.rank_search_keys(
+        [choice.search_key for choice in choices],
+        query,
         score_cutoff=score_cutoff,
-        limit=None,
     )
-
-    scores: dict[int, float] = {int(index): float(score) for _key, score, index in matches}
-    for index, choice in enumerate(choices):
-        if normalized in choice.search_key:
-            scores[index] = max(scores.get(index, 0.0), 100.0)
-
-    ranked_indices = sorted(scores, key=lambda index: (-scores[index], index))
     return [choices[index] for index in ranked_indices]
 
 
@@ -203,26 +188,6 @@ class CalibrationChoice:
 class CatalogScanned(Message):
     choices: list[SongChoice]
     generation: int
-
-
-@dataclass(frozen=True, slots=True)
-class MetadataPrioritySnapshot:
-    selected: list[Path]
-    visible: list[Path]
-    overscan: list[Path]
-    filtered: list[Path]
-    
-    def ordered_paths(self) -> list[Path]:
-        priority: list[Path] = []
-        seen: set[Path] = set()
-        
-        for paths_list in (self.selected, self.visible, self.overscan, self.filtered):
-            for p in paths_list:
-                if p not in seen:
-                    priority.append(p)
-                    seen.add(p)
-                    
-        return priority
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,11 +316,14 @@ class PickerScreen(Screen[SongPickerResult]):
         self.dry_run = dry_run
         self.scan_code_mode = scan_code_mode
         self.cfg = cfg or load_config()
+        self.settings_service = SettingsService(self.cfg)
+        settings = self.settings_service.snapshot()
+        self._catalog_service = CatalogService(settings.songs_dir)
         self.fps = fps
         self.verbose_hud = verbose_hud
         self.telemetry_enabled = telemetry_enabled
-        self.active_theme = self._normalize_theme_name(theme_name or self.cfg.theme)
-        self.background_mode = self._normalize_background_mode(background_mode or self.cfg.ui_background_mode)
+        self.active_theme = self._normalize_theme_name(theme_name or settings.theme)
+        self.background_mode = self._normalize_background_mode(background_mode or settings.ui_background_mode)
         self.preview_visible = True
         self.show_notes = True
         self.show_risk = True
@@ -498,18 +466,19 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def _scan_catalog_worker(self, generation: int, force_refresh: bool = False) -> None:
         from sky_music.ui.picker_helpers import get_song_choices
-        from sky_music.ui.picker_theme import remove_accents
         
         if self._quiesced or self._catalog_generation != generation:
             return
             
         if self._provided_choices is None:
             paths = get_song_choices(force_refresh=force_refresh)
+            self._catalog_service.replace_paths(paths)
             new_choices = [
-                SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
-                for path in paths
+                SongChoice(path=entry.path, search_key=entry.search_key)
+                for entry in self._catalog_service.entries()
             ]
         else:
+            self._catalog_service.replace_paths(choice.path for choice in self._provided_choices)
             new_choices = list(self._provided_choices)
             
         if self._quiesced or self._catalog_generation != generation:
@@ -523,6 +492,7 @@ class PickerScreen(Screen[SongPickerResult]):
         self._apply_catalog_choices(message.choices)
 
     def _apply_catalog_choices(self, choices: list[SongChoice]) -> None:
+        self._catalog_service.replace_paths(choice.path for choice in choices)
         self.choices = choices
         self.filtered = rank_song_choices(self.choices, self.search_query)
         self._render_table()

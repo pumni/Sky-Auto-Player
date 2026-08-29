@@ -1,8 +1,16 @@
 import time
 from pathlib import Path
 
+from sky_music.orchestration.catalog_service import (
+    SUPPORTED_EXTENSIONS as CATALOG_SUPPORTED_EXTENSIONS,
+)
+from sky_music.orchestration.catalog_service import (
+    CatalogService,
+    normalize_search_text,
+)
+
 SONG_DIR: Path = Path("songs")
-SUPPORTED_EXTENSIONS: set[str] = {".json", ".skysheet", ".txt"}
+SUPPORTED_EXTENSIONS: set[str] = set(CATALOG_SUPPORTED_EXTENSIONS)
 
 _song_choices_cache: list[Path] = []
 _song_choices_mtime_ns: int | None = None
@@ -18,16 +26,9 @@ def save_theme(theme_name: str) -> None:
     save_config(cfg)
 
 def load_song_choices() -> list[Path]:
-    if not SONG_DIR.exists():
-        return []
-    # Sort by the same key the picker displays (filename stem) so the visible list
-    # is genuinely A→Z. Accents are normalized so Vietnamese titles collate naturally
-    # and the order matches the search keys built from the stem.
-    from sky_music.ui.picker_theme import remove_accents
-    return sorted(
-        [path for path in SONG_DIR.iterdir() if path.suffix.lower() in SUPPORTED_EXTENSIONS],
-        key=lambda path: (remove_accents(path.stem).casefold(), path.stem.casefold()),
-    )
+    # Keep this legacy path-based helper for CLI/TUI callers, while the shared
+    # service owns filtering and deterministic catalog ordering.
+    return [entry.path for entry in CatalogService(SONG_DIR).scan_entries()]
 
 def get_song_choices(force_refresh: bool = False) -> list[Path]:
     global _song_choices_cache, _song_choices_mtime_ns
@@ -58,19 +59,18 @@ def resolve_song_selection(selection_text: str, song_choices: list[Path]) -> Pat
     if candidate_path.exists() and candidate_path.suffix.lower() in SUPPORTED_EXTENSIONS:
         return candidate_path
 
-    from sky_music.ui.picker_theme import remove_accents
-    normalized = remove_accents(selection).casefold()
+    normalized = normalize_search_text(selection)
     
     exact_matches = [
         path for path in song_choices
-        if remove_accents(path.stem).casefold() == normalized or remove_accents(path.name).casefold() == normalized
+        if normalize_search_text(path.stem) == normalized or normalize_search_text(path.name) == normalized
     ]
     if len(exact_matches) == 1:
         return exact_matches[0]
 
     partial_matches = [
         path for path in song_choices
-        if normalized in remove_accents(path.stem).casefold() or normalized in remove_accents(path.name).casefold()
+        if normalized in normalize_search_text(path.stem) or normalized in normalize_search_text(path.name)
     ]
     if len(partial_matches) == 1:
         return partial_matches[0]
