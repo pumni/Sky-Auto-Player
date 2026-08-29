@@ -324,19 +324,33 @@ fn public_v350_artifact_verification_matches_golden_digest() {
     let expected_digest = "9173715b6bbbf15d0c70c45ede246bfbd63f206fe0e4ff81e08b2faeebefed76";
     if let Ok(path) = std::env::var("SKY_TEST_V350_ZIP") {
         let zip_path = PathBuf::from(path);
-        if zip_path.is_file() {
-            let actual = sky_updater::archive::sha256_file(&zip_path).expect("hash v3.5.0 zip");
-            assert_eq!(actual, expected_digest);
-            let sidecar_path = zip_path.with_extension("zip.sha256");
-            if sidecar_path.is_file() {
-                let sidecar_bytes = fs::read(&sidecar_path).expect("read sidecar");
-                let parsed = sky_updater::archive::parse_sha_sidecar(
-                    &sidecar_bytes,
-                    "Sky-Auto-Player-v3.5.0.zip",
-                )
-                .expect("parse sidecar");
-                assert_eq!(parsed, expected_digest);
-            }
-        }
+        assert!(
+            zip_path.is_file(),
+            "SKY_TEST_V350_ZIP does not exist or is not a regular file: {}",
+            zip_path.display()
+        );
+        let actual = sky_updater::archive::sha256_file(&zip_path).expect("hash v3.5.0 zip");
+        assert_eq!(actual, expected_digest, "ZIP sha256 mismatch");
+
+        let zip_name = zip_path
+            .file_name()
+            .expect("zip filename")
+            .to_string_lossy();
+        let sidecar_path = zip_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(format!("{zip_name}.sha256"));
+        assert!(
+            sidecar_path.is_file(),
+            "sidecar file is missing next to target zip: {}",
+            sidecar_path.display()
+        );
+        let sidecar_bytes = fs::read(&sidecar_path).expect("read sidecar");
+        let parsed = sky_updater::archive::parse_sha_sidecar(&sidecar_bytes, &zip_name)
+            .expect("parse sidecar");
+        assert_eq!(parsed, expected_digest, "sidecar digest mismatch");
+        println!(
+            "[qualification] public v3.5.0 verified: expected={expected_digest} actual_file={actual} sidecar={parsed}"
+        );
     }
 }
