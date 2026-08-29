@@ -3,8 +3,10 @@ use crate::ui_events::UiEvent;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri::ipc::Channel;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogSearchRequest {
     pub query: String,
@@ -13,14 +15,16 @@ pub struct CatalogSearchRequest {
     pub generation: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogDetailRequest {
     pub song_id: String,
     pub generation: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogViewportRequest {
     pub generation: u64,
@@ -29,7 +33,8 @@ pub struct CatalogViewportRequest {
     pub selected_song_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackPatch {
     pub hold_frames: Option<f64>,
@@ -37,7 +42,8 @@ pub struct PlaybackPatch {
     pub fps: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
     pub theme: Option<String>,
@@ -83,7 +89,8 @@ struct CoreSettingsPatch {
     playback_defaults: Option<CorePlaybackPatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct NativeBuildDto {
     pub native_build_commit: String,
     pub native_version: String,
@@ -93,7 +100,8 @@ pub struct NativeBuildDto {
     pub win32_backend: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PlaybackDefaultsDto {
     pub hold_frames: f64,
     pub tempo_scale: f64,
@@ -101,21 +109,24 @@ pub struct PlaybackDefaultsDto {
     pub dry_run: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PlaybackOptionSetsDto {
     pub hold_frames: Vec<f64>,
     pub tempo_scales: Vec<f64>,
     pub fps: Vec<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct UpdatePreferencesDto {
     pub auto_check: bool,
     pub channel: String,
     pub skip_version: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BootstrapDto {
     pub app_version: String,
     pub protocol_version: u64,
@@ -128,7 +139,8 @@ pub struct BootstrapDto {
     pub catalog_generation: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CatalogRowDto {
     pub song_id: String,
     pub title: String,
@@ -138,7 +150,8 @@ pub struct CatalogRowDto {
     pub metadata_state: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CatalogSearchDto {
     pub items: Vec<CatalogRowDto>,
     pub offset: u64,
@@ -147,7 +160,8 @@ pub struct CatalogSearchDto {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RiskSummaryDto {
     pub level: String,
     pub headline: String,
@@ -155,14 +169,16 @@ pub struct RiskSummaryDto {
     pub recommendations: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PlaybackRecommendationDto {
     pub recommended_hold_frames: Option<f64>,
     pub recommended_tempo_scale: Option<f64>,
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SongDetailDto {
     pub song_id: String,
     pub title: String,
@@ -173,7 +189,8 @@ pub struct SongDetailDto {
     pub recommendation: Option<PlaybackRecommendationDto>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SettingsDto {
     pub theme: String,
     pub ui_background_mode: String,
@@ -183,13 +200,15 @@ pub struct SettingsDto {
     pub update_preferences: UpdatePreferencesDto,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CatalogReloadDto {
     pub generation: u64,
     pub total: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CatalogViewportDto {
     pub accepted: bool,
     pub generation: u64,

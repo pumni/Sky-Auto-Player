@@ -18,6 +18,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BUFFERED_EVENTS: usize = 128;
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreLifecycle {
@@ -26,6 +27,17 @@ pub enum CoreLifecycle {
     ShuttingDown,
     Exited,
     Fatal,
+}
+
+impl CoreLifecycle {
+    fn accepts_requests(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    #[cfg(test)]
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Exited | Self::Fatal)
+    }
 }
 
 #[derive(Debug, thiserror::Error, Clone)]
@@ -49,8 +61,7 @@ pub struct CoreSupervisor {
     next_id: AtomicU64,
     lifecycle: Mutex<CoreLifecycle>,
     ready: Mutex<Option<Receiver<Result<(), String>>>>,
-    events: Mutex<Vec<UiEvent>>,
-    channel: Mutex<Option<tauri::ipc::Channel<UiEvent>>>,
+    events: Mutex<EventState>,
     shutdown_requested: AtomicBool,
 }
 
@@ -98,8 +109,7 @@ impl CoreSupervisor {
             next_id: AtomicU64::new(1),
             lifecycle: Mutex::new(CoreLifecycle::Starting),
             ready: Mutex::new(Some(ready_receiver)),
-            events: Mutex::new(Vec::new()),
-            channel: Mutex::new(None),
+            events: Mutex::new(EventState::default()),
             shutdown_requested: AtomicBool::new(false),
         });
         Self::spawn_reader(Arc::clone(&supervisor), stdout, ready_sender);
@@ -205,7 +215,18 @@ impl CoreSupervisor {
         thread::Builder::new()
             .name("sky-desktop-core-waiter".into())
             .spawn(move || {
-                let status = supervisor.child.lock().expect("Core child poisoned").wait();
+                let status = loop {
+                    let status = supervisor
+                        .child
+                        .lock()
+                        .expect("Core child poisoned")
+                        .try_wait();
+                    match status {
+                        Ok(Some(status)) => break Ok(status),
+                        Ok(None) => thread::sleep(CHILD_POLL_INTERVAL),
+                        Err(error) => break Err(error),
+                    }
+                };
                 if status.is_err() || !supervisor.shutdown_requested.load(Ordering::Acquire) {
                     supervisor.pending.fail_all("Core process exited");
                     let mut lifecycle = supervisor.lifecycle.lock().expect("lifecycle poisoned");
@@ -235,28 +256,23 @@ impl CoreSupervisor {
             payload: event.payload,
         };
         let mut events = self.events.lock().expect("event buffer poisoned");
-        if events.len() >= MAX_BUFFERED_EVENTS {
-            events.remove(0);
+        if events.buffered.len() >= MAX_BUFFERED_EVENTS {
+            events.buffered.remove(0);
         }
-        events.push(ui_event.clone());
-        if let Some(channel) = self
-            .channel
-            .lock()
-            .expect("event channel poisoned")
-            .as_ref()
-        {
+        events.buffered.push(ui_event.clone());
+        if let Some(channel) = events.channel.as_ref() {
             let _ = channel.send(ui_event);
         }
     }
 
     pub fn subscribe(&self, channel: tauri::ipc::Channel<UiEvent>) -> Result<(), SupervisorError> {
-        let buffered = self.events.lock().expect("event buffer poisoned").clone();
-        for event in &buffered {
+        let mut events = self.events.lock().expect("event buffer poisoned");
+        for event in &events.buffered {
             channel
                 .send(event.clone())
                 .map_err(|error| SupervisorError::Request(error.to_string()))?;
         }
-        *self.channel.lock().expect("event channel poisoned") = Some(channel);
+        events.channel = Some(channel);
         Ok(())
     }
 
@@ -266,7 +282,7 @@ impl CoreSupervisor {
 
     pub fn request<P: Serialize>(&self, method: &str, params: P) -> Result<Value, SupervisorError> {
         let lifecycle = self.lifecycle();
-        if !matches!(lifecycle, CoreLifecycle::Ready) {
+        if !lifecycle.accepts_requests() {
             return Err(SupervisorError::Unavailable(format!(
                 "Core state is {lifecycle:?}"
             )));
@@ -354,6 +370,35 @@ impl CoreSupervisor {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
         }
+    }
+}
+
+#[derive(Default)]
+struct EventState {
+    buffered: Vec<UiEvent>,
+    channel: Option<tauri::ipc::Channel<UiEvent>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CoreLifecycle;
+
+    #[test]
+    fn lifecycle_only_accepts_requests_after_ready() {
+        assert!(!CoreLifecycle::Starting.accepts_requests());
+        assert!(CoreLifecycle::Ready.accepts_requests());
+        assert!(!CoreLifecycle::ShuttingDown.accepts_requests());
+        assert!(!CoreLifecycle::Exited.accepts_requests());
+        assert!(!CoreLifecycle::Fatal.accepts_requests());
+    }
+
+    #[test]
+    fn lifecycle_terminal_states_are_not_recoverable() {
+        assert!(!CoreLifecycle::Starting.is_terminal());
+        assert!(!CoreLifecycle::Ready.is_terminal());
+        assert!(!CoreLifecycle::ShuttingDown.is_terminal());
+        assert!(CoreLifecycle::Exited.is_terminal());
+        assert!(CoreLifecycle::Fatal.is_terminal());
     }
 }
 
