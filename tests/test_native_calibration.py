@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,47 @@ import pytest
 
 from sky_music.infrastructure import calibration_loader as loader
 from sky_music.platform.win32 import native_calibration
+
+
+def test_native_command_cancellation_terminates_child_before_returning(monkeypatch) -> None:
+    cancel = threading.Event()
+    cancel.set()
+
+    class FakeProcess:
+        returncode = -15
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.waited = False
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, *, timeout: float) -> int:
+            assert timeout == 0.5
+            self.waited = True
+            return self.returncode
+
+        def kill(self) -> None:
+            raise AssertionError("cancellation should terminate before kill fallback")
+
+    process = FakeProcess()
+
+    def fake_popen(*args: object, **kwargs: object) -> FakeProcess:
+        assert args == (["fake-calibration"],)
+        assert kwargs["shell"] is False
+        return process
+
+    monkeypatch.setattr(native_calibration.subprocess, "Popen", fake_popen)
+    with pytest.raises(native_calibration.NativeCalibrationError, match="cancelled"):
+        native_calibration._run_native_command(
+            ["fake-calibration"], timeout_seconds=1.0, cancel_event=cancel
+        )
+    assert process.terminated is True
+    assert process.waited is True
 
 
 def _quantiles(p99: int = 6) -> dict[str, int]:

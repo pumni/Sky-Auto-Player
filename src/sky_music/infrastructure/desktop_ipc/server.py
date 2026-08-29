@@ -32,6 +32,11 @@ from sky_music.orchestration.catalog_service import (
     CatalogLookupError,
     CatalogService,
 )
+from sky_music.orchestration.desktop_calibration import (
+    DesktopCalibrationError,
+    DesktopCalibrationService,
+)
+from sky_music.orchestration.desktop_diagnostics import DesktopDiagnosticsService
 from sky_music.orchestration.desktop_models import (
     BootstrapDto,
     NativeBuildDto,
@@ -77,6 +82,9 @@ SUPPORTED_METHODS = frozenset(
         "playback.pause",
         "playback.resume",
         "playback.skip",
+        "diagnostics.set_enabled",
+        "calibration.start",
+        "calibration.cancel",
     }
 )
 
@@ -222,10 +230,17 @@ class DesktopCoreServer:
         self._event_buffer_overflowed = False
         self._viewport: dict[str, object] | None = None
         self._stop_event = threading.Event()
+        self.diagnostics = DesktopDiagnosticsService(publish_event=self._publish_event)
         self.playback = DesktopPlaybackService(
             settings_service=settings_service,
             catalog_service=catalog_service,
             publish_event=self._publish_event,
+            diagnostics=self.diagnostics,
+        )
+        self.calibration = DesktopCalibrationService(
+            publish_event=self._publish_event,
+            physical_playback_active=self.playback.is_physical_active,
+            on_success=self.playback.invalidate_settings,
         )
 
     def ready_event(self) -> dict[str, object]:
@@ -252,14 +267,25 @@ class DesktopCoreServer:
     def _publish_event(self, name: str, payload: Mapping[str, object]) -> None:
         message = event(name, payload)
         with self._events_lock:
-            if name == "playback.snapshot":
-                session_id = payload.get("session_id")
+            coalesced_key: tuple[str, object] | None = None
+            if name in {"playback.snapshot", "diagnostics.snapshot"}:
+                coalesced_key = (name, payload.get("session_id"))
+            elif name == "calibration.progress":
+                coalesced_key = (name, payload.get("operation_id"))
+            if coalesced_key is not None:
+                event_name, event_identity = coalesced_key
                 for index in range(len(self._events) - 1, -1, -1):
                     previous = self._events[index]
+                    previous_payload = previous.get("payload")
                     if (
-                        previous.get("name") == name
-                        and isinstance(previous.get("payload"), dict)
-                        and previous["payload"].get("session_id") == session_id  # type: ignore[index]
+                        previous.get("name") == event_name
+                        and isinstance(previous_payload, dict)
+                        and previous_payload.get(
+                            "session_id"
+                            if event_name != "calibration.progress"
+                            else "operation_id"
+                        )
+                        == event_identity  # type: ignore[index]
                     ):
                         self._events[index] = message
                         return
@@ -331,13 +357,14 @@ class DesktopCoreServer:
             return self._bootstrap(_object_params(params, frozenset()))
         if method == "app.shutdown":
             _object_params(params, frozenset())
+            calibration_clean = self.calibration.shutdown()
             playback_clean = self.playback.shutdown()
             self._shutdown_requested = True
             self._stop_event.set()
-            if not playback_clean:
+            if not calibration_clean or not playback_clean:
                 raise CoreRequestError(
                     "shutdown_timeout",
-                    "playback cleanup did not complete within the shutdown budget",
+                    "playback or calibration cleanup did not complete within the shutdown budget",
                 )
             return {"shutdown": True}
         if method == "catalog.search":
@@ -366,6 +393,16 @@ class DesktopCoreServer:
             return _settings_dict(self.settings_service)
         if method == "settings.patch":
             return self._patch_settings(params)
+        if method == "diagnostics.set_enabled":
+            return self._set_diagnostics_enabled(
+                _object_params(params, frozenset({"enabled"}))
+            )
+        if method == "calibration.start":
+            return self._start_calibration(params)
+        if method == "calibration.cancel":
+            return self._cancel_calibration(
+                _object_params(params, frozenset({"operation_id"}))
+            )
         if method == "playback.prepare":
             return self._prepare_playback(params)
         if method == "playback.start":
@@ -613,6 +650,26 @@ class DesktopCoreServer:
         except (TypeError, ValueError) as exc:
             raise CoreRequestError("invalid_params", str(exc)) from exc
 
+    def _set_diagnostics_enabled(
+        self, params: Mapping[str, object]
+    ) -> dict[str, object]:
+        enabled = params.get("enabled")
+        if type(enabled) is not bool:
+            raise CoreRequestError("invalid_params", "enabled must be a boolean")
+        return {"enabled": self.diagnostics.set_enabled(enabled)}
+
+    def _start_calibration(self, params: Mapping[str, object]) -> dict[str, object]:
+        try:
+            return self.calibration.start(params)
+        except DesktopCalibrationError as exc:
+            raise CoreRequestError(exc.code, exc.message) from exc
+
+    def _cancel_calibration(self, params: Mapping[str, object]) -> dict[str, object]:
+        try:
+            return self.calibration.cancel(params.get("operation_id"))
+        except DesktopCalibrationError as exc:
+            raise CoreRequestError(exc.code, exc.message) from exc
+
     def _prepare_playback(self, params: Mapping[str, object]) -> dict[str, object]:
         self._ensure_catalog()
         if set(params) != {"song_id", "generation", "config"}:
@@ -705,6 +762,7 @@ class DesktopCoreServer:
                 return
             while not parent_watch_stop.wait(0.25):
                 if not parent_process_alive(self.parent_pid):
+                    self.calibration.shutdown()
                     self.playback.shutdown()
                     self._shutdown_requested = True
                     self._stop_event.set()
@@ -725,6 +783,7 @@ class DesktopCoreServer:
                     item = queue.get(timeout=0.05)
                 except Empty:
                     if self.event_buffer_overflowed:
+                        self.calibration.shutdown()
                         self.playback.shutdown()
                         break
                     continue
@@ -732,6 +791,7 @@ class DesktopCoreServer:
                     # Inherited stdin EOF is a parent-loss/shutdown signal.
                     # Give the active native session the same bounded cleanup
                     # opportunity as an explicit app.shutdown request.
+                    self.calibration.shutdown()
                     self.playback.shutdown()
                     self._shutdown_requested = True
                     break
@@ -792,6 +852,7 @@ class DesktopCoreServer:
                 # Protocol/output failures must not bypass native playback
                 # cleanup. This is the preferred path; the Tauri emergency
                 # release remains a separate last-resort fallback.
+                self.calibration.shutdown()
                 self.playback.shutdown()
                 self._shutdown_requested = True
             # Shutdown may be requested while the inherited stdin pipe is

@@ -86,6 +86,16 @@ def response(request_id: int, result: Any = None) -> None:
 
 def command_result(item: dict[str, Any]) -> Any:
     method = item.get("method")
+    if method == "diagnostics.set_enabled":
+        return {"enabled": item.get("params", {}).get("enabled", False)}
+    if method == "calibration.start":
+        return {"operation_id": "d" * 32, "state": "running"}
+    if method == "calibration.cancel":
+        return {
+            "operation_id": item.get("params", {}).get("operation_id", "d" * 32),
+            "state": "cancelled",
+            "accepted": True,
+        }
     if method == "catalog.search":
         return {
             "items": [],

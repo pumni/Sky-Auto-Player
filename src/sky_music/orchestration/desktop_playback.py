@@ -26,6 +26,7 @@ from sky_music.orchestration.catalog_service import (
     CatalogGenerationError,
     CatalogLookupError,
 )
+from sky_music.orchestration.desktop_diagnostics import DesktopDiagnosticsService
 from sky_music.orchestration.desktop_models import (
     PlaybackCommandAckDto,
     PlaybackConfigDto,
@@ -49,7 +50,9 @@ from sky_music.orchestration.native_models import (
     PLAYBACK_QUIT,
     PLAYBACK_SHUTDOWN_TIMEOUT,
     PLAYBACK_SKIPPED,
+    BackendHealth,
     NativeDispatchError,
+    ProgressCounters,
 )
 from sky_music.orchestration.playback_controller import (
     PlaybackError,
@@ -179,19 +182,23 @@ class _SnapshotRenderer:
         session_id: str,
         song_id: str,
         title: str,
+        diagnostics: DesktopDiagnosticsService | None = None,
         on_state: Callable[[PlaybackState], None] | None = None,
     ) -> None:
         self._publish = publish
         self._session_id = session_id
         self._song_id = song_id
         self._title = title
+        self._diagnostics = diagnostics
         self._on_state = on_state
         self._seq = 0
+        self._last_counters = ProgressCounters(0, 0, 0, 0, 0, 0, ())
 
-    def update_counters_batch(self, _counters: object) -> None:
+    def update_counters_batch(self, counters: object) -> None:
         # Native telemetry remains owned by the existing engine.  The desktop
         # snapshot is deliberately the small bounded progress view below.
-        return None
+        if isinstance(counters, ProgressCounters):
+            self._last_counters = counters
 
     def render(
         self,
@@ -202,7 +209,7 @@ class _SnapshotRenderer:
         status: str,
         pre_roll_remaining_us: int = 0,
         input_path_degraded: bool = False,
-        backend_health: object | None = None,
+        backend_health: BackendHealth | None = None,
         **_kwargs: object,
     ) -> None:
         self._seq += 1
@@ -240,6 +247,12 @@ class _SnapshotRenderer:
         )
         if self._on_state is not None:
             self._on_state(state)
+        if self._diagnostics is not None:
+            self._diagnostics.publish_progress(
+                self._last_counters,
+                backend_health,
+                session_id=self._session_id,
+            )
         self._publish(
             "playback.snapshot", asdict(snapshot) | {"session_id": self._session_id}
         )
@@ -257,14 +270,24 @@ class DesktopPlaybackService:
         settings_service: Any,
         catalog_service: Any,
         publish_event: Callable[[str, Mapping[str, object]], None],
+        diagnostics: DesktopDiagnosticsService | None = None,
     ) -> None:
         self._settings_service = settings_service
         self._catalog_service = catalog_service
         self._publish_event = publish_event
+        self._diagnostics = diagnostics
         self._lock = threading.RLock()
         self._prepared: OrderedDict[str, _PreparedRecord] = OrderedDict()
         self._active: _ActiveSession | None = None
         self._last_terminal: tuple[str, PlaybackState] | None = None
+
+    def is_physical_active(self) -> bool:
+        with self._lock:
+            return self._active is not None and not self._active.dry_run and self._active.state not in {
+                "finished",
+                "failed",
+                "cancelled",
+            }
 
     @staticmethod
     def _opaque_id() -> str:
@@ -672,6 +695,7 @@ class DesktopPlaybackService:
                     active.session_id,
                     active.song_id,
                     plan.song.name,
+                    diagnostics=self._diagnostics,
                     on_state=lambda state: self._on_native_state(active, state),
                 ),
                 telemetry_enabled=bool(

@@ -1,11 +1,24 @@
 import type {
   BootstrapDto,
+  CalibrationCancelAckDto,
+  CalibrationCancelRequest,
+  CalibrationFinishedPayload,
+  CalibrationMode,
+  CalibrationOutcome,
+  CalibrationProgressPayload,
+  CalibrationStartAckDto,
+  CalibrationStartRequest,
+  CalibrationState,
   CatalogDetailRequest,
   CatalogRowDto,
   CatalogSearchDto,
   CatalogSearchRequest,
   CatalogViewportDto,
   CatalogViewportRequest,
+  DiagnosticsBackendStatus,
+  DiagnosticsEnabledDto,
+  DiagnosticsSetEnabledRequest,
+  DiagnosticsSnapshotDto,
   NativeBuildDto,
   PlaybackConfigDto,
   PlaybackCommandAckDto,
@@ -88,6 +101,19 @@ export type PreparedPlayback = PreparedPlaybackDto;
 export type PlaybackStart = PlaybackStartRequest;
 export type PlaybackSession = PlaybackSessionDto;
 export type PlaybackSessionCommand = PlaybackSessionCommandRequest;
+export type DiagnosticsSnapshot = DiagnosticsSnapshotDto;
+export type DiagnosticsBackend = DiagnosticsBackendStatus;
+export type DiagnosticsEnabled = DiagnosticsEnabledDto;
+export type DiagnosticsSetEnabled = DiagnosticsSetEnabledRequest;
+export type CalibrationStart = CalibrationStartRequest;
+export type CalibrationStartAck = CalibrationStartAckDto;
+export type CalibrationCancel = CalibrationCancelRequest;
+export type CalibrationCancelAck = CalibrationCancelAckDto;
+export type CalibrationProgress = CalibrationProgressPayload;
+export type CalibrationFinished = CalibrationFinishedPayload;
+export type CalibrationModeId = CalibrationMode;
+export type CalibrationStateId = CalibrationState;
+export type CalibrationOutcomeId = CalibrationOutcome;
 
 export type Unsubscribe = () => void;
 
@@ -105,6 +131,9 @@ export interface DesktopBridge {
   pausePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   resumePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   skipPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
+  setDiagnosticsEnabled(request: DiagnosticsSetEnabled): Promise<DiagnosticsEnabled>;
+  startCalibration(request: CalibrationStart): Promise<CalibrationStartAck>;
+  cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck>;
   subscribeUiEvents(listener: (event: UiEvent) => void): Promise<Unsubscribe>;
   shutdown(): Promise<void>;
 }

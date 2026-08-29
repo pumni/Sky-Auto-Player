@@ -245,7 +245,10 @@ impl CoreSupervisor {
                                     }
                                     CoreEvent::PlaybackSnapshot(_)
                                     | CoreEvent::PlaybackFinished(_)
-                                    | CoreEvent::PlaybackFailed(_) => {
+                                    | CoreEvent::PlaybackFailed(_)
+                                    | CoreEvent::DiagnosticsSnapshot(_)
+                                    | CoreEvent::CalibrationProgress(_)
+                                    | CoreEvent::CalibrationFinished(_) => {
                                         supervisor.publish_event(event)
                                     }
                                 },
