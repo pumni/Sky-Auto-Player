@@ -39,15 +39,15 @@ pub(crate) fn build_core_command() -> Result<Command, SupervisorError> {
                 python.display()
             )));
         }
-        let helper = root.join("scripts\\dev_desktop.py");
-        if !helper.is_file() {
+        let entrypoint = root.join("src\\core_main.py");
+        if !entrypoint.is_file() {
             return Err(SupervisorError::Launch(format!(
-                "desktop dev helper not found: {}",
-                helper.display()
+                "desktop Core entrypoint not found: {}",
+                entrypoint.display()
             )));
         }
         let mut command = Command::new(python);
-        command.arg(helper);
+        command.arg(entrypoint);
         command
     } else {
         let core = root.join(CORE_EXE_NAME);

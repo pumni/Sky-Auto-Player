@@ -391,6 +391,10 @@ class DesktopCoreServer:
 
     def _set_viewport(self, params: Mapping[str, object]) -> dict[str, object]:
         self._ensure_catalog()
+        # Viewport indices are positions in the full catalog snapshot. A
+        # filtered UI result has a different index space, so the desktop
+        # adapter suppresses that hint until the protocol carries a filtered
+        # window identity.
         generation = _required_int(params, "generation")
         first_index = _required_int(params, "first_index")
         raw_last_index = params.get("last_index")

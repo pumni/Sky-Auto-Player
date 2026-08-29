@@ -1,4 +1,4 @@
-use serde::de::{self, DeserializeSeed, MapAccess, Visitor};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
 use std::io::{self, Read};
@@ -47,26 +47,26 @@ pub enum ProtocolError {
     Invalid(String),
 }
 
-struct StrictObject;
+struct StrictValue;
 
-impl<'de> DeserializeSeed<'de> for StrictObject {
-    type Value = Map<String, Value>;
+impl<'de> DeserializeSeed<'de> for StrictValue {
+    type Value = Value;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_map(ObjectVisitor)
+        deserializer.deserialize_any(ValueVisitor)
     }
 }
 
-struct ObjectVisitor;
+struct ValueVisitor;
 
-impl<'de> Visitor<'de> for ObjectVisitor {
-    type Value = Map<String, Value>;
+impl<'de> Visitor<'de> for ValueVisitor {
+    type Value = Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object with unique keys")
+        formatter.write_str("a JSON value with unique object keys")
     }
 
     fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
@@ -74,12 +74,56 @@ impl<'de> Visitor<'de> for ObjectVisitor {
         A: MapAccess<'de>,
     {
         let mut object = Map::new();
-        while let Some((key, value)) = access.next_entry::<String, Value>()? {
-            if object.insert(key.clone(), value).is_some() {
+        while let Some(key) = access.next_key::<String>()? {
+            if object.contains_key(&key) {
                 return Err(de::Error::custom(format!("duplicate JSON key: {key}")));
             }
+            let value = access.next_value_seed(StrictValue)?;
+            object.insert(key, value);
         }
-        Ok(object)
+        Ok(Value::Object(object))
+    }
+
+    fn visit_seq<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = access.next_element_seed(StrictValue)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(Value::Null)
     }
 }
 
@@ -111,13 +155,28 @@ pub fn encode_request(id: u64, method: &str, params: Value) -> Result<Vec<u8>, P
 
 fn parse_object(frame: &[u8]) -> Result<Map<String, Value>, ProtocolError> {
     let mut deserializer = serde_json::Deserializer::from_slice(frame);
-    let object = StrictObject
+    let value = StrictValue
         .deserialize(&mut deserializer)
         .map_err(|error| ProtocolError::Json(error.to_string()))?;
     deserializer
         .end()
         .map_err(|error| ProtocolError::Json(error.to_string()))?;
-    Ok(object)
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| ProtocolError::Invalid("protocol message must be a JSON object".into()))
+}
+
+fn ensure_fields(object: &Map<String, Value>, allowed: &[&str]) -> Result<(), ProtocolError> {
+    if let Some(unexpected) = object
+        .keys()
+        .find(|key| !allowed.iter().any(|allowed| allowed == key))
+    {
+        return Err(ProtocolError::Invalid(format!(
+            "unexpected protocol field: {unexpected}"
+        )));
+    }
+    Ok(())
 }
 
 fn required_string(object: &Map<String, Value>, name: &str) -> Result<String, ProtocolError> {
@@ -147,6 +206,7 @@ pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
     }
     match object.get("type").and_then(Value::as_str) {
         Some("response") => {
+            ensure_fields(&object, &["v", "id", "type", "ok", "result", "error"])?;
             let id = required_u64(&object, "id")?;
             if id > MAX_REQUEST_ID {
                 return Err(ProtocolError::Invalid(
@@ -158,6 +218,11 @@ pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
                 .and_then(Value::as_bool)
                 .ok_or_else(|| ProtocolError::Invalid("response ok must be boolean".into()))?;
             if ok {
+                if object.contains_key("error") {
+                    return Err(ProtocolError::Invalid(
+                        "successful response cannot contain error".into(),
+                    ));
+                }
                 let result = object.get("result").cloned().ok_or_else(|| {
                     ProtocolError::Invalid("successful response lacks result".into())
                 })?;
@@ -168,10 +233,16 @@ pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
                     error: None,
                 }))
             } else {
+                if object.contains_key("result") {
+                    return Err(ProtocolError::Invalid(
+                        "failed response cannot contain result".into(),
+                    ));
+                }
                 let error = object
                     .get("error")
                     .and_then(Value::as_object)
                     .ok_or_else(|| ProtocolError::Invalid("failed response lacks error".into()))?;
+                ensure_fields(error, &["code", "message"])?;
                 Ok(CoreMessage::Response(CoreResponse {
                     id,
                     ok,
@@ -183,13 +254,16 @@ pub fn parse_message(frame: &[u8]) -> Result<CoreMessage, ProtocolError> {
                 }))
             }
         }
-        Some("event") => Ok(CoreMessage::Event(CoreEvent {
-            name: required_string(&object, "name")?,
-            payload: object
-                .get("payload")
-                .cloned()
-                .ok_or_else(|| ProtocolError::Invalid("event lacks payload".into()))?,
-        })),
+        Some("event") => {
+            ensure_fields(&object, &["v", "type", "name", "payload"])?;
+            Ok(CoreMessage::Event(CoreEvent {
+                name: required_string(&object, "name")?,
+                payload: object
+                    .get("payload")
+                    .cloned()
+                    .ok_or_else(|| ProtocolError::Invalid("event lacks payload".into()))?,
+            }))
+        }
         Some(other) => Err(ProtocolError::Invalid(format!(
             "unsupported message type: {other}"
         ))),
@@ -255,6 +329,26 @@ mod tests {
         let bad_version = br#"{"v":2,"type":"event","name":"core.ready","payload":{}}"#;
         assert!(matches!(
             parse_message(bad_version),
+            Err(ProtocolError::Invalid(_))
+        ));
+
+        let nested_duplicate =
+            br#"{"v":1,"id":1,"type":"response","ok":false,"error":{"code":"x","code":"y","message":"bad"}}"#;
+        assert!(matches!(
+            parse_message(nested_duplicate),
+            Err(ProtocolError::Json(_))
+        ));
+
+        let unexpected = br#"{"v":1,"id":1,"type":"response","ok":true,"result":{},"extra":1}"#;
+        assert!(matches!(
+            parse_message(unexpected),
+            Err(ProtocolError::Invalid(_))
+        ));
+
+        let mixed_response =
+            br#"{"v":1,"id":1,"type":"response","ok":true,"result":{},"error":{}}"#;
+        assert!(matches!(
+            parse_message(mixed_response),
             Err(ProtocolError::Invalid(_))
         ));
     }

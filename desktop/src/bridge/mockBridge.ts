@@ -53,7 +53,9 @@ function row(index: number, title: string): SearchResult['items'][number] {
   };
 }
 
-const rows = titles.map((title, index) => row(index, title));
+const rows = Array.from({ length: 500 }, (_, index) =>
+  row(index, titles[index] ?? `Song ${String(index + 1).padStart(3, '0')}`),
+);
 
 function initialSettings(): Settings {
   return {

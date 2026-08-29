@@ -2,7 +2,7 @@ use super::protocol::{
     BoundedFrameReader, CoreEvent, CoreMessage, DESKTOP_PROTOCOL_VERSION, MAX_REQUEST_ID,
     encode_request,
 };
-use super::request_registry::PendingRegistry;
+use super::request_registry::{Completion, PendingRegistry};
 use crate::ui_events::UiEvent;
 use serde::Serialize;
 use serde_json::Value;
@@ -19,6 +19,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BUFFERED_EVENTS: usize = 128;
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+#[derive(Debug, Clone, Copy)]
+struct SupervisorTimeouts {
+    startup: Duration,
+    request: Duration,
+    reload: Duration,
+}
+
+const DEFAULT_TIMEOUTS: SupervisorTimeouts = SupervisorTimeouts {
+    startup: STARTUP_TIMEOUT,
+    request: REQUEST_TIMEOUT,
+    reload: RELOAD_TIMEOUT,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreLifecycle {
@@ -63,6 +76,7 @@ pub struct CoreSupervisor {
     ready: Mutex<Option<Receiver<Result<(), String>>>>,
     events: Mutex<EventState>,
     shutdown_requested: AtomicBool,
+    timeouts: SupervisorTimeouts,
 }
 
 impl CoreSupervisor {
@@ -73,15 +87,26 @@ impl CoreSupervisor {
 
     #[cfg(test)]
     pub(crate) fn spawn_with_command(mut command: Command) -> Result<Arc<Self>, SupervisorError> {
-        Self::spawn_process(&mut command)
+        Self::spawn_process(&mut command, DEFAULT_TIMEOUTS)
     }
 
     #[cfg(not(test))]
     pub(crate) fn spawn_with_command(mut command: Command) -> Result<Arc<Self>, SupervisorError> {
-        Self::spawn_process(&mut command)
+        Self::spawn_process(&mut command, DEFAULT_TIMEOUTS)
     }
 
-    fn spawn_process(command: &mut Command) -> Result<Arc<Self>, SupervisorError> {
+    #[cfg(test)]
+    fn spawn_with_command_and_timeouts(
+        mut command: Command,
+        timeouts: SupervisorTimeouts,
+    ) -> Result<Arc<Self>, SupervisorError> {
+        Self::spawn_process(&mut command, timeouts)
+    }
+
+    fn spawn_process(
+        command: &mut Command,
+        timeouts: SupervisorTimeouts,
+    ) -> Result<Arc<Self>, SupervisorError> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -111,6 +136,7 @@ impl CoreSupervisor {
             ready: Mutex::new(Some(ready_receiver)),
             events: Mutex::new(EventState::default()),
             shutdown_requested: AtomicBool::new(false),
+            timeouts,
         });
         Self::spawn_reader(Arc::clone(&supervisor), stdout, ready_sender);
         Self::spawn_stderr_drainer(stderr);
@@ -122,7 +148,7 @@ impl CoreSupervisor {
             .expect("ready receiver poisoned")
             .take()
             .expect("ready receiver missing");
-        match receiver.recv_timeout(STARTUP_TIMEOUT) {
+        match receiver.recv_timeout(supervisor.timeouts.startup) {
             Ok(Ok(())) => Ok(supervisor),
             Ok(Err(error)) => {
                 supervisor.terminate_child();
@@ -152,29 +178,48 @@ impl CoreSupervisor {
                 let mut frames = BoundedFrameReader::new(stdout);
                 loop {
                     match frames.next_frame() {
-                        Ok(Some(frame)) => match super::protocol::parse_message(&frame) {
-                            Ok(CoreMessage::Response(response)) => {
-                                if !supervisor.pending.complete(response.id, Ok(response)) {
-                                    supervisor.protocol_fatal(
-                                        "response used an unknown request id",
-                                        &ready_sender,
-                                    );
+                        Ok(Some(frame)) => {
+                            match super::protocol::parse_message(&frame) {
+                                Ok(CoreMessage::Response(response)) => {
+                                    // Timed-out IDs are retained as bounded tombstones. A response
+                                    // for one of them is a harmless late response; any other unknown
+                                    // ID remains a protocol violation and fails closed.
+                                    match supervisor.pending.complete(response.id, Ok(response)) {
+                                        Completion::Delivered | Completion::LateAfterTimeout => {}
+                                        Completion::Unknown => {
+                                            supervisor.protocol_fatal(
+                                                "response used an unknown request id",
+                                                &ready_sender,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                                Ok(CoreMessage::Event(event)) => match event.name.as_str() {
+                                    "core.ready" => {
+                                        if supervisor.transition_to_ready() {
+                                            supervisor.publish_event(event);
+                                            let _ = ready_sender.send(Ok(()));
+                                        } else {
+                                            supervisor.protocol_fatal(
+                                                "core.ready is only valid once while Starting",
+                                                &ready_sender,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                    "core.fatal" => {
+                                        supervisor.inbound_core_fatal(event, &ready_sender);
+                                        break;
+                                    }
+                                    _ => supervisor.publish_event(event),
+                                },
+                                Err(error) => {
+                                    supervisor.protocol_fatal(&error.to_string(), &ready_sender);
                                     break;
                                 }
                             }
-                            Ok(CoreMessage::Event(event)) => {
-                                let is_ready = event.name == "core.ready";
-                                supervisor.publish_event(event);
-                                if is_ready {
-                                    supervisor.set_lifecycle(CoreLifecycle::Ready);
-                                    let _ = ready_sender.send(Ok(()));
-                                }
-                            }
-                            Err(error) => {
-                                supervisor.protocol_fatal(&error.to_string(), &ready_sender);
-                                break;
-                            }
-                        },
+                        }
                         Ok(None) => {
                             if supervisor.shutdown_requested.load(Ordering::Acquire) {
                                 supervisor.set_lifecycle(CoreLifecycle::Exited);
@@ -249,6 +294,33 @@ impl CoreSupervisor {
         self.terminate_child();
     }
 
+    fn inbound_core_fatal(
+        &self,
+        event: CoreEvent,
+        ready_sender: &mpsc::Sender<Result<(), String>>,
+    ) {
+        let message = event
+            .payload
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("Core reported a fatal error");
+        self.set_lifecycle(CoreLifecycle::Fatal);
+        self.pending
+            .fail_all(&format!("Core reported fatal error: {message}"));
+        let _ = ready_sender.send(Err(message.to_owned()));
+        self.publish_event(event);
+        self.terminate_child();
+    }
+
+    fn transition_to_ready(&self) -> bool {
+        let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
+        if *lifecycle != CoreLifecycle::Starting {
+            return false;
+        }
+        *lifecycle = CoreLifecycle::Ready;
+        true
+    }
+
     fn publish_event(&self, event: CoreEvent) {
         let ui_event = UiEvent {
             v: DESKTOP_PROTOCOL_VERSION,
@@ -288,9 +360,9 @@ impl CoreSupervisor {
             )));
         }
         let timeout = if method == "catalog.reload" {
-            RELOAD_TIMEOUT
+            self.timeouts.reload
         } else {
-            REQUEST_TIMEOUT
+            self.timeouts.request
         };
         self.request_inner(method, params, timeout)
     }
@@ -320,7 +392,7 @@ impl CoreSupervisor {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => return Err(SupervisorError::Unavailable(error)),
             Err(RecvTimeoutError::Timeout) => {
-                self.pending.remove(id);
+                self.pending.expire(id);
                 return Err(SupervisorError::Timeout);
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -358,7 +430,7 @@ impl CoreSupervisor {
             return;
         }
         self.set_lifecycle(CoreLifecycle::ShuttingDown);
-        let _ = self.request_inner("app.shutdown", serde_json::json!({}), REQUEST_TIMEOUT);
+        let _ = self.request_inner("app.shutdown", serde_json::json!({}), self.timeouts.request);
         self.terminate_child();
     }
 
@@ -390,7 +462,54 @@ impl Drop for CoreSupervisor {
 
 #[cfg(test)]
 mod tests {
-    use super::CoreLifecycle;
+    use super::{CoreLifecycle, CoreSupervisor, SupervisorError, SupervisorTimeouts};
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn fake_core(mode: &str) -> Command {
+        let python = std::env::var("SKY_PYTHON").unwrap_or_else(|_| "python".into());
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("fake_core.py");
+        let mut command = Command::new(python);
+        command
+            .arg("-u")
+            .arg(fixture)
+            .arg(mode)
+            .env("PYTHONUNBUFFERED", "1");
+        command
+    }
+
+    fn short_timeouts() -> SupervisorTimeouts {
+        SupervisorTimeouts {
+            // Windows can start several Python fixtures concurrently when the
+            // test harness runs these cases in parallel. Keep the request
+            // budgets short, but leave startup enough room for process launch.
+            startup: Duration::from_secs(2),
+            request: Duration::from_millis(150),
+            reload: Duration::from_millis(250),
+        }
+    }
+
+    fn start(mode: &str) -> std::sync::Arc<CoreSupervisor> {
+        CoreSupervisor::spawn_with_command_and_timeouts(fake_core(mode), short_timeouts())
+            .unwrap_or_else(|error| panic!("fake Core did not become ready: {error}"))
+    }
+
+    fn eventually(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        predicate()
+    }
 
     #[test]
     fn lifecycle_only_accepts_requests_after_ready() {
@@ -408,5 +527,143 @@ mod tests {
         assert!(!CoreLifecycle::ShuttingDown.is_terminal());
         assert!(CoreLifecycle::Exited.is_terminal());
         assert!(CoreLifecycle::Fatal.is_terminal());
+    }
+
+    #[test]
+    fn fake_core_request_round_trip_uses_real_pipes() {
+        let supervisor = start("normal");
+        let result = supervisor
+            .request("catalog.search", json!({"query": "Aurora"}))
+            .expect("fake Core response");
+        assert_eq!(result["method"], "catalog.search");
+        assert_eq!(result["params"]["query"], "Aurora");
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn core_fatal_before_ready_fails_startup() {
+        let result = CoreSupervisor::spawn_with_command_and_timeouts(
+            fake_core("fatal_before_ready"),
+            short_timeouts(),
+        );
+        let error = match result {
+            Ok(_) => panic!("fatal Core must not become ready"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, SupervisorError::Unavailable(message) if message.contains("fatal before ready"))
+        );
+    }
+
+    #[test]
+    fn core_fatal_after_ready_is_immediately_terminal_and_preserves_event() {
+        let supervisor = start("fatal_after_ready");
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle() == CoreLifecycle::Fatal
+        }));
+        assert!(!supervisor.lifecycle().accepts_requests());
+        let events = supervisor.events.lock().expect("event buffer poisoned");
+        let fatal = events
+            .buffered
+            .iter()
+            .find(|event| event.name == "core.fatal")
+            .expect("original fatal event");
+        assert_eq!(fatal.payload["message"], "fatal after ready");
+    }
+
+    #[test]
+    fn duplicate_ready_is_a_protocol_fatal() {
+        let supervisor = start("duplicate_ready");
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle() == CoreLifecycle::Fatal
+        }));
+    }
+
+    #[test]
+    fn malformed_duplicate_and_oversized_output_fail_closed() {
+        for mode in ["malformed", "duplicate_output", "oversized_output"] {
+            let result =
+                CoreSupervisor::spawn_with_command_and_timeouts(fake_core(mode), short_timeouts());
+            assert!(result.is_err(), "mode {mode} unexpectedly became ready");
+        }
+    }
+
+    #[test]
+    fn startup_timeout_and_eof_before_ready_are_errors() {
+        let timeout = CoreSupervisor::spawn_with_command_and_timeouts(
+            fake_core("startup_timeout"),
+            short_timeouts(),
+        );
+        assert!(matches!(timeout, Err(SupervisorError::Timeout)));
+
+        let eof = CoreSupervisor::spawn_with_command_and_timeouts(
+            fake_core("eof_before_ready"),
+            short_timeouts(),
+        );
+        assert!(eof.is_err());
+    }
+
+    #[test]
+    fn eof_after_ready_and_unknown_response_are_terminal() {
+        let eof = start("eof_after_ready");
+        assert!(eventually(Duration::from_secs(1), || {
+            eof.lifecycle() == CoreLifecycle::Fatal
+        }));
+
+        let unknown = start("unknown_id");
+        let result = unknown.request("test.echo", json!({}));
+        assert!(result.is_err());
+        assert!(eventually(Duration::from_secs(1), || {
+            unknown.lifecycle() == CoreLifecycle::Fatal
+        }));
+    }
+
+    #[test]
+    fn request_timeout_ignores_one_late_response_without_poisoning_core() {
+        let supervisor = start("request_timeout");
+        let error = supervisor
+            .request("slow.operation", json!({}))
+            .expect_err("request should time out");
+        assert!(matches!(error, SupervisorError::Timeout));
+        thread::sleep(Duration::from_millis(350));
+        assert_eq!(supervisor.lifecycle(), CoreLifecycle::Ready);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn child_exit_during_pending_request_fails_the_request() {
+        let supervisor = start("child_pending");
+        let result = supervisor.request("pending.operation", json!({}));
+        assert!(result.is_err());
+        assert!(eventually(Duration::from_secs(1), || {
+            supervisor.lifecycle().is_terminal()
+        }));
+    }
+
+    #[test]
+    fn stderr_flood_does_not_deadlock_stdout_requests() {
+        let supervisor = start("stderr_flood");
+        let result = supervisor
+            .request("catalog.search", json!({"query": "flood"}))
+            .expect("response after stderr flood");
+        assert_eq!(result["method"], "catalog.search");
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn shutdown_is_graceful_and_forced_fallback_is_bounded() {
+        let graceful = start("normal");
+        graceful.shutdown();
+        assert!(eventually(Duration::from_secs(1), || {
+            graceful.lifecycle() == CoreLifecycle::Exited
+        }));
+
+        let forced = start("force_shutdown");
+        let started = Instant::now();
+        forced.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(eventually(Duration::from_secs(1), || {
+            forced.lifecycle() == CoreLifecycle::Exited
+        }));
     }
 }

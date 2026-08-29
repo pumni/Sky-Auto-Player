@@ -36,8 +36,12 @@ function normalizeEvent(event: CoreChannelEvent): UiEvent {
   return event;
 }
 
+export function encodeCommandArgs(request?: unknown): Record<string, unknown> | undefined {
+  return request === undefined ? undefined : { params: request };
+}
+
 function call<T>(command: string, request?: unknown): Promise<T> {
-  return invoke<T>(command, request === undefined ? undefined : { request });
+  return invoke<T>(command, encodeCommandArgs(request));
 }
 
 export function createTauriBridge(): DesktopBridge {

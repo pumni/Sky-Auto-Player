@@ -99,6 +99,21 @@ def test_protocol_rejects_oversized_frames_without_readline() -> None:
         protocol.encode_frame({"payload": "x" * (1024 * 1024)})
 
 
+def test_protocol_reader_progresses_on_an_open_buffered_pipe() -> None:
+    """A live inherited pipe must not wait for a full 4 KiB read."""
+    read_fd, write_fd = os.pipe()
+    reader_stream = io.BufferedReader(os.fdopen(read_fd, "rb", buffering=0))
+    writer_stream = os.fdopen(write_fd, "wb", buffering=0)
+    try:
+        writer_stream.write(protocol.encode_frame(_request("settings.get")))
+        writer_stream.flush()
+        frames = protocol.iter_bounded_frames(reader_stream)
+        assert next(frames) == protocol.encode_frame(_request("settings.get"))[:-1]
+    finally:
+        reader_stream.close()
+        writer_stream.close()
+
+
 def test_protocol_rejects_bad_envelope_types() -> None:
     bad_requests = (
         {**_request("settings.get"), "id": True},
@@ -463,7 +478,7 @@ raise SystemExit(server.serve(sys.stdin.buffer, sys.stdout.buffer, stderr=sys.st
     assert completed.stderr == b""
 
 
-def test_exact_core_main_entrypoint_smoke_with_real_admission(tmp_path: Path) -> None:
+def test_exact_core_main_entrypoint_smoke_with_real_admission() -> None:
     """Exercise the production source path, not only DesktopCoreServer in isolation."""
     from sky_music.orchestration.native_admission import (
         NativeAdmissionError,
@@ -477,19 +492,24 @@ def test_exact_core_main_entrypoint_smoke_with_real_admission(tmp_path: Path) ->
 
     repository_root = Path(__file__).parents[1]
     source_root = repository_root / "src"
+    song_path = repository_root / "songs" / "blue.json"
+    assert song_path.is_file()
+    song_id = song_id_for_path(song_path)
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), env.get("PYTHONPATH", "")]))
     requests = b"".join(
         protocol.encode_frame(request)
         for request in (
             _request("app.bootstrap", request_id=1),
-            _request("catalog.search", {"query": "", "offset": 0, "limit": 1}, request_id=2),
-            _request("app.shutdown", request_id=3),
+            _request("catalog.search", {"query": "blue", "offset": 0, "limit": 1}, request_id=2),
+            _request("catalog.detail", {"song_id": song_id, "generation": 1}, request_id=3),
+            _request("settings.get", request_id=4),
+            _request("app.shutdown", request_id=5),
         )
     )
 
     completed = subprocess.run(
-        [sys.executable, str(source_root / "core_main.py"), "--desktop-worker", "--install-root", str(tmp_path)],
+        [sys.executable, str(source_root / "core_main.py"), "--desktop-worker", "--install-root", str(repository_root)],
         input=requests,
         capture_output=True,
         env=env,
@@ -505,9 +525,13 @@ def test_exact_core_main_entrypoint_smoke_with_real_admission(tmp_path: Path) ->
     assert messages[0]["name"] == "core.ready"
     assert messages[1]["id"] == 1
     assert messages[2]["id"] == 2
+    assert messages[2]["result"]["items"][0]["song_id"] == song_id  # type: ignore[index]
+    assert messages[3]["id"] == 3
+    assert messages[3]["result"]["song_id"] == song_id  # type: ignore[index]
+    assert messages[4]["id"] == 4
     assert messages[-1] == {
         "v": 1,
-        "id": 3,
+        "id": 5,
         "type": "response",
         "ok": True,
         "result": {"shutdown": True},

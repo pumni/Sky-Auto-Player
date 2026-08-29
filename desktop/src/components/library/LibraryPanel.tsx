@@ -22,7 +22,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: total,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 44,
     overscan: 10,
@@ -31,7 +31,10 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const renderedItems =
     virtualItems.length > 0
       ? virtualItems
-      : rows.slice(0, 20).map((_, index) => ({ index, start: index * 44 }));
+      : Array.from({ length: Math.min(total, 20) }, (_, index) => ({
+          index,
+          start: index * 44,
+        }));
   const first = renderedItems[0]?.index ?? 0;
   const last = renderedItems.at(-1)?.index ?? -1;
 
@@ -53,7 +56,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
           {error}
         </p>
       )}
-      {!loading && rows.length === 0 ? (
+      {!loading && total === 0 ? (
         <div className="empty-state">
           <span className="empty-glyph" aria-hidden="true">
             ∿
@@ -66,7 +69,18 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
           <div className="virtual-list-inner" style={{ height: virtualizer.getTotalSize() }}>
             {renderedItems.map((virtualRow) => {
               const row = rows[virtualRow.index];
-              if (!row) return null;
+              if (!row) {
+                return (
+                  <div
+                    key={`loading-${virtualRow.index}`}
+                    className="song-row song-row-placeholder"
+                    aria-busy="true"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <span className="song-row-title">Loading song…</span>
+                  </div>
+                );
+              }
               const selected = row.song_id === selectedSongId;
               return (
                 <button

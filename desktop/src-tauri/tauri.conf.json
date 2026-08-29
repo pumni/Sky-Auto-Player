@@ -17,6 +17,8 @@
         "height": 760,
         "minWidth": 920,
         "minHeight": 620,
+        "visible": true,
+        "focus": true,
         "resizable": true,
         "maximizable": true,
         "decorations": true,

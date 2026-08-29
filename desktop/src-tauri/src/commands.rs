@@ -1,6 +1,9 @@
 use crate::app_state::AppState;
+use crate::core::CoreSupervisor;
 use crate::ui_events::UiEvent;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
@@ -217,59 +220,79 @@ pub struct CatalogViewportDto {
     pub selected_song_id: Option<String>,
 }
 
-fn request<P, R>(state: &State<'_, AppState>, method: &str, params: P) -> Result<R, String>
+fn request_with_supervisor<P, R>(
+    supervisor: &CoreSupervisor,
+    method: &'static str,
+    params: P,
+) -> Result<R, String>
 where
     P: Serialize,
-    R: for<'de> Deserialize<'de>,
+    R: DeserializeOwned,
 {
-    let value = state
-        .supervisor()
-        .map_err(|error| error.to_string())?
+    let value = supervisor
         .request(method, params)
         .map_err(|error| error.to_string())?;
     serde_json::from_value(value).map_err(|error| format!("invalid {method} response: {error}"))
 }
 
-#[tauri::command]
-pub fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapDto, String> {
-    request(&state, "app.bootstrap", serde_json::json!({}))
+async fn blocking_request<P, R>(
+    state: State<'_, AppState>,
+    method: &'static str,
+    params: P,
+) -> Result<R, String>
+where
+    P: Serialize + Send + 'static,
+    R: DeserializeOwned + Send + 'static,
+{
+    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        request_with_supervisor(&supervisor, method, params)
+    })
+    .await
+    .map_err(|error| format!("Core worker failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn search_songs(
+pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapDto, String> {
+    blocking_request(state, "app.bootstrap", serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn search_songs(
     state: State<'_, AppState>,
     params: CatalogSearchRequest,
 ) -> Result<CatalogSearchDto, String> {
-    request(&state, "catalog.search", params)
+    blocking_request(state, "catalog.search", params).await
 }
 
 #[tauri::command]
-pub fn get_song_detail(
+pub async fn get_song_detail(
     state: State<'_, AppState>,
     params: CatalogDetailRequest,
 ) -> Result<SongDetailDto, String> {
-    request(
-        &state,
+    blocking_request(
+        state,
         "catalog.detail",
         CoreDetailParams {
             song_id: params.song_id,
             generation: params.generation,
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub fn reload_library(state: State<'_, AppState>) -> Result<CatalogReloadDto, String> {
-    request(&state, "catalog.reload", serde_json::json!({}))
+pub async fn reload_library(state: State<'_, AppState>) -> Result<CatalogReloadDto, String> {
+    blocking_request(state, "catalog.reload", serde_json::json!({})).await
 }
 
 #[tauri::command]
-pub fn set_library_viewport(
+pub async fn set_library_viewport(
     state: State<'_, AppState>,
     params: CatalogViewportRequest,
 ) -> Result<CatalogViewportDto, String> {
-    request(
-        &state,
+    blocking_request(
+        state,
         "catalog.set_viewport",
         CoreViewportParams {
             generation: params.generation,
@@ -278,15 +301,16 @@ pub fn set_library_viewport(
             selected_song_id: params.selected_song_id,
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> Result<SettingsDto, String> {
-    request(&state, "settings.get", serde_json::json!({}))
+pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsDto, String> {
+    blocking_request(state, "settings.get", serde_json::json!({})).await
 }
 
 #[tauri::command]
-pub fn patch_settings(
+pub async fn patch_settings(
     state: State<'_, AppState>,
     params: SettingsPatch,
 ) -> Result<SettingsDto, String> {
@@ -295,8 +319,8 @@ pub fn patch_settings(
         tempo_scale: playback.tempo_scale,
         fps: playback.fps,
     });
-    request(
-        &state,
+    blocking_request(
+        state,
         "settings.patch",
         CoreSettingsPatch {
             theme: params.theme,
@@ -305,25 +329,29 @@ pub fn patch_settings(
             playback_defaults,
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub fn subscribe_ui_events(
+pub async fn subscribe_ui_events(
     state: State<'_, AppState>,
     channel: Channel<UiEvent>,
 ) -> Result<(), String> {
-    state
-        .supervisor()
-        .map_err(|error| error.to_string())?
-        .subscribe(channel)
-        .map_err(|error| error.to_string())
+    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        supervisor
+            .subscribe(channel)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Core event worker failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .supervisor()
-        .map_err(|error| error.to_string())?
-        .shutdown();
+pub async fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
+    let supervisor: Arc<CoreSupervisor> = state.supervisor()?;
+    tauri::async_runtime::spawn_blocking(move || supervisor.shutdown())
+        .await
+        .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
     Ok(())
 }
