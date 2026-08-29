@@ -22,6 +22,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const [activeIndex, setActiveIndex] = useState(0);
+  const pendingKeyboardIndex = useRef<number | null>(null);
   const virtualizer = useVirtualizer({
     count: total,
     getScrollElement: () => parentRef.current,
@@ -32,10 +33,15 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const renderedItems =
     virtualItems.length > 0
       ? virtualItems
-      : Array.from({ length: Math.min(total, 20) }, (_, index) => ({
-          index,
-          start: index * 44,
-        }));
+      : [
+          ...Array.from({ length: Math.min(total, 20) }, (_, index) => ({
+            index,
+            start: index * 44,
+          })),
+          ...(activeIndex >= 20 && activeIndex < total
+            ? [{ index: activeIndex, start: activeIndex * 44 }]
+            : []),
+        ];
   const first = renderedItems[0]?.index ?? 0;
   const last = renderedItems.at(-1)?.index ?? -1;
 
@@ -47,13 +53,30 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
     setActiveIndex((current) => (total === 0 ? 0 : Math.min(current, total - 1)));
   }, [total]);
 
+  useEffect(() => {
+    if (pendingKeyboardIndex.current !== activeIndex) return;
+    const row = rows[activeIndex];
+    if (!row) return;
+    pendingKeyboardIndex.current = null;
+    void selectSong(row.song_id);
+  }, [activeIndex, rows, selectSong]);
+
   const activeRow = rows[activeIndex];
   const moveActive = (nextIndex: number) => {
     const next = Math.max(0, Math.min(total - 1, nextIndex));
     setActiveIndex(next);
     virtualizer.scrollToIndex(next, { align: 'auto' });
     const row = rows[next];
-    if (row) void selectSong(row.song_id);
+    if (row) {
+      pendingKeyboardIndex.current = null;
+      void selectSong(row.song_id);
+    } else {
+      // Keep the active index while the corresponding page is fetched. The
+      // effect above commits selection only after the row arrives, so End and
+      // Home retain their keyboard semantics across unloaded pages.
+      pendingKeyboardIndex.current = next;
+      void setViewport(next, next);
+    }
   };
 
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

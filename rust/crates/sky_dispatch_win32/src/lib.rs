@@ -18,6 +18,15 @@ pub fn win32_available() -> bool {
     cfg!(windows)
 }
 
+/// Canonical emergency release for the desktop parent-loss boundary.
+///
+/// This is intentionally not a playback control path: it releases only the
+/// allowlisted fifteen instrument scan codes and contains no scheduling.
+pub fn emergency_release_canonical() -> input::ReleaseAllOutcome {
+    let mut state = input::TrackedKeyState::new();
+    state.release_all_full_instrument(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

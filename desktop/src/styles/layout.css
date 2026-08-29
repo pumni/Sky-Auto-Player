@@ -294,6 +294,61 @@ body {
   color: var(--text-secondary);
   font-size: 12px;
 }
+.dock-song {
+  display: grid;
+  min-width: 150px;
+  max-width: 230px;
+  gap: 1px;
+}
+.dock-song strong,
+.dock-song span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-controls,
+.dock-settings,
+.risk-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dock-settings {
+  margin-left: auto;
+}
+.dock-settings label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.dock-settings select {
+  min-height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.dock-checkbox {
+  white-space: nowrap;
+}
+.dock-progress {
+  color: var(--text-secondary);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+}
+.risk-confirmation {
+  flex-wrap: wrap;
+  margin-left: auto;
+  color: var(--warning);
+}
+.dock-error {
+  overflow: hidden;
+  color: var(--danger);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .status-led {
   width: 8px;
   height: 8px;

@@ -143,7 +143,7 @@ GROUPS: dict[str, tuple[Check, ...]] = {
                 "--no-default-features",
                 "--features",
                 "tauri-test",
-                "generated_tauri_handler_decodes_params_envelope",
+                "generated_tauri_handler",
                 "--locked",
             ),
         ),

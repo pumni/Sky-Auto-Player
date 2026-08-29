@@ -2,5 +2,9 @@
 import type { CatalogChangedPayload } from "./CatalogChangedPayload";
 import type { CoreFatalPayload } from "./CoreFatalPayload";
 import type { CoreReadyPayload } from "./CoreReadyPayload";
+import type { PlaybackFailedPayload } from "./PlaybackFailedPayload";
+import type { PlaybackFinishedPayload } from "./PlaybackFinishedPayload";
+import type { PlaybackSnapshotPayload } from "./PlaybackSnapshotPayload";
+import type { PlaybackStateChangedPayload } from "./PlaybackStateChangedPayload";
 
-export type UiEvent = { "name": "core.ready", v: number, payload: CoreReadyPayload, } | { "name": "core.fatal", v: number, payload: CoreFatalPayload, } | { "name": "catalog.changed", v: number, payload: CatalogChangedPayload, };
+export type UiEvent = { "name": "core.ready", v: number, payload: CoreReadyPayload, } | { "name": "core.fatal", v: number, payload: CoreFatalPayload, } | { "name": "catalog.changed", v: number, payload: CatalogChangedPayload, } | { "name": "playback.state_changed", v: number, payload: PlaybackStateChangedPayload, } | { "name": "playback.snapshot", v: number, payload: PlaybackSnapshotPayload, } | { "name": "playback.finished", v: number, payload: PlaybackFinishedPayload, } | { "name": "playback.failed", v: number, payload: PlaybackFailedPayload, };

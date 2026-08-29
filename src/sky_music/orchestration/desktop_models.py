@@ -9,6 +9,10 @@ RiskLevel = Literal["low", "medium", "high", "unknown"]
 MetadataState = Literal["pending", "ready", "error"]
 Admission = Literal["ready", "confirmation_required", "blocked"]
 PlaybackState = Literal[
+    "idle",
+    "ready",
+    "awaiting_confirmation",
+    "starting",
     "preparing",
     "countdown",
     "playing",
@@ -16,6 +20,8 @@ PlaybackState = Literal[
     "focus_lost",
     "stopping",
     "finished",
+    "cancelled",
+    "failed",
     "error",
 ]
 FocusState = Literal["focused", "unfocused", "waiting"]
@@ -111,12 +117,38 @@ class RiskDecisionDto:
 
 @dataclass(frozen=True, slots=True)
 class PreparedPlaybackDto:
-    prepared_id: str
+    prepared_id: str | None
     song: SongDetailDto
     config: PlaybackConfigDto
     admission: Admission
     risk: RiskSummaryDto
     decisions: tuple[RiskDecisionDto, ...]
+    plan_fingerprint: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackDecisionAcceptanceDto:
+    decision: str
+    accepted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackSessionDto:
+    session_id: str
+    prepared_id: str
+    song_id: str
+    state: PlaybackState
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackFinishedDto:
+    session_id: str
+    song_id: str
+    outcome: str
+    total_us: int
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +194,11 @@ __all__ = [
     "MetadataState",
     "NativeBuildDto",
     "PlaybackConfigDto",
+    "PlaybackDecisionAcceptanceDto",
+    "PlaybackFinishedDto",
     "PlaybackOptionSetsDto",
     "PlaybackRecommendationDto",
+    "PlaybackSessionDto",
     "PlaybackSnapshotDto",
     "PlaybackState",
     "PreparedPlaybackDto",

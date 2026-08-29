@@ -5,6 +5,7 @@ import { LibraryPanel } from '../components/library/LibraryPanel';
 import { SettingsPanel } from '../components/settings/SettingsPanel';
 import { SongInspector } from '../components/inspector/SongInspector';
 import { Toolbar } from '../components/shell/Toolbar';
+import { PlayerDock } from '../components/player/PlayerDock';
 import { createDesktopStore } from '../state/store';
 
 interface AppProps {
@@ -51,14 +52,7 @@ export function App({ bridge }: AppProps) {
             <LibraryPanel useStore={useStore} />
             <SongInspector useStore={useStore} />
           </main>
-          <footer className="player-dock" aria-label="Desktop slice status">
-            <span className="status-led" aria-hidden="true" />
-            <span>Core connected</span>
-            <span className="dock-divider" />
-            <span className="muted">
-              Physical playback is intentionally unavailable in this desktop slice.
-            </span>
-          </footer>
+          <PlayerDock useStore={useStore} />
           <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
         </div>
       )}

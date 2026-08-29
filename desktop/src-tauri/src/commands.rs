@@ -54,6 +54,47 @@ pub struct SettingsPatch {
     pub playback_defaults: Option<PlaybackPatch>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackPrepareRequest {
+    pub song_id: String,
+    pub generation: u64,
+    pub config: PlaybackConfigDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PlaybackConfigDto {
+    pub hold_frames: f64,
+    pub tempo_scale: f64,
+    pub fps: u16,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackDecisionAcceptanceDto {
+    pub decision: String,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackStartRequest {
+    pub prepared_id: String,
+    pub decisions: Vec<PlaybackDecisionAcceptanceDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackSessionCommandRequest {
+    pub session_id: String,
+}
+
 #[derive(Debug, Serialize)]
 struct CoreDetailParams {
     song_id: String,
@@ -89,6 +130,24 @@ struct CoreSettingsPatch {
     verbose_hud: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     playback_defaults: Option<CorePlaybackPatch>,
+}
+
+#[derive(Debug, Serialize)]
+struct CorePlaybackPrepareParams {
+    song_id: String,
+    generation: u64,
+    config: PlaybackConfigDto,
+}
+
+#[derive(Debug, Serialize)]
+struct CorePlaybackStartParams {
+    prepared_id: String,
+    decisions: Vec<PlaybackDecisionAcceptanceDto>,
+}
+
+#[derive(Debug, Serialize)]
+struct CorePlaybackSessionParams {
+    session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -193,6 +252,36 @@ pub struct SongDetailDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct RiskDecisionDto {
+    pub decision: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PreparedPlaybackDto {
+    pub prepared_id: Option<String>,
+    pub song: SongDetailDto,
+    pub config: PlaybackConfigDto,
+    pub admission: String,
+    pub risk: RiskSummaryDto,
+    pub decisions: Vec<RiskDecisionDto>,
+    pub plan_fingerprint: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PlaybackSessionDto {
+    pub session_id: String,
+    pub prepared_id: String,
+    pub song_id: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SettingsDto {
     pub theme: String,
     pub ui_background_mode: String,
@@ -260,7 +349,9 @@ where
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Tauri may run multiple async commands concurrently. Keep the
-        // persistence boundary FIFO even if callers bypass the frontend queue.
+        // persistence boundary serialized/exclusive even if callers bypass the
+        // frontend queue. The frontend Promise tail owns user-intent order;
+        // this guard only prevents overlapping persistence operations.
         let _write_guard = app_state.lock_settings_writes();
         let supervisor = app_state.ensure_core_blocking()?;
         request_with_supervisor(&supervisor, "settings.patch", params)
@@ -346,6 +437,86 @@ pub async fn patch_settings(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub async fn prepare_playback(
+    state: State<'_, AppState>,
+    params: PlaybackPrepareRequest,
+) -> Result<PreparedPlaybackDto, String> {
+    blocking_request(
+        state,
+        "playback.prepare",
+        CorePlaybackPrepareParams {
+            song_id: params.song_id,
+            generation: params.generation,
+            config: params.config,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn start_playback(
+    state: State<'_, AppState>,
+    params: PlaybackStartRequest,
+) -> Result<PlaybackSessionDto, String> {
+    blocking_request(
+        state,
+        "playback.start",
+        CorePlaybackStartParams {
+            prepared_id: params.prepared_id,
+            decisions: params.decisions,
+        },
+    )
+    .await
+}
+
+async fn playback_session_command(
+    state: State<'_, AppState>,
+    method: &'static str,
+    params: PlaybackSessionCommandRequest,
+) -> Result<serde_json::Value, String> {
+    blocking_request(
+        state,
+        method,
+        CorePlaybackSessionParams {
+            session_id: params.session_id,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stop_playback(
+    state: State<'_, AppState>,
+    params: PlaybackSessionCommandRequest,
+) -> Result<serde_json::Value, String> {
+    playback_session_command(state, "playback.stop", params).await
+}
+
+#[tauri::command]
+pub async fn pause_playback(
+    state: State<'_, AppState>,
+    params: PlaybackSessionCommandRequest,
+) -> Result<serde_json::Value, String> {
+    playback_session_command(state, "playback.pause", params).await
+}
+
+#[tauri::command]
+pub async fn resume_playback(
+    state: State<'_, AppState>,
+    params: PlaybackSessionCommandRequest,
+) -> Result<serde_json::Value, String> {
+    playback_session_command(state, "playback.resume", params).await
+}
+
+#[tauri::command]
+pub async fn skip_playback(
+    state: State<'_, AppState>,
+    params: PlaybackSessionCommandRequest,
+) -> Result<serde_json::Value, String> {
+    playback_session_command(state, "playback.skip", params).await
 }
 
 #[tauri::command]

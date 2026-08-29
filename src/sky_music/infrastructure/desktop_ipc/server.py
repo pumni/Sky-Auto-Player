@@ -7,6 +7,7 @@ import sys
 import threading
 import traceback
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import asdict
 from queue import Empty, Queue
 from typing import Any
@@ -41,6 +42,10 @@ from sky_music.orchestration.desktop_models import (
     SongDetailDto,
     UpdatePreferencesDto,
 )
+from sky_music.orchestration.desktop_playback import (
+    DesktopPlaybackError,
+    DesktopPlaybackService,
+)
 from sky_music.orchestration.native_admission import RustBuildInfo
 from sky_music.orchestration.settings_service import (
     HOLD_FRAME_OPTIONS,
@@ -51,6 +56,7 @@ from sky_music.orchestration.song_metadata_service import get_song_ui_metadata
 
 MAX_OFFSET = 1_000_000_000
 MAX_VIEWPORT_SPAN = 2_000
+MAX_BUFFERED_EVENTS = 128
 PATCH_FIELDS = frozenset({"theme", "telemetry_enabled", "verbose_hud", "playback_defaults"})
 PLAYBACK_PATCH_FIELDS = frozenset({"hold_frames", "tempo_scale", "fps"})
 SUPPORTED_METHODS = frozenset(
@@ -63,6 +69,12 @@ SUPPORTED_METHODS = frozenset(
         "catalog.set_viewport",
         "settings.get",
         "settings.patch",
+        "playback.prepare",
+        "playback.start",
+        "playback.stop",
+        "playback.pause",
+        "playback.resume",
+        "playback.skip",
     }
 )
 
@@ -190,8 +202,14 @@ class DesktopCoreServer:
         self._catalog_initialized = catalog_service.generation > 0
         self._shutdown_requested = False
         self._events: list[dict[str, object]] = []
+        self._events_lock = threading.Lock()
         self._viewport: dict[str, object] | None = None
         self._stop_event = threading.Event()
+        self.playback = DesktopPlaybackService(
+            settings_service=settings_service,
+            catalog_service=catalog_service,
+            publish_event=self._publish_event,
+        )
 
     def ready_event(self) -> dict[str, object]:
         return event(
@@ -204,9 +222,37 @@ class DesktopCoreServer:
         )
 
     def drain_events(self) -> tuple[dict[str, object], ...]:
-        events = tuple(self._events)
-        self._events.clear()
+        with self._events_lock:
+            events = tuple(self._events)
+            self._events.clear()
         return events
+
+    def _publish_event(self, name: str, payload: Mapping[str, object]) -> None:
+        message = event(name, payload)
+        with self._events_lock:
+            if name == "playback.snapshot":
+                session_id = payload.get("session_id")
+                for index in range(len(self._events) - 1, -1, -1):
+                    previous = self._events[index]
+                    if (
+                        previous.get("name") == name
+                        and isinstance(previous.get("payload"), dict)
+                        and previous["payload"].get("session_id") == session_id  # type: ignore[index]
+                    ):
+                        self._events[index] = message
+                        return
+                if len(self._events) >= MAX_BUFFERED_EVENTS:
+                    # Snapshots are latest-wins telemetry. Never evict a
+                    # state-transition event just to retain another frame.
+                    return
+            elif len(self._events) >= MAX_BUFFERED_EVENTS:
+                snapshot_index = next(
+                    (index for index, item in enumerate(self._events) if item.get("name") == "playback.snapshot"),
+                    None,
+                )
+                if snapshot_index is not None:
+                    self._events.pop(snapshot_index)
+            self._events.append(message)
 
     def handle_request(self, request: Mapping[str, object]) -> dict[str, object]:
         """Dispatch a validated request and return exactly one response."""
@@ -240,8 +286,14 @@ class DesktopCoreServer:
             return self._bootstrap(_object_params(params, frozenset()))
         if method == "app.shutdown":
             _object_params(params, frozenset())
+            playback_clean = self.playback.shutdown()
             self._shutdown_requested = True
             self._stop_event.set()
+            if not playback_clean:
+                raise CoreRequestError(
+                    "shutdown_timeout",
+                    "playback cleanup did not complete within the shutdown budget",
+                )
             return {"shutdown": True}
         if method == "catalog.search":
             return self._search(_object_params(params, frozenset({"query", "offset", "limit", "generation"})))
@@ -261,6 +313,12 @@ class DesktopCoreServer:
             return _settings_dict(self.settings_service)
         if method == "settings.patch":
             return self._patch_settings(params)
+        if method == "playback.prepare":
+            return self._prepare_playback(params)
+        if method == "playback.start":
+            return self._start_playback(params)
+        if method in {"playback.stop", "playback.pause", "playback.resume", "playback.skip"}:
+            return self._playback_command(method, params)
         raise CoreRequestError("unknown_method", "unknown desktop Core method")
 
     def _ensure_catalog(self) -> None:
@@ -381,11 +439,10 @@ class DesktopCoreServer:
     def _reload(self, _params: Mapping[str, object]) -> dict[str, object]:
         snapshot = self.catalog_service.scan()
         self._catalog_initialized = True
-        self._events.append(
-            event(
-                "catalog.changed",
-                {"generation": snapshot.generation, "total": snapshot.total},
-            )
+        self.playback.invalidate_catalog(snapshot.generation)
+        self._publish_event(
+            "catalog.changed",
+            {"generation": snapshot.generation, "total": snapshot.total},
         )
         return {"generation": snapshot.generation, "total": snapshot.total}
 
@@ -471,9 +528,58 @@ class DesktopCoreServer:
             translated.update({field_map[key]: value for key, value in playback.items()})
         try:
             self.settings_service.patch(translated)
+            self.playback.invalidate_settings()
             return _settings_dict(self.settings_service)
         except (TypeError, ValueError) as exc:
             raise CoreRequestError("invalid_params", str(exc)) from exc
+
+    def _prepare_playback(self, params: Mapping[str, object]) -> dict[str, object]:
+        self._ensure_catalog()
+        if set(params) != {"song_id", "generation", "config"}:
+            raise CoreRequestError(
+                "invalid_params",
+                "playback.prepare requires song_id, generation, and config",
+            )
+        song_id = params["song_id"]
+        generation = params["generation"]
+        config = params["config"]
+        if type(song_id) is not str or type(generation) is not int or not isinstance(config, dict):
+            raise CoreRequestError("invalid_params", "invalid playback.prepare parameters")
+        try:
+            return self.playback.prepare(
+                song_id=song_id,
+                generation=generation,
+                config=config,
+                resolve_path=self.catalog_service.path_for_song_id,
+            )
+        except DesktopPlaybackError as exc:
+            raise CoreRequestError(exc.code, exc.message) from exc
+
+    def _start_playback(self, params: Mapping[str, object]) -> dict[str, object]:
+        if set(params) != {"prepared_id", "decisions"}:
+            raise CoreRequestError("invalid_params", "playback.start requires prepared_id and decisions")
+        prepared_id = params["prepared_id"]
+        decisions = params["decisions"]
+        if type(prepared_id) is not str or not isinstance(decisions, list):
+            raise CoreRequestError("invalid_params", "invalid playback.start parameters")
+        try:
+            return self.playback.start(prepared_id=prepared_id, decisions=decisions)
+        except DesktopPlaybackError as exc:
+            raise CoreRequestError(exc.code, exc.message) from exc
+
+    def _playback_command(self, method: str, params: Mapping[str, object]) -> dict[str, object]:
+        if set(params) != {"session_id"}:
+            raise CoreRequestError("invalid_params", f"{method} requires session_id")
+        session_id = params["session_id"]
+        if type(session_id) is not str:
+            raise CoreRequestError("invalid_params", "session_id must be text")
+        try:
+            return self.playback.command(
+                session_id=session_id,
+                command=method.removeprefix("playback."),
+            )
+        except DesktopPlaybackError as exc:
+            raise CoreRequestError(exc.code, exc.message) from exc
 
     def serve(self, stdin: Any, stdout: Any, *, stderr: Any = None) -> int:
         """Run until shutdown, EOF, parent loss, or a fatal protocol violation."""
@@ -505,6 +611,7 @@ class DesktopCoreServer:
                 return
             while not parent_watch_stop.wait(0.25):
                 if not parent_process_alive(self.parent_pid):
+                    self.playback.shutdown()
                     self._stop_event.set()
                     queue.put(None)
                     return
@@ -515,8 +622,10 @@ class DesktopCoreServer:
         exit_code = 0
         try:
             while not self._stop_event.is_set():
+                for notification in self.drain_events():
+                    write_frame(stdout, notification)
                 try:
-                    item = queue.get(timeout=0.25)
+                    item = queue.get(timeout=0.05)
                 except Empty:
                     continue
                 if item is None:
@@ -560,6 +669,13 @@ class DesktopCoreServer:
         finally:
             parent_watch_stop.set()
             self._stop_event.set()
+            # Shutdown may be requested while the inherited stdin pipe is
+            # still open. Close our end so the bounded reader can leave its
+            # blocking read before interpreter finalization; the parent owns
+            # the other end and remains responsible for child termination.
+            with suppress(AttributeError, OSError, ValueError):
+                stdin.close()
+            reader.join(timeout=0.5)
         return exit_code
 
 

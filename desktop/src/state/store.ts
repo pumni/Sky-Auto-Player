@@ -9,10 +9,16 @@ import type {
   SongDetail,
   SongRow,
   UiEvent,
+  PlaybackConfig,
+  PlaybackDecisionAcceptance,
+  PlaybackPrepare,
+  PreparedPlayback,
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
+type PlaybackUiState =
+  'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
 
 export interface DesktopStore {
   bootstrapState: LoadState;
@@ -33,6 +39,13 @@ export interface DesktopStore {
   settings: Settings | null;
   settingsState: LoadState;
   settingsOpen: boolean;
+  playback: {
+    state: PlaybackUiState;
+    sessionId: string | null;
+    prepared: PreparedPlayback | null;
+    snapshot: Extract<UiEvent, { name: 'playback.snapshot' }>['payload'] | null;
+    error: string | null;
+  };
   initialize: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   search: (query?: string) => Promise<void>;
@@ -40,6 +53,12 @@ export interface DesktopStore {
   setViewport: (first: number, last: number) => Promise<void>;
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<void>;
+  prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;
+  startPreparedPlayback: (decision?: string) => Promise<void>;
+  stopPlayback: () => Promise<void>;
+  pausePlayback: () => Promise<void>;
+  resumePlayback: () => Promise<void>;
+  skipPlayback: () => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
 }
 
@@ -149,6 +168,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       settings: null,
       settingsState: 'idle',
       settingsOpen: false,
+      playback: { state: 'idle', sessionId: null, prepared: null, snapshot: null, error: null },
 
       async initialize() {
         if (get().bootstrapState === 'loading' || get().bootstrapState === 'ready') return;
@@ -183,7 +203,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
         );
         if (event.name === 'core.fatal') {
           detailRequestToken += 1;
-          set({ fatal: eventState.fatal, bootstrapState: 'fatal' });
+          set({
+            fatal: eventState.fatal,
+            bootstrapState: 'fatal',
+            playback: { ...get().playback, state: 'failed', error: eventState.fatal },
+          });
           return;
         }
         if (event.name === 'catalog.changed') {
@@ -199,9 +223,59 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: null,
               loading: true,
             },
+            playback: { ...get().playback, prepared: null },
           });
           set({ detail: { state: 'idle', value: null, error: null } });
           void get().search();
+        }
+        if (event.name === 'playback.state_changed') {
+          const current = get().playback;
+          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          set({
+            playback: {
+              ...current,
+              sessionId: event.payload.session_id,
+              state:
+                event.payload.state === 'failed'
+                  ? 'failed'
+                  : (event.payload.state as PlaybackUiState),
+              error: event.payload.message,
+            },
+          });
+        } else if (event.name === 'playback.snapshot') {
+          const current = get().playback;
+          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          set({
+            playback: {
+              ...current,
+              sessionId: event.payload.session_id,
+              state: event.payload.state as PlaybackUiState,
+              snapshot: event.payload,
+              error: event.payload.message,
+            },
+          });
+        } else if (event.name === 'playback.finished') {
+          const current = get().playback;
+          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          set({
+            playback: {
+              ...current,
+              sessionId: event.payload.session_id,
+              state: 'finished',
+              error: null,
+            },
+          });
+        } else if (event.name === 'playback.failed') {
+          const current = get().playback;
+          if (current.sessionId && current.sessionId !== event.payload.session_id) return;
+          set({
+            playback: {
+              ...current,
+              sessionId: event.payload.session_id,
+              state: 'failed',
+              error: `${event.payload.code}: ${event.payload.message}`,
+            },
+          });
         }
       },
 
@@ -302,7 +376,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
           set({ settingsState: 'loading' });
           try {
             const settings = await bridge.patchSettings(patch);
-            set({ settings, settingsState: 'ready' });
+            set({
+              settings,
+              settingsState: 'ready',
+              playback: { ...get().playback, prepared: null },
+            });
             document.documentElement.dataset.theme = settings.theme;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -316,6 +394,133 @@ export function createDesktopStore(bridge: DesktopBridge) {
           () => undefined,
         );
         return mutation;
+      },
+
+      async prepareSelectedPlayback(overrides) {
+        const selectedSongId = get().library.selectedSongId;
+        const settings = get().settings;
+        if (!selectedSongId || !settings) {
+          set({
+            playback: { ...get().playback, error: 'Select a song before preparing playback.' },
+          });
+          return;
+        }
+        const config: PlaybackConfig = {
+          hold_frames: overrides?.hold_frames ?? settings.playback_defaults.hold_frames,
+          tempo_scale: overrides?.tempo_scale ?? settings.playback_defaults.tempo_scale,
+          fps: overrides?.fps ?? settings.playback_defaults.fps,
+          dry_run: overrides?.dry_run ?? false,
+        };
+        const request: PlaybackPrepare = {
+          songId: selectedSongId,
+          generation: get().library.generation,
+          config,
+        };
+        try {
+          const prepared = await bridge.preparePlayback(request);
+          set({ playback: { ...get().playback, prepared, error: prepared.error_message } });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              prepared: null,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async startPreparedPlayback(decision) {
+        const prepared = get().playback.prepared;
+        if (!prepared?.prepared_id) {
+          set({ playback: { ...get().playback, error: 'Prepare playback before starting.' } });
+          return;
+        }
+        const decisions: PlaybackDecisionAcceptance[] = decision
+          ? [{ decision, accepted: true }]
+          : [];
+        try {
+          const session = await bridge.startPlayback({
+            preparedId: prepared.prepared_id,
+            decisions,
+          });
+          set({
+            playback: {
+              ...get().playback,
+              prepared: null,
+              sessionId: session.session_id,
+              state: 'starting',
+              error: null,
+            },
+          });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async stopPlayback() {
+        const sessionId = get().playback.sessionId;
+        if (!sessionId) return;
+        try {
+          await bridge.stopPlayback({ sessionId });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async pausePlayback() {
+        const sessionId = get().playback.sessionId;
+        if (!sessionId) return;
+        try {
+          await bridge.pausePlayback({ sessionId });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async resumePlayback() {
+        const sessionId = get().playback.sessionId;
+        if (!sessionId) return;
+        try {
+          await bridge.resumePlayback({ sessionId });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async skipPlayback() {
+        const sessionId = get().playback.sessionId;
+        if (!sessionId) return;
+        try {
+          await bridge.skipPlayback({ sessionId });
+        } catch (error) {
+          set({
+            playback: {
+              ...get().playback,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
       },
 
       setSettingsOpen(open) {

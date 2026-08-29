@@ -47,6 +47,28 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Player Dock completes a dry-run lifecycle accessibly', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+
+  await page.getByRole('button', { name: 'Play' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Playback confirmation' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Proceed with current settings' }).click();
+
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await expect(page.getByRole('button', { name: 'Play' })).toBeVisible();
+});
+
 test('Settings modal has no serious accessibility violations and closes accessibly', async ({
   page,
 }) => {
