@@ -22,6 +22,8 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
   const setOpen = useStore((store: StoreState) => store.setSettingsOpen);
   const patchSettings = useStore((store: StoreState) => store.patchSettings);
   const setCalibrationOpen = useStore((store: StoreState) => store.setCalibrationOpen);
+  const update = useStore((store: StoreState) => store.update);
+  const checkForUpdate = useStore((store: StoreState) => store.checkForUpdate);
   const dialogRef = useRef<HTMLElement>(null);
   const wasOpen = useRef(false);
   useEffect(() => {
@@ -146,6 +148,52 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
               />{' '}
               Verbose fallback HUD
             </label>
+          </div>
+          <div className="settings-section">
+            <h3>Updates</h3>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={settings.update_preferences.auto_check}
+                onChange={(event) =>
+                  patch({ updatePreferences: { autoCheck: event.target.checked } })
+                }
+              />{' '}
+              Check for updates automatically
+            </label>
+            <label>
+              Channel
+              <select
+                value={settings.update_preferences.channel}
+                onChange={(event) =>
+                  patch({
+                    updatePreferences: { channel: event.target.value as 'stable' | 'beta' },
+                  })
+                }
+              >
+                <option value="stable">Stable</option>
+                <option value="beta">Beta</option>
+              </select>
+            </label>
+            <label>
+              Skip version
+              <input
+                value={settings.update_preferences.skip_version}
+                placeholder="Optional version"
+                onChange={(event) =>
+                  patch({ updatePreferences: { skipVersion: event.target.value } })
+                }
+              />
+            </label>
+            <button className="button" type="button" onClick={() => void checkForUpdate()}>
+              {update.state === 'checking' ? 'Checking…' : 'Check for updates'}
+            </button>
+          </div>
+          <div className="settings-section">
+            <h3>Advanced</h3>
+            <p className="settings-note">
+              Native timing, input and security policy remain owned by the local Core.
+            </p>
           </div>
           <div className="settings-section">
             <h3>Native timing</h3>

@@ -24,6 +24,10 @@ import type {
   Unsubscribe,
   ViewportRequest,
   ViewportResult,
+  UpdateCheck,
+  UpdateHandoff,
+  UpdatePatch,
+  UpdatePreferences,
 } from './DesktopBridge';
 
 type CoreChannelEvent = UiEvent;
@@ -50,6 +54,12 @@ export function createTauriBridge(): DesktopBridge {
       call<ViewportResult>('set_library_viewport', request),
     getSettings: () => call<Settings>('get_settings'),
     patchSettings: (patch: SettingsPatch) => call<Settings>('patch_settings', patch),
+    checkForUpdate: () => call<UpdateCheck>('check_for_update'),
+    getUpdatePreferences: () => call<UpdatePreferences>('get_update_preferences'),
+    patchUpdatePreferences: (patch: UpdatePatch) =>
+      call<UpdatePreferences>('patch_update_preferences', patch),
+    beginUpdateHandoff: (targetVersion: string) =>
+      call<UpdateHandoff>('begin_update_handoff', { targetVersion }),
     preparePlayback: (request: PlaybackPrepare) =>
       call<PreparedPlayback>('prepare_playback', request),
     startPlayback: (request: PlaybackStart) => call<PlaybackSession>('start_playback', request),

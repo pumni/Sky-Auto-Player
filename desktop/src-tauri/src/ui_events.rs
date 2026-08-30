@@ -43,6 +43,57 @@ pub struct CatalogChangedPayload {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    Stable,
+    Beta,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    Idle,
+    Checking,
+    Current,
+    Available,
+    Error,
+    HandoffInProgress,
+    HandoffReady,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateAvailablePayload {
+    pub current_version: String,
+    pub available_version: String,
+    pub channel: UpdateChannel,
+    pub release_notes: Option<String>,
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateResultPayload {
+    pub state: UpdateState,
+    pub current_version: String,
+    pub available_version: Option<String>,
+    pub channel: UpdateChannel,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateHandoffReadyPayload {
+    pub handoff_id: String,
+    pub target_version: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticsBackendStatus {
     Healthy,
     Degraded,
@@ -271,6 +322,21 @@ pub enum UiEvent {
         v: u64,
         payload: CalibrationFinishedPayload,
     },
+    #[serde(rename = "update.available")]
+    UpdateAvailable {
+        v: u64,
+        payload: UpdateAvailablePayload,
+    },
+    #[serde(rename = "update.result")]
+    UpdateResult {
+        v: u64,
+        payload: UpdateResultPayload,
+    },
+    #[serde(rename = "update.handoff_ready")]
+    UpdateHandoffReady {
+        v: u64,
+        payload: UpdateHandoffReadyPayload,
+    },
 }
 
 impl UiEvent {
@@ -401,6 +467,38 @@ impl UiEvent {
             return Err("calibration margin is outside bounds".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn validate_update_available(
+        payload: &UpdateAvailablePayload,
+    ) -> Result<(), String> {
+        validate_text("current_version", &payload.current_version)?;
+        validate_text("available_version", &payload.available_version)?;
+        if let Some(notes) = &payload.release_notes {
+            validate_text("release_notes", notes)?;
+        }
+        if let Some(published_at) = &payload.published_at {
+            validate_text("published_at", published_at)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_update_result(payload: &UpdateResultPayload) -> Result<(), String> {
+        validate_text("current_version", &payload.current_version)?;
+        if let Some(version) = &payload.available_version {
+            validate_text("available_version", version)?;
+        }
+        if let Some(error) = &payload.error {
+            validate_text("error", error)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_update_handoff(
+        payload: &UpdateHandoffReadyPayload,
+    ) -> Result<(), String> {
+        validate_operation_id(&payload.handoff_id)?;
+        validate_text("target_version", &payload.target_version)
     }
 }
 

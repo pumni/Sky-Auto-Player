@@ -34,6 +34,9 @@ PATCHABLE_SETTINGS: frozenset[str] = frozenset(
         "theme",
         "telemetry_enabled",
         "verbose_hud",
+        "update_auto_check",
+        "update_channel",
+        "update_skip_version",
     }
 )
 
@@ -169,6 +172,18 @@ def _validate_write_theme(value: object) -> str:
     if normalized not in THEME_IDS:
         raise ValueError("theme must be a known theme ID")
     return normalized
+
+
+def _validate_write_update_channel(value: object) -> str:
+    if not isinstance(value, str) or value.strip().casefold() not in {"stable", "beta"}:
+        raise ValueError("update_channel must be stable or beta")
+    return value.strip().casefold()
+
+
+def _validate_write_skip_version(value: object) -> str:
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 128 or "\x00" in value:
+        raise ValueError("update_skip_version must be bounded text")
+    return value.strip()
 
 
 def normalize_application_settings(cfg: AppConfig) -> ApplicationSettings:
@@ -316,6 +331,18 @@ class SettingsService:
             normalized["verbose_hud"] = _validate_write_bool(
                 values["verbose_hud"], "verbose_hud"
             )
+        if "update_auto_check" in values:
+            normalized["update_auto_check"] = _validate_write_bool(
+                values["update_auto_check"], "update_auto_check"
+            )
+        if "update_channel" in values:
+            normalized["update_channel"] = _validate_write_update_channel(
+                values["update_channel"]
+            )
+        if "update_skip_version" in values:
+            normalized["update_skip_version"] = _validate_write_skip_version(
+                values["update_skip_version"]
+            )
 
         if "default_hold_frames" in normalized:
             self._cfg.default_hold_frames = normalized["default_hold_frames"]  # type: ignore[assignment]
@@ -329,6 +356,12 @@ class SettingsService:
             self._cfg.telemetry_enabled_by_default = normalized["telemetry_enabled"]  # type: ignore[assignment]
         if "verbose_hud" in normalized:
             self._cfg.verbose_hud = normalized["verbose_hud"]  # type: ignore[assignment]
+        if "update_auto_check" in normalized:
+            self._cfg.update.auto_check = normalized["update_auto_check"]  # type: ignore[assignment]
+        if "update_channel" in normalized:
+            self._cfg.update.channel = normalized["update_channel"]  # type: ignore[assignment]
+        if "update_skip_version" in normalized:
+            self._cfg.update.skip_version = normalized["update_skip_version"]  # type: ignore[assignment]
         if normalized:
             save_config(self._cfg)
         return self.snapshot()

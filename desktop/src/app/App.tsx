@@ -8,6 +8,7 @@ import { Toolbar } from '../components/shell/Toolbar';
 import { PlayerDock } from '../components/player/PlayerDock';
 import { DiagnosticsDrawer } from '../components/diagnostics/DiagnosticsDrawer';
 import { CalibrationDialog } from '../components/calibration/CalibrationDialog';
+import { UpdateDialog } from '../components/updates/UpdateDialog';
 import { createDesktopStore } from '../state/store';
 
 interface AppProps {
@@ -58,6 +59,7 @@ export function App({ bridge }: AppProps) {
           <DiagnosticsDrawer useStore={useStore} />
           <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
           <CalibrationDialog useStore={useStore} />
+          <UpdateDialog useStore={useStore} />
         </div>
       )}
     </BootstrapGate>

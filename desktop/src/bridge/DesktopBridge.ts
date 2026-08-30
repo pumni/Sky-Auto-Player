@@ -39,6 +39,13 @@ import type {
   SongDetailDto,
   UiEvent as GeneratedUiEvent,
   UpdatePreferencesDto,
+  UpdateChannel as GeneratedUpdateChannel,
+  UpdateState as GeneratedUpdateState,
+  UpdateCheckDto,
+  UpdateHandoffDto,
+  UpdateAvailablePayload,
+  UpdateResultPayload,
+  UpdateHandoffReadyPayload,
 } from './generated';
 
 export type ThemeId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
@@ -47,8 +54,17 @@ export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;
 export type PlaybackOptionSets = PlaybackOptionSetsDto;
 export type UpdatePreferences = Omit<UpdatePreferencesDto, 'channel'> & {
-  channel: 'stable' | 'beta';
+  channel: GeneratedUpdateChannel;
 };
+export type UpdateChannelId = GeneratedUpdateChannel;
+export type UpdateStateId = GeneratedUpdateState;
+export type UpdateCheck = UpdateCheckDto;
+export type UpdateHandoff = UpdateHandoffDto;
+export type UpdatePatch = Partial<{
+  autoCheck: boolean;
+  channel: GeneratedUpdateChannel;
+  skipVersion: string;
+}>;
 export type Bootstrap = Omit<BootstrapDto, 'theme' | 'update_preferences'> & {
   theme: ThemeId;
   update_preferences: UpdatePreferences;
@@ -77,11 +93,15 @@ export type PlaybackPatch = Partial<
   }
 >;
 export type SettingsPatch = Partial<
-  Omit<GeneratedSettingsPatch, 'theme' | 'telemetryEnabled' | 'verboseHud' | 'playbackDefaults'> & {
+  Omit<
+    GeneratedSettingsPatch,
+    'theme' | 'telemetryEnabled' | 'verboseHud' | 'playbackDefaults' | 'updatePreferences'
+  > & {
     theme: ThemeId;
     telemetryEnabled: boolean;
     verboseHud: boolean;
     playbackDefaults: PlaybackPatch;
+    updatePreferences: UpdatePatch;
   }
 >;
 export type GeneratedCoreEvent = GeneratedUiEvent;
@@ -92,6 +112,9 @@ export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
 };
 
 export type UiEvent = GeneratedUiEvent;
+export type UpdateAvailable = UpdateAvailablePayload;
+export type UpdateResult = UpdateResultPayload;
+export type UpdateHandoffReady = UpdateHandoffReadyPayload;
 export type PlaybackConfig = PlaybackConfigDto;
 export type PlaybackCommandAck = PlaybackCommandAckDto;
 export type PlaybackPrepare = PlaybackPrepareRequest;
@@ -125,6 +148,10 @@ export interface DesktopBridge {
   setLibraryViewport(request: ViewportRequest): Promise<ViewportResult>;
   getSettings(): Promise<Settings>;
   patchSettings(patch: SettingsPatch): Promise<Settings>;
+  checkForUpdate(): Promise<UpdateCheck>;
+  getUpdatePreferences(): Promise<UpdatePreferences>;
+  patchUpdatePreferences(patch: UpdatePatch): Promise<UpdatePreferences>;
+  beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff>;
   preparePlayback(request: PlaybackPrepare): Promise<PreparedPlayback>;
   startPlayback(request: PlaybackStart): Promise<PlaybackSession>;
   stopPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;

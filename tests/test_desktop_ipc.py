@@ -15,6 +15,8 @@ import pytest
 from sky_music.config import AppConfig
 from sky_music.infrastructure import desktop_ipc as desktop_ipc_package
 from sky_music.infrastructure.desktop_ipc import protocol
+from sky_music.infrastructure.desktop_ipc import server as desktop_server_module
+from sky_music.domain.update_checker import UpdateCheckResult, UpdateInfo
 from sky_music.infrastructure.desktop_ipc.server import DesktopCoreServer
 from sky_music.orchestration import desktop_playback as playback_module
 from sky_music.orchestration import settings_service as settings_module
@@ -385,6 +387,116 @@ def test_settings_patch_uses_service_and_is_atomic(
     assert invalid["error"]["code"] == "invalid_params"  # type: ignore[index]
     assert server.settings_service.snapshot() == before
     assert len(writes) == 1
+
+
+def test_update_preferences_are_typed_persistent_and_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writes: list[AppConfig] = []
+    monkeypatch.setattr(settings_module, "save_config", lambda cfg: writes.append(cfg))
+    server = _server(tmp_path)
+
+    response = _call(
+        server,
+        _request(
+            "update.preferences.patch",
+            {"auto_check": False, "channel": "beta", "skip_version": "3.6.0"},
+        ),
+    )
+
+    assert response["ok"] is True
+    assert response["result"] == {
+        "auto_check": False,
+        "channel": "beta",
+        "skip_version": "3.6.0",
+    }
+    assert len(writes) == 1
+    before = server.settings_service.snapshot()
+    invalid = _call(
+        server,
+        _request(
+            "update.preferences.patch",
+            {"auto_check": "false", "channel": "nightly"},
+        ),
+    )
+    assert invalid["ok"] is False
+    assert invalid["error"]["code"] == "invalid_params"  # type: ignore[index]
+    assert server.settings_service.snapshot() == before
+    assert len(writes) == 1
+
+
+def test_update_check_publishes_typed_available_and_result_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = UpdateInfo(
+        latest_version="3.6.0",
+        download_url="https://github.com/pumni/Sky-Auto-Player/releases/download/v3.6.0/Sky-Auto-Player-v3.6.0.zip",
+        release_notes="A bounded test release.",
+        html_url="https://github.com/pumni/Sky-Auto-Player/releases/tag/v3.6.0",
+        published_at="2026-08-30T00:00:00Z",
+        sha256_url="https://github.com/pumni/Sky-Auto-Player/releases/download/v3.6.0/Sky-Auto-Player-v3.6.0.zip.sha256",
+        manifest_url="https://github.com/pumni/Sky-Auto-Player/releases/download/v3.6.0/MANIFEST.json",
+    )
+    monkeypatch.setattr(
+        desktop_server_module,
+        "check_for_update",
+        lambda *_args, **_kwargs: UpdateCheckResult(info, "3.5.0"),
+    )
+    monkeypatch.setattr(desktop_server_module, "record_successful_check", lambda *_args: None)
+    server = _server(tmp_path)
+
+    response = _call(server, _request("update.check"))
+    assert response["ok"] is True
+    assert response["result"]["state"] == "available"  # type: ignore[index]
+    events = server.drain_events()
+    assert [item["name"] for item in events] == [
+        "update.available",
+        "update.result",
+    ]
+    assert events[0]["payload"]["channel"] == "stable"  # type: ignore[index]
+    assert events[1]["payload"]["available_version"] == "3.6.0"  # type: ignore[index]
+
+
+def test_update_handoff_requires_fresh_typed_check_and_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = UpdateInfo(
+        latest_version="3.6.0",
+        download_url="https://example.invalid/update.zip",
+        release_notes="test",
+        html_url="https://example.invalid/release",
+        published_at="2026-08-30T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        desktop_server_module,
+        "check_for_update",
+        lambda *_args, **_kwargs: UpdateCheckResult(info, "3.5.0"),
+    )
+    monkeypatch.setattr(desktop_server_module, "record_successful_check", lambda *_args: None)
+    monkeypatch.setattr(desktop_server_module, "active_update_for_install", lambda _root: None)
+    launch_calls: list[object] = []
+    monkeypatch.setattr(
+        desktop_server_module,
+        "launch_update",
+        lambda request: launch_calls.append(request) or object(),
+    )
+    server = DesktopCoreServer(
+        settings_service=SettingsService(AppConfig(songs_dir=str(tmp_path))),
+        catalog_service=CatalogService(tmp_path),
+        native_build_info=NATIVE_INFO,
+        app_version="3.5.0",
+        install_root=tmp_path,
+    )
+    _call(server, _request("update.check"))
+    stale = _call(server, _request("update.begin_handoff", {"target_version": "3.5.1"}))
+    assert stale["error"]["code"] == "stale_update"  # type: ignore[index]
+
+    first = _call(server, _request("update.begin_handoff", {"target_version": "3.6.0"}))
+    second = _call(server, _request("update.begin_handoff", {"target_version": "3.6.0"}))
+    assert first["ok"] is True
+    assert first["result"]["state"] == "handoff_ready"  # type: ignore[index]
+    assert second["result"] == first["result"]
+    assert len(launch_calls) == 1
 
 
 def test_diagnostics_control_is_disabled_by_default_and_bounded_to_ui_rate(

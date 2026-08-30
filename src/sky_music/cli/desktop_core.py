@@ -88,6 +88,14 @@ def run_desktop_core(
             import os
 
             os.chdir(install_root)
+            from sky_music.infrastructure.update_runtime import active_update_for_install
+
+            active_update = active_update_for_install(install_root)
+            if active_update is not None:
+                raise ValueError(
+                    "an update transaction is active for this installation; "
+                    "restart after the updater completes"
+                )
         (runtime_guard or assert_free_threaded_runtime)()
         cfg = load_config()
         native_info = (native_admission or require_rust_core)()
@@ -98,6 +106,7 @@ def run_desktop_core(
             catalog_service=catalog,
             native_build_info=native_info,
             parent_pid=parent_pid,
+            install_root=install_root,
         )
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 2

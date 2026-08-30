@@ -94,6 +94,33 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(settingsButton).toBeFocused();
 });
 
+test('all supported themes round-trip through the settings surface', async ({ page }) => {
+  await page.goto('/');
+  const settingsButton = page.getByRole('button', { name: 'Open settings' });
+  await settingsButton.click();
+  const theme = page.getByLabel('Theme');
+  for (const id of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
+    await theme.selectOption(id);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+  }
+  await page.keyboard.press('Escape');
+  await expect(settingsButton).toBeFocused();
+});
+
+test('update indicator and typed update dialog expose safe handoff states', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const indicator = page.getByRole('button', { name: /Open update 3\.6\.0-mock/ });
+  await expect(indicator).toBeVisible();
+  await indicator.click();
+  const dialog = page.getByRole('dialog', { name: 'Software update' });
+  await expect(dialog).toContainText('Version 3.6.0-mock is available');
+  await expectNoSeriousAccessibilityViolations(page);
+  await dialog.getByRole('button', { name: 'Update and restart' }).click();
+  await expect(dialog).toContainText('Restart handoff ready');
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');

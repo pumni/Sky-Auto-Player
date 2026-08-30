@@ -86,6 +86,31 @@ def response(request_id: int, result: Any = None) -> None:
 
 def command_result(item: dict[str, Any]) -> Any:
     method = item.get("method")
+    if method == "update.check":
+        return {
+            "state": "available",
+            "current_version": "3.5.0",
+            "available_version": "3.6.0",
+            "channel": "stable",
+            "release_notes": "deterministic fake release",
+            "published_at": "2026-08-30T00:00:00Z",
+            "error": None,
+        }
+    if method == "update.preferences.get":
+        return {"auto_check": True, "channel": "stable", "skip_version": ""}
+    if method == "update.preferences.patch":
+        params = item.get("params", {})
+        return {
+            "auto_check": params.get("auto_check", True),
+            "channel": params.get("channel", "stable"),
+            "skip_version": params.get("skip_version", ""),
+        }
+    if method == "update.begin_handoff":
+        return {
+            "handoff_id": "e" * 32,
+            "target_version": item.get("params", {}).get("target_version", "3.6.0"),
+            "state": "handoff_ready",
+        }
     if method == "diagnostics.set_enabled":
         return {"enabled": item.get("params", {}).get("enabled", False)}
     if method == "calibration.start":
