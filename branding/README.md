@@ -6,9 +6,10 @@ the lower-left gold ring is intentionally larger than the smaller blue-gray ring
 Connections are two thin solid lines and three explicit, round-capped dash segments. Each connection
 has an optical inset so it does not weld into a node at small sizes.
 
-`sky-auto-player-app-icon-small.svg` is the optical master for `24px` and `16px`. It uses slightly
-stronger strokes and two clearly separated dash segments so the distinction between solid and dashed
-edges survives reduction. Use the large master for `256`, `128`, `64`, `48`, and `32px`.
+`sky-auto-player-app-icon-small.svg` is the optical master for `24px`; it uses slightly stronger
+strokes and two clearly separated dash segments. `sky-auto-player-app-icon-16.svg` is a dedicated
+16px optical master with protected ring holes and the same two-pulse rhythm. Use the large master for
+`256`, `128`, `64`, `48`, and `32px`.
 
 ## Source variants
 
@@ -23,22 +24,24 @@ glow, texture, or generated design-tool metadata.
 
 ## Export commands
 
-The Tauri CLI can rasterize one source at a time, so the Windows ICO is assembled from two raster
+The Tauri CLI can rasterize one source at a time, so the Windows ICO is assembled from three raster
 sets. Run from the repository root after installing the pinned desktop dependencies:
 
 ```powershell
 cd desktop
 bun install --frozen-lockfile
 bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <large-output> --png 32,48,64,128,256
-bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output <small-output> --png 16,24
+bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output <small-output> --png 24
+bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <tiny-output> --png 16
 cd ..
-uv run python branding/scripts/build_ico.py --large-dir <large-output> --small-dir <small-output> --output branding/exports/windows/sky-auto-player.ico
+uv run python branding/scripts/build_ico.py --large-dir <large-output> --small-dir <small-output> --tiny-dir <tiny-output> --output branding/exports/windows/sky-auto-player.ico
 ```
 
 `branding/scripts/build_ico.py` is a build-time standard-library assembler. It preserves the PNG
-payloads and writes the six ICO layers `16, 24, 32, 48, 64, 256`; the first two come from the small
-optical master and the remaining layers come from the large master. Copy the resulting ICO byte-for-
-byte to `site/public/favicon.ico` and `desktop/src-tauri/icons/icon.ico`.
+payloads and writes the seven ICO layers `16, 24, 32, 48, 64, 128, 256`; `16` comes from the dedicated
+16px master, `24` comes from the small optical master, and the remaining layers come from the large
+master. Copy the resulting ICO byte-for-byte to `site/public/favicon.ico` and
+`desktop/src-tauri/icons/icon.ico`.
 
 Generate the Apple touch icon from the large master with the same Tauri CLI using `--png 180`, then
 copy it to `branding/exports/web/apple-touch-icon.png` and `site/public/apple-touch-icon.png`.

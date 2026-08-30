@@ -3,12 +3,12 @@
   <desc id="desc">Dark monochrome right-facing triangular mark with a preserved dashed edge.</desc>
 
   <line id="edge-a-b" x1="40" y1="48" x2="40" y2="80" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
-  <line id="edge-a-c" x1="52.9904" y1="40.5" x2="82.8683" y2="57.75" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
-  <line id="dash-b-c-1" x1="55.5885" y1="86" x2="60.7847" y2="83" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
-  <line id="dash-b-c-2" x1="65.9808" y1="80" x2="71.1770" y2="77" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
-  <line id="dash-b-c-3" x1="76.3731" y1="74" x2="81.5693" y2="71" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
+  <line id="edge-a-c" x1="51.2583" y1="39.5" x2="81.5692" y2="57" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
+  <line id="dash-b-c-1" x1="55.5019" y1="86.05" x2="59.1392" y2="83.95" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
+  <line id="dash-b-c-2" x1="65.8942" y1="80.05" x2="69.5315" y2="77.95" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
+  <line id="dash-b-c-3" x1="76.2865" y1="74.05" x2="79.9238" y2="71.95" stroke="#07090D" stroke-width="2.8" stroke-linecap="round"/>
 
   <rect id="diamond-a" x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#07090D"/>
   <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="none" stroke="#07090D" stroke-width="3.8"/>
-  <circle id="node-c-sky" cx="93.6936" cy="64" r="7.7" fill="none" stroke="#07090D" stroke-width="3.2"/>
+  <circle id="node-c-sky" cx="93.6936" cy="64" r="8.5" fill="none" stroke="#07090D" stroke-width="3.2"/>
 </svg>

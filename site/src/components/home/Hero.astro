@@ -170,7 +170,7 @@ const { data, locale } = Astro.props;
     padding-block: var(--space-5);
   }
 
-  .hero__visual > :not(.hero__score-lines) {
+  .hero__visual > :not(.hero__score-lines):not(.hero__brand-mark) {
     position: relative;
     z-index: 1;
   }
@@ -242,10 +242,6 @@ const { data, locale } = Astro.props;
     bottom: -1.5rem;
     width: 8rem;
     opacity: 0.12;
-  }
-
-  .hero__visual > .hero__brand-mark {
-    position: absolute;
   }
 
   .hero__stage-meta {

@@ -3,7 +3,7 @@
   <rect width="1440" height="900" fill="#07090D"/>
   <rect y="450" width="1440" height="450" fill="#F6F2E8"/>
   <text x="48" y="48" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Sky Auto Player · actual-size icon evidence</text>
-  <text x="48" y="84" fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="16">Large master: 256 / 128 / 64 / 48 / 32 px · small optical master: 24 / 16 px</text>
+  <text x="48" y="84" fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="16">Large master: 256 / 128 / 64 / 48 / 32 px · small master: 24 px · dedicated 16 px master</text>
   <text x="48" y="128" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">DARK BACKGROUND</text>
   <text x="48" y="494" fill="#07090D" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">LIGHT BACKGROUND</text>
 
@@ -11,12 +11,12 @@
     <g fill="#F4EFE3">
       <text x="168" y="425">256 · LARGE</text><text x="438" y="425">128 · LARGE</text>
       <text x="590" y="425">64 · LARGE</text><text x="710" y="425">48 · LARGE</text>
-      <text x="820" y="425">32 · LARGE</text><text x="920" y="425">24 · SMALL</text><text x="1000" y="425">16 · SMALL</text>
+      <text x="820" y="425">32 · LARGE</text><text x="920" y="425">24 · SMALL</text><text x="1000" y="425">16 · DEDICATED</text>
     </g>
     <g fill="#07090D">
       <text x="168" y="880">256 · LARGE</text><text x="438" y="880">128 · LARGE</text>
       <text x="590" y="880">64 · LARGE</text><text x="710" y="880">48 · LARGE</text>
-      <text x="820" y="880">32 · LARGE</text><text x="920" y="880">24 · SMALL</text><text x="1000" y="880">16 · SMALL</text>
+      <text x="820" y="880">32 · LARGE</text><text x="920" y="880">24 · SMALL</text><text x="1000" y="880">16 · DEDICATED</text>
     </g>
   </g>
 
@@ -26,7 +26,7 @@
   <image href="../sky-auto-player-app-icon.svg" x="686" y="225" width="48" height="48"/>
   <image href="../sky-auto-player-app-icon.svg" x="804" y="233" width="32" height="32"/>
   <image href="../sky-auto-player-app-icon-small.svg" x="908" y="237" width="24" height="24"/>
-  <image href="../sky-auto-player-app-icon-small.svg" x="992" y="241" width="16" height="16"/>
+  <image href="../sky-auto-player-app-icon-16.svg" x="992" y="241" width="16" height="16"/>
 
   <image href="../sky-auto-player-app-icon.svg" x="40" y="595" width="256" height="256"/>
   <image href="../sky-auto-player-app-icon.svg" x="374" y="635" width="128" height="128"/>
@@ -34,5 +34,5 @@
   <image href="../sky-auto-player-app-icon.svg" x="686" y="675" width="48" height="48"/>
   <image href="../sky-auto-player-app-icon.svg" x="804" y="683" width="32" height="32"/>
   <image href="../sky-auto-player-app-icon-small.svg" x="908" y="687" width="24" height="24"/>
-  <image href="../sky-auto-player-app-icon-small.svg" x="992" y="691" width="16" height="16"/>
+  <image href="../sky-auto-player-app-icon-16.svg" x="992" y="691" width="16" height="16"/>
 </svg>

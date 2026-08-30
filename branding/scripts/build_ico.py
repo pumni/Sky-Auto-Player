@@ -6,7 +6,7 @@ import argparse
 import struct
 from pathlib import Path
 
-EXPECTED_SIZES = (16, 24, 32, 48, 64, 256)
+EXPECTED_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def png_dimensions(data: bytes) -> tuple[int, int]:
@@ -65,11 +65,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--large-dir", type=Path, required=True)
     parser.add_argument("--small-dir", type=Path, required=True)
+    parser.add_argument("--tiny-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     layers = find_layers(args.large_dir, (32, 48, 64, 128, 256))
-    layers.update(find_layers(args.small_dir, (16, 24)))
+    layers.update(find_layers(args.small_dir, (24,)))
+    layers.update(find_layers(args.tiny_dir, (16,)))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(build_ico(layers))
 

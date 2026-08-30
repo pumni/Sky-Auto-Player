@@ -17,6 +17,7 @@ SKY = "#B8CCD6"
 
 CANONICAL = ROOT / "branding" / "sky-auto-player-app-icon.svg"
 SMALL = ROOT / "branding" / "sky-auto-player-app-icon-small.svg"
+TINY = ROOT / "branding" / "sky-auto-player-app-icon-16.svg"
 
 
 def _parse_svg(path: Path) -> ElementTree.Element:
@@ -90,6 +91,7 @@ def test_logo_masters_are_flat_and_visually_hierarchical() -> None:
     plate = root.find(f"{SVG}rect[@id='plate']")
     assert plate is not None
     assert plate.attrib["fill"] == NIGHT
+    assert plate.attrib["stroke"] == "#1A222A"
     assert plate.attrib["width"] == plate.attrib["height"] == "128"
 
     lines = _elements(root, "line")
@@ -105,10 +107,22 @@ def test_small_master_has_optimized_two_dash_rhythm() -> None:
     _assert_mark_skeleton(root, dash_count=2)
 
 
+def test_16px_master_protects_ring_holes() -> None:
+    root = _parse_svg(TINY)
+    _assert_flat(root)
+    _assert_mark_skeleton(root, dash_count=2)
+    gold = root.find(f"{SVG}circle[@id='node-b-gold']")
+    blue = root.find(f"{SVG}circle[@id='node-c-sky']")
+    assert gold is not None and blue is not None
+    assert float(gold.attrib["r"]) - float(gold.attrib["stroke-width"]) / 2 > 7
+    assert float(blue.attrib["r"]) - float(blue.attrib["stroke-width"]) / 2 > 7
+
+
 def test_required_branding_sources_exist_and_lockups_are_flat() -> None:
     required = [
         CANONICAL,
         SMALL,
+        TINY,
         ROOT / "branding" / "sky-auto-player-mark-mono.svg",
         ROOT / "branding" / "sky-auto-player-mark-mono-dark.svg",
         ROOT / "branding" / "sky-auto-player-mark-mono-solid.svg",
@@ -120,9 +134,9 @@ def test_required_branding_sources_exist_and_lockups_are_flat() -> None:
     ]
     assert all(path.exists() for path in required)
 
-    for path in required[2:6]:
+    for path in required[2:7]:
         _assert_flat(_parse_svg(path))
-    for path in required[6:8]:
+    for path in required[7:9]:
         text = path.read_text(encoding="utf-8")
         assert "Sky Auto Player" in text
         assert "Play the sheet." in text
@@ -164,7 +178,7 @@ def test_consumers_use_the_right_master_or_identical_generated_exports() -> None
     ico = (
         ROOT / "branding" / "exports" / "windows" / "sky-auto-player.ico"
     ).read_bytes()
-    assert _ico_sizes(ico) == {16, 24, 32, 48, 64, 256}
+    assert _ico_sizes(ico) == {16, 24, 32, 48, 64, 128, 256}
     assert (ROOT / "desktop" / "src-tauri" / "icons" / "icon.ico").read_bytes() == ico
     assert (ROOT / "site" / "public" / "favicon.ico").read_bytes() == ico
 

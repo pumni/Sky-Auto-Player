@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640">
+  <title>Approved visual target compared with production logo</title>
+  <rect width="1000" height="640" fill="#252A32"/>
+  <text x="40" y="48" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Approved target → production render</text>
+  <text x="40" y="76" fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="14">Target reconstructed from the owner acceptance review; production is the committed vector master.</text>
+
+  <rect x="40" y="104" width="440" height="250" rx="20" fill="#07090D" stroke="#1A222A"/>
+  <rect x="520" y="104" width="440" height="250" rx="20" fill="#07090D" stroke="#1A222A"/>
+  <text x="260" y="138" text-anchor="middle" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">OWNER-APPROVED TARGET</text>
+  <text x="740" y="138" text-anchor="middle" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">PRODUCTION LARGE MASTER</text>
+
+  <g transform="translate(196 154) scale(1.18)">
+    <rect width="128" height="128" rx="28" fill="#07090D" stroke="#1A222A"/>
+    <line x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="51.2583" y1="39.5" x2="81.5692" y2="57" stroke="#F4EFE3" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="55.5019" y1="86.05" x2="59.1392" y2="83.95" stroke="#F4EFE3" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="65.8942" y1="80.05" x2="69.5315" y2="77.95" stroke="#F4EFE3" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="76.2865" y1="74.05" x2="79.9238" y2="71.95" stroke="#F4EFE3" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#F7DDA2" stroke="#F4EFE3" stroke-width="2"/>
+    <circle cx="40" cy="95" r="9" fill="#07090D" stroke="#F7DDA2" stroke-width="3.5"/>
+    <circle cx="93.6936" cy="64" r="7.5" fill="#07090D" stroke="#B8CCD6" stroke-width="3"/>
+  </g>
+  <image href="../sky-auto-player-app-icon.svg" x="676" y="154" width="176" height="176"/>
+
+  <text x="40" y="398" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">Production at actual export sizes</text>
+  <g font-family="Segoe UI, sans-serif" font-size="14" text-anchor="middle">
+    <g fill="#B8CCD6">
+      <text x="176" y="608">128 · LARGE</text><text x="358" y="608">32 · LARGE</text><text x="530" y="608">24 · SMALL</text><text x="702" y="608">16 · 16px MASTER</text>
+    </g>
+  </g>
+  <image href="../sky-auto-player-app-icon.svg" x="112" y="430" width="128" height="128"/>
+  <image href="../sky-auto-player-app-icon.svg" x="342" y="478" width="32" height="32"/>
+  <image href="../sky-auto-player-app-icon-small.svg" x="518" y="482" width="24" height="24"/>
+  <image href="../sky-auto-player-app-icon-16.svg" x="694" y="486" width="16" height="16"/>
+</svg>
