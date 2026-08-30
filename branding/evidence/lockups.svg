@@ -2,6 +2,6 @@
   <title>Sky Auto Player lockup evidence</title>
   <rect width="1200" height="760" fill="#252A32"/>
   <text x="48" y="54" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Production lockups</text>
-  <image href="../lockup-horizontal.svg" x="48" y="92" width="1104" height="286"/>
-  <image href="../lockup-stacked.svg" x="430" y="410" width="340" height="243"/>
+  <image href="../lockup-horizontal.svg" x="48" y="92" width="1104" height="368"/>
+  <image href="../lockup-stacked.svg" x="430" y="500" width="340" height="243"/>
 </svg>

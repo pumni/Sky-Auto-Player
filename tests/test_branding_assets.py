@@ -137,6 +137,13 @@ def test_required_branding_sources_exist_and_lockups_are_flat() -> None:
     for path in required[2:7]:
         _assert_flat(_parse_svg(path))
     for path in required[7:9]:
+        view_box = _parse_svg(path).attrib["viewBox"].split()
+        width, height = (float(view_box[index]) for index in (2, 3))
+        ratio = width / height
+        if path.name == "lockup-horizontal.svg":
+            assert 2.8 <= ratio <= 3.2
+        else:
+            assert 1.2 <= ratio <= 1.6
         text = path.read_text(encoding="utf-8")
         assert "Sky Auto Player" in text
         assert "Play the sheet." in text

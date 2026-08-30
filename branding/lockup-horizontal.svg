@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 176" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 180" role="img" aria-labelledby="title desc">
   <title id="title">Sky Auto Player horizontal lockup</title>
   <desc id="desc">Sky Auto Player logo and tagline arranged in a compact horizontal lockup.</desc>
-  <rect width="680" height="176" rx="28" fill="#07090D" stroke="#1A222A" stroke-width="1"/>
+  <rect width="540" height="180" rx="28" fill="#07090D" stroke="#1A222A" stroke-width="1"/>
 
   <g transform="translate(16 16) scale(1.125)">
     <line x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
