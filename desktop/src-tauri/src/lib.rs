@@ -56,6 +56,48 @@ pub fn run() {
         .expect("error while running Sky Auto Player desktop shell");
 }
 
+/// Validate the release shell/Core pairing without constructing a WebView.
+///
+/// This hidden, packaging-only entrypoint is used by the exact portable
+/// artifact gate. It still uses the production launch command and
+/// ``CoreSupervisor``; it merely replaces the interactive window with a
+/// bounded bootstrap/shutdown assertion so CI never needs to synthesize a
+/// physical input session.
+pub fn selftest_packaged_shell() -> i32 {
+    if let Err(error) = core::check_startup_update_guard() {
+        eprintln!("packaged shell selftest startup guard failed: {error}");
+        return 2;
+    }
+    let supervisor = match core::CoreSupervisor::spawn() {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            eprintln!("packaged shell selftest could not start Core: {error}");
+            return 2;
+        }
+    };
+    let bootstrap = supervisor.request("app.bootstrap", serde_json::json!({}));
+    let result = match bootstrap {
+        Ok(value) if value.get("native_build").is_some() => {
+            supervisor.shutdown();
+            0
+        }
+        Ok(_) => {
+            eprintln!("packaged shell selftest bootstrap omitted native_build");
+            supervisor.shutdown();
+            1
+        }
+        Err(error) => {
+            eprintln!("packaged shell selftest bootstrap failed: {error}");
+            supervisor.shutdown();
+            1
+        }
+    };
+    if result == 0 {
+        println!("Packaged Tauri/Core selftest: PASS");
+    }
+    result
+}
+
 // The mock runtime is intentionally exercised in a no-default-features test
 // build. Keeping the production Wry runtime out of that test binary avoids
 // loading the native desktop webview during command-decoder unit tests.

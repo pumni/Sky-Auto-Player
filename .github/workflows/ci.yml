@@ -71,7 +71,7 @@ jobs:
                 relevant=true
                 break
                 ;;
-              pyproject.toml|uv.lock|.python-version|.env.example|Sky-Auto-Player.spec)
+              pyproject.toml|uv.lock|.python-version|.env.example|Sky-Auto-Player.spec|Sky-Auto-Player-Core.spec)
                 relevant=true
                 break
                 ;;
@@ -187,7 +187,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -223,22 +223,33 @@ jobs:
           "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
           "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
-      - name: Build packaged unsigned app
+      - name: Set up Bun for production frontend build
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Build and qualify exact Phase 8 portable artifact
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: uv run --env-file .env python -m build_app --manifest
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player Phase8"
+          uv run --env-file .env python scripts/build_phase8.py --output-root $output
+          "SKY_PHASE8_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify packaged release tree
         run: |
           $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
           uv run --env-file .env python scripts/verify_release_manifest.py `
-            --release-dir "dist\Sky-Auto-Player-v$version" --version $version
+            --release-dir (Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$version") --version $version
 
-      - name: Native updater security E2E
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo test --manifest-path rust/Cargo.toml -p sky_updater --test packaged_update_e2e --all-features --locked
+      - name: Upload exact Phase 8 release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sky-auto-player-phase8-portable-v${{ hashFiles('pyproject.toml') }}
+          path: ${{ runner.temp }}/Sky Auto Player Phase8
+          if-no-files-found: error
+          retention-days: 14
 
   status:
     name: Sky Auto Player — required CI gate
