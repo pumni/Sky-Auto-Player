@@ -320,9 +320,9 @@ __all__ = [
     "RiskSummaryDto",
     "SongDetailDto",
     "SongRowDto",
-    "UpdatePreferencesDto",
+    "UpdateChannel",
     "UpdateCheckDto",
     "UpdateHandoffDto",
-    "UpdateChannel",
+    "UpdatePreferencesDto",
     "UpdateState",
 ]

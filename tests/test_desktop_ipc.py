@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from sky_music.config import AppConfig
+from sky_music.domain.update_checker import UpdateCheckResult, UpdateInfo
 from sky_music.infrastructure import desktop_ipc as desktop_ipc_package
 from sky_music.infrastructure.desktop_ipc import protocol
 from sky_music.infrastructure.desktop_ipc import server as desktop_server_module
-from sky_music.domain.update_checker import UpdateCheckResult, UpdateInfo
 from sky_music.infrastructure.desktop_ipc.server import DesktopCoreServer
 from sky_music.orchestration import desktop_playback as playback_module
 from sky_music.orchestration import settings_service as settings_module

@@ -17,6 +17,7 @@ from typing import Any
 from sky_music import __version__
 from sky_music.config import VALID_FPS
 from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.domain.update_checker import UpdateCheckResult
 from sky_music.infrastructure.desktop_ipc.protocol import (
     DESKTOP_PROTOCOL_VERSION,
     ProtocolError,
@@ -28,6 +29,12 @@ from sky_music.infrastructure.desktop_ipc.protocol import (
     response_ok,
     write_frame,
 )
+from sky_music.infrastructure.update_launcher import (
+    UpdateLaunchError,
+    UpdateLaunchRequest,
+    launch_update,
+)
+from sky_music.infrastructure.update_runtime import active_update_for_install
 from sky_music.orchestration.catalog_service import (
     CatalogError,
     CatalogGenerationError,
@@ -61,19 +68,12 @@ from sky_music.orchestration.settings_service import (
     TEMPO_SCALE_OPTIONS,
     SettingsService,
 )
+from sky_music.orchestration.song_metadata_service import get_song_ui_metadata
 from sky_music.orchestration.update_service import (
     check_for_update,
     record_check_error,
     record_successful_check,
 )
-from sky_music.domain.update_checker import UpdateCheckResult
-from sky_music.infrastructure.update_launcher import (
-    UpdateLaunchError,
-    UpdateLaunchRequest,
-    launch_update,
-)
-from sky_music.infrastructure.update_runtime import active_update_for_install
-from sky_music.orchestration.song_metadata_service import get_song_ui_metadata
 
 MAX_OFFSET = 1_000_000_000
 MAX_VIEWPORT_SPAN = 2_000
@@ -824,7 +824,7 @@ class DesktopCoreServer:
             raise CoreRequestError("update_busy", "an update is already active")
         preferences = self.settings_service.snapshot().update_preferences
         try:
-            result = launch_update(
+            launch_update(
                 UpdateLaunchRequest(
                     install_root=self.install_root,
                     current_version=self.app_version,

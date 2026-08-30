@@ -88,7 +88,9 @@ def run_desktop_core(
             import os
 
             os.chdir(install_root)
-            from sky_music.infrastructure.update_runtime import active_update_for_install
+            from sky_music.infrastructure.update_runtime import (
+                active_update_for_install,
+            )
 
             active_update = active_update_for_install(install_root)
             if active_update is not None:
