@@ -20,15 +20,30 @@ def _load():
 
 def test_report_scans_only_production_surfaces(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
+    (tmp_path / "scripts").mkdir()
     (tmp_path / "docs").mkdir()
     (tmp_path / "node_modules").mkdir()
+    (tmp_path / "rust" / "tests").mkdir(parents=True)
+    (tmp_path / "rust" / "src").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "ISSUE_TEMPLATE").mkdir(parents=True)
+    (tmp_path / ".github" / "PULL_REQUEST_TEMPLATE.md").write_text("pyo3\n", encoding="utf-8")
     (tmp_path / "src" / "runtime.py").write_text("import pyo3\n", encoding="utf-8")
+    (tmp_path / "scripts" / "report_production_python_boundary.py").write_text("pyo3\n", encoding="utf-8")
     (tmp_path / "docs" / "history.md").write_text("pyo3\n", encoding="utf-8")
     (tmp_path / "node_modules" / "ignored.py").write_text("pyo3\n", encoding="utf-8")
+    (tmp_path / "rust" / "tests" / "ignored.rs").write_text("pyo3\n", encoding="utf-8")
+    (tmp_path / "rust" / "src" / "test_session.rs").write_text("pyo3\n", encoding="utf-8")
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("pyo3\n", encoding="utf-8")
+    (tmp_path / ".github" / "ISSUE_TEMPLATE" / "config.yml").write_text("pyo3\n", encoding="utf-8")
 
     references = _load().collect(tmp_path)
 
-    assert [(item.marker, item.path, item.line) for item in references] == [("pyo3", "src/runtime.py", 1)]
+    assert [(item.marker, item.path, item.line) for item in references] == [
+        ("pyo3", ".github/workflows/ci.yml", 1),
+        ("pyo3", "src/runtime.py", 1),
+    ]
+    assert not any(item.path == "scripts/report_production_python_boundary.py" for item in references)
 
 
 def test_current_report_captures_known_transitional_boundaries() -> None:

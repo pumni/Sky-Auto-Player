@@ -26,10 +26,10 @@ MARKERS: Final[tuple[str, ...]] = (
     "python-environment",
 )
 SCAN_DIRECTORIES: Final[tuple[str, ...]] = (
-    ".github",
+    ".github/actions",
+    ".github/workflows",
     "desktop/src-tauri",
     "rust",
-    "scripts",
     "src",
 )
 SCAN_FILES: Final[tuple[str, ...]] = (
@@ -38,13 +38,31 @@ SCAN_FILES: Final[tuple[str, ...]] = (
     "Sky-Auto-Player-Core.spec",
     "Sky-Auto-Player.spec",
     "pyproject.toml",
+    "scripts/build_portable_release.py",
+    "scripts/build_pyinstaller_bootloader.ps1",
+    "scripts/build_rust_wheel.py",
+    "scripts/test_windows_updater_e2e.ps1",
+    "scripts/verify_release_manifest.py",
 )
 TEXT_SUFFIXES: Final[frozenset[str]] = frozenset(
-    {".json", ".md", ".mjs", ".ps1", ".py", ".rs", ".spec", ".toml", ".ts", ".tsx", ".yml", ".yaml"}
+    {".json", ".mjs", ".ps1", ".py", ".rs", ".spec", ".toml", ".ts", ".tsx", ".yml", ".yaml"}
 )
 EXCLUDED_PARTS: Final[frozenset[str]] = frozenset(
-    {".git", ".pytest_tmp", "__pycache__", "dist", "node_modules", "target"}
+    {
+        ".git",
+        ".pytest_tmp",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "generated",
+        "gen",
+        "node_modules",
+        "target",
+        "tests",
+    }
 )
+REPORTER_PATH = "scripts/report_production_python_boundary.py"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,13 +84,25 @@ def _candidate_files(repository_root: Path) -> tuple[Path, ...]:
         if not directory.is_dir():
             continue
         for path in directory.rglob("*"):
+            relative_path = path.relative_to(repository_root)
             if (
                 path.is_file()
                 and path.suffix.lower() in TEXT_SUFFIXES
-                and not EXCLUDED_PARTS.intersection(path.parts)
+                and not EXCLUDED_PARTS.intersection(relative_path.parts)
+                and not _is_test_file(path)
             ):
                 candidates.add(path)
     return tuple(sorted(candidates))
+
+
+def _is_test_file(path: Path) -> bool:
+    name = path.name.casefold()
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith("_tests.rs")
+        or "selftest" in name
+    )
 
 
 def collect(repository_root: Path = ROOT) -> tuple[Reference, ...]:
@@ -82,6 +112,8 @@ def collect(repository_root: Path = ROOT) -> tuple[Reference, ...]:
     lowered_markers = tuple((marker, marker.casefold()) for marker in MARKERS)
     for path in _candidate_files(repository_root):
         relative = path.relative_to(repository_root).as_posix()
+        if relative == REPORTER_PATH:
+            continue
         for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             folded_line = raw_line.casefold()
             for marker, folded_marker in lowered_markers:
@@ -140,7 +172,7 @@ def main() -> int:
 
     print("Production Python boundary report")
     print(f"repository head: {payload['repository_head'] or 'unavailable'}")
-    print("scope: .github, desktop/src-tauri, rust, scripts, src, and packaging files")
+    print("scope: .github/actions, .github/workflows, desktop/src-tauri, rust, src, and explicit packaging files")
     for marker in MARKERS:
         data = payload["markers"][marker]
         assert isinstance(data, dict)

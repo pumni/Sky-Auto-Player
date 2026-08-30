@@ -1,6 +1,6 @@
 # ADR-0004: Direct Tauri Commands and Channels; Remove Internal Python RPC
 
-Status: proposed
+Status: accepted
 
 Date: 2026-08-31
 

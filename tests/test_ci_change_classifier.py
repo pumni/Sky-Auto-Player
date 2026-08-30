@@ -45,12 +45,16 @@ def test_runtime_source_changes_run_code_but_not_exact_package() -> None:
 
 def test_package_sensitive_boundaries_require_exact_qualification() -> None:
     audit = _load()
-    result = audit.classify(
-        ["rust/crates/sky_updater/src/policy.rs", "desktop/src-tauri/tauri.conf.json"]
-    )
-    assert result.static_required
-    assert result.code_required
-    assert result.package_required
+    for path in (
+        "rust/crates/sky_updater/src/policy.rs",
+        "desktop/src-tauri/tauri.conf.json",
+        "desktop/src-tauri/build.rs",
+        ".cargo/config.toml",
+    ):
+        result = audit.classify([path])
+        assert result.static_required
+        assert result.code_required
+        assert result.package_required
 
 
 def test_ci_and_release_workflow_changes_require_portable_qualification() -> None:

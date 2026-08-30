@@ -1,6 +1,6 @@
 # ADR-0003: Rust-first Clean Architecture for the Desktop Core
 
-Status: proposed
+Status: accepted
 
 Date: 2026-08-31
 
@@ -19,6 +19,15 @@ the native player/dispatch and updater as specialized outer implementations.
 Remove Python from the shipped runtime only after parity and safety gates pass.
 
 The migration is incremental and every intermediate `main` remains releasable.
+
+## Relationship to ADR-0002
+
+This ADR amends and supersedes ADR-0002 only regarding the long-term ownership
+of shared Python application services and the Python Core sidecar. ADR-0002's
+decision to use Tauri for the desktop UI, its incremental migration rule, Rust
+authority for realtime work, `SendInput` security boundary, and fail-closed
+requirements remain valid. ADR-0002 is not wholly obsolete; its accepted UI
+and safety constraints continue to govern this migration.
 
 ## Constraints
 

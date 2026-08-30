@@ -1,6 +1,6 @@
 # ADR-0005: Rust `xtask` Owns Exact Portable Release Assembly
 
-Status: proposed
+Status: accepted
 
 Date: 2026-08-31
 
