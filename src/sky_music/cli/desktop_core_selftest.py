@@ -157,6 +157,11 @@ def run_packaged_core_selftest() -> int:
             raise RuntimeError("bootstrap omitted native build information")
         request("settings.get", {})
         request("app.shutdown", {})
+        # Closing the parent end makes the inherited stdin EOF explicit.  The
+        # Core has already completed the bounded shutdown response; this also
+        # lets its reader thread leave a blocking pipe read on Windows.
+        if process.stdin is not None:
+            process.stdin.close()
         try:
             process.wait(timeout=_TIMEOUT_S)
         except subprocess.TimeoutExpired as exc:
