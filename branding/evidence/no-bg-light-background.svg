@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="430" viewBox="0 0 1000 430">
+  <title>Transparent no-background mark on light and colored surfaces</title>
+  <rect width="1000" height="430" fill="#DCE1E5"/>
+  <text x="40" y="48" fill="#1A2329" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Transparent no-bg mark</text>
+  <text x="40" y="78" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="14">The ring interiors stay transparent; no Night plate is baked into this decorative variant.</text>
+  <rect x="40" y="108" width="430" height="270" rx="22" fill="#FFFFFF" stroke="#A7B0B7"/>
+  <rect x="530" y="108" width="430" height="270" rx="22" fill="#B8CCD6" stroke="#879AA5"/>
+  <image href="../sky-auto-player-mark-no-bg.svg" x="170" y="138" width="210" height="210"/>
+  <image href="../sky-auto-player-mark-no-bg.svg" x="660" y="138" width="210" height="210"/>
+  <text x="255" y="358" text-anchor="middle" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="14">LIGHT SURFACE</text>
+  <text x="745" y="358" text-anchor="middle" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="14">COLORED SURFACE</text>
+</svg>

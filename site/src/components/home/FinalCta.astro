@@ -1,7 +1,7 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
-import ConstellationMark from '../ui/ConstellationMark.astro';
+import BrandMark from '../ui/BrandMark.astro';
 
 interface Props {
   data: HomeContent['finalCta'];
@@ -32,7 +32,7 @@ const { data, locale } = Astro.props;
       <a class="button button--secondary" href={SITE.repositoryUrl}>{data.secondaryCta}</a>
       <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 10–11</span>
     </div>
-    <span class="final-cta__mark" aria-hidden="true"><ConstellationMark /></span>
+    <span class="final-cta__mark" aria-hidden="true"><BrandMark /></span>
   </div>
 </section>
 
@@ -117,7 +117,6 @@ const { data, locale } = Astro.props;
     position: absolute;
     left: -2rem;
     bottom: -2rem;
-    color: var(--color-action);
     opacity: 0.1;
     transform: scale(2.5);
     transform-origin: left bottom;

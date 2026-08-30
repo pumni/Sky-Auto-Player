@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 180" role="img" aria-labelledby="title desc">
+  <title id="title">Sky Auto Player horizontal lockup</title>
+  <desc id="desc">Sky Auto Player logo and tagline arranged in a compact horizontal lockup.</desc>
+  <rect id="plate" x="0.25" y="0.25" width="539.5" height="179.5" rx="27.75" fill="#07090D" stroke="#1A222A" stroke-width="0.5"/>
+
+  <g transform="translate(16 16) scale(1.125)">
+    <line id="edge-a-b" x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
+    <line id="edge-a-c" x1="51.2583" y1="39.5" x2="81.5692" y2="57" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
+    <line id="dash-b-c-1" x1="55.5019" y1="86.05" x2="59.1392" y2="83.95" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
+    <line id="dash-b-c-2" x1="65.8942" y1="80.05" x2="69.5315" y2="77.95" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
+    <line id="dash-b-c-3" x1="76.2865" y1="74.05" x2="79.9238" y2="71.95" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
+    <rect id="diamond-a" x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#F7DDA2" stroke="#F4EFE3" stroke-width="2"/>
+    <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="#07090D" stroke="#F7DDA2" stroke-width="3.8"/>
+    <circle id="node-c-sky" cx="93.6936" cy="64" r="8.5" fill="#07090D" stroke="#B8CCD6" stroke-width="3.2"/>
+  </g>
+
+  <text x="190" y="80" fill="#F4EFE3" font-family="Inter, Segoe UI, sans-serif" font-size="34" font-weight="650">Sky Auto Player</text>
+  <text x="192" y="114" fill="#B8CCD6" font-family="Inter, Segoe UI, sans-serif" font-size="15" letter-spacing="0.03em">Play the sheet. Not the keyboard.</text>
+</svg>

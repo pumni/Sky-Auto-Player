@@ -3,7 +3,7 @@ import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
 import Kicker from '../ui/Kicker.astro';
-import ConstellationMark from '../ui/ConstellationMark.astro';
+import BrandMark from '../ui/BrandMark.astro';
 import TimingConsole from './TimingConsole.astro';
 
 interface Props {
@@ -58,7 +58,7 @@ const { data, locale } = Astro.props;
 
     <div class="hero__visual">
       <span class="hero__score-lines" aria-hidden="true"></span>
-      <span class="hero__constellation" aria-hidden="true"><ConstellationMark /></span>
+      <span class="hero__brand-mark" aria-hidden="true"><BrandMark /></span>
       <TimingConsole locale={locale} />
     </div>
   </div>
@@ -170,7 +170,7 @@ const { data, locale } = Astro.props;
     padding-block: var(--space-5);
   }
 
-  .hero__visual > :not(.hero__score-lines) {
+  .hero__visual > :not(.hero__score-lines):not(.hero__brand-mark) {
     position: relative;
     z-index: 1;
   }
@@ -236,14 +236,12 @@ const { data, locale } = Astro.props;
     opacity: 0.88;
   }
 
-  .hero__constellation {
+  .hero__brand-mark {
     position: absolute;
     right: -1.5rem;
     bottom: -1.5rem;
     width: 8rem;
-    color: var(--color-action);
     opacity: 0.12;
-    transform: rotate(-8deg);
   }
 
   .hero__stage-meta {

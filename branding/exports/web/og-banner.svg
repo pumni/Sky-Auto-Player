@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <title>Sky Auto Player — Play the sheet. Not the keyboard.</title>
+  <rect width="1200" height="630" fill="#07090D"/>
+  <path d="M72 72H1128M72 558H1128" stroke="#F4EFE3" stroke-opacity="0.18"/>
+  <path d="M72 72V558" stroke="#F7DDA2" stroke-opacity="0.7" stroke-width="3"/>
+
+  <image href="../../sky-auto-player-app-icon.svg" x="104" y="165" width="300" height="300"/>
+
+  <g font-family="Inter, 'Segoe UI', sans-serif">
+    <text x="486" y="238" fill="#B8CCD6" font-size="22" font-weight="600" letter-spacing="4">
+      TIMING-FIRST MUSIC SHEETS
+    </text>
+    <text x="480" y="344" fill="#F4EFE3" font-size="74" font-weight="700" letter-spacing="-2">
+      Sky Auto Player
+    </text>
+    <text x="486" y="408" fill="#F7DDA2" font-size="30" font-weight="500">
+      Play the sheet. Not the keyboard.
+    </text>
+    <text x="486" y="506" fill="#B8B4AB" font-size="18" letter-spacing="2">
+      JSON · SKYSHEET · TXT / WINDOWS 10–11
+    </text>
+  </g>
+</svg>

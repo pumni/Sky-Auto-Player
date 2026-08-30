@@ -107,9 +107,13 @@ test.describe('accessibility and responsive contracts', () => {
     expect(pixelMetrics.colors).toBeGreaterThan(32);
     const renderedEvidence = await page.locator('.screenshot-frame').screenshot();
     expect(renderedEvidence.byteLength).toBeGreaterThan(10_000);
-    await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute(
+    await expect(page.locator('link[rel="icon"][type="image/png"][sizes="16x16"]')).toHaveAttribute(
       'href',
-      /sky-auto-player-mark\.svg/,
+      /favicon-16x16\.png/,
+    );
+    await expect(page.locator('link[rel="icon"][type="image/png"][sizes="32x32"]')).toHaveAttribute(
+      'href',
+      /favicon-32x32\.png/,
     );
   });
 
@@ -345,10 +349,7 @@ test.describe('accessibility and responsive contracts', () => {
     await page.goto('/Sky-Auto-Player/');
     await expect(page.locator('.final-cta__measure')).toContainText('M.12 / READY');
     await expect(page.locator('.final-cta__actions a')).toHaveCount(2);
-    await expect(page.locator('.site-footer__brand img')).toHaveAttribute(
-      'src',
-      /sky-auto-player-mark\.svg/,
-    );
+    await expect(page.locator('.site-footer__brand img')).toHaveAttribute('src', /favicon\.svg/);
   });
 
   test('core content and navigation remain available without JavaScript', async ({ browser }) => {
