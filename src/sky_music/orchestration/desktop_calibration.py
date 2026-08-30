@@ -160,6 +160,11 @@ class DesktopCalibrationService:
         with self._lock:
             return self._operation_id
 
+    def is_active(self) -> bool:
+        """Return whether calibration still owns its native activity slot."""
+        with self._lock:
+            return self._state in {"starting", "running", "cancelling"}
+
     def start(self, params: Mapping[str, object]) -> dict[str, object]:
         request = _validate_start(params)
         with self._lock:

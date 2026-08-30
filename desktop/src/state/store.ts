@@ -134,8 +134,19 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
   const cacheKey = (query: string, generation: number) => `${generation}\u0000${query}`;
 
-  const boundedText = (value: string): string =>
-    value.replace(/[\u0000\r\n\t]/g, ' ').slice(0, MAX_DIAGNOSTIC_LINE_LENGTH);
+  const boundedText = (value: string): string => {
+    const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    if (encoder.encode(normalized).length <= MAX_DIAGNOSTIC_LINE_LENGTH) {
+      return normalized;
+    }
+    let bounded = decoder.decode(encoder.encode(normalized).slice(0, MAX_DIAGNOSTIC_LINE_LENGTH));
+    while (encoder.encode(bounded).length > MAX_DIAGNOSTIC_LINE_LENGTH) {
+      bounded = bounded.slice(0, -1);
+    }
+    return bounded;
+  };
 
   const eventDetail = (event: UiEvent): string => {
     switch (event.name) {

@@ -445,6 +445,80 @@ def test_calibration_server_path_publishes_terminal_event_once(tmp_path: Path) -
     )
 
 
+def test_core_rejects_playback_while_calibration_is_active_then_allows_it(
+    tmp_path: Path,
+) -> None:
+    server, song_id = _playback_server(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def runner(_request, cancel, _progress):
+        entered.set()
+        while not release.wait(0.01):
+            if cancel.is_set():
+                return {}
+        return {"status": "ready"}
+
+    server.calibration = DesktopCalibrationService(
+        publish_event=server._publish_event,
+        physical_playback_active=server.playback.is_physical_active,
+        runner=runner,
+    )
+    started_calibration = _call(
+        server, _request("calibration.start", {"mode": "quick"})
+    )
+    assert started_calibration["ok"] is True
+    operation_id = started_calibration["result"]["operation_id"]  # type: ignore[index]
+    assert isinstance(operation_id, str)
+    assert entered.wait(2)
+
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": True,
+                },
+            },
+        ),
+    )
+    assert prepared["ok"] is True
+    prepared_id = prepared["result"]["prepared_id"]  # type: ignore[index]
+    blocked = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared_id, "decisions": []},  # type: ignore[dict-item]
+        ),
+    )
+    assert blocked["ok"] is False
+    assert blocked["error"]["code"] == "calibration_active"  # type: ignore[index]
+
+    cancelled = _call(
+        server, _request("calibration.cancel", {"operation_id": operation_id})
+    )
+    assert cancelled["ok"] is True
+    release.set()
+    _wait_for_playback_event(server, "calibration.finished")
+    assert server.calibration.state == "cancelled"
+
+    allowed = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared_id, "decisions": []},  # type: ignore[dict-item]
+        ),
+    )
+    assert allowed["ok"] is True
+    _wait_for_playback_event(server, "playback.finished")
+
+
 def test_unknown_method_and_invalid_params_are_responses() -> None:
     server = _server(Path("songs"))
     unknown = _call(server, _request("catalog.nope"))

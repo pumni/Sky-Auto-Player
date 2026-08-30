@@ -343,6 +343,25 @@ describe('desktop store', () => {
     expect(store.getState().diagnostics.logs).toHaveLength(200);
   });
 
+  it('bounds diagnostic event text by UTF-8 bytes', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const message = '🙂'.repeat(2_000);
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'core.fatal',
+      payload: { code: 'test', message },
+    });
+
+    const log = store.getState().diagnostics.logs.at(-1)?.message;
+    const event = store.getState().diagnostics.events.at(-1)?.detail;
+    expect(log).toBeDefined();
+    expect(event).toBeDefined();
+    expect(new TextEncoder().encode(log).length).toBeLessThanOrEqual(4096);
+    expect(new TextEncoder().encode(event).length).toBeLessThanOrEqual(4096);
+  });
+
   it('drives calibration through typed progress and terminal events', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());

@@ -35,6 +35,51 @@ qualification. Late-event counters are not a meaningful comparison here
 because no native scheduler is running; the same supplied counters are observed
 in both modes.
 
+## Native playback A/B qualification
+
+The reproducible harness is `scripts/bench_phase6_native_diagnostics.py`. It
+runs the same authored plan through the production Python
+`PlaybackEngine`/`RustDispatchRuntime` path in both legs. The session factory
+is replaced only at the native binding seam with Rust's
+`sky_player_rs.TestDispatchSession`, which uses the real Rust
+`NativeDispatchSession` scheduler and `BackendConfig::Mock`; it never calls
+Windows `SendInput`. Diagnostics is disabled for the OFF leg and enabled plus
+consumed from the existing renderer callback for the ON leg. Each leg ran the
+same 16-note/32-action plan for 7 repeats. The native wheel was built from
+closure head `4eb437a30692b99752b89781c3f323037578cd3a` with Rust `1.98.0`.
+Plan fingerprint:
+`65261cd52bfe6e0853f3444a3a4dad4607bfe0e3236d79c109ab6dc6ec2fb59c`.
+
+Command:
+
+```text
+uv run python scripts/bench_phase6_native_diagnostics.py --notes 16 --repeats 7 \
+  --output docs/perf-baselines/2026-08-phase-6-diagnostics-native-ab.json
+```
+
+The native timing statistics below are per-session summary values aggregated
+across the 7 repeats. `dispatch_start_error_us` is the closest existing native
+onset metric; native max lateness, completion lateness, and the native
+late-event counters are also recorded. All runs finished. Each leg recorded one
+2 ms late-event bucket entry across the seven sessions, with zero 5 ms/10 ms
+entries and zero mock-backend drop/chord-split anomalies.
+
+| Mode | Diagnostics samples consumed | Native max-lateness p50 (us) | Native max-lateness p95 (us) | Dispatch-start p50 (us) | Dispatch-start p95 (us) | Completion-lateness p95 (us) | Max native late counters (2/5/10 ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Diagnostics off | 0 | 1,660 | 2,152 | 2 | 5 | 0 | 1 / 0 / 0 |
+| Diagnostics on | 49 | 1,637 | 2,161 | 2 | 5 | 0 | 1 / 0 / 0 |
+| On minus off | +49 | -23 | +9 | 0 | 0 | 0 | 0 / 0 / 0 |
+
+The ON leg did not increase the measured p50/p95 scheduler onset metrics, and
+the native max-lateness p50 moved down by 23 microseconds while p95 moved up by
+9 microseconds. Late-event counters were identical. This is qualification
+evidence for the Rust scheduler plus deterministic mock backend, not a claim
+about game-observed latency or physical SendInput behavior. No timing
+threshold, deadline, lead, or compensation was changed based on this
+measurement.
+
+Raw result: `docs/perf-baselines/2026-08-phase-6-diagnostics-native-ab.json`.
+
 ## Verification relationship
 
 Diagnostics is produced from the existing low-rate renderer snapshot callback,

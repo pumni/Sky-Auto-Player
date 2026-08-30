@@ -699,6 +699,16 @@ class DesktopCoreServer:
             raise CoreRequestError(exc.code, exc.message) from exc
 
     def _start_playback(self, params: Mapping[str, object]) -> dict[str, object]:
+        # Request dispatch is serialized by DesktopCoreServer. Checking the
+        # calibration state immediately before handing the request to the
+        # playback service therefore closes the reciprocal admission edge:
+        # calibration.start already rejects active physical playback, and
+        # playback.start now rejects every still-live calibration operation.
+        if self.calibration.is_active():
+            raise CoreRequestError(
+                "calibration_active",
+                "playback cannot start while calibration is active",
+            )
         if set(params) != {"prepared_id", "decisions"}:
             raise CoreRequestError(
                 "invalid_params", "playback.start requires prepared_id and decisions"
