@@ -18,7 +18,7 @@ use sky_updater::install::{install_verified, read_staged_manifest};
 use sky_updater::local_source::LocalReleaseSource;
 use sky_updater::manifest::{Manifest, ManifestFile};
 use sky_updater::progress::NoopProgressSink;
-use sky_updater::recovery::{has_unresolved_transaction, recover_before_update};
+use sky_updater::recovery::{has_unresolved_transaction, recover_before_update, rollback_prepared};
 use sky_updater::transaction::verify_installed_managed;
 use sky_updater::transaction::{build_plan, prepare_journal};
 use sky_updater::{
@@ -308,9 +308,15 @@ fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_sta
     assert!(has_unresolved_transaction(&install));
 
     // Simulate an interrupted apply after target files were written but before
-    // the transaction could commit. Recovery must use the verified journal,
-    // not process teardown, to restore the previous stable installation.
-    extract_zip_file(&zip, &install)?;
+    // the transaction could commit. Copy only manifest-owned files here: the
+    // real transaction never replaces preserved user state such as
+    // config.json, songs/, or logs/.
+    for file in &target.files {
+        let source = staging.join(&file.path);
+        let destination = install.join(&file.path);
+        fs::create_dir_all(destination.parent().expect("managed file parent"))?;
+        fs::copy(source, destination)?;
+    }
     recover_before_update(&install)?;
 
     assert!(!has_unresolved_transaction(&install));
@@ -330,6 +336,66 @@ fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_sta
     Ok(())
 }
 
+#[cfg(feature = "e2e-fault-injection")]
+#[test]
+fn exact_phase8_artifact_injected_apply_failure_rolls_back_and_preserves_user_state() -> Result<()>
+{
+    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => return Ok(()),
+    };
+    let zip = artifact_dir.join(format!("Sky-Auto-Player-v{TARGET_VERSION}.zip"));
+    assert!(zip.is_file(), "exact ZIP missing");
+
+    let install = temp_root("exact-fault-install");
+    fs::create_dir_all(&install).expect("install");
+    let previous = old_manifest();
+    for file in &previous.files {
+        write_file(&install, &file.path, old_file_bytes(&file.path));
+    }
+    write_manifest(&install, &previous);
+    write_file(&install, "config.json", br#"{"theme":"aurora"}"#);
+    write_file(&install, ".env", b"USER_SECRET=preserve");
+    write_file(&install, "songs/user.skysheet", b"user song");
+    write_file(&install, "logs/user.log", b"user log");
+
+    let staging = temp_root("exact-fault-staging");
+    fs::create_dir_all(&staging).expect("staging");
+    extract_zip_file(&zip, &staging)?;
+    let target = read_staged_manifest(&staging, TARGET_VERSION)?;
+
+    sky_updater::faults::configure(
+        Some("apply:after-replace:Sky-Auto-Player-Updater.exe"),
+        None,
+        None,
+    )
+    .expect("fault config");
+    let error = install_verified(&install, &staging, &target, &previous, &NoopProgressSink)
+        .expect_err("exact artifact apply fault");
+    assert!(matches!(
+        error,
+        sky_updater::error::UpdaterError::InstallCopyFailed(_)
+    ));
+    assert!(has_unresolved_transaction(&install));
+
+    sky_updater::faults::configure(None, None, None).expect("clear fault");
+    rollback_prepared(&install)?;
+    for file in &previous.files {
+        assert_eq!(
+            fs::read(install.join(&file.path)).expect("restored managed file"),
+            old_file_bytes(&file.path),
+            "restored {}",
+            file.path
+        );
+    }
+    assert_preserved(&install);
+    assert!(!has_unresolved_transaction(&install));
+
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&install);
+    Ok(())
+}
+
 #[test]
 fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
@@ -340,8 +406,9 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         Some(value) => PathBuf::from(value),
         None => panic!("exact package updater qualification runner is missing"),
     };
-    let actual_updater = artifact_dir.join(UPDATER_EXE);
-    let primary = artifact_dir.join(PRIMARY_EXE);
+    let release_dir = artifact_dir.join(format!("Sky-Auto-Player-v{TARGET_VERSION}"));
+    let actual_updater = release_dir.join(UPDATER_EXE);
+    let primary = release_dir.join(PRIMARY_EXE);
     assert!(actual_updater.is_file(), "packaged updater is missing");
     assert!(primary.is_file(), "packaged Tauri executable is missing");
     let version = Command::new(&actual_updater).arg("--version").output()?;

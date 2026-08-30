@@ -555,6 +555,7 @@ def run_pipeline(output_root: Path) -> Path:
                 "target": "3.5.0",
                 "previous_stable": "3.4.5",
                 "exact_artifact_update": "passed",
+                "exact_artifact_fault_rollback": "passed",
                 "package_selftest": "passed",
                 "core_selftest_negative_matrix": "passed",
                 "tauri_core_pair_smoke": "passed",
