@@ -115,9 +115,13 @@ fn old_file_bytes(path: &str) -> &'static [u8] {
 }
 
 fn assert_preserved(install: &Path) {
+    assert_preserved_config(install, br#"{"theme":"aurora"}"#);
+}
+
+fn assert_preserved_config(install: &Path, expected_config: &[u8]) {
     assert_eq!(
         fs::read(install.join("config.json")).expect("config"),
-        br#"{"theme":"aurora"}"#
+        expected_config
     );
     assert_eq!(
         fs::read(install.join(".env")).expect("env"),
@@ -163,10 +167,7 @@ impl Drop for ChildGuard {
 }
 
 fn wait_for_ready_handoff(local_app_data: &Path, updater_pid: u32) -> PathBuf {
-    let runs = local_app_data
-        .join(APP_NAME)
-        .join("update-state")
-        .join("update-runs");
+    let runs = local_app_data.join(APP_NAME).join("update-runs");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while std::time::Instant::now() < deadline {
         if let Ok(entries) = fs::read_dir(&runs) {
@@ -430,6 +431,16 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     fs::create_dir_all(&install).expect("install");
     extract_zip_file(&zip, &install)?;
     let target = read_staged_manifest(&install, TARGET_VERSION)?;
+    let packaged_config = fs::read(install.join("config.json")).expect("packaged config");
+    let user_config = String::from_utf8(packaged_config)
+        .expect("packaged config UTF-8")
+        .replace(r#""theme": "aurora""#, r#""theme": "classic""#)
+        .into_bytes();
+    assert_ne!(
+        user_config,
+        fs::read(install.join("config.json")).expect("packaged config")
+    );
+    write_file(&install, "config.json", &user_config);
     let mut previous = target.clone();
     previous.version = PREVIOUS_VERSION.into();
     previous.git_head = "a".repeat(40);
@@ -441,7 +452,6 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     });
     write_file(&install, "Sky-Player.exe", b"obsolete v3 identity");
     write_manifest(&install, &previous);
-    write_file(&install, "config.json", br#"{"theme":"aurora"}"#);
     write_file(&install, ".env", b"USER_SECRET=preserve");
     write_file(&install, "songs/user.skysheet", b"user song");
     write_file(&install, "logs/user.log", b"user log");
@@ -494,7 +504,7 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         "canonical Tauri restart did not bootstrap the new Core"
     );
     verify_installed_managed(&install, &target)?;
-    assert_preserved(&install);
+    assert_preserved_config(&install, &user_config);
     assert!(!install.join("Sky-Player.exe").exists());
     assert!(
         !local_app_data
