@@ -4,7 +4,7 @@ Date: 2026-08-30
 
 This is the Phase 7 update-flow qualification, not the Phase 8 final portable
 artifact qualification. The public source revision for the desktop update
-surface is `fc549b6`. Native/updater provenance is the checked-in
+surface is `01b599f`. Native/updater provenance is the checked-in
 `rust/crates/sky_updater` source plus its test-only deterministic fixture; a
 final updater binary is intentionally not asserted at this phase.
 

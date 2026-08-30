@@ -23,7 +23,7 @@ captures. Existing real-window evidence remains in `desktop-nonphysical/` and
 
 ## Source and provenance
 
-- Desktop implementation source: public `repo_head` `fc549b6`.
+- Desktop implementation source: public `repo_head` `01b599f`.
 - Native/updater provenance: the checked-in Rust `sky_updater` source and its
   deterministic test fixture; no final release binary is claimed here.
 - Exact packaged-artifact qualification remains a Phase 8 gate.
