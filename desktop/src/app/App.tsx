@@ -72,7 +72,10 @@ export function App({ bridge }: AppProps) {
       await state.patchSettings({ theme: state.bootstrap?.theme ?? 'aurora' });
       await state.setDiagnosticsEnabled(true);
       await state.setDiagnosticsEnabled(false);
-      await bridge.shutdown();
+      // The controlled-close command destroys this WebView after starting
+      // bounded Core cleanup. Do not wait for an invoke response from a
+      // window that is intentionally being destroyed.
+      void bridge.shutdown();
     };
 
     const onSmokeEvent = () => {

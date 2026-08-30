@@ -264,15 +264,21 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
 
 
 def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
-    result = subprocess.run(
-        [str(primary_exe), "--selftest-desktop-gui"],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=90,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [str(primary_exe), "--selftest-desktop-gui"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            "packaged Tauri GUI smoke timed out; "
+            f"stdout={error.stdout!r} stderr={error.stderr!r}"
+        ) from error
     if result.returncode != 0:
         raise RuntimeError(
             f"packaged Tauri GUI smoke failed ({result.returncode}): "

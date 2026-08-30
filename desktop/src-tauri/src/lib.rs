@@ -33,9 +33,21 @@ fn run_inner(gui_smoke: bool) {
         eprintln!("Sky Auto Player startup refused: {error}");
         return;
     }
+    let app_state = app_state::AppState::default();
+    app_state.set_gui_smoke_exit(gui_smoke);
     let mut builder = tauri::Builder::<ShellRuntime>::default()
-        .manage(app_state::AppState::default())
-        .setup(|_| Ok(()));
+        .manage(app_state)
+        .setup(move |app| {
+            if gui_smoke {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(45));
+                    eprintln!("packaged GUI smoke watchdog expired");
+                    app_handle.exit(1);
+                });
+            }
+            Ok(())
+        });
     if gui_smoke {
         builder = builder.on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
