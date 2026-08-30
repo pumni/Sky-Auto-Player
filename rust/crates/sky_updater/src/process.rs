@@ -56,9 +56,9 @@ pub fn query_process_image(pid: u32) -> Result<ProcessImage> {
                 "could not query process image".into(),
             ));
         }
-        return Ok(ProcessImage::Alive(PathBuf::from(
+        Ok(ProcessImage::Alive(PathBuf::from(
             std::ffi::OsString::from_wide(&buffer[..length as usize]),
-        )));
+        )))
     }
     #[cfg(not(windows))]
     {

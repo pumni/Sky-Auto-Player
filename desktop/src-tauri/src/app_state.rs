@@ -128,7 +128,7 @@ impl AppState {
         *self.inner.core.lock().expect("desktop state poisoned") = CoreState::Ready(supervisor);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "tauri-test", not(feature = "desktop-runtime")))]
     pub(crate) fn is_closing_for_test(&self) -> bool {
         self.is_closing()
     }

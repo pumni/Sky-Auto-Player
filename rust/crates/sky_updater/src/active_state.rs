@@ -58,18 +58,18 @@ where
         return Ok(None);
     }
     if state_path.metadata()?.len() > crate::SIDECAR_MAX_BYTES as u64 {
-        remove_state(&state_path);
+        remove_state(state_path);
         return Ok(None);
     }
-    let state: ActiveUpdateState = match serde_json::from_slice(&std::fs::read(&state_path)?) {
+    let state: ActiveUpdateState = match serde_json::from_slice(&std::fs::read(state_path)?) {
         Ok(state) => state,
         Err(_) => {
-            remove_state(&state_path);
+            remove_state(state_path);
             return Ok(None);
         }
     };
     if !valid_state(&state) {
-        remove_state(&state_path);
+        remove_state(state_path);
         return Ok(None);
     }
     if state.install_id != install_id(install_root)? {
@@ -77,7 +77,7 @@ where
     }
     let process = match query_process(state.updater_pid)? {
         process::ProcessImage::Exited => {
-            remove_state(&state_path);
+            remove_state(state_path);
             return Ok(None);
         }
         process::ProcessImage::Alive(path) => path,
@@ -85,7 +85,7 @@ where
     let image = match process.canonicalize() {
         Ok(path) => path,
         Err(_) => {
-            remove_state(&state_path);
+            remove_state(state_path);
             return Ok(None);
         }
     };
@@ -99,7 +99,7 @@ where
     let expected_run = match runs {
         Ok(path) => path,
         Err(_) => {
-            remove_state(&state_path);
+            remove_state(state_path);
             return Ok(None);
         }
     };
@@ -111,7 +111,7 @@ where
             .and_then(|name| name.to_str())
             != Some(state.run_id.as_str())
     {
-        remove_state(&state_path);
+        remove_state(state_path);
         return Ok(None);
     }
     Ok(Some(state))
