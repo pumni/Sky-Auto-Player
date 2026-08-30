@@ -136,8 +136,11 @@ fn packaged_update_and_injected_failure_rollback_preserve_user_state() {
         (CALIBRATION_EXE, b"B calibration"),
         ("new.dll", b"B new managed file"),
     ];
-    let manifest_a = manifest("1.0.0", &a_files);
-    let manifest_b = manifest("2.0.0", &b_files);
+    // Controlled previous-stable -> v4-candidate fixture. The final portable
+    // package remains a Phase 8 qualification concern; this test exercises the
+    // existing transaction contract against the architecture's target layout.
+    let manifest_a = manifest("3.4.5", &a_files);
+    let manifest_b = manifest("3.5.0", &b_files);
 
     let install_a = temp_root("install-a");
     let staging_b = temp_root("staging-b");
@@ -175,7 +178,7 @@ fn packaged_update_and_injected_failure_rollback_preserve_user_state() {
             .expect("installed manifest parses"),
         manifest_b
     );
-    result::write_result(&result::success("1.0.0", "2.0.0")).expect("success result");
+    result::write_result(&result::success("3.4.5", "3.5.0")).expect("success result");
     assert_eq!(read_result().status, "success");
     cleanup_committed(&install_a).expect("cleanup committed transaction");
     assert!(!transaction_root(&install_a).exists());
@@ -213,7 +216,7 @@ fn packaged_update_and_injected_failure_rollback_preserve_user_state() {
         manifest_a
     );
     let injected = UpdaterError::InstallCopyFailed("injected failure after mutation".into());
-    result::write_result(&result::rolled_back("1.0.0", "2.0.0", &injected))
+    result::write_result(&result::rolled_back("3.4.5", "3.5.0", &injected))
         .expect("rollback result");
     assert_eq!(read_result().status, "rolled_back");
     assert!(!transaction_root(&install_rollback).exists());
