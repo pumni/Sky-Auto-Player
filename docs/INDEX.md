@@ -20,6 +20,8 @@ sources.
 
 - [architecture.md](architecture.md) — Python/Rust layering, dependency direction, and component
   ownership.
+- [architecture-target.md](architecture-target.md) — Rust-first migration target and dependency
+  invariants; current runtime remains in `architecture.md` until each phase passes.
 - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — current native real-time dispatch
   contract and runtime boundary.
 - [timing-principles.md](timing-principles.md) — timing semantics, targets, measurement domains, and

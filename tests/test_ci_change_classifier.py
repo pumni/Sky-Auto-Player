@@ -34,13 +34,27 @@ def test_regression_test_changes_run_code_but_not_package_build() -> None:
     assert not result.package_required
 
 
-def test_runtime_and_release_inputs_require_portable_qualification() -> None:
+def test_runtime_source_changes_run_code_but_not_exact_package() -> None:
     result = _load().classify(
         ["src/sky_music/cli/desktop_core.py", "desktop/src-tauri/src/main.rs"]
     )
     assert result.static_required
     assert result.code_required
-    assert result.package_required
+    assert not result.package_required
+
+
+def test_package_sensitive_boundaries_require_exact_qualification() -> None:
+    audit = _load()
+    for path in (
+        "rust/crates/sky_updater/src/policy.rs",
+        "desktop/src-tauri/tauri.conf.json",
+        "desktop/src-tauri/build.rs",
+        ".cargo/config.toml",
+    ):
+        result = audit.classify([path])
+        assert result.static_required
+        assert result.code_required
+        assert result.package_required
 
 
 def test_ci_and_release_workflow_changes_require_portable_qualification() -> None:
