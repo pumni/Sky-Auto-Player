@@ -53,7 +53,9 @@ evidence:
 ## First launch
 
 On first launch the application creates a `config.json` file in the installation folder.
-You do not need to edit this file manually — all settings are accessible from within the TUI.
+You do not need to edit this file manually — all supported settings are available from the
+desktop app's **Settings** dialog. The packaged Textual interface remains available as a
+keyboard-first fallback through `play.bat` or `Sky-Auto-Player-Core.exe --tui`.
 
 If Windows shows a SmartScreen prompt ("Windows protected your PC"), click
 **More info → Run anyway**. The binary is not code-signed; SmartScreen shows this warning
@@ -63,9 +65,18 @@ for any unsigned executable downloaded from the internet.
 
 1. Export a sheet from the [Sky Music editor](https://specy.github.io/skyMusic/) as JSON, `.skysheet`, or TXT.
 2. Copy or move the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
-3. In the picker, press `Ctrl+R` to reload the list.
+3. In the desktop Library, press **Reload songs**. In the Textual fallback, press `Ctrl+R`.
 
-## Hotkeys
+## Desktop shortcuts
+
+| Shortcut | Action                            |
+| -------- | --------------------------------- |
+| `/`      | Focus song search                 |
+| `Ctrl+F` | Focus song search                 |
+| `Esc`    | Close the active safe overlay     |
+| `q`      | No quit action in the desktop GUI |
+
+The supported Textual fallback keeps its keyboard controls:
 
 | Hotkey      | Action                  |
 | ----------- | ----------------------- |

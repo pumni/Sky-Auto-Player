@@ -1,8 +1,8 @@
 """Build and qualify the exact v4 portable Windows release candidate.
 
-This is the Phase 8 release entry point.  It reuses the native build and
-manifest helpers from ``src/build_app.py`` but assembles the Tauri shell and
-the single Core runtime into the canonical portable layout.
+This is the canonical portable release entry point. It reuses the native build
+and manifest helpers from ``src/build_app.py`` but assembles the Tauri shell
+and the single Core runtime into the portable layout.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def _hash_file(path: Path) -> str:
 
 
 def _run(command: Sequence[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
-    print(f"[phase8] {' '.join(str(item) for item in command)}", flush=True)
+    print(f"[portable-release] {' '.join(str(item) for item in command)}", flush=True)
     subprocess.run(list(command), cwd=str(cwd), env=env, check=True)
 
 
@@ -273,8 +273,8 @@ def _run_core_selftest_negative_matrix(core_exe: Path, *, cwd: Path) -> None:
     )
     for scenario in scenarios:
         env = os.environ.copy()
-        env["SKY_PHASE8_SELFTEST_TIMEOUT_SECONDS"] = "0.1"
-        env["SKY_PHASE8_SELFTEST_CHILD"] = json.dumps(
+        env["SKY_DESKTOP_SELFTEST_TIMEOUT_SECONDS"] = "0.1"
+        env["SKY_DESKTOP_SELFTEST_CHILD"] = json.dumps(
             [sys.executable, str(fixture), scenario]
         )
         result = subprocess.run(
@@ -293,7 +293,7 @@ def _run_core_selftest_negative_matrix(core_exe: Path, *, cwd: Path) -> None:
                 f"{_decode_output(result.stdout)}"
             )
     missing_env = os.environ.copy()
-    missing_env["SKY_PHASE8_SELFTEST_CHILD"] = json.dumps(
+    missing_env["SKY_DESKTOP_SELFTEST_CHILD"] = json.dumps(
         [str(cwd / "missing-core.exe")]
     )
     missing = subprocess.run(
@@ -334,7 +334,7 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
     # The real production Core remains native-calibration-backed.  This
     # packaging-only environment selects the explicit no-input seam so the
     # actual Tauri/Core smoke can exercise calibration safely in CI.
-    env["SKY_PHASE8_SAFE_CALIBRATION"] = "1"
+    env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
     try:
         result = subprocess.run(
             [str(primary_exe), "--selftest-desktop-gui"],
@@ -379,8 +379,8 @@ def _run_tui_smoke(core_exe: Path, *, cwd: Path) -> None:
 
 def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> None:
     env = os.environ.copy()
-    env["SKY_PHASE8_ARTIFACT_DIR"] = str(output_root)
-    env["SKY_PHASE8_E2E_UPDATER"] = str(e2e_updater)
+    env["SKY_PORTABLE_ARTIFACT_DIR"] = str(output_root)
+    env["SKY_PORTABLE_E2E_UPDATER"] = str(e2e_updater)
     _run(
         [
             "cargo",
@@ -390,7 +390,7 @@ def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> No
             "-p",
             "sky_updater",
             "--test",
-            "phase8_exact_artifact",
+            "portable_exact_artifact",
             "--all-features",
             "--locked",
             "--",
@@ -402,7 +402,7 @@ def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> No
 
 def _build() -> tuple[Path, Path, Path, Path, Path]:
     if sys.platform != "win32":
-        raise RuntimeError("Phase 8 portable build requires Windows")
+        raise RuntimeError("portable release build requires Windows")
     git_head = build_app.get_git_head()
     version = build_app.get_project_version()
     if version != VERSION:
@@ -508,7 +508,7 @@ def run_pipeline(output_root: Path) -> Path:
     _run(
         [sys.executable, str(verifier), "--release-dir", str(release_dir), "--version", VERSION]
     )
-    smoke_root = Path(tempfile.mkdtemp(prefix="Sky Auto Player Phase8 "))
+    smoke_root = Path(tempfile.mkdtemp(prefix="Sky Auto Player portable "))
     try:
         smoke_dir = smoke_root / release_dir.name
         shutil.copytree(release_dir, smoke_dir)
@@ -529,7 +529,7 @@ def run_pipeline(output_root: Path) -> Path:
         zip_path=zip_path,
         native_build_commit=repo_head,
     )
-    (output_root / "PHASE8_ARTIFACT_SUMMARY.json").write_text(
+    (output_root / "PORTABLE_ARTIFACT_SUMMARY.json").write_text(
         json.dumps(
             {
                 "repo_head": repo_head,
@@ -547,7 +547,7 @@ def run_pipeline(output_root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
-    (output_root / "PHASE8_QUALIFICATION.json").write_text(
+    (output_root / "PORTABLE_QUALIFICATION.json").write_text(
         json.dumps(
             {
                 "repo_head": repo_head,
@@ -578,14 +578,14 @@ def run_pipeline(output_root: Path) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=ROOT / "dist" / "phase8")
+    parser.add_argument("--output-root", type=Path, default=ROOT / "dist" / "portable")
     args = parser.parse_args(argv)
     if args.output_root.exists():
         # This is a narrow generated output directory, never a repository path.
         shutil.rmtree(args.output_root)
     args.output_root.mkdir(parents=True, exist_ok=True)
     release_dir = run_pipeline(args.output_root.resolve())
-    print(f"Phase 8 artifact ready: {release_dir}")
+    print(f"Portable release artifact ready: {release_dir}")
     return 0
 
 

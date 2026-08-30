@@ -19,38 +19,38 @@ const { data, locale } = Astro.props;
   <div class="container product-view__layout">
     <figure class="screenshot-frame ui-product-stage">
       <div class="screenshot-frame__bar">
-        <span>SKY AUTO PLAYER / PICKER</span>
-        <span>PRODUCT PROOF / PORTABLE</span>
+        <span>SKY AUTO PLAYER / DESKTOP</span>
+        <span>REAL TAURI WINDOW / PORTABLE</span>
       </div>
       <a
         class="screenshot-link"
-        href={withBase('/assets/images/picker.webp')}
+        href={withBase('/assets/images/library-real-tauri.png')}
         aria-label={locale === 'vi'
-          ? 'Mở ảnh trình chọn kích thước lớn'
-          : 'Open picker screenshot at full size'}
+          ? 'Mở ảnh giao diện desktop kích thước lớn'
+          : 'Open desktop GUI screenshot at full size'}
       >
         <picture>
           <source
             media="(max-width: 40rem)"
-            srcset={withBase('/assets/images/picker-mobile.webp')}
-            width="1095"
-            height="821"
+            srcset={withBase('/assets/images/minimum-real-tauri.png')}
+            width="920"
+            height="620"
           />
           <img
-            src={withBase('/assets/images/picker.webp')}
+            src={withBase('/assets/images/library-real-tauri.png')}
             alt={locale === 'vi'
-              ? 'Trình chọn bài nhạc của Sky Auto Player'
-              : 'Sky Auto Player song picker'}
-            width="1331"
-            height="821"
+              ? 'Giao diện Library desktop của Sky Auto Player'
+              : 'Sky Auto Player desktop Library'}
+            width="1214"
+            height="798"
           />
         </picture>
       </a>
       <figcaption>
         <span
-          >{locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}</span
+          >{locale === 'vi' ? 'Giao diện desktop chính thức' : 'Canonical desktop interface'}</span
         >
-        <span class="screenshot-frame__caption-meta">WEBP · FULL SIZE</span>
+        <span class="screenshot-frame__caption-meta">PNG · REAL TAURI WINDOW</span>
       </figcaption>
     </figure>
 

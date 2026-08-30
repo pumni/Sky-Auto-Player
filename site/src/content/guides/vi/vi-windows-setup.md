@@ -52,7 +52,9 @@ evidence:
 ## Lần khởi động đầu tiên
 
 Lần đầu khởi động, ứng dụng tạo file `config.json` trong thư mục cài đặt. Bạn không cần
-chỉnh sửa file này thủ công — tất cả cài đặt có thể truy cập từ bên trong TUI.
+chỉnh sửa file này thủ công — mọi cài đặt được hỗ trợ đều có trong hộp thoại **Settings** của
+ứng dụng desktop. Giao diện Textual vẫn có thể dùng như fallback điều khiển bằng bàn phím qua
+`play.bat` hoặc `Sky-Auto-Player-Core.exe --tui`.
 
 Nếu Windows hiện cảnh báo SmartScreen ("Windows đã bảo vệ máy tính của bạn"), nhấn
 **Thêm thông tin → Vẫn chạy**. Tệp thực thi chưa được ký mã; SmartScreen hiển thị cảnh
@@ -62,11 +64,20 @@ báo này cho bất kỳ tệp unsigned nào tải từ internet.
 
 1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, `.skysheet`, hoặc TXT.
 2. Sao chép hoặc di chuyển file vào thư mục `songs/` cạnh `Sky-Auto-Player.exe`.
-3. Trong picker, nhấn `Ctrl+R` để reload danh sách.
+3. Trong Library desktop, nhấn **Reload songs**. Trong fallback Textual, nhấn `Ctrl+R`.
 
-## Hotkey
+## Phím tắt desktop
 
-| Hotkey      | Hành động                |
+| Phím tắt | Hành động                    |
+| -------- | ---------------------------- |
+| `/`      | Focus ô tìm kiếm bài         |
+| `Ctrl+F` | Focus ô tìm kiếm bài         |
+| `Esc`    | Đóng overlay an toàn đang mở |
+| `q`      | Không thoát desktop GUI      |
+
+Fallback Textual vẫn giữ các phím tắt điều khiển bằng bàn phím:
+
+| Phím tắt    | Hành động                |
 | ----------- | ------------------------ |
 | `/`         | Mở command palette       |
 | `F8`        | Tạm dừng / tiếp tục phát |

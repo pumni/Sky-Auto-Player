@@ -56,8 +56,8 @@ Sky-Auto-Player/
     └── third-song.txt
 ```
 
-After adding files, press `Ctrl+R` in the song picker to reload the list without
-restarting the application.
+After adding files, press **Reload songs** in the desktop Library without restarting the
+application. The Textual fallback uses `Ctrl+R` for the same action.
 
 ## Getting a sheet file
 
@@ -68,9 +68,10 @@ restarting the application.
 
 ## Common issues
 
-**File not appearing in the picker**
-: Reload with `Ctrl+R`. If the file still does not appear, verify the file extension
-is `.json`, `.skysheet`, or `.txt`. Other extensions are not recognised.
+**File not appearing in the Library**
+: Use **Reload songs** in the desktop GUI. In the Textual fallback, reload with `Ctrl+R`.
+If the file still does not appear, verify the file extension is `.json`, `.skysheet`, or `.txt`.
+Other extensions are not recognised.
 
 **"Failed to parse" error**
 : The file content is not valid JSON. Open the file in a text editor to confirm it

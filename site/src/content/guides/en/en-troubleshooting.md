@@ -7,7 +7,7 @@ description: >-
   Common issues with Sky Auto Player: song not appearing, notes out of sync, holds
   not registering, SmartScreen warnings, and update failures — with solutions.
 summary: >-
-  Symptom-based troubleshooting for Sky Auto Player: song picker issues, playback timing
+  Symptom-based troubleshooting for Sky Auto Player: Library issues, playback timing
   problems, hold registration, SmartScreen, and update failures. Covers known limitations
   that cannot be fixed from the player side.
 category: support
@@ -31,14 +31,15 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md
 ---
 
-## Song not appearing in the picker
+## Song not appearing in the Library
 
-**Cause**: The file extension is not recognised, or the picker has not been reloaded.
+**Cause**: The file extension is not recognised, or the Library has not been reloaded.
 
 **Fix**:
 
 1. Confirm the file extension is `.json`, `.skysheet`, or `.txt`.
-2. Press `Ctrl+R` in the picker to reload without restarting.
+2. Press **Reload songs** in the desktop GUI without restarting. In the Textual fallback, press
+   `Ctrl+R`.
 3. If still missing, check that the file is directly inside the `songs/` folder, not in a subfolder.
 
 ## "Failed to parse" or parse error on launch

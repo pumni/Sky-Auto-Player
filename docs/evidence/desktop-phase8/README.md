@@ -2,13 +2,13 @@
 
 Phase 8 produces one unsigned portable release candidate from the exact
 checked-out commit. The authoritative generated evidence is emitted beside
-the artifact by `scripts/build_phase8.py`:
+the artifact by `scripts/build_portable_release.py`:
 
 - `PROVENANCE.json` records the public repository head, pinned Python/Rust/Bun/
   Tauri/PyInstaller identities, exact ZIP hash, manifest hash, and file count.
-- `PHASE8_ARTIFACT_SUMMARY.json` repeats the final ZIP size/hash, MANIFEST hash,
+- `PORTABLE_ARTIFACT_SUMMARY.json` repeats the final ZIP size/hash, MANIFEST hash,
   portable file count, and managed-entry count for CI summaries and review.
-- `PHASE8_QUALIFICATION.json` records the Core self-test, packaged
+- `PORTABLE_QUALIFICATION.json` records the Core self-test, packaged
   Tauri/Core pairing smoke, the fail-closed Core self-test negative matrix,
   packaged GUI smoke, packaged TUI smoke, and exact-artifact updater
   qualification.

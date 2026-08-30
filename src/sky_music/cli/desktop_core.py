@@ -111,7 +111,7 @@ def run_desktop_core(
             install_root=install_root,
             calibration_runner=(
                 run_packaged_smoke_calibration
-                if os.environ.get("SKY_PHASE8_SAFE_CALIBRATION") == "1"
+                if os.environ.get("SKY_PACKAGED_SAFE_CALIBRATION") == "1"
                 else None
             ),
         )

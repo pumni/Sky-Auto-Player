@@ -93,9 +93,10 @@ sender đo được, không phải đảm bảo timing tuyệt đối.
 ## Rust dispatch worker
 
 Một Rust worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân
-giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp, và telemetry native. Python sở
-hữu TUI và luồng ứng dụng. Chúng chạy trên các thread riêng biệt; build Python 3.14
-free-threaded đảm bảo vòng lặp dispatch không tranh chấp với Textual UI trên GIL.
+giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp, và telemetry native. Tauri/React
+render desktop GUI chính thức; Python Core sở hữu policy ứng dụng dùng chung, còn Textual
+là fallback được hỗ trợ. Chúng chạy trên các thread riêng biệt; build Python 3.14
+free-threaded đảm bảo vòng lặp dispatch không tranh chấp với các đường UI trên GIL.
 
 ## Giới hạn đã biết
 

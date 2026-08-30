@@ -108,14 +108,14 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player Phase8"
-          uv run --env-file .env python scripts/build_phase8.py --output-root $output
-          "SKY_PHASE8_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player portable"
+          uv run --env-file .env python scripts/build_portable_release.py --output-root $output
+          "SKY_PORTABLE_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify exact release tree and manifest
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
-          $rel = Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$ver"
+          $rel = Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$ver"
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir $rel --version $ver
           $e2e = Get-ChildItem $rel -Recurse -File -ErrorAction SilentlyContinue |
@@ -126,12 +126,12 @@ jobs:
         id: stage
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
-          $artifact = Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$ver.zip"
+          $artifact = Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$ver.zip"
           $sidecar = "$artifact.sha256"
-          $manifest = Join-Path $env:SKY_PHASE8_OUTPUT "MANIFEST.json"
-          $provenance = Join-Path $env:SKY_PHASE8_OUTPUT "PROVENANCE.json"
+          $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
+          $provenance = Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json"
           foreach ($path in @($artifact, $sidecar, $manifest, $provenance)) {
-            if (-not (Test-Path $path)) { throw "Missing exact Phase 8 release asset: $path" }
+            if (-not (Test-Path $path)) { throw "Missing exact portable release asset: $path" }
           }
           Copy-Item $artifact "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip"
           Copy-Item $sidecar "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256"

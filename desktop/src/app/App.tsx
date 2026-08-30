@@ -204,8 +204,8 @@ export function App({ bridge }: AppProps) {
         });
       });
     };
-    window.addEventListener('sky-phase8-gui-smoke', onSmokeEvent);
-    if ((window as Window & { __SKY_PHASE8_GUI_SMOKE__?: boolean }).__SKY_PHASE8_GUI_SMOKE__) {
+    window.addEventListener('sky-desktop-gui-smoke', onSmokeEvent);
+    if ((window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__) {
       void runPackagedSmoke().catch((error: unknown) => {
         console.error('packaged GUI smoke failed', error);
         void bridge.shutdown(true).catch((shutdownError: unknown) => {
@@ -213,7 +213,7 @@ export function App({ bridge }: AppProps) {
         });
       });
     }
-    return () => window.removeEventListener('sky-phase8-gui-smoke', onSmokeEvent);
+    return () => window.removeEventListener('sky-desktop-gui-smoke', onSmokeEvent);
   }, [bridge, useStore]);
 
   return (

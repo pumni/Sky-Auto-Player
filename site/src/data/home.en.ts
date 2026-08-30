@@ -76,11 +76,11 @@ export const homeEn: HomeContent = {
     kicker: 'The actual player',
     title: 'Your library, timing profile and controls in one place.',
     description:
-      'The keyboard-first picker keeps song search, playback setup and status visible without adding a heavyweight desktop interface.',
+      'The Tauri desktop app keeps song search, playback setup and status visible in one focused window.',
     annotations: [
-      'Search and select songs from the terminal picker.',
-      'Review the suggested timing profile before playback.',
-      'Keep pause, skip and stop controls within reach.',
+      'Search and select songs from the desktop Library.',
+      'Review timing risk and recommendations in Song Detail.',
+      'Keep playback, diagnostics and settings within reach.',
     ],
   },
   steps: {
@@ -103,7 +103,8 @@ export const homeEn: HomeContent = {
           'Open Sky Auto Player, choose a song, then switch to the Sky window when you are ready.',
       },
     ],
-    hotkeyNote: 'Ctrl+R reloads the library · F8 pauses · F9 skips · F10 stops',
+    hotkeyNote:
+      'Press Reload songs in the GUI · / or Ctrl+F focuses search · Esc closes safe overlays',
   },
   technical: {
     kicker: 'Technical boundaries',

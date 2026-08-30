@@ -7,7 +7,7 @@ description: >-
   Các vấn đề thường gặp với Sky Auto Player: bài hát không hiện, nốt lệch nhịp, hold không đăng ký,
   cảnh báo SmartScreen và lỗi cập nhật — kèm giải pháp.
 summary: >-
-  Xử lý sự cố theo triệu chứng cho Sky Auto Player: vấn đề picker, timing phát nhạc, đăng ký hold,
+  Xử lý sự cố theo triệu chứng cho Sky Auto Player: vấn đề Library, timing phát nhạc, đăng ký hold,
   SmartScreen và lỗi cập nhật. Bao gồm các giới hạn đã biết không thể sửa từ phía player.
 category: support
 order: 1
@@ -30,14 +30,15 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md
 ---
 
-## Bài hát không hiện trong picker
+## Bài hát không hiện trong Library
 
-**Nguyên nhân**: Phần mở rộng file không được nhận diện, hoặc picker chưa được reload.
+**Nguyên nhân**: Phần mở rộng file không được nhận diện, hoặc Library chưa được reload.
 
 **Sửa**:
 
 1. Xác nhận phần mở rộng là `.json`, `.skysheet`, hoặc `.txt`.
-2. Nhấn `Ctrl+R` trong picker để reload mà không cần khởi động lại.
+2. Nhấn **Reload songs** trong desktop GUI để reload mà không cần khởi động lại. Trong fallback
+   Textual, nhấn `Ctrl+R`.
 3. Nếu vẫn không hiện, kiểm tra file nằm trực tiếp trong thư mục `songs/`, không phải trong thư mục con.
 
 ## Lỗi "Failed to parse" hoặc lỗi parse khi khởi động

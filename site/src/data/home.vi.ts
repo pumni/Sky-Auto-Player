@@ -73,11 +73,11 @@ export const homeVi: HomeContent = {
     kicker: 'Ứng dụng thực tế',
     title: 'Thư viện, profile timing và điều khiển trong cùng một giao diện.',
     description:
-      'Trình chọn điều khiển bằng bàn phím giữ tìm kiếm bài hát, thiết lập phát và trạng thái trong một nơi mà không cần giao diện desktop nặng nề.',
+      'Ứng dụng desktop Tauri giữ việc tìm kiếm, thiết lập phát và trạng thái trong một cửa sổ tập trung.',
     annotations: [
-      'Tìm và chọn bài trong trình chọn terminal.',
-      'Xem profile timing được gợi ý trước khi phát.',
-      'Luôn có sẵn điều khiển tạm dừng, bỏ qua và dừng.',
+      'Tìm và chọn bài trong Library desktop.',
+      'Xem rủi ro timing và đề xuất trong Song Detail.',
+      'Luôn có sẵn playback, diagnostics và settings.',
     ],
   },
   steps: {
@@ -100,7 +100,8 @@ export const homeVi: HomeContent = {
           'Mở Sky Auto Player, chọn bài hát rồi chuyển sang cửa sổ Sky khi bạn đã sẵn sàng.',
       },
     ],
-    hotkeyNote: 'Ctrl+R tải lại thư viện · F8 tạm dừng · F9 bỏ qua · F10 dừng',
+    hotkeyNote:
+      'Nhấn Reload songs trong GUI · / hoặc Ctrl+F để focus tìm kiếm · Esc đóng overlay an toàn',
   },
   technical: {
     kicker: 'Giới hạn kỹ thuật',

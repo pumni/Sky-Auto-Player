@@ -27,6 +27,11 @@ Textual remains a supported fallback and consumes the same extracted Python
 orchestration services. Migration proceeds incrementally; there is no big-bang
 rewrite and no early removal of the Textual implementation.
 
+The Phase 9 product cutover makes the packaged Tauri/React desktop application
+the canonical user-facing surface. This changes product guidance and release
+documentation only; it does not remove the Textual fallback or change the
+shared service, native timing, or input boundaries.
+
 ## Consequences
 
 - Playback preparation, catalog access, metadata coordination, settings, and

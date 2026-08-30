@@ -48,6 +48,10 @@ Quy trình sử dụng điển hình:
 2. Đặt file vào thư mục `songs/` cạnh `Sky-Auto-Player.exe`.
 3. Khởi động Sky Auto Player, chọn bài, chuyển sang game và nhấn hotkey phát nhạc.
 
+Bản đóng gói `Sky-Auto-Player.exe` là giao diện Tauri desktop chính thức, gồm Library, Song
+Detail, Player Dock, Diagnostics, Settings và Update. `play.bat` cùng
+`Sky-Auto-Player-Core.exe --tui` vẫn là các entry point fallback điều khiển bằng bàn phím.
+
 Sky Auto Player gửi phím; game nhận chúng theo lịch của riêng nó. Độ chính xác timing
 về phía game phụ thuộc vào lịch trình Windows, tần số polling input của game, và phần cứng
 của bạn — không phải do player kiểm soát.
@@ -79,7 +83,7 @@ Code tuân theo thiết kế bốn lớp:
 | **Infrastructure** | Theo dõi focus, hotkey listener, real-time sleeper, đăng ký MMCSS.                  |
 | **Platform**       | Backend Windows: `SendInput`, waitable timer, MMCSS. Nơi duy nhất chứa Win32 types. |
 
-Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp và telemetry native. Python sở hữu TUI và luồng ứng dụng. Chúng chạy trên các thread riêng biệt; build Python 3.14 free-threaded đảm bảo vòng lặp dispatch không tranh chấp với Textual UI trên GIL.
+Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp và telemetry native. Tauri/React render desktop UI, còn Python Core sở hữu policy ứng dụng và orchestration dùng chung. Fallback Textual dùng các service đã tách ra này. Các đường presentation và dispatch chạy trên thread riêng; build Python 3.14 free-threaded đảm bảo vòng lặp dispatch không tranh chấp với UI trên GIL.
 
 ## Những gì Sky Auto Player KHÔNG làm
 

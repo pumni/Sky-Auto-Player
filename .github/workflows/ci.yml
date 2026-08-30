@@ -23,7 +23,7 @@ defaults:
 
 jobs:
   changes:
-    name: Detect relevant changes
+    name: Classify validation layers
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -31,7 +31,10 @@ jobs:
         shell: bash
 
     outputs:
-      relevant: ${{ steps.filter.outputs.relevant }}
+      static_required: ${{ steps.filter.outputs.static_required }}
+      code_required: ${{ steps.filter.outputs.code_required }}
+      package_required: ${{ steps.filter.outputs.package_required }}
+      classification_reason: ${{ steps.filter.outputs.classification_reason }}
 
     steps:
       - name: Checkout
@@ -51,44 +54,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "Manual validation runs all relevant gates."
-            exit 0
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
+            classification="$(printf '\n' | python scripts/classify_ci_changes.py --full)"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             changed_files="$(git diff --name-only "$PR_BASE_SHA" "$CURRENT_SHA")"
+            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
           elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
             changed_files="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA")"
+            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
           else
             changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
+            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
           fi
 
-          relevant=false
-          while IFS= read -r path; do
-            case "$path" in
-              # Winget is not currently supported; no manifest validation is run.
-              src/*|tests/*|scripts/*|rust/*|desktop/*|.cargo/*|.github/workflows/*|.github/actions/*|.github/ISSUE_TEMPLATE/*)
-                relevant=true
-                break
-                ;;
-              pyproject.toml|uv.lock|.python-version|.env.example|Sky-Auto-Player.spec|Sky-Auto-Player-Core.spec)
-                relevant=true
-                break
-                ;;
-              windows_version_info.txt|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|SECURITY.md|docs/INDEX.md|docs/README.md|.github/PULL_REQUEST_TEMPLATE.md|.config/security_audit_baseline.json|.config/rust_architecture_allowlist.json)
-                relevant=true
-                break
-                ;;
-            esac
-          done <<< "$changed_files"
-
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "Relevant validation changes: $relevant"
+          printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$classification"
+          {
+            echo '## Validation classification'
+            echo '```text'
+            printf '%s\n' "$classification"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   static:
     name: Static and security gates
     needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.static_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -124,7 +115,7 @@ jobs:
   validate:
     name: Windows compatibility and unit tests
     needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.code_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -185,7 +176,7 @@ jobs:
   packaged:
     name: Packaged frozen unsigned app smoke
     needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -228,27 +219,27 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Build and qualify exact Phase 8 portable artifact
+      - name: Build and qualify exact portable artifact
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player Phase8"
-          uv run --env-file .env python scripts/build_phase8.py --output-root $output
-          "SKY_PHASE8_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player portable"
+          uv run --env-file .env python scripts/build_portable_release.py --output-root $output
+          "SKY_PORTABLE_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify packaged release tree
         run: |
           $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
           uv run --env-file .env python scripts/verify_release_manifest.py `
-            --release-dir (Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$version") --version $version
+            --release-dir (Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$version") --version $version
 
-      - name: Report exact Phase 8 artifact identity
+      - name: Report exact portable artifact identity
         shell: pwsh
         run: |
-          $summary = Get-Content (Join-Path $env:SKY_PHASE8_OUTPUT "PHASE8_ARTIFACT_SUMMARY.json") -Raw | ConvertFrom-Json
+          $summary = Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PORTABLE_ARTIFACT_SUMMARY.json") -Raw | ConvertFrom-Json
           @"
-          ## Phase 8 exact artifact
+          ## Exact portable artifact
           - repo head: ``$($summary.repo_head)``
           - ZIP: ``$($summary.artifact_name)`` ($($summary.artifact_size) bytes)
           - ZIP SHA-256: ``$($summary.artifact_sha256)``
@@ -256,13 +247,13 @@ jobs:
           - portable files: $($summary.portable_file_count)
           - managed entries: $($summary.managed_entry_count)
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-          Get-Content (Join-Path $env:SKY_PHASE8_OUTPUT "PROVENANCE.json")
+          Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json")
 
-      - name: Upload exact Phase 8 release candidate
+      - name: Upload exact portable release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sky-auto-player-phase8-portable-v${{ hashFiles('pyproject.toml') }}
-          path: ${{ runner.temp }}/Sky Auto Player Phase8
+          name: sky-auto-player-portable-v${{ hashFiles('pyproject.toml') }}
+          path: ${{ runner.temp }}/Sky Auto Player portable
           if-no-files-found: error
           retention-days: 14
 
@@ -280,13 +271,16 @@ jobs:
       - name: Require relevant gates to pass
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
+          CODE_REQUIRED: ${{ needs.changes.outputs.code_required }}
+          PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           STATIC_RESULT: ${{ needs.static.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
-          [[ "$STATIC_RESULT" == "success" || "$STATIC_RESULT" == "skipped" ]]
-          [[ "$VALIDATE_RESULT" == "success" || "$VALIDATE_RESULT" == "skipped" ]]
-          [[ "$PACKAGED_RESULT" == "success" || "$PACKAGED_RESULT" == "skipped" ]]
+          if [[ "$STATIC_REQUIRED" == "true" ]]; then [[ "$STATIC_RESULT" == "success" ]]; else [[ "$STATIC_RESULT" == "skipped" ]]; fi
+          if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
+          if [[ "$PACKAGE_REQUIRED" == "true" ]]; then [[ "$PACKAGED_RESULT" == "success" ]]; else [[ "$PACKAGED_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
