@@ -15,13 +15,37 @@ type ShellRuntime = tauri::test::MockRuntime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_inner(false);
+}
+
+/// Run the production shell with a packaging-only WebView smoke hook.
+///
+/// The hook is selected only by the hidden release self-test argument. It
+/// dispatches a DOM event after the real frontend has loaded; React then
+/// exercises the production bridge and closes through the normal controlled
+/// lifecycle. No test command or alternate runtime is exposed to the user.
+pub fn run_gui_smoke() {
+    run_inner(true);
+}
+
+fn run_inner(gui_smoke: bool) {
     if let Err(error) = core::check_startup_update_guard() {
         eprintln!("Sky Auto Player startup refused: {error}");
         return;
     }
-    tauri::Builder::<ShellRuntime>::default()
+    let mut builder = tauri::Builder::<ShellRuntime>::default()
         .manage(app_state::AppState::default())
-        .setup(|_| Ok(()))
+        .setup(|_| Ok(()));
+    if gui_smoke {
+        builder = builder.on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = webview.eval(
+                    "window.__SKY_PHASE8_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-phase8-gui-smoke'));",
+                );
+            }
+        });
+    }
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::search_songs,

@@ -28,10 +28,13 @@ Sky-Auto-Player-v3.5.0/
 
 The package smoke is run from a temporary Windows path containing spaces. It
 uses no repository checkout, source `.venv`, Bun server, game process, or
-physical input. The Tauri self-test uses the production release launch
-command and `CoreSupervisor` to validate the packaged shell/Core pairing; it
-is intentionally headless so CI does not synthesize a physical playback
-session. Exact GUI visual acceptance remains a manual release check.
+physical input. The headless Tauri self-test uses the production release launch
+command and `CoreSupervisor` to validate the packaged shell/Core pairing. A
+second packaging-only smoke launches the real Wry window and lets the
+production React store exercise bootstrap, Library search, settings
+round-trip, and diagnostics enable/disable through the real Tauri bridge
+before the approved controlled shutdown path closes the window. Exact GUI
+visual acceptance remains a manual release check.
 
 Previous-stable qualification is `3.4.5 → 3.5.0` and exercises the native
 updater's ZIP/sidecar/manifest checks, staged verification, managed-file

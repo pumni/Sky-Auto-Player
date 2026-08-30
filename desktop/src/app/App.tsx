@@ -46,6 +46,45 @@ export function App({ bridge }: AppProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [settingsOpen, useStore]);
 
+  useEffect(() => {
+    let completed = false;
+    const runPackagedSmoke = async () => {
+      if (completed) return;
+      completed = true;
+      const waitForReady = async () => {
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const state = useStore.getState();
+          if (state.bootstrapState === 'ready' && state.settings) return;
+          if (state.bootstrapState === 'fatal') {
+            throw new Error(state.fatal ?? 'packaged GUI bootstrap failed');
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+        }
+        throw new Error('packaged GUI bootstrap timed out');
+      };
+
+      await waitForReady();
+      const state = useStore.getState();
+      if (!document.querySelector('.app-shell')) {
+        throw new Error('packaged GUI shell did not render');
+      }
+      await state.search('');
+      await state.patchSettings({ theme: state.bootstrap?.theme ?? 'aurora' });
+      await state.setDiagnosticsEnabled(true);
+      await state.setDiagnosticsEnabled(false);
+      await bridge.shutdown();
+    };
+
+    const onSmokeEvent = () => {
+      void runPackagedSmoke();
+    };
+    window.addEventListener('sky-phase8-gui-smoke', onSmokeEvent);
+    if ((window as Window & { __SKY_PHASE8_GUI_SMOKE__?: boolean }).__SKY_PHASE8_GUI_SMOKE__) {
+      void runPackagedSmoke();
+    }
+    return () => window.removeEventListener('sky-phase8-gui-smoke', onSmokeEvent);
+  }, [bridge, useStore]);
+
   return (
     <BootstrapGate useStore={useStore}>
       {bootstrap && (

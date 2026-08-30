@@ -263,6 +263,24 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
     print(result.stdout.strip())
 
 
+def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
+    result = subprocess.run(
+        [str(primary_exe), "--selftest-desktop-gui"],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=90,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"packaged Tauri GUI smoke failed ({result.returncode}): "
+            f"{result.stderr[-4000:]}"
+        )
+    print("Packaged Tauri GUI smoke: PASS")
+
+
 def _run_tui_smoke(core_exe: Path, *, cwd: Path) -> None:
     result = subprocess.run(
         [str(core_exe), "--tui", "--list"],
@@ -391,6 +409,7 @@ def run_pipeline(output_root: Path) -> Path:
         shutil.copytree(release_dir, smoke_dir)
         _run_core_selftest(smoke_dir / CORE_EXE, cwd=smoke_dir)
         _run_tauri_pair_selftest(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
+        _run_tauri_gui_smoke(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
         _run_tui_smoke(smoke_dir / CORE_EXE, cwd=smoke_dir)
     finally:
         shutil.rmtree(smoke_root, ignore_errors=True)
@@ -414,6 +433,7 @@ def run_pipeline(output_root: Path) -> Path:
                 "exact_artifact_update": "passed",
                 "package_selftest": "passed",
                 "tauri_core_pair_smoke": "passed",
+                "tauri_gui_smoke": "passed",
                 "tui_smoke": "passed",
             },
             indent=2,
