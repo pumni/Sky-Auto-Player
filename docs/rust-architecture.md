@@ -2,21 +2,26 @@
 
 ## Crate Dependency Direction
 
-The workspace consists of three core crates that follow a strict one-way dependency graph:
+The workspace follows a strict one-way dependency graph. During the Phase 1
+compatibility window, the mature engine is a pure Rust crate and the old wheel
+name remains a thin PyO3 adapter:
 
 ```text
 sky_dispatch_core
         ↑
 sky_dispatch_win32
         ↑
-sky_player_rs
+sky_player
+        ↑
+sky_player_rs (temporary PyO3 adapter)
         ↑
 Python application
 ```
 
 - `sky_dispatch_core`: Pure scheduling/domain logic. Must not import Win32 or PyO3.
 - `sky_dispatch_win32`: Windows/QPC/SendInput platform adapter. Must not import PyO3.
-- `sky_player_rs`: Runtime orchestration and Python FFI boundary. Only this crate may import PyO3.
+- `sky_player`: Pure Rust runtime orchestration and playback engine. It must not import PyO3.
+- `sky_player_rs`: Temporary Python FFI adapter. Only this crate may import PyO3.
 
 ## Module Ownership
 
@@ -27,7 +32,7 @@ Python application
 
 Current stable facades and ownership boundaries:
 
-- `sky_player_rs::engine.rs` owns only module declarations and stable
+- `sky_player::engine.rs` owns only module declarations and stable
   re-exports; session lifecycle is in `engine/session.rs`.
 - `engine/shared.rs` owns the cross-thread command, target, lifecycle, metrics,
   telemetry, and completion resources shared by a session and its worker.

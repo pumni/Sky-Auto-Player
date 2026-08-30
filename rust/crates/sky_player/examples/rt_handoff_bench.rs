@@ -16,7 +16,7 @@ use sky_dispatch_win32::input::{
     PhysicalPacket, PreparedPhysicalPacket, SendTransactionOutcome, SendTransactionStatus,
 };
 use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
-use sky_player_rs::engine::dispatch_primitives::{
+use sky_player::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, NextDispatchPlan, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
     ProductionDispatchTestHarness,
@@ -627,7 +627,7 @@ fn record_preparation_sample(samples: &mut Samples, counts: PreparationCounts, e
 
 fn wait_and_dispatch_or_record(
     harness: &mut ProductionDispatchTestHarness,
-    plan: &sky_player_rs::engine::dispatch_primitives::NextDispatchPlan,
+    plan: &sky_player::engine::dispatch_primitives::NextDispatchPlan,
     benchmark_mode: BenchmarkMode,
     samples: &mut Samples,
 ) -> Result<Option<()>, String> {
@@ -997,10 +997,10 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-        "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
-        "calibration_samples": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
-        "calibration_budget_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
-        "startup_readiness_reserve_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
+        "spin_floor_us": sky_player::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
+        "calibration_samples": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+        "calibration_budget_us": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
+        "startup_readiness_reserve_us": sky_player::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
         "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
         "effective_spin_threshold_us": mode.effective_spin_threshold_us,
         "sender_start_timestamp_source": "mock transport QPC sampled at its immediate callback boundary; production native sender samples inside the SendInput envelope",
@@ -1155,13 +1155,13 @@ fn build_wait_mode(
         .probe_wake_error_stats(
             qpc_clock,
             &interrupt,
-            sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+            sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
         )
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     let effective_spin_threshold_us = if adaptive_spin_enabled {
-        sky_player_rs::engine::dispatch_primitives::calibrated_spin_threshold_us(startup_wake_error)
+        sky_player::engine::dispatch_primitives::calibrated_spin_threshold_us(startup_wake_error)
     } else if event_wait_enabled {
-        sky_player_rs::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US
+        sky_player::engine::dispatch_primitives::LEGACY_ADAPTIVE_SPIN_FLOOR_US
     } else {
         0
     };
@@ -1183,7 +1183,7 @@ fn build_fixed_wait_mode(name: &'static str, spin_threshold_us: u64) -> WaitMode
         .probe_wake_error_stats(
             qpc_clock,
             &interrupt,
-            sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+            sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
         )
         .unwrap_or_else(|| panic!("{name}: startup wake probe failed; refusing mock fallback"));
     WaitMode {
@@ -1303,10 +1303,10 @@ fn main() {
                     "waitable_timer_enabled": mode.waitable_timer_enabled,
                     "event_wait_enabled": mode.event_wait_enabled,
                     "adaptive_spin_enabled": mode.adaptive_spin_enabled,
-                    "spin_floor_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
-                    "calibration_samples": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
-                    "calibration_budget_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
-                    "startup_readiness_reserve_us": sky_player_rs::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
+                    "spin_floor_us": sky_player::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
+                    "calibration_samples": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+                    "calibration_budget_us": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
+                    "startup_readiness_reserve_us": sky_player::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
                     "effective_spin_threshold_us": mode.effective_spin_threshold_us,
                     "requested_wait_policy": "production_calibrated",
                     "effective_wait_policy": "production_calibrated",

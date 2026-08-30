@@ -19,7 +19,7 @@ pub enum EnginePollStatus {
 }
 
 impl EnginePollStatus {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "ready",
             Self::Preroll => "preroll",

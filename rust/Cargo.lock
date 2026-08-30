@@ -3094,18 +3094,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "sky_player_rs"
+name = "sky_player"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
  "parking_lot",
- "pyo3",
  "serde",
  "serde_json",
  "sky_dispatch_core",
  "sky_dispatch_win32",
  "smallvec",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "sky_player_rs"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+ "serde_json",
+ "sky_dispatch_core",
+ "sky_dispatch_win32",
+ "sky_player",
+ "smallvec",
 ]
 
 [[package]]

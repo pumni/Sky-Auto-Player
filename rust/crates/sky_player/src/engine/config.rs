@@ -12,7 +12,7 @@ pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TestWaitPolicy {
+pub enum TestWaitPolicy {
     /// Historical test-support behavior. Existing tests use the wide spin
     /// window to avoid making host timer jitter part of their assertions.
     LegacyTestWideSpin,
@@ -23,7 +23,7 @@ pub(crate) enum TestWaitPolicy {
 
 #[cfg(any(test, feature = "test-support"))]
 impl TestWaitPolicy {
-    pub(crate) fn parse(value: &str) -> Result<Self, &'static str> {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
         match value {
             "legacy_test_wide_spin" => Ok(Self::LegacyTestWideSpin),
             "production_calibrated" => Ok(Self::ProductionCalibrated),
@@ -31,7 +31,7 @@ impl TestWaitPolicy {
         }
     }
 
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::LegacyTestWideSpin => "legacy_test_wide_spin",
             Self::ProductionCalibrated => "production_calibrated",
@@ -124,7 +124,7 @@ impl DispatchProfile {
         }
     }
 
-    pub(crate) fn strict_timing(self) -> bool {
+    pub fn strict_timing(self) -> bool {
         matches!(self, Self::StrictTimingDiagnostic)
     }
 
@@ -138,7 +138,7 @@ impl DispatchProfile {
     }
 }
 
-pub(crate) enum BackendConfig {
+pub enum BackendConfig {
     Production,
     #[cfg(any(test, feature = "test-support"))]
     Mock {
@@ -148,27 +148,27 @@ pub(crate) enum BackendConfig {
     },
 }
 
-pub(crate) struct NativeSessionOptions {
-    pub(crate) schedule: RuntimeSchedule,
-    pub(crate) backend: BackendConfig,
-    pub(crate) profile: DispatchProfile,
-    pub(crate) timing: TimingOptions,
-    pub(crate) focus: FocusOptions,
-    pub(crate) wait: WaitOptions,
-    pub(crate) telemetry: TelemetryOptions,
-    pub(crate) priority: PriorityOptions,
+pub struct NativeSessionOptions {
+    pub schedule: RuntimeSchedule,
+    pub backend: BackendConfig,
+    pub profile: DispatchProfile,
+    pub timing: TimingOptions,
+    pub focus: FocusOptions,
+    pub wait: WaitOptions,
+    pub telemetry: TelemetryOptions,
+    pub priority: PriorityOptions,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
+    pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) restore_race_hook: Option<RestoreRaceHook>,
+    pub restore_race_hook: Option<RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) timer_lifecycle_context:
+    pub timer_lifecycle_context:
         Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
-pub(crate) struct StartupOrderingHook {
+pub struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
@@ -251,33 +251,33 @@ impl Default for WorkerConfig {
     }
 }
 
-pub(crate) struct TimingOptions {
-    pub(crate) game_fps: u16,
-    pub(crate) min_hold_us: u64,
-    pub(crate) min_release_gap_us: u64,
-    pub(crate) down_late_grace_us: u64,
-    pub(crate) strict_timing: bool,
-    pub(crate) strict_down_completion_late_us: u64,
-    pub(crate) strict_up_completion_late_us: u64,
-    pub(crate) input_path_warn_us: u64,
+pub struct TimingOptions {
+    pub game_fps: u16,
+    pub min_hold_us: u64,
+    pub min_release_gap_us: u64,
+    pub down_late_grace_us: u64,
+    pub strict_timing: bool,
+    pub strict_down_completion_late_us: u64,
+    pub strict_up_completion_late_us: u64,
+    pub input_path_warn_us: u64,
 }
 
-pub(crate) struct FocusOptions {
-    pub(crate) require_focus: bool,
-    pub(crate) focus_restore_grace_us: u64,
+pub struct FocusOptions {
+    pub require_focus: bool,
+    pub focus_restore_grace_us: u64,
 }
 
-pub(crate) struct WaitOptions {
-    pub(crate) enable_waitable_timer: bool,
-    pub(crate) enable_event_wait: bool,
-    pub(crate) supervisor_lease_timeout_us: u64,
+pub struct WaitOptions {
+    pub enable_waitable_timer: bool,
+    pub enable_event_wait: bool,
+    pub supervisor_lease_timeout_us: u64,
     /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) test_spin_threshold_us: Option<u64>,
+    pub test_spin_threshold_us: Option<u64>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) test_wait_policy: TestWaitPolicy,
+    pub test_wait_policy: TestWaitPolicy,
 }
 
 impl WaitOptions {
@@ -310,13 +310,13 @@ impl WaitOptions {
     }
 }
 
-pub(crate) struct TelemetryOptions {
-    pub(crate) mode: TelemetryMode,
-    pub(crate) capacity: usize,
+pub struct TelemetryOptions {
+    pub mode: TelemetryMode,
+    pub capacity: usize,
 }
 
-pub(crate) struct PriorityOptions {
-    pub(crate) mode: PriorityMode,
+pub struct PriorityOptions {
+    pub mode: PriorityMode,
 }
 
 #[cfg(test)]

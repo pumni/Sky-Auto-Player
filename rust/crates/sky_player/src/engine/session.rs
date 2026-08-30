@@ -80,7 +80,7 @@ pub struct NativeDispatchSession {
 }
 
 impl NativeDispatchSession {
-    pub(crate) fn new(options: NativeSessionOptions) -> Result<Self, String> {
+    pub fn new(options: NativeSessionOptions) -> Result<Self, String> {
         validate_timing_constants()?;
         // This is the authoritative native admission boundary.  Python calls
         // the same core validator before crossing into Rust, but direct native

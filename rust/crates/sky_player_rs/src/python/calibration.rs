@@ -13,7 +13,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use sky_dispatch_win32::calibration::{
+use sky_player::engine::binding_support::calibration::{
     CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, run_calibration_json,
 };
 

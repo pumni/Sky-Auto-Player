@@ -1,6 +1,9 @@
 #[cfg(feature = "test-support")]
 use super::engine::FaultInjectionScript;
 use super::engine::{BackendConfig, DispatchProfile, NativeDispatchSession};
+use sky_player::engine::binding_support::{
+    ActionKind, KeyActionInput, PHYSICAL_INSTRUMENT_SCAN_CODES, PriorityMode, RuntimeSchedule,
+};
 
 mod conversion;
 mod session;
@@ -14,9 +17,6 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
 use session::NativeDispatchSessionPy;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
-use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
-use sky_dispatch_win32::mmcss::PriorityMode;
 use snapshot::{BackendHealthSnapshotPy, PollSnapshotPy, ProgressSnapshotPy};
 use std::sync::Arc;
 use telemetry::build_info;
