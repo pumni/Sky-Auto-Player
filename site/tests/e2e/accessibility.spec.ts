@@ -26,7 +26,7 @@ test.describe('accessibility and responsive contracts', () => {
     });
   }
 
-  test('mobile CTA, screenshot crop and project favicon follow the UI contract', async ({
+  test('mobile CTA, real desktop screenshot and project favicon follow the UI contract', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 360, height: 900 });
@@ -47,17 +47,23 @@ test.describe('accessibility and responsive contracts', () => {
     );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'srcset',
-      /picker-mobile\.webp/,
+      /minimum-real-tauri\.png/,
     );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'width',
-      '1095',
+      '1214',
     );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'height',
-      '821',
+      '798',
     );
-    await expect(page.locator('.screenshot-frame__caption-meta')).toHaveText('WEBP · FULL SIZE');
+    await expect(page.locator('.screenshot-frame__caption-meta')).toHaveText(
+      'PNG · REAL TAURI WINDOW',
+    );
+    await expect(page.locator('.screenshot-frame img')).toHaveAttribute(
+      'alt',
+      'Sky Auto Player desktop Library',
+    );
     await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute(
       'href',
       /sky-auto-player-mark\.svg/,

@@ -74,8 +74,10 @@ test.describe('published route and asset contracts', () => {
       '/favicon.svg',
       '/assets/sky-auto-player-mark.svg',
       '/assets/og-banner.jpg',
-      '/assets/images/picker.webp',
-      '/assets/images/picker-mobile.webp',
+      '/assets/images/library-real-tauri.png',
+      '/assets/images/minimum-real-tauri.png',
+      '/assets/images/detail-real-tauri.png',
+      '/assets/images/settings-real-tauri.png',
     ];
 
     for (const asset of assets) {
@@ -85,6 +87,9 @@ test.describe('published route and asset contracts', () => {
 
     const home = await request.get(origin + '/');
     const html = await home.text();
+    expect(html).toContain('Canonical desktop interface');
+    expect(html).toContain('/assets/images/library-real-tauri.png');
+    expect(html).not.toContain('terminal picker');
     const localUrls = Array.from(
       html.matchAll(/(?:href|src)="(\/Sky-Auto-Player\/[^"#?]+)"/g),
       (match) => match[1],
