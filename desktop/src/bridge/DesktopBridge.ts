@@ -162,5 +162,5 @@ export interface DesktopBridge {
   startCalibration(request: CalibrationStart): Promise<CalibrationStartAck>;
   cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck>;
   subscribeUiEvents(listener: (event: UiEvent) => void): Promise<Unsubscribe>;
-  shutdown(): Promise<void>;
+  shutdown(failed?: boolean): Promise<void>;
 }

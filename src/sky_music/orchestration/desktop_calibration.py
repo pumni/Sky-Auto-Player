@@ -49,6 +49,32 @@ CalibrationRunner = Callable[
 ]
 
 
+def run_packaged_smoke_calibration(
+    request: CalibrationStartDto,
+    cancel: threading.Event,
+    progress: CalibrationProgressCallback,
+) -> Mapping[str, Any]:
+    """Run the package smoke calibration without touching game input.
+
+    This seam is only selected by the release-package smoke harness.  The
+    production runner remains ``_run_native`` and therefore keeps the native
+    calibration executable as the sole real calibration boundary.
+    """
+    del request
+    if cancel.is_set():
+        raise CalibrationCancelled()
+    progress("measuring", 0, 1, "Running package-safe calibration")
+    if cancel.wait(0.02):
+        raise CalibrationCancelled()
+    progress("completed", 1, 1, "Package-safe calibration completed")
+    return {
+        "status": "completed",
+        "transport_margin_us": 0,
+        "sample_count": 1,
+        "source": "package-smoke-test",
+    }
+
+
 def _bounded_text(value: object) -> str:
     text = str(value).replace("\x00", "")
     encoded = text.encode("utf-8", errors="replace")
@@ -394,4 +420,5 @@ __all__ = [
     "CALIBRATION_JOIN_TIMEOUT_SECONDS",
     "DesktopCalibrationError",
     "DesktopCalibrationService",
+    "run_packaged_smoke_calibration",
 ]

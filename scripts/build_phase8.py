@@ -51,6 +51,15 @@ def _run(command: Sequence[str], *, cwd: Path = ROOT, env: dict[str, str] | None
     subprocess.run(list(command), cwd=str(cwd), env=env, check=True)
 
 
+def _decode_output(value: object) -> str:
+    """Decode child diagnostics deterministically, including invalid bytes."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _capture(command: Sequence[str], *, cwd: Path = ROOT) -> str:
     result = subprocess.run(
         list(command), cwd=str(cwd), capture_output=True, text=True, check=True
@@ -232,7 +241,7 @@ def _run_core_selftest(core_exe: Path, *, cwd: Path) -> None:
         [str(core_exe), "--selftest-desktop-core"],
         cwd=str(cwd),
         capture_output=True,
-        text=True,
+        text=False,
         timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
@@ -240,9 +249,66 @@ def _run_core_selftest(core_exe: Path, *, cwd: Path) -> None:
     if result.returncode != 0:
         raise RuntimeError(
             f"packaged Core selftest failed ({result.returncode}): "
-            f"{result.stderr[-4000:]}"
+            f"{_decode_output(result.stderr)[-4000:]}"
         )
-    print(result.stdout.strip())
+    print(_decode_output(result.stdout).strip())
+
+
+def _run_core_selftest_negative_matrix(core_exe: Path, *, cwd: Path) -> None:
+    """Run the packaged selftest against bounded deterministic bad children."""
+    fixture = ROOT / "desktop" / "src-tauri" / "tests" / "fixtures" / "fake_core.py"
+    if not fixture.is_file():
+        raise RuntimeError(f"Core selftest fixture is missing: {fixture}")
+    scenarios = (
+        "startup_timeout",
+        "eof_before_ready",
+        "fatal_before_ready",
+        "malformed",
+        "non_utf8",
+        "duplicate_output",
+        "oversized_output",
+        "request_timeout",
+        "unknown_id",
+        "force_shutdown",
+    )
+    for scenario in scenarios:
+        env = os.environ.copy()
+        env["SKY_PHASE8_SELFTEST_TIMEOUT_SECONDS"] = "0.1"
+        env["SKY_PHASE8_SELFTEST_CHILD"] = json.dumps(
+            [sys.executable, str(fixture), scenario]
+        )
+        result = subprocess.run(
+            [str(core_exe), "--selftest-desktop-core"],
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=False,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+        if result.returncode == 0:
+            raise RuntimeError(
+                f"packaged Core selftest accepted bad child scenario {scenario}: "
+                f"{_decode_output(result.stdout)}"
+            )
+    missing_env = os.environ.copy()
+    missing_env["SKY_PHASE8_SELFTEST_CHILD"] = json.dumps(
+        [str(cwd / "missing-core.exe")]
+    )
+    missing = subprocess.run(
+        [str(core_exe), "--selftest-desktop-core"],
+        cwd=str(cwd),
+        env=missing_env,
+        capture_output=True,
+        text=False,
+        timeout=10,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+    if missing.returncode == 0:
+        raise RuntimeError("packaged Core selftest accepted a missing child")
+    print(f"Packaged Desktop Core selftest negative matrix: {len(scenarios) + 1} PASS")
 
 
 def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
@@ -250,7 +316,7 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
         [str(primary_exe), "--selftest-desktop-shell"],
         cwd=str(cwd),
         capture_output=True,
-        text=True,
+        text=False,
         timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
@@ -258,18 +324,24 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
     if result.returncode != 0:
         raise RuntimeError(
             f"packaged Tauri/Core selftest failed ({result.returncode}): "
-            f"{result.stderr[-4000:]}"
+            f"{_decode_output(result.stderr)[-4000:]}"
         )
-    print(result.stdout.strip())
+    print(_decode_output(result.stdout).strip())
 
 
 def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
+    env = os.environ.copy()
+    # The real production Core remains native-calibration-backed.  This
+    # packaging-only environment selects the explicit no-input seam so the
+    # actual Tauri/Core smoke can exercise calibration safely in CI.
+    env["SKY_PHASE8_SAFE_CALIBRATION"] = "1"
     try:
         result = subprocess.run(
             [str(primary_exe), "--selftest-desktop-gui"],
             cwd=str(cwd),
             capture_output=True,
-            text=True,
+            text=False,
+            env=env,
             timeout=60,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
@@ -277,12 +349,13 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(
             "packaged Tauri GUI smoke timed out; "
-            f"stdout={error.stdout!r} stderr={error.stderr!r}"
+            f"stdout={_decode_output(error.stdout)!r} "
+            f"stderr={_decode_output(error.stderr)!r}"
         ) from error
     if result.returncode != 0:
         raise RuntimeError(
             f"packaged Tauri GUI smoke failed ({result.returncode}): "
-            f"{result.stderr[-4000:]}"
+            f"{_decode_output(result.stderr)[-4000:]}"
         )
     print("Packaged Tauri GUI smoke: PASS")
 
@@ -292,20 +365,22 @@ def _run_tui_smoke(core_exe: Path, *, cwd: Path) -> None:
         [str(core_exe), "--tui", "--list"],
         cwd=str(cwd),
         capture_output=True,
-        text=True,
+        text=False,
         timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"packaged TUI smoke failed ({result.returncode}): {result.stderr[-4000:]}"
+            f"packaged TUI smoke failed ({result.returncode}): "
+            f"{_decode_output(result.stderr)[-4000:]}"
         )
 
 
-def _run_exact_updater_qualification(output_root: Path) -> None:
+def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> None:
     env = os.environ.copy()
     env["SKY_PHASE8_ARTIFACT_DIR"] = str(output_root)
+    env["SKY_PHASE8_E2E_UPDATER"] = str(e2e_updater)
     _run(
         [
             "cargo",
@@ -318,12 +393,14 @@ def _run_exact_updater_qualification(output_root: Path) -> None:
             "phase8_exact_artifact",
             "--all-features",
             "--locked",
+            "--",
+            "--test-threads=1",
         ],
         env=env,
     )
 
 
-def _build() -> tuple[Path, Path, Path, Path]:
+def _build() -> tuple[Path, Path, Path, Path, Path]:
     if sys.platform != "win32":
         raise RuntimeError("Phase 8 portable build requires Windows")
     git_head = build_app.get_git_head()
@@ -374,6 +451,27 @@ def _build() -> tuple[Path, Path, Path, Path]:
             ),
             env=env,
         )
+        # This disposable feature-gated runner is never copied into the
+        # release tree. It lets exact-artifact qualification use the native
+        # updater transaction runner with a deterministic local source while
+        # the shipped updater remains the production GitHub-only binary.
+        _run(
+            [
+                "cargo",
+                "build",
+                "--manifest-path",
+                str(ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml"),
+                "--bin",
+                "sky_updater_e2e",
+                "--release",
+                "--features",
+                "e2e-local-source,e2e-fault-injection",
+                "--locked",
+            ],
+            env=env,
+        )
+        # Build the shipped updater last so the exact release binary is
+        # produced with the default (GitHub-only) feature set.
         _run(
             build_app.cargo_release_build_command(
                 ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml", "sky_updater"
@@ -385,6 +483,7 @@ def _build() -> tuple[Path, Path, Path, Path]:
             ROOT / "rust" / "target" / "release" / "sky_desktop_shell.exe",
             ROOT / "rust" / "target" / "release" / CALIBRATION_EXE,
             ROOT / "rust" / "target" / "release" / "sky_updater.exe",
+            ROOT / "rust" / "target" / "release" / "sky_updater_e2e.exe",
         )
     finally:
         build_app.VERSION_PY.unlink(missing_ok=True)
@@ -393,7 +492,7 @@ def _build() -> tuple[Path, Path, Path, Path]:
 
 def run_pipeline(output_root: Path) -> Path:
     repo_head = build_app.get_git_head()
-    core_dist, tauri_exe, calibration_exe, updater_exe = _build()
+    core_dist, tauri_exe, calibration_exe, updater_exe, e2e_updater_exe = _build()
     release_dir = output_root / RELEASE_NAME
     assemble_release(
         release_dir,
@@ -414,6 +513,7 @@ def run_pipeline(output_root: Path) -> Path:
         smoke_dir = smoke_root / release_dir.name
         shutil.copytree(release_dir, smoke_dir)
         _run_core_selftest(smoke_dir / CORE_EXE, cwd=smoke_dir)
+        _run_core_selftest_negative_matrix(smoke_dir / CORE_EXE, cwd=smoke_dir)
         _run_tauri_pair_selftest(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
         _run_tauri_gui_smoke(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
         _run_tui_smoke(smoke_dir / CORE_EXE, cwd=smoke_dir)
@@ -421,13 +521,31 @@ def run_pipeline(output_root: Path) -> Path:
         shutil.rmtree(smoke_root, ignore_errors=True)
     zip_path, _ = write_deterministic_zip(release_dir, output_root / ZIP_NAME)
     (output_root / "MANIFEST.json").write_bytes((release_dir / "MANIFEST.json").read_bytes())
-    _run_exact_updater_qualification(output_root)
+    _run_exact_updater_qualification(output_root, e2e_updater_exe)
     provenance = write_provenance(
         output_root / "PROVENANCE.json",
         repo_head=repo_head,
         release_dir=release_dir,
         zip_path=zip_path,
         native_build_commit=repo_head,
+    )
+    (output_root / "PHASE8_ARTIFACT_SUMMARY.json").write_text(
+        json.dumps(
+            {
+                "repo_head": repo_head,
+                "artifact_name": zip_path.name,
+                "artifact_size": provenance["artifact"]["size"],
+                "artifact_sha256": provenance["artifact"]["sha256"],
+                "manifest_sha256": provenance["artifact"]["manifest_sha256"],
+                "portable_file_count": provenance["artifact"]["file_count"],
+                "managed_entry_count": len(
+                    json.loads((release_dir / "MANIFEST.json").read_text(encoding="utf-8"))["files"]
+                ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     (output_root / "PHASE8_QUALIFICATION.json").write_text(
         json.dumps(
@@ -438,9 +556,15 @@ def run_pipeline(output_root: Path) -> Path:
                 "previous_stable": "3.4.5",
                 "exact_artifact_update": "passed",
                 "package_selftest": "passed",
+                "core_selftest_negative_matrix": "passed",
                 "tauri_core_pair_smoke": "passed",
                 "tauri_gui_smoke": "passed",
                 "tui_smoke": "passed",
+                "packaged_updater_identity_smoke": "passed",
+                "exact_artifact_transaction_restart": "qualified_with_local_source_runner",
+                "production_updater_network_transaction": (
+                    "not_run_without_public_release_or_local_http_source"
+                ),
             },
             indent=2,
         )

@@ -243,6 +243,21 @@ jobs:
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir (Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$version") --version $version
 
+      - name: Report exact Phase 8 artifact identity
+        shell: pwsh
+        run: |
+          $summary = Get-Content (Join-Path $env:SKY_PHASE8_OUTPUT "PHASE8_ARTIFACT_SUMMARY.json") -Raw | ConvertFrom-Json
+          @"
+          ## Phase 8 exact artifact
+          - repo head: ``$($summary.repo_head)``
+          - ZIP: ``$($summary.artifact_name)`` ($($summary.artifact_size) bytes)
+          - ZIP SHA-256: ``$($summary.artifact_sha256)``
+          - MANIFEST SHA-256: ``$($summary.manifest_sha256)``
+          - portable files: $($summary.portable_file_count)
+          - managed entries: $($summary.managed_entry_count)
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Get-Content (Join-Path $env:SKY_PHASE8_OUTPUT "PROVENANCE.json")
+
       - name: Upload exact Phase 8 release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

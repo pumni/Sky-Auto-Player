@@ -526,7 +526,7 @@ export function createMockBridge(): DesktopBridge {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async shutdown() {
+    async shutdown(_failed = false) {
       if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer);
       if (calibrationTimer !== null) clearTimeout(calibrationTimer);
       diagnosticsTimer = null;

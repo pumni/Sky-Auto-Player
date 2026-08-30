@@ -31,6 +31,12 @@ pub fn run_gui_smoke() {
 fn run_inner(gui_smoke: bool) {
     if let Err(error) = core::check_startup_update_guard() {
         eprintln!("Sky Auto Player startup refused: {error}");
+        if gui_smoke {
+            // The packaging smoke is a process-level gate. A startup guard
+            // rejection must be observable as a failing child, rather than
+            // looking like a clean return before Tauri's event loop starts.
+            std::process::exit(2);
+        }
         return;
     }
     let app_state = app_state::AppState::default();
@@ -115,6 +121,9 @@ pub fn selftest_packaged_shell() -> i32 {
     let result = match bootstrap {
         Ok(value) if value.get("native_build").is_some() => {
             supervisor.shutdown();
+            if let Some(marker) = std::env::var_os("SKY_PHASE8_RESTART_MARKER") {
+                let _ = std::fs::write(marker, b"bootstrap-ready\n");
+            }
             0
         }
         Ok(_) => {

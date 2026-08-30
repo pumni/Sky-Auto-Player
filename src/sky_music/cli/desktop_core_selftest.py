@@ -7,6 +7,7 @@ useful packaging check rather than another in-process unit test.
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -61,34 +62,57 @@ class _ChildOutput:
 
 def _root_and_command() -> tuple[Path, list[str]]:
     executable = Path(sys.executable).resolve()
+    override = os.environ.get("SKY_PHASE8_SELFTEST_CHILD")
+    if override:
+        try:
+            values = json.loads(override)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("SKY_PHASE8_SELFTEST_CHILD is not valid JSON") from exc
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(value, str) or not value for value in values)
+        ):
+            raise RuntimeError("SKY_PHASE8_SELFTEST_CHILD must be a non-empty string list")
+        return executable.parent, values
     if getattr(sys, "frozen", False):
         return executable.parent, [str(executable)]
     root = Path(__file__).resolve().parents[3]
     return root, [sys.executable, str(root / "src" / "core_main.py")]
 
 
-def run_packaged_core_selftest() -> int:
+def run_core_selftest(
+    *,
+    command: list[str] | None = None,
+    root: Path | None = None,
+    timeout_s: float = _TIMEOUT_S,
+) -> int:
     """Run a bounded ready/bootstrap/request/shutdown round-trip.
 
     Diagnostics are written to stderr so the method remains safe to use from
     an automated package gate and never contaminates Desktop Core stdout.
     """
-    root, command = _root_and_command()
-    if not root.is_dir():
-        print(f"desktop Core selftest: install root missing: {root}", file=sys.stderr)
+    default_root, default_command = _root_and_command()
+    install_root = root if root is not None else default_root
+    child_command = list(command) if command is not None else default_command
+    if not install_root.is_dir():
+        print(
+            f"desktop Core selftest: install root missing: {install_root}",
+            file=sys.stderr,
+        )
         return 2
-    command += [
+    child_command += [
         "--desktop-worker",
         "--parent-pid",
         str(os.getpid()),
         "--install-root",
-        str(root),
+        str(install_root),
     ]
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         process = subprocess.Popen(
-            command,
-            cwd=str(root),
+            child_command,
+            cwd=str(install_root),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -101,7 +125,7 @@ def run_packaged_core_selftest() -> int:
     output = _ChildOutput(process)
     next_id = 1
 
-    def receive(timeout: float = _TIMEOUT_S) -> dict[str, object] | None:
+    def receive(timeout: float = timeout_s) -> dict[str, object] | None:
         try:
             item = output.frames.get(timeout=timeout)
         except queue.Empty:
@@ -166,7 +190,7 @@ def run_packaged_core_selftest() -> int:
         if process.stdin is not None:
             process.stdin.close()
         try:
-            process.wait(timeout=_TIMEOUT_S)
+            process.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
             process.kill()
             process.wait(timeout=2)
@@ -183,4 +207,19 @@ def run_packaged_core_selftest() -> int:
         return 1
 
 
-__all__ = ["run_packaged_core_selftest"]
+def run_packaged_core_selftest() -> int:
+    raw_timeout = os.environ.get("SKY_PHASE8_SELFTEST_TIMEOUT_SECONDS")
+    timeout = _TIMEOUT_S
+    if raw_timeout is not None:
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            print("desktop Core selftest: invalid timeout override", file=sys.stderr)
+            return 2
+        if not 0.1 <= timeout <= 60:
+            print("desktop Core selftest: timeout override is out of bounds", file=sys.stderr)
+            return 2
+    return run_core_selftest(timeout_s=timeout)
+
+
+__all__ = ["run_core_selftest", "run_packaged_core_selftest"]

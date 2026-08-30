@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sky_updater::archive::{extract_zip_file, sha256_bytes, sha256_file};
@@ -17,13 +18,39 @@ use sky_updater::install::{install_verified, read_staged_manifest};
 use sky_updater::local_source::LocalReleaseSource;
 use sky_updater::manifest::{Manifest, ManifestFile};
 use sky_updater::progress::NoopProgressSink;
+use sky_updater::recovery::{has_unresolved_transaction, recover_before_update};
 use sky_updater::transaction::verify_installed_managed;
+use sky_updater::transaction::{build_plan, prepare_journal};
 use sky_updater::{
     APP_NAME, CALIBRATION_EXE, MANIFEST_NAME, PRIMARY_EXE, SCHEMA_VERSION, UPDATER_EXE,
 };
 
 const PREVIOUS_VERSION: &str = "3.4.5";
 const TARGET_VERSION: &str = "3.5.0";
+
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        // These integration tests run single-threaded because the updater
+        // contract deliberately uses process-wide LOCALAPPDATA state.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
 
 fn temp_root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -106,6 +133,72 @@ fn assert_preserved(install: &Path) {
     );
 }
 
+fn stop_child(child: &mut Child) {
+    if child.try_wait().expect("child status").is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+struct ChildGuard(Child);
+
+impl ChildGuard {
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    fn stop(&mut self) {
+        stop_child(&mut self.0);
+    }
+
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.0.wait()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        stop_child(&mut self.0);
+    }
+}
+
+fn wait_for_ready_handoff(local_app_data: &Path, updater_pid: u32) -> PathBuf {
+    let runs = local_app_data
+        .join(APP_NAME)
+        .join("update-state")
+        .join("update-runs");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if let Ok(entries) = fs::read_dir(&runs) {
+            for entry in entries.flatten() {
+                let handoff = entry.path().join("handoff.json");
+                let Ok(bytes) = fs::read(&handoff) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                    continue;
+                };
+                if value.get("state").and_then(|v| v.as_str()) == Some("ready")
+                    && value.get("updater_pid").and_then(|v| v.as_u64()) == Some(updater_pid as u64)
+                {
+                    return entry.path();
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("native updater did not publish READY within the bounded handoff budget");
+}
+
+#[cfg(windows)]
+fn no_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn no_window(_command: &mut Command) {}
+
 #[test]
 fn exact_phase8_artifact_updates_previous_stable_and_preserves_user_state() -> Result<()> {
     let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
@@ -182,5 +275,161 @@ fn exact_phase8_artifact_updates_previous_stable_and_preserves_user_state() -> R
     fs::remove_dir_all(download_root).expect("download cleanup");
     fs::remove_dir_all(staging).expect("staging cleanup");
     fs::remove_dir_all(install).expect("install cleanup");
+    Ok(())
+}
+
+#[test]
+fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_state() -> Result<()> {
+    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => return Ok(()),
+    };
+    let zip = artifact_dir.join(format!("Sky-Auto-Player-v{TARGET_VERSION}.zip"));
+    assert!(zip.is_file(), "exact ZIP missing");
+
+    let install = temp_root("exact-recovery-install");
+    fs::create_dir_all(&install).expect("install");
+    let previous = old_manifest();
+    for file in &previous.files {
+        write_file(&install, &file.path, old_file_bytes(&file.path));
+    }
+    write_manifest(&install, &previous);
+    write_file(&install, "config.json", br#"{"theme":"aurora"}"#);
+    write_file(&install, ".env", b"USER_SECRET=preserve");
+    write_file(&install, "songs/user.skysheet", b"user song");
+    write_file(&install, "logs/user.log", b"user log");
+
+    let staging = temp_root("exact-recovery-staging");
+    fs::create_dir_all(&staging).expect("staging");
+    extract_zip_file(&zip, &staging)?;
+    let target = read_staged_manifest(&staging, TARGET_VERSION)?;
+    let plan = build_plan(Some(&previous), &target)?;
+    prepare_journal(&install, &plan, &NoopProgressSink)?;
+    assert!(has_unresolved_transaction(&install));
+
+    // Simulate an interrupted apply after target files were written but before
+    // the transaction could commit. Recovery must use the verified journal,
+    // not process teardown, to restore the previous stable installation.
+    extract_zip_file(&zip, &install)?;
+    recover_before_update(&install)?;
+
+    assert!(!has_unresolved_transaction(&install));
+    for file in &previous.files {
+        assert_eq!(
+            fs::read(install.join(&file.path)).expect("restored managed file"),
+            old_file_bytes(&file.path),
+            "restored {}",
+            file.path
+        );
+    }
+    assert_preserved(&install);
+    assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
+
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&install);
+    Ok(())
+}
+
+#[test]
+fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
+    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => return Ok(()),
+    };
+    let e2e_updater = match std::env::var_os("SKY_PHASE8_E2E_UPDATER") {
+        Some(value) => PathBuf::from(value),
+        None => panic!("exact package updater qualification runner is missing"),
+    };
+    let actual_updater = artifact_dir.join(UPDATER_EXE);
+    let primary = artifact_dir.join(PRIMARY_EXE);
+    assert!(actual_updater.is_file(), "packaged updater is missing");
+    assert!(primary.is_file(), "packaged Tauri executable is missing");
+    let version = Command::new(&actual_updater).arg("--version").output()?;
+    assert!(
+        version.status.success(),
+        "packaged updater --version failed"
+    );
+
+    let zip = artifact_dir.join(format!("Sky-Auto-Player-v{TARGET_VERSION}.zip"));
+    let local_app_data = temp_root("localappdata");
+    let _local_app_data = EnvGuard::set("LOCALAPPDATA", &local_app_data);
+    fs::create_dir_all(&local_app_data).expect("local app data");
+    let install = temp_root("exact-install-with-spaces");
+    fs::create_dir_all(&install).expect("install");
+    extract_zip_file(&zip, &install)?;
+    let target = read_staged_manifest(&install, TARGET_VERSION)?;
+    let mut previous = target.clone();
+    previous.version = PREVIOUS_VERSION.into();
+    previous.git_head = "a".repeat(40);
+    previous.native_build_commit = "b".repeat(40);
+    previous.files.push(ManifestFile {
+        path: "Sky-Player.exe".into(),
+        size: b"obsolete v3 identity".len() as u64,
+        sha256: sha256_bytes(b"obsolete v3 identity"),
+    });
+    write_file(&install, "Sky-Player.exe", b"obsolete v3 identity");
+    write_manifest(&install, &previous);
+    write_file(&install, "config.json", br#"{"theme":"aurora"}"#);
+    write_file(&install, ".env", b"USER_SECRET=preserve");
+    write_file(&install, "songs/user.skysheet", b"user song");
+    write_file(&install, "logs/user.log", b"user log");
+
+    let restart_marker = temp_root("restart-marker");
+    let mut parent = Command::new(&install.join(PRIMARY_EXE));
+    parent
+        .arg("--selftest-desktop-parent")
+        .current_dir(&install)
+        .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
+    no_window(&mut parent);
+    let mut parent = ChildGuard(parent.spawn()?);
+    let mut updater = Command::new(&e2e_updater);
+    updater
+        .arg("--release-dir")
+        .arg(&artifact_dir)
+        .arg("--install-root")
+        .arg(&install)
+        .arg("--parent-pid")
+        .arg(parent.id().to_string())
+        .arg("--current-version")
+        .arg(PREVIOUS_VERSION)
+        .arg("--target-version")
+        .arg(TARGET_VERSION)
+        .arg("--channel")
+        .arg("stable")
+        .arg("--restart")
+        .current_dir(&install)
+        .env("SKY_PHASE8_RESTART_SELFTEST", "1")
+        .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
+    no_window(&mut updater);
+    let mut updater = ChildGuard(updater.spawn()?);
+    let _run_root = wait_for_ready_handoff(&local_app_data, updater.id());
+    parent.stop();
+    let status = updater.wait()?;
+    assert!(
+        status.success(),
+        "local-source native updater failed: {status}"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !restart_marker.is_file() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        restart_marker.is_file(),
+        "canonical Tauri restart did not bootstrap the new Core"
+    );
+    verify_installed_managed(&install, &target)?;
+    assert_preserved(&install);
+    assert!(!install.join("Sky-Player.exe").exists());
+    assert!(
+        !local_app_data
+            .join(APP_NAME)
+            .join("update-state")
+            .join("active-update.json")
+            .exists()
+    );
+
+    let _ = fs::remove_dir_all(&install);
+    let _ = fs::remove_dir_all(&local_app_data);
+    let _ = fs::remove_file(&restart_marker);
     Ok(())
 }

@@ -42,6 +42,7 @@ from sky_music.orchestration.catalog_service import (
     CatalogService,
 )
 from sky_music.orchestration.desktop_calibration import (
+    CalibrationRunner,
     DesktopCalibrationError,
     DesktopCalibrationService,
 )
@@ -245,6 +246,7 @@ class DesktopCoreServer:
         app_version: str = __version__,
         parent_pid: int | None = None,
         install_root: Path | None = None,
+        calibration_runner: CalibrationRunner | None = None,
     ) -> None:
         self.settings_service = settings_service
         self.catalog_service = catalog_service
@@ -275,6 +277,7 @@ class DesktopCoreServer:
             publish_event=self._publish_event,
             physical_playback_active=self.playback.is_physical_active,
             on_success=self.playback.invalidate_settings,
+            runner=calibration_runner,
         )
 
     def ready_event(self) -> dict[str, object]:
