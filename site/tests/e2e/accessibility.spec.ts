@@ -107,9 +107,13 @@ test.describe('accessibility and responsive contracts', () => {
     expect(pixelMetrics.colors).toBeGreaterThan(32);
     const renderedEvidence = await page.locator('.screenshot-frame').screenshot();
     expect(renderedEvidence.byteLength).toBeGreaterThan(10_000);
-    await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute(
+    await expect(page.locator('link[rel="icon"][type="image/png"][sizes="16x16"]')).toHaveAttribute(
       'href',
-      /favicon\.svg/,
+      /favicon-16x16\.png/,
+    );
+    await expect(page.locator('link[rel="icon"][type="image/png"][sizes="32x32"]')).toHaveAttribute(
+      'href',
+      /favicon-32x32\.png/,
     );
   });
 

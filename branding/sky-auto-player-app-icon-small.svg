@@ -2,7 +2,7 @@
   <title id="title">Sky Auto Player small icon</title>
   <desc id="desc">Optically tuned small-size version of the Sky Auto Player mark.</desc>
 
-  <rect id="plate" width="128" height="128" rx="28" fill="#07090D" stroke="#1A222A" stroke-width="1"/>
+  <rect id="plate" x="0.25" y="0.25" width="127.5" height="127.5" rx="27.75" fill="#07090D" stroke="#1A222A" stroke-width="0.5"/>
 
   <!-- Slightly stronger small-size strokes and larger gaps preserve the rhythm at 16/24 px. -->
   <line id="edge-a-b" x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="3" stroke-linecap="round"/>

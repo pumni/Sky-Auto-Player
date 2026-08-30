@@ -33,6 +33,9 @@ bun install --frozen-lockfile
 bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <large-output> --png 32,48,64,128,256
 bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output <small-output> --png 24
 bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <tiny-output> --png 16
+# Browser favicon PNGs: use the dedicated 16px master and large 32px master
+bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <favicon-16-output> --png 16
+bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <favicon-32-output> --png 32
 cd ..
 uv run python branding/scripts/build_ico.py --large-dir <large-output> --small-dir <small-output> --tiny-dir <tiny-output> --output branding/exports/windows/sky-auto-player.ico
 ```
@@ -42,6 +45,13 @@ payloads and writes the seven ICO layers `16, 24, 32, 48, 64, 128, 256`; `16` co
 16px master, `24` comes from the small optical master, and the remaining layers come from the large
 master. Copy the resulting ICO byte-for-byte to `site/public/favicon.ico` and
 `desktop/src-tauri/icons/icon.ico`.
+
+For browser favicon routing, also rasterize the dedicated 16px master and the large master as
+individual PNGs, then copy them byte-for-byte to `site/public/favicon-16x16.png` and
+`site/public/favicon-32x32.png` (and keep the same files under `branding/exports/web/`). The HTML
+head declares these explicit PNG candidates before the ICO fallback, so browsers that support PNG
+favicons receive the real 16px optical master. `site/public/favicon.svg` remains the 24px small
+master used by the footer and is intentionally not declared as the browser favicon.
 
 Generate the Apple touch icon from the large master with the same Tauri CLI using `--png 180`, then
 copy it to `branding/exports/web/apple-touch-icon.png` and `site/public/apple-touch-icon.png`.

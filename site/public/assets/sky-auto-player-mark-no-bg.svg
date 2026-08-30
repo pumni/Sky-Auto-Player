@@ -9,6 +9,6 @@
   <line id="dash-b-c-3" x1="76.2865" y1="74.05" x2="79.9238" y2="71.95" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
 
   <rect id="diamond-a" x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#F7DDA2" stroke="#F4EFE3" stroke-width="2"/>
-  <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="#07090D" stroke="#F7DDA2" stroke-width="3.8"/>
-  <circle id="node-c-sky" cx="93.6936" cy="64" r="8.5" fill="#07090D" stroke="#B8CCD6" stroke-width="3.2"/>
+  <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="none" stroke="#F7DDA2" stroke-width="3.8"/>
+  <circle id="node-c-sky" cx="93.6936" cy="64" r="8.5" fill="none" stroke="#B8CCD6" stroke-width="3.2"/>
 </svg>

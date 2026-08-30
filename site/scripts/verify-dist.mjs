@@ -21,6 +21,8 @@ const requiredStaticFiles = [
   'sitemap-index.xml',
   'favicon.ico',
   'favicon.svg',
+  'favicon-16x16.png',
+  'favicon-32x32.png',
   'apple-touch-icon.png',
   'assets/sky-auto-player-mark.svg',
   'assets/sky-auto-player-mark-mono.svg',

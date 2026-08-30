@@ -6,8 +6,10 @@
   <circle cx="46" cy="43" r="6" fill="#F07070"/><circle cx="66" cy="43" r="6" fill="#F0C56A"/><circle cx="86" cy="43" r="6" fill="#70C98B"/>
   <rect x="116" y="31" width="360" height="24" rx="12" fill="#FFFFFF" stroke="#D0D6DA"/>
   <text x="128" y="48" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="12">pumni.github.io/Sky-Auto-Player/</text>
-  <image href="../../site/public/favicon.svg" x="44" y="88" width="32" height="32"/>
-  <image href="../../site/public/favicon.svg" x="104" y="96" width="16" height="16"/>
-  <text x="138" y="109" fill="#1A2329" font-family="Segoe UI, sans-serif" font-size="18">favicon.svg</text>
-  <text x="44" y="156" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="13">Small optical master · 32 px and 16 px browser surfaces</text>
+  <image href="../../site/public/favicon-32x32.png" x="44" y="88" width="32" height="32"/>
+  <image href="../../site/public/favicon-16x16.png" x="104" y="96" width="16" height="16"/>
+  <text x="138" y="103" fill="#1A2329" font-family="Segoe UI, sans-serif" font-size="16">PNG browser candidates</text>
+  <image href="../../site/public/favicon.svg" x="392" y="88" width="32" height="32"/>
+  <text x="438" y="109" fill="#1A2329" font-family="Segoe UI, sans-serif" font-size="16">24 px footer SVG</text>
+  <text x="44" y="156" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="13">16 px uses the dedicated optical master · 32 px uses the large master · SVG stays scoped to the 24 px footer</text>
 </svg>
