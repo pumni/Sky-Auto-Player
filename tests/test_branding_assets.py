@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import struct
-from math import hypot, isclose
+from math import cos, hypot, isclose, radians, sin
 from pathlib import Path
+from re import fullmatch
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ TINY = ROOT / "branding" / "sky-auto-player-app-icon-16.svg"
 POINT_ATTRS = ("x1", "y1", "x2", "y2")
 LINE_IDS = ("edge-a-b", "edge-a-c", "dash-b-c-1", "dash-b-c-2", "dash-b-c-3")
 NODE_IDS = ("node-b-gold", "node-c-sky")
+EXPECTED_ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def _parse_svg(path: Path) -> ElementTree.Element:
@@ -43,6 +45,23 @@ def _ico_sizes(data: bytes) -> set[int]:
             struct.unpack_from("<BB", data, 6 + index * 16) for index in range(count)
         )
     }
+
+
+def _ico_layers(data: bytes) -> dict[int, bytes]:
+    assert data[:4] == b"\x00\x00\x01\x00"
+    count = struct.unpack_from("<H", data, 4)[0]
+    assert count == len(EXPECTED_ICO_SIZES)
+    layers: dict[int, bytes] = {}
+    for index in range(count):
+        width, height, _colors, _reserved, _planes, _bits, size, offset = (
+            struct.unpack_from("<BBBBHHII", data, 6 + index * 16)
+        )
+        decoded_width = 256 if width == 0 else width
+        decoded_height = 256 if height == 0 else height
+        assert decoded_width == decoded_height
+        assert decoded_width not in layers
+        layers[decoded_width] = data[offset : offset + size]
+    return layers
 
 
 def _png_dimensions(data: bytes) -> tuple[int, int]:
@@ -96,15 +115,66 @@ def _mark_container(root: ElementTree.Element) -> ElementTree.Element:
     return group if group is not None else root
 
 
+def _group_transform(
+    root: ElementTree.Element,
+) -> tuple[ElementTree.Element, float, float, float, float]:
+    group = root.find(f"{SVG}g")
+    assert group is not None
+    transform = group.attrib.get("transform")
+    assert transform is not None
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+    match = fullmatch(
+        rf"\s*translate\(\s*({number})\s+({number})\s*\)\s+"
+        rf"scale\(\s*({number})(?:\s+({number}))?\s*\)\s*",
+        transform,
+    )
+    assert match is not None, f"unsupported lockup transform: {transform}"
+    sx = float(match.group(3))
+    sy = float(match.group(4)) if match.group(4) is not None else sx
+    return group, float(match.group(1)), float(match.group(2)), sx, sy
+
+
+def _transform_point(
+    point: tuple[float, float], tx: float, ty: float, sx: float, sy: float
+) -> tuple[float, float]:
+    return tx + point[0] * sx, ty + point[1] * sy
+
+
+def _diamond_transform(
+    diamond: ElementTree.Element,
+) -> tuple[float, tuple[float, float]]:
+    transform = diamond.attrib.get("transform")
+    assert transform is not None
+    match = fullmatch(
+        r"\s*rotate\(\s*([-+]?\d+(?:\.\d*)?|[-+]?\.\d+)\s+"
+        r"([-+]?\d+(?:\.\d*)?|[-+]?\.\d+)\s+"
+        r"([-+]?\d+(?:\.\d*)?|[-+]?\.\d+)\s*\)\s*",
+        transform,
+    )
+    assert match is not None, f"unsupported diamond transform: {transform}"
+    return float(match.group(1)), (float(match.group(2)), float(match.group(3)))
+
+
+def _transformed_diamond_center(diamond: ElementTree.Element) -> tuple[float, float]:
+    raw_center = (
+        float(diamond.attrib["x"]) + float(diamond.attrib["width"]) / 2,
+        float(diamond.attrib["y"]) + float(diamond.attrib["height"]) / 2,
+    )
+    angle, pivot = _diamond_transform(diamond)
+    theta = radians(angle)
+    offset = _subtract(raw_center, pivot)
+    return (
+        pivot[0] + offset[0] * cos(theta) - offset[1] * sin(theta),
+        pivot[1] + offset[0] * sin(theta) + offset[1] * cos(theta),
+    )
+
+
 def _mark_nodes(
     container: ElementTree.Element,
 ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
     diamond = container.find(f"{SVG}rect[@id='diamond-a']")
     assert diamond is not None
-    a = (
-        float(diamond.attrib["x"]) + float(diamond.attrib["width"]) / 2,
-        float(diamond.attrib["y"]) + float(diamond.attrib["height"]) / 2,
-    )
+    a = _transformed_diamond_center(diamond)
     circles = {
         circle.attrib["id"]: circle for circle in container.findall(f"{SVG}circle")
     }
@@ -125,11 +195,13 @@ def _assert_line_on_edge(
     last = _point(line, "x2", "y2")
     assert abs(_cross(edge, _subtract(first, start))) < EPSILON
     assert abs(_cross(edge, _subtract(last, start))) < EPSILON
+    edge_length = _distance(start, end)
+    first_t = _projection_distance(first, start, end) / edge_length
+    last_t = _projection_distance(last, start, end) / edge_length
     if inset:
-        edge_length = _distance(start, end)
-        first_t = _projection_distance(first, start, end) / edge_length
-        last_t = _projection_distance(last, start, end) / edge_length
         assert 0.1 < first_t < last_t < 0.9
+    else:
+        assert 0 < first_t < last_t < 1
 
 
 def _assert_mark_geometry(
@@ -138,6 +210,16 @@ def _assert_mark_geometry(
     dash_count: int,
     expected_dash_distances: tuple[float, ...] | None = None,
 ) -> None:
+    diamond = container.find(f"{SVG}rect[@id='diamond-a']")
+    assert diamond is not None
+    angle, pivot = _diamond_transform(diamond)
+    raw_center = (
+        float(diamond.attrib["x"]) + float(diamond.attrib["width"]) / 2,
+        float(diamond.attrib["y"]) + float(diamond.attrib["height"]) / 2,
+    )
+    assert isclose(angle, 45, abs_tol=EPSILON)
+    assert _distance(pivot, raw_center) < EPSILON
+
     a, b, c = _mark_nodes(container)
     ab = _distance(a, b)
     ac = _distance(a, c)
@@ -172,6 +254,50 @@ def _assert_mark_geometry(
             dash_distances, expected_dash_distances, strict=True
         ):
             assert isclose(actual, expected, abs_tol=0.12)
+
+
+def _assert_rendered_lockup_geometry(root: ElementTree.Element) -> None:
+    group, tx, ty, sx, sy = _group_transform(root)
+    assert isclose(sx, sy, abs_tol=EPSILON)
+    a, b, c = _mark_nodes(group)
+    rendered_a = _transform_point(a, tx, ty, sx, sy)
+    rendered_b = _transform_point(b, tx, ty, sx, sy)
+    rendered_c = _transform_point(c, tx, ty, sx, sy)
+    rendered_lengths = (
+        _distance(rendered_a, rendered_b),
+        _distance(rendered_a, rendered_c),
+        _distance(rendered_b, rendered_c),
+    )
+    assert isclose(rendered_lengths[0], rendered_lengths[1], rel_tol=1e-4)
+    assert isclose(rendered_lengths[0], rendered_lengths[2], rel_tol=1e-4)
+
+    for line_id, start, end in (
+        ("edge-a-b", rendered_a, rendered_b),
+        ("edge-a-c", rendered_a, rendered_c),
+    ):
+        line = _line(group, line_id)
+        first = _transform_point(_point(line, "x1", "y1"), tx, ty, sx, sy)
+        last = _transform_point(_point(line, "x2", "y2"), tx, ty, sx, sy)
+        edge = _subtract(end, start)
+        assert abs(_cross(edge, _subtract(first, start))) < EPSILON * sx
+        assert abs(_cross(edge, _subtract(last, start))) < EPSILON * sx
+
+    centers: list[tuple[float, float]] = []
+    for index in range(1, 4):
+        line = _line(group, f"dash-b-c-{index}")
+        first = _transform_point(_point(line, "x1", "y1"), tx, ty, sx, sy)
+        last = _transform_point(_point(line, "x2", "y2"), tx, ty, sx, sy)
+        edge = _subtract(rendered_c, rendered_b)
+        assert abs(_cross(edge, _subtract(first, rendered_b))) < EPSILON * sx
+        assert abs(_cross(edge, _subtract(last, rendered_b))) < EPSILON * sx
+        centers.append(((first[0] + last[0]) / 2, (first[1] + last[1]) / 2))
+    rendered_dash_distances = tuple(
+        _projection_distance(center, rendered_b, rendered_c) for center in centers
+    )
+    for actual, expected in zip(
+        rendered_dash_distances, (20 * sx, 32 * sx, 44 * sx), strict=True
+    ):
+        assert isclose(actual, expected, abs_tol=0.2)
 
 
 def _assert_geometry_parity(
@@ -253,7 +379,11 @@ def test_optical_masters_preserve_invariants_with_intentional_tuning() -> None:
     for path, dash_count in ((SMALL, 2), (TINY, 2)):
         root = _parse_svg(path)
         _assert_flat(root, view_box="0 0 128 128")
-        _assert_mark_geometry(_mark_container(root), dash_count=dash_count)
+        _assert_mark_geometry(
+            _mark_container(root),
+            dash_count=dash_count,
+            expected_dash_distances=(21.5, 37.5),
+        )
         _assert_inset_plate(root, 128, 128)
 
     root = _parse_svg(TINY)
@@ -286,6 +416,8 @@ def test_variants_and_lockups_match_the_canonical_geometry() -> None:
     ):
         root = _parse_svg(ROOT / "branding" / name)
         _assert_geometry_parity(canonical, _mark_container(root))
+        if name.startswith("lockup-"):
+            _assert_rendered_lockup_geometry(root)
 
 
 def test_required_branding_sources_exist_and_lockups_are_flat() -> None:
@@ -360,7 +492,16 @@ def test_consumers_use_the_right_master_or_identical_generated_exports() -> None
     ico = (
         ROOT / "branding" / "exports" / "windows" / "sky-auto-player.ico"
     ).read_bytes()
-    assert _ico_sizes(ico) == {16, 24, 32, 48, 64, 128, 256}
+    assert _ico_sizes(ico) == set(EXPECTED_ICO_SIZES)
+    ico_layers = _ico_layers(ico)
+    assert (
+        ico_layers[16]
+        == (ROOT / "branding" / "exports" / "web" / "favicon-16x16.png").read_bytes()
+    )
+    assert (
+        ico_layers[32]
+        == (ROOT / "branding" / "exports" / "web" / "favicon-32x32.png").read_bytes()
+    )
     assert (ROOT / "desktop" / "src-tauri" / "icons" / "icon.ico").read_bytes() == ico
     assert (ROOT / "site" / "public" / "favicon.ico").read_bytes() == ico
 
