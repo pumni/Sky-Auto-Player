@@ -23,8 +23,10 @@ const requiredStaticFiles = [
   'favicon.svg',
   'assets/sky-auto-player-mark.svg',
   'assets/og-banner.jpg',
-  'assets/images/picker.webp',
-  'assets/images/picker-mobile.webp',
+  'assets/images/library-real-tauri.png',
+  'assets/images/minimum-real-tauri.png',
+  'assets/images/detail-real-tauri.png',
+  'assets/images/settings-real-tauri.png',
 ];
 
 for (const relativePath of requiredStaticFiles) {
@@ -49,7 +51,12 @@ for (const alias of COMPATIBILITY_ALIASES) {
   }
 }
 
-for (const image of ['assets/images/picker.webp', 'assets/images/picker-mobile.webp']) {
+for (const image of [
+  'assets/images/library-real-tauri.png',
+  'assets/images/minimum-real-tauri.png',
+  'assets/images/detail-real-tauri.png',
+  'assets/images/settings-real-tauri.png',
+]) {
   const bytes = statSync(resolve(dist, image)).size;
   if (bytes > 400_000) {
     throw new Error('Image budget exceeded for ' + image + ': ' + bytes + ' bytes');

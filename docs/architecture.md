@@ -4,6 +4,16 @@ Sky Auto Player keeps application and policy work in Python and owns the
 complete production input lifecycle in Rust. There is no Python dispatch
 backend, runtime fallback, or low-level Python/Rust input adapter.
 
+## Presentation surfaces
+
+The packaged `Sky-Auto-Player.exe` Tauri/React application is the canonical
+desktop interface for the v4 release: Library, Song Detail, Player Dock,
+Diagnostics, Settings, and Updates are rendered by the desktop shell. The
+Textual application remains a supported keyboard-first fallback and uses the
+same extracted Python orchestration services. `src/main.py` remains the source
+TUI/CLI entry point; it is not Tauri glue, and the packaged fallback is
+`Sky-Auto-Player-Core.exe --tui` (also available through `play.bat`).
+
 ## Layers
 
 1. `sky_music/domain/` parses songs, validates authored actions, resolves the

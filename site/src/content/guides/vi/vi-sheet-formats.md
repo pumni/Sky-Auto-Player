@@ -54,7 +54,8 @@ Sky-Auto-Player/
     └── bai-ba.txt
 ```
 
-Sau khi thêm file, nhấn `Ctrl+R` trong picker để reload danh sách mà không cần khởi động lại ứng dụng.
+Sau khi thêm file, nhấn **Reload songs** trong Library desktop mà không cần khởi động lại ứng
+dụng. Fallback Textual dùng `Ctrl+R` cho thao tác tương tự.
 
 ## Lấy file sheet ở đâu
 
@@ -65,9 +66,10 @@ Sau khi thêm file, nhấn `Ctrl+R` trong picker để reload danh sách mà kh�
 
 ## Các lỗi thường gặp
 
-**File không hiện trong picker**
-: Reload bằng `Ctrl+R`. Nếu vẫn không hiện, kiểm tra phần mở rộng file phải là `.json`,
-`.skysheet`, hoặc `.txt`. Các phần mở rộng khác không được nhận diện.
+**File không hiện trong Library**
+: Dùng **Reload songs** trong GUI desktop. Trong fallback Textual, reload bằng `Ctrl+R`.
+Nếu vẫn không hiện, kiểm tra phần mở rộng file phải là `.json`, `.skysheet`, hoặc `.txt`.
+Các phần mở rộng khác không được nhận diện.
 
 **Lỗi "Failed to parse"**
 : Nội dung file không phải JSON hợp lệ. Mở file trong text editor để xác nhận nó chứa

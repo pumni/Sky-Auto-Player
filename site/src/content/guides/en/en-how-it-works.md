@@ -48,6 +48,10 @@ The intended workflow is:
 2. Drop the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
 3. Launch Sky Auto Player, select the song, switch to the game, and press your play hotkey.
 
+The packaged `Sky-Auto-Player.exe` is the canonical Tauri desktop GUI. It provides the Library,
+Song Detail, Player Dock, Diagnostics, Settings, and Update surfaces. `play.bat` and
+`Sky-Auto-Player-Core.exe --tui` remain supported keyboard-first fallback entry points.
+
 Sky Auto Player sends keystrokes; the game observes them on its own schedule. The timing
 precision on the game side depends on Windows scheduling, the game's input sampling rate, and
 your hardware — not on the player itself.
@@ -80,8 +84,10 @@ The code follows a four-layer design:
 | **Platform**       | Windows backend: `SendInput`, waitable timer, MMCSS. Only place Win32 types live. |
 
 A Rust timing worker owns compilation, dispatch, focus, `SendInput` calls, cleanup, and native
-telemetry. Python owns the UI and application flow. The dispatch loop and Textual TUI run on
-separate threads using the free-threaded Python 3.14 build — they do not contend on the GIL.
+telemetry. The Tauri/React shell renders the desktop UI, while the Python Core owns shared
+application policy and orchestration. The supported Textual fallback uses the same extracted
+services. The dispatch loop and Python presentation paths run on separate threads using the
+free-threaded Python 3.14 build — they do not contend on the GIL.
 
 ## What Sky Auto Player does not do
 

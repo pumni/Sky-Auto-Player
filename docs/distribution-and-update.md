@@ -120,8 +120,9 @@ will restart the app automatically.`
 
 ## 3. Release selection and network
 
-Python remains the user-facing selector. Stable excludes prereleases; beta may
-include them. The checker uses:
+The desktop GUI is the canonical user-facing selector, while the supported
+Textual fallback uses the same update policy. Stable excludes prereleases;
+beta may include them. The checker uses:
 
 ```text
 stable: https://api.github.com/repos/pumni/Sky-Auto-Player/releases/latest
