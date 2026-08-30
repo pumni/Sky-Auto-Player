@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
+  <title>Sky Auto Player monochrome small-size evidence</title>
+  <rect width="900" height="260" fill="#07090D"/>
+  <rect y="260" width="900" height="260" fill="#F6F2E8"/>
+  <text x="40" y="48" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700">Monochrome small-size evidence</text>
+  <text x="40" y="294" fill="#07090D" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700">Dark-on-light variant</text>
+  <g font-family="Segoe UI, sans-serif" font-size="15" text-anchor="middle">
+    <g fill="#B8CCD6"><text x="260" y="224">32 px</text><text x="470" y="224">24 px</text><text x="650" y="224">16 px</text></g>
+    <g fill="#07090D"><text x="260" y="484">32 px</text><text x="470" y="484">24 px</text><text x="650" y="484">16 px</text></g>
+  </g>
+  <image href="../sky-auto-player-mark-mono.svg" x="244" y="112" width="32" height="32"/>
+  <image href="../sky-auto-player-mark-mono.svg" x="458" y="116" width="24" height="24"/>
+  <image href="../sky-auto-player-mark-mono.svg" x="642" y="120" width="16" height="16"/>
+  <image href="../sky-auto-player-mark-mono-dark.svg" x="244" y="372" width="32" height="32"/>
+  <image href="../sky-auto-player-mark-mono-dark.svg" x="458" y="376" width="24" height="24"/>
+  <image href="../sky-auto-player-mark-mono-dark.svg" x="642" y="380" width="16" height="16"/>
+</svg>

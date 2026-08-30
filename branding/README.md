@@ -1,28 +1,46 @@
 # Sky Auto Player branding
 
-`sky-auto-player-app-icon.svg` is the canonical application mark. It is a flat `128 × 128` SVG
-with the approved `#07090D`, `#F4EFE3`, `#F7DDA2`, and `#B8CCD6` palette. The node centers are
-`(40, 33)`, `(40, 95)`, and `(93.6936, 64)`, an equilateral triangle pointing right. The two
-edges from the diamond are solid; the circle-to-circle edge is three explicit six-unit,
-round-capped segments at the approved coordinates.
+The visual master is `sky-auto-player-app-icon.svg`: a flat `128 × 128` application icon with a
+right-facing equilateral node skeleton. The top-left node is a medium ivory-outlined gold diamond;
+the lower-left gold ring is intentionally larger than the smaller blue-gray ring on the right.
+Connections are two thin solid lines and three explicit, round-capped dash segments. Each connection
+has an optical inset so it does not weld into a node at small sizes.
 
-The application plate is part of the canonical icon. `sky-auto-player-mark-mono.svg` is the
-transparent monochrome derivative for the site's low-opacity decorative mark; it retains all three
-edges and the same geometry.
+`sky-auto-player-app-icon-small.svg` is the optical master for `24px` and `16px`. It uses slightly
+stronger strokes and two clearly separated dash segments so the distinction between solid and dashed
+edges survives reduction. Use the large master for `256`, `128`, `64`, `48`, and `32px`.
 
-## Exports
+## Source variants
 
-- `exports/windows/sky-auto-player.ico` is generated from the canonical SVG with the pinned Tauri
-  CLI (`cd desktop; bun install --frozen-lockfile; bun run tauri icon ../branding/sky-auto-player-app-icon.svg
-  --output <temporary-output>`) and contains the Windows size layers.
-- `exports/web/apple-touch-icon.png` is the 180 px application-plate render.
-- `exports/web/og-banner.svg` is the deterministic source composition for the 1200 × 630 JPEG
-  social card. Render it with a local browser screenshot and encode the result as
-  `site/public/assets/og-banner.jpg` (and its legacy `assets/images` copy).
-- `site/public/favicon.ico` and `desktop/src-tauri/icons/icon.ico` are byte-identical copies of the
-  canonical Windows export.
+- `sky-auto-player-mark-no-bg.svg` — full-color transparent mark for upright, low-opacity decorative use.
+- `sky-auto-player-mark-mono.svg` — light-on-dark transparent monochrome mark.
+- `sky-auto-player-mark-mono-dark.svg` — dark-on-light transparent monochrome mark.
+- `sky-auto-player-mark-mono-solid.svg` — light monochrome mark on the dark application plate.
+- `lockup-horizontal.svg` and `lockup-stacked.svg` — flat production lockups with the approved tagline.
 
-Keep the SVG flat: no filters, gradients, embedded raster data, glow, or generated design-tool
-metadata. Judge the canonical export at 256, 128, 64, 48, 32, 24, and 16 px before changing the
-geometry. If an optical small master is ever needed, preserve the equilateral node skeleton and
-document the exact sizes that use it here.
+All sources are hand-authored flat SVG. They contain no filters, gradients, embedded raster images,
+glow, texture, or generated design-tool metadata.
+
+## Export commands
+
+The Tauri CLI can rasterize one source at a time, so the Windows ICO is assembled from two raster
+sets. Run from the repository root after installing the pinned desktop dependencies:
+
+```powershell
+cd desktop
+bun install --frozen-lockfile
+bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <large-output> --png 32,48,64,128,256
+bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output <small-output> --png 16,24
+cd ..
+uv run python branding/scripts/build_ico.py --large-dir <large-output> --small-dir <small-output> --output branding/exports/windows/sky-auto-player.ico
+```
+
+`branding/scripts/build_ico.py` is a build-time standard-library assembler. It preserves the PNG
+payloads and writes the six ICO layers `16, 24, 32, 48, 64, 256`; the first two come from the small
+optical master and the remaining layers come from the large master. Copy the resulting ICO byte-for-
+byte to `site/public/favicon.ico` and `desktop/src-tauri/icons/icon.ico`.
+
+Generate the Apple touch icon from the large master with the same Tauri CLI using `--png 180`, then
+copy it to `branding/exports/web/apple-touch-icon.png` and `site/public/apple-touch-icon.png`.
+Render `exports/web/og-banner.svg` in a browser at `1200 × 630` and encode the screenshot as JPEG at
+both `site/public/assets/og-banner.jpg` and `site/public/assets/images/og-banner.jpg`.

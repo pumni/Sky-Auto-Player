@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
-  <title id="title">Sky Auto Player monochrome mark</title>
-  <desc id="desc">Monochrome right-facing triangular mark with two solid edges and one dashed edge.</desc>
+  <title id="title">Sky Auto Player mark</title>
+  <desc id="desc">Transparent full-color Sky Auto Player mark.</desc>
 
   <line id="edge-a-b" x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
   <line id="edge-a-c" x1="52.9904" y1="40.5" x2="82.8683" y2="57.75" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
@@ -8,7 +8,7 @@
   <line id="dash-b-c-2" x1="65.9808" y1="80" x2="71.1770" y2="77" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
   <line id="dash-b-c-3" x1="76.3731" y1="74" x2="81.5693" y2="71" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
 
-  <rect id="diamond-a" x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#F4EFE3"/>
-  <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="none" stroke="#F4EFE3" stroke-width="3.8"/>
-  <circle id="node-c-sky" cx="93.6936" cy="64" r="7.7" fill="none" stroke="#F4EFE3" stroke-width="3.2"/>
+  <rect id="diamond-a" x="32.5" y="25.5" width="15" height="15" rx="0.75" transform="rotate(45 40 33)" fill="#F7DDA2" stroke="#F4EFE3" stroke-width="2"/>
+  <circle id="node-b-gold" cx="40" cy="95" r="9.5" fill="#07090D" stroke="#F7DDA2" stroke-width="3.8"/>
+  <circle id="node-c-sky" cx="93.6936" cy="64" r="7.7" fill="#07090D" stroke="#B8CCD6" stroke-width="3.2"/>
 </svg>

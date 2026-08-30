@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
-  <title id="title">Sky Auto Player monochrome mark</title>
-  <desc id="desc">Monochrome right-facing triangular mark with two solid edges and one dashed edge.</desc>
+  <title id="title">Sky Auto Player solid monochrome mark</title>
+  <desc id="desc">Solid light monochrome application mark on a dark plate with a preserved dashed edge.</desc>
 
+  <rect id="plate" width="128" height="128" rx="28" fill="#07090D"/>
   <line id="edge-a-b" x1="40" y1="48" x2="40" y2="80" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
   <line id="edge-a-c" x1="52.9904" y1="40.5" x2="82.8683" y2="57.75" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>
   <line id="dash-b-c-1" x1="55.5885" y1="86" x2="60.7847" y2="83" stroke="#F4EFE3" stroke-width="2.8" stroke-linecap="round"/>

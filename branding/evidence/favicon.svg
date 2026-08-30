@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="220" viewBox="0 0 720 220">
+  <title>Sky Auto Player favicon evidence</title>
+  <rect width="720" height="220" rx="18" fill="#DCE1E5"/>
+  <rect x="24" y="24" width="672" height="172" rx="12" fill="#FFFFFF" stroke="#A7B0B7"/>
+  <rect x="24" y="24" width="672" height="38" rx="12" fill="#EEF1F3"/>
+  <circle cx="46" cy="43" r="6" fill="#F07070"/><circle cx="66" cy="43" r="6" fill="#F0C56A"/><circle cx="86" cy="43" r="6" fill="#70C98B"/>
+  <rect x="116" y="31" width="360" height="24" rx="12" fill="#FFFFFF" stroke="#D0D6DA"/>
+  <text x="128" y="48" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="12">pumni.github.io/Sky-Auto-Player/</text>
+  <image href="../../site/public/favicon.svg" x="44" y="88" width="32" height="32"/>
+  <image href="../../site/public/favicon.svg" x="104" y="96" width="16" height="16"/>
+  <text x="138" y="109" fill="#1A2329" font-family="Segoe UI, sans-serif" font-size="18">favicon.svg</text>
+  <text x="44" y="156" fill="#53616A" font-family="Segoe UI, sans-serif" font-size="13">Small optical master · 32 px and 16 px browser surfaces</text>
+</svg>
