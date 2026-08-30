@@ -562,6 +562,7 @@ def run_pipeline(output_root: Path) -> Path:
                 "tauri_gui_smoke": "passed",
                 "tui_smoke": "passed",
                 "packaged_updater_identity_smoke": "passed",
+                "packaged_updater_ready_parent_smoke": "passed",
                 "exact_artifact_transaction_restart": "qualified_with_local_source_runner",
                 "production_updater_network_transaction": (
                     "not_run_without_public_release_or_local_http_source"

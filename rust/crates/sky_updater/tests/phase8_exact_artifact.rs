@@ -464,6 +464,34 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
     no_window(&mut parent);
     let mut parent = ChildGuard(parent.spawn()?);
+
+    // Exercise the shipped updater binary through its real READY/parent-wait
+    // boundary before the offline transaction runner performs the exact
+    // artifact install. The production binary intentionally remains
+    // GitHub/HTTPS-only; the feature-gated runner below is the only local
+    // transport used for the deterministic offline transaction.
+    let packaged_run_root = update_runs.join("run-abcdef0123456789abcdef0123456789");
+    fs::create_dir_all(&packaged_run_root).expect("packaged updater run root");
+    let packaged_updater = packaged_run_root.join(UPDATER_EXE);
+    fs::copy(&actual_updater, &packaged_updater).expect("packaged updater qualification copy");
+    let mut packaged = Command::new(&packaged_updater);
+    packaged
+        .arg("--install-root")
+        .arg(&install)
+        .arg("--parent-pid")
+        .arg(parent.id().to_string())
+        .arg("--current-version")
+        .arg(PREVIOUS_VERSION)
+        .arg("--target-version")
+        .arg(TARGET_VERSION)
+        .arg("--channel")
+        .arg("stable")
+        .current_dir(&install);
+    no_window(&mut packaged);
+    let mut packaged = ChildGuard(packaged.spawn()?);
+    let _packaged_run_root = wait_for_ready_handoff(&local_app_data, packaged.id());
+    packaged.stop();
+
     let e2e_run_root = update_runs.join("run-0123456789abcdef0123456789abcdef");
     fs::create_dir_all(&e2e_run_root).expect("E2E updater run root");
     let e2e_updater_canonical = e2e_run_root.join(UPDATER_EXE);

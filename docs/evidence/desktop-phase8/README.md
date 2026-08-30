@@ -45,7 +45,9 @@ Previous-stable qualification is `3.4.5 → 3.5.0` and exercises the native
 updater's ZIP/sidecar/manifest checks, staged verification, managed-file
 transition, preserved user paths, transaction installation, injected apply
 failure rollback, and interrupted transaction recovery against the actual
-Phase 8 ZIP. The feature-gated
+Phase 8 ZIP. The exact-package harness also launches the shipped updater
+binary through its real READY and canonical-parent wait boundary before the
+offline transaction. The feature-gated
 `sky_updater_e2e` runner supplies only the deterministic local-release
 transport used by the offline exact-artifact handoff/restart harness; the
 shipped `Sky-Auto-Player-Updater.exe` remains the default GitHub/HTTPS
