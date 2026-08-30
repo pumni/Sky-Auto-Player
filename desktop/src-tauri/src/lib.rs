@@ -15,6 +15,10 @@ type ShellRuntime = tauri::test::MockRuntime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = core::check_startup_update_guard() {
+        eprintln!("Sky Auto Player startup refused: {error}");
+        return;
+    }
     tauri::Builder::<ShellRuntime>::default()
         .manage(app_state::AppState::default())
         .setup(|_| Ok(()))
@@ -338,6 +342,7 @@ mod ipc_tests {
                 super::commands::get_update_preferences,
                 super::commands::patch_update_preferences,
                 super::commands::begin_update_handoff,
+                super::commands::shutdown,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
@@ -384,6 +389,11 @@ mod ipc_tests {
         let handoff_value: serde_json::Value = handoff.deserialize().expect("handoff JSON");
         assert_eq!(handoff_value["state"], "handoff_ready");
         assert_eq!(handoff_value["target_version"], "3.6.0");
+
+        let shutdown = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 55))
+            .expect("successful handoff must use the controlled shell close command");
+        let _: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
+        assert!(app.state::<AppState>().inner().is_closing_for_test());
 
         let wrong = tauri::test::get_ipc_response(
             &webview,

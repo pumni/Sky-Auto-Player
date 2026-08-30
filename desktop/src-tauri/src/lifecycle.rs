@@ -17,3 +17,41 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
         let _ = window.destroy();
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppState;
+
+    fn close_sequence_for_test(
+        state: &AppState,
+        order: &mut Vec<&'static str>,
+        core_shutdown: impl FnOnce(&mut Vec<&'static str>),
+        destroy: impl FnOnce(&mut Vec<&'static str>),
+    ) -> bool {
+        if !state.begin_close() {
+            return false;
+        }
+        core_shutdown(order);
+        destroy(order);
+        true
+    }
+
+    #[test]
+    fn controlled_close_cleans_core_before_destroy_and_is_idempotent() {
+        let state = AppState::default();
+        let mut order = Vec::new();
+        assert!(close_sequence_for_test(
+            &state,
+            &mut order,
+            |order| order.push("core_shutdown"),
+            |order| order.push("destroy"),
+        ));
+        assert!(!close_sequence_for_test(
+            &state,
+            &mut order,
+            |order| order.push("duplicate_shutdown"),
+            |order| order.push("duplicate_destroy"),
+        ));
+        assert_eq!(order, ["core_shutdown", "destroy"]);
+    }
+}

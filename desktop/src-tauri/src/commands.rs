@@ -863,15 +863,15 @@ pub async fn subscribe_ui_events(
 }
 
 #[tauri::command]
-pub async fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
-    let app_state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Ok(supervisor) = app_state.supervisor() {
-            supervisor.shutdown();
-        }
-    })
-    .await
-    .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
+pub async fn shutdown(
+    window: tauri::WebviewWindow<super::ShellRuntime>,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    // This command is used only after an authoritative update handoff. Keep
+    // shell exit under the same prevent-close -> bounded Core cleanup ->
+    // destroy lifecycle as a user-initiated close; React never destroys the
+    // native window directly.
+    crate::lifecycle::close_window(window.as_ref().window());
     Ok(())
 }
 

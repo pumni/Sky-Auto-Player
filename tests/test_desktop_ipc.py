@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -478,7 +479,8 @@ def test_update_handoff_requires_fresh_typed_check_and_is_idempotent(
     monkeypatch.setattr(
         desktop_server_module,
         "launch_update",
-        lambda request: launch_calls.append(request) or object(),
+        lambda request: launch_calls.append(request)
+        or SimpleNamespace(status="ready"),
     )
     server = DesktopCoreServer(
         settings_service=SettingsService(AppConfig(songs_dir=str(tmp_path))),
@@ -486,6 +488,7 @@ def test_update_handoff_requires_fresh_typed_check_and_is_idempotent(
         native_build_info=NATIVE_INFO,
         app_version="3.5.0",
         install_root=tmp_path,
+        parent_pid=12345,
     )
     _call(server, _request("update.check"))
     stale = _call(server, _request("update.begin_handoff", {"target_version": "3.5.1"}))
@@ -497,6 +500,52 @@ def test_update_handoff_requires_fresh_typed_check_and_is_idempotent(
     assert first["result"]["state"] == "handoff_ready"  # type: ignore[index]
     assert second["result"] == first["result"]
     assert len(launch_calls) == 1
+    assert launch_calls[0].parent_pid == 12345  # type: ignore[union-attr]
+
+
+def test_update_handoff_lock_race_is_busy_without_ready_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = UpdateInfo(
+        latest_version="3.6.0",
+        download_url="https://example.invalid/update.zip",
+        release_notes="test",
+        html_url="https://example.invalid/release",
+        published_at="2026-08-30T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        desktop_server_module,
+        "check_for_update",
+        lambda *_args, **_kwargs: UpdateCheckResult(info, "3.5.0"),
+    )
+    monkeypatch.setattr(desktop_server_module, "record_successful_check", lambda *_args: None)
+    monkeypatch.setattr(desktop_server_module, "active_update_for_install", lambda _root: None)
+    launch_calls: list[object] = []
+    monkeypatch.setattr(
+        desktop_server_module,
+        "launch_update",
+        lambda request: launch_calls.append(request)
+        or SimpleNamespace(status="already_running"),
+    )
+    server = DesktopCoreServer(
+        settings_service=SettingsService(AppConfig(songs_dir=str(tmp_path))),
+        catalog_service=CatalogService(tmp_path),
+        native_build_info=NATIVE_INFO,
+        app_version="3.5.0",
+        install_root=tmp_path,
+        parent_pid=54321,
+    )
+    _call(server, _request("update.check"))
+    server.drain_events()
+
+    response = _call(
+        server, _request("update.begin_handoff", {"target_version": "3.6.0"})
+    )
+    assert response["ok"] is False
+    assert response["error"]["code"] == "update_busy"  # type: ignore[index]
+    assert [event["name"] for event in server.drain_events()] == ["update.result"]
+    assert len(launch_calls) == 1
+    assert server._update_handoff_started is False  # type: ignore[attr-defined]
 
 
 def test_diagnostics_control_is_disabled_by_default_and_bounded_to_ui_rate(

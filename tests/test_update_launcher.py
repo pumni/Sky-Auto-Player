@@ -19,6 +19,7 @@ def _request(root: Path, *, target: str = "2.5.0") -> update_launcher.UpdateLaun
         current_version="2.4.0",
         target_version=target,
         channel="stable",
+        parent_pid=4242,
     )
 
 
@@ -117,7 +118,7 @@ def test_launch_stages_verified_native_updater(
         "--install-root",
         str(root.resolve()),
         "--parent-pid",
-        str(os.getpid()),
+        "4242",
         "--current-version",
         "2.4.0",
         "--target-version",
@@ -380,6 +381,7 @@ def test_launcher_request_validation_boundary_variants(
             current_version=request.current_version,
             target_version=request.target_version,
             channel="nightly",
+            parent_pid=request.parent_pid,
         )
     elif variant == "invalid_current":
         request = update_launcher.UpdateLaunchRequest(
@@ -387,6 +389,7 @@ def test_launcher_request_validation_boundary_variants(
             current_version="not-a-version",
             target_version=request.target_version,
             channel=request.channel,
+            parent_pid=request.parent_pid,
         )
     elif variant == "invalid_target":
         request = update_launcher.UpdateLaunchRequest(
@@ -394,12 +397,32 @@ def test_launcher_request_validation_boundary_variants(
             current_version=request.current_version,
             target_version="not-a-version",
             channel=request.channel,
+            parent_pid=request.parent_pid,
         )
     elif variant == "downgrade":
         request = _request(root, target="2.3.0")
     else:
         request = _request(root, target="2.4.0")
     with pytest.raises(update_launcher.UpdateLaunchError, match=message):
+        update_launcher.launch_update(request)
+
+
+@pytest.mark.parametrize("parent_pid", [0, -1, 0x1_0000_0000, True, None])
+def test_launcher_rejects_missing_or_malformed_parent_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, parent_pid: object
+) -> None:
+    root = tmp_path / "install"
+    root.mkdir()
+    _write_install_manifest(root)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    request = update_launcher.UpdateLaunchRequest(
+        install_root=root,
+        current_version="2.4.0",
+        target_version="2.5.0",
+        channel="stable",
+        parent_pid=parent_pid,  # type: ignore[arg-type]
+    )
+    with pytest.raises(update_launcher.UpdateLaunchError, match="parent PID"):
         update_launcher.launch_update(request)
 
 

@@ -3,10 +3,12 @@
 Date: 2026-08-30
 
 This is the Phase 7 update-flow qualification, not the Phase 8 final portable
-artifact qualification. The public source revision for the desktop update
-surface is `01b599f`. Native/updater provenance is the checked-in
-`rust/crates/sky_updater` source plus its test-only deterministic fixture; a
-final updater binary is intentionally not asserted at this phase.
+artifact qualification. The prior public source revision for the desktop
+update surface was `2cc36cb`; the updater-lifecycle closure is recorded in the
+PR #76 verification section at the final branch head. Native/updater
+provenance is the checked-in `rust/crates/sky_updater` source plus its
+test-only deterministic fixture; a final updater binary is intentionally not
+asserted at this phase.
 
 ## Controlled previous-stable → candidate fixture
 
@@ -38,6 +40,37 @@ survive both the successful transaction and rollback recovery.
 | Fault injection and rollback | `packaged_update_e2e.rs`, `updater_safety.rs` | PASS |
 | User-file preservation | `packaged_update_e2e.rs` | PASS |
 | Canonical restart target | native updater restart tests and contract docs | PASS |
+
+## Desktop handoff lifecycle closure
+
+The desktop launch path performs a read-only active-update admission check
+before constructing the Tauri builder. It reuses `sky_updater`'s fixed
+`active-update.json` path, install-ID, run-directory, and bounded Windows
+process-image validation. A live owned transaction refuses ordinary GUI/Core
+startup; foreign, stale, dead, and malformed state follows the existing
+cleanup/ignore semantics without an indefinite wait.
+
+The authoritative parent chain is:
+
+```text
+Tauri GUI PID
+  -> Core --parent-pid
+  -> UpdateLaunchRequest.parent_pid
+  -> native updater --parent-pid
+```
+
+Legacy Textual launchers pass their own PID explicitly. The Core refuses a
+desktop handoff without a positive bounded parent PID. A native launcher result
+of `already_running` becomes a typed `update_busy` response and never emits
+`update.handoff_ready`.
+
+Only a successful typed handoff is followed by the Tauri `shutdown` command.
+That command enters the shared `prevent-close`/idempotent close transition,
+performs bounded Core/native cleanup on a blocking worker, and destroys the
+window only after cleanup. Repeated close requests are ignored after the first
+transition. Focused tests cover parent PID propagation, startup admission,
+already-running handoff rejection, generated Tauri shutdown dispatch, and
+cleanup-before-destroy ordering.
 
 The native updater remains the only download, artifact-verification,
 transaction, rollback, and canonical restart authority. React sends only a

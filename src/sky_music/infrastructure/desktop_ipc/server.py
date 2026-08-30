@@ -815,6 +815,10 @@ class DesktopCoreServer:
             )
         if self.install_root is None:
             raise CoreRequestError("update_unavailable", "install root is unavailable")
+        if type(self.parent_pid) is not int or not 0 < self.parent_pid <= 0xFFFFFFFF:
+            raise CoreRequestError(
+                "update_unavailable", "desktop parent PID is unavailable"
+            )
         if self.playback.is_physical_active() or self.calibration.is_active():
             raise CoreRequestError(
                 "update_busy", "stop playback and calibration before updating"
@@ -824,12 +828,13 @@ class DesktopCoreServer:
             raise CoreRequestError("update_busy", "an update is already active")
         preferences = self.settings_service.snapshot().update_preferences
         try:
-            launch_update(
+            launch_result = launch_update(
                 UpdateLaunchRequest(
                     install_root=self.install_root,
                     current_version=self.app_version,
                     target_version=target,
                     channel=preferences.channel,
+                    parent_pid=self.parent_pid,
                 )
             )
         except UpdateLaunchError as exc:
@@ -844,6 +849,20 @@ class DesktopCoreServer:
                 },
             )
             raise CoreRequestError("update_handoff_failed", str(exc)) from exc
+        if launch_result.status != "ready":
+            self._publish_event(
+                "update.result",
+                {
+                    "state": "error",
+                    "current_version": self.app_version,
+                    "available_version": target,
+                    "channel": preferences.channel,
+                    "error": "an update is already running",
+                },
+            )
+            raise CoreRequestError(
+                "update_busy", "another updater won the handoff lock race"
+            )
         self._update_handoff_started = True
         self._update_handoff_id = secrets.token_hex(16)
         handoff = UpdateHandoffDto(self._update_handoff_id, target, "handoff_ready")
