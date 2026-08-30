@@ -43,6 +43,95 @@ pub struct CatalogChangedPayload {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
+pub enum DiagnosticsBackendStatus {
+    Healthy,
+    Degraded,
+    Error,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsSnapshotDto {
+    pub seq: u64,
+    pub max_lateness_us: u64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub sigma_onset_ms: f64,
+    pub late_2ms: u64,
+    pub late_5ms: u64,
+    pub late_10ms: u64,
+    pub active_keys: u64,
+    pub stuck_keys: u64,
+    pub keys_dropped: u64,
+    pub chord_split_events: u64,
+    pub backend_status: DiagnosticsBackendStatus,
+    pub release_max_us: Option<u64>,
+    pub release_late_2ms: Option<u64>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationMode {
+    Quick,
+    Full,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationState {
+    Idle,
+    Starting,
+    Running,
+    Cancelling,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationProgressPayload {
+    pub operation_id: String,
+    pub state: CalibrationState,
+    pub phase: String,
+    pub completed: u64,
+    pub total: u64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationFinishedPayload {
+    pub operation_id: String,
+    pub outcome: CalibrationOutcome,
+    pub status: String,
+    pub margin_us: Option<u64>,
+    pub sample_count: u64,
+    pub source: String,
+    pub message: String,
+    pub applied: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum PlaybackEventState {
     Starting,
     Playing,
@@ -134,7 +223,7 @@ pub struct PlaybackFailedPayload {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, TS, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, TS, PartialEq)]
 #[ts(export)]
 #[serde(tag = "name")]
 pub enum UiEvent {
@@ -166,6 +255,21 @@ pub enum UiEvent {
     PlaybackFailed {
         v: u64,
         payload: PlaybackFailedPayload,
+    },
+    #[serde(rename = "diagnostics.snapshot")]
+    DiagnosticsSnapshot {
+        v: u64,
+        payload: DiagnosticsSnapshotDto,
+    },
+    #[serde(rename = "calibration.progress")]
+    CalibrationProgress {
+        v: u64,
+        payload: CalibrationProgressPayload,
+    },
+    #[serde(rename = "calibration.finished")]
+    CalibrationFinished {
+        v: u64,
+        payload: CalibrationFinishedPayload,
     },
 }
 
@@ -246,6 +350,58 @@ impl UiEvent {
         validate_text("code", &payload.code)?;
         validate_text("message", &payload.message)
     }
+
+    pub(crate) fn validate_diagnostics_snapshot(
+        payload: &DiagnosticsSnapshotDto,
+    ) -> Result<(), String> {
+        if payload.seq == 0 {
+            return Err("diagnostics sequence must be positive".into());
+        }
+        for (name, value) in [
+            ("p50_ms", payload.p50_ms),
+            ("p95_ms", payload.p95_ms),
+            ("sigma_onset_ms", payload.sigma_onset_ms),
+        ] {
+            if !value.is_finite() || !(-60_000.0..=60_000.0).contains(&value) {
+                return Err(format!("diagnostics {name} is outside bounds"));
+            }
+        }
+        if payload.max_lateness_us > 60_000_000 {
+            return Err("diagnostics max lateness is outside bounds".into());
+        }
+        if let Some(session_id) = &payload.session_id {
+            validate_session_id(session_id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_calibration_progress(
+        payload: &CalibrationProgressPayload,
+    ) -> Result<(), String> {
+        validate_operation_id(&payload.operation_id)?;
+        validate_text("phase", &payload.phase)?;
+        validate_text("message", &payload.message)?;
+        if payload.total == 0 || payload.total > 10_000 || payload.completed > payload.total {
+            return Err("calibration progress is outside bounds".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_calibration_finished(
+        payload: &CalibrationFinishedPayload,
+    ) -> Result<(), String> {
+        validate_operation_id(&payload.operation_id)?;
+        validate_text("status", &payload.status)?;
+        validate_text("source", &payload.source)?;
+        validate_text("message", &payload.message)?;
+        if payload.sample_count > 5_000 {
+            return Err("calibration sample count exceeds bounds".into());
+        }
+        if payload.margin_us.is_some_and(|value| value > 60_000_000) {
+            return Err("calibration margin is outside bounds".into());
+        }
+        Ok(())
+    }
 }
 
 fn validate_session_id(value: &str) -> Result<(), String> {
@@ -260,6 +416,10 @@ fn validate_song_id(value: &str) -> Result<(), String> {
         return Err("event song_id is not an opaque ID".into());
     }
     Ok(())
+}
+
+fn validate_operation_id(value: &str) -> Result<(), String> {
+    validate_session_id(value).map_err(|_| "calibration operation_id is not an opaque ID".into())
 }
 
 fn is_lower_hex(byte: u8) -> bool {

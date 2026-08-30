@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import type {
   Bootstrap,
+  CalibrationFinished,
+  CalibrationModeId,
+  CalibrationProgress,
+  CalibrationStart,
   DesktopBridge,
+  DiagnosticsSnapshot,
   SearchRequest,
   Settings,
   SettingsPatch,
@@ -20,6 +25,25 @@ import { initialEventState, reduceEvent } from './eventReducer';
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
 type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
+type CalibrationUiState =
+  'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
+
+export const MAX_DIAGNOSTIC_SAMPLES = 600;
+export const MAX_DIAGNOSTIC_EVENTS = 500;
+export const MAX_DIAGNOSTIC_LOGS = 200;
+export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
+
+export interface DiagnosticsEventLine {
+  seq: number;
+  name: string;
+  detail: string;
+}
+
+export interface DiagnosticsLogLine {
+  seq: number;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+}
 
 export interface DesktopStore {
   bootstrapState: LoadState;
@@ -40,6 +64,25 @@ export interface DesktopStore {
   settings: Settings | null;
   settingsState: LoadState;
   settingsOpen: boolean;
+  diagnostics: {
+    open: boolean;
+    enabled: boolean;
+    samples: DiagnosticsSnapshot[];
+    events: DiagnosticsEventLine[];
+    logs: DiagnosticsLogLine[];
+    error: string | null;
+  };
+  calibration: {
+    open: boolean;
+    operationId: string | null;
+    state: CalibrationUiState;
+    phase: string;
+    completed: number;
+    total: number;
+    message: string;
+    result: CalibrationFinished | null;
+    error: string | null;
+  };
   playback: {
     state: PlaybackUiState;
     sessionId: string | null;
@@ -63,6 +106,11 @@ export interface DesktopStore {
   resumePlayback: () => Promise<void>;
   skipPlayback: () => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
+  setDiagnosticsOpen: (open: boolean) => void;
+  setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
+  startCalibration: (mode?: CalibrationModeId) => Promise<void>;
+  cancelCalibration: () => Promise<void>;
+  setCalibrationOpen: (open: boolean) => void;
 }
 
 export function createDesktopStore(bridge: DesktopBridge) {
@@ -76,12 +124,54 @@ export function createDesktopStore(bridge: DesktopBridge) {
     songTitle: string;
   } | null = null;
   let settingsMutationTail: Promise<void> = Promise.resolve();
+  let diagnosticsToggleEpoch = 0;
   const retiredSessionIds = new Set<string>();
   const pageSize = 200;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
+  let diagnosticsEventSeq = 0;
+  let diagnosticsLogSeq = 0;
 
   const cacheKey = (query: string, generation: number) => `${generation}\u0000${query}`;
+
+  const boundedText = (value: string): string => {
+    const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    if (encoder.encode(normalized).length <= MAX_DIAGNOSTIC_LINE_LENGTH) {
+      return normalized;
+    }
+    let bounded = decoder.decode(encoder.encode(normalized).slice(0, MAX_DIAGNOSTIC_LINE_LENGTH));
+    while (encoder.encode(bounded).length > MAX_DIAGNOSTIC_LINE_LENGTH) {
+      bounded = bounded.slice(0, -1);
+    }
+    return bounded;
+  };
+
+  const eventDetail = (event: UiEvent): string => {
+    switch (event.name) {
+      case 'core.ready':
+        return `Protocol ${event.payload.protocol_version} ready`;
+      case 'core.fatal':
+        return `${event.payload.code}: ${event.payload.message}`;
+      case 'catalog.changed':
+        return `Generation ${event.payload.generation}, ${event.payload.total} songs`;
+      case 'diagnostics.snapshot':
+        return `p95 ${event.payload.p95_ms.toFixed(2)} ms; max ${event.payload.max_lateness_us} μs`;
+      case 'calibration.progress':
+        return `${event.payload.phase}: ${event.payload.completed}/${event.payload.total}`;
+      case 'calibration.finished':
+        return `${event.payload.outcome}: ${event.payload.status}`;
+      case 'playback.state_changed':
+        return `${event.payload.song_id} → ${event.payload.state}`;
+      case 'playback.snapshot':
+        return `${event.payload.title}: ${event.payload.state}`;
+      case 'playback.finished':
+        return `${event.payload.song_id}: ${event.payload.outcome}`;
+      case 'playback.failed':
+        return `${event.payload.code}: ${event.payload.message}`;
+    }
+  };
 
   return create<DesktopStore>((set, get) => {
     const acceptsSessionEvent = (sessionId: string, songId: string): boolean => {
@@ -204,6 +294,25 @@ export function createDesktopStore(bridge: DesktopBridge) {
       settings: null,
       settingsState: 'idle',
       settingsOpen: false,
+      diagnostics: {
+        open: false,
+        enabled: false,
+        samples: [],
+        events: [],
+        logs: [],
+        error: null,
+      },
+      calibration: {
+        open: false,
+        operationId: null,
+        state: 'idle',
+        phase: '',
+        completed: 0,
+        total: 0,
+        message: '',
+        result: null,
+        error: null,
+      },
       playback: {
         state: 'idle',
         sessionId: null,
@@ -236,6 +345,25 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       applyEvent(event) {
+        diagnosticsEventSeq += 1;
+        const detail = boundedText(eventDetail(event));
+        const level: DiagnosticsLogLine['level'] =
+          event.name === 'core.fatal' || event.name === 'playback.failed' ? 'error' : 'info';
+        const diagnostics = get().diagnostics;
+        const eventLine: DiagnosticsEventLine = {
+          seq: diagnosticsEventSeq,
+          name: event.name,
+          detail,
+        };
+        diagnosticsLogSeq += 1;
+        const logLine: DiagnosticsLogLine = { seq: diagnosticsLogSeq, level, message: detail };
+        set({
+          diagnostics: {
+            ...diagnostics,
+            events: [...diagnostics.events, eventLine].slice(-MAX_DIAGNOSTIC_EVENTS),
+            logs: [...diagnostics.logs, logLine].slice(-MAX_DIAGNOSTIC_LOGS),
+          },
+        });
         const eventState = reduceEvent(
           {
             ...initialEventState,
@@ -251,6 +379,14 @@ export function createDesktopStore(bridge: DesktopBridge) {
             fatal: eventState.fatal,
             bootstrapState: 'fatal',
             playback: { ...get().playback, state: 'failed', error: eventState.fatal },
+            calibration: {
+              ...get().calibration,
+              state:
+                get().calibration.state === 'running' || get().calibration.state === 'starting'
+                  ? 'failed'
+                  : get().calibration.state,
+              error: eventState.fatal,
+            },
           });
           return;
         }
@@ -347,6 +483,56 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: `${event.payload.code}: ${event.payload.message}`,
             },
           });
+        } else if (event.name === 'diagnostics.snapshot') {
+          const current = get().diagnostics;
+          if (!current.enabled || !current.open) return;
+          set({
+            diagnostics: {
+              ...current,
+              samples: [...current.samples, event.payload].slice(-MAX_DIAGNOSTIC_SAMPLES),
+            },
+          });
+        } else if (event.name === 'calibration.progress') {
+          const current = get().calibration;
+          if (current.operationId && current.operationId !== event.payload.operation_id) return;
+          set({
+            calibration: {
+              ...current,
+              operationId: current.operationId ?? event.payload.operation_id,
+              state: event.payload.state as CalibrationUiState,
+              phase: boundedText(event.payload.phase),
+              completed: event.payload.completed,
+              total: event.payload.total,
+              message: boundedText(event.payload.message),
+              error: null,
+            },
+          });
+        } else if (event.name === 'calibration.finished') {
+          const current = get().calibration;
+          if (current.operationId && current.operationId !== event.payload.operation_id) return;
+          if (['succeeded', 'failed', 'cancelled'].includes(current.state)) return;
+          const state: CalibrationUiState =
+            event.payload.outcome === 'succeeded'
+              ? 'succeeded'
+              : event.payload.outcome === 'cancelled'
+                ? 'cancelled'
+                : 'failed';
+          set({
+            calibration: {
+              ...current,
+              operationId: current.operationId ?? event.payload.operation_id,
+              state,
+              message: boundedText(event.payload.message),
+              result: event.payload,
+              error: state === 'failed' ? boundedText(event.payload.message) : null,
+            },
+          });
+          if (state === 'succeeded') {
+            void bridge.getSettings().then((settings) => {
+              set({ settings, settingsState: 'ready' });
+              prepareRequestEpoch += 1;
+            });
+          }
         }
       },
 
@@ -643,6 +829,113 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
       setSettingsOpen(open) {
         set({ settingsOpen: open });
+      },
+
+      async setDiagnosticsEnabled(enabled) {
+        const epoch = ++diagnosticsToggleEpoch;
+        const current = get().diagnostics;
+        set({ diagnostics: { ...current, enabled: false, error: null } });
+        try {
+          const result = await bridge.setDiagnosticsEnabled({ enabled });
+          if (epoch !== diagnosticsToggleEpoch) return;
+          set({
+            diagnostics: {
+              ...get().diagnostics,
+              enabled: result.enabled,
+              error: null,
+            },
+          });
+        } catch (error) {
+          if (epoch !== diagnosticsToggleEpoch) return;
+          set({
+            diagnostics: {
+              ...get().diagnostics,
+              enabled: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      setDiagnosticsOpen(open) {
+        if (get().diagnostics.open === open) return;
+        set({ diagnostics: { ...get().diagnostics, open } });
+        void get().setDiagnosticsEnabled(open);
+      },
+
+      async startCalibration(mode = 'quick') {
+        if (['starting', 'running', 'cancelling'].includes(get().calibration.state)) return;
+        set({
+          calibration: {
+            ...get().calibration,
+            open: true,
+            operationId: null,
+            state: 'starting',
+            phase: mode,
+            completed: 0,
+            total: 0,
+            message: 'Starting calibration…',
+            result: null,
+            error: null,
+          },
+        });
+        try {
+          const ack = await bridge.startCalibration({
+            mode,
+            className: null,
+            polyphony: null,
+            samples: null,
+            timeoutSeconds: null,
+          } satisfies CalibrationStart);
+          const current = get().calibration;
+          if (current.operationId && current.operationId !== ack.operation_id) return;
+          if (['succeeded', 'failed', 'cancelled'].includes(current.state)) return;
+          set({
+            calibration: {
+              ...current,
+              operationId: ack.operation_id,
+              state: ack.state as CalibrationUiState,
+              error: null,
+            },
+          });
+        } catch (error) {
+          set({
+            calibration: {
+              ...get().calibration,
+              state: 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      async cancelCalibration() {
+        const operationId = get().calibration.operationId;
+        if (
+          !operationId ||
+          ['succeeded', 'failed', 'cancelled'].includes(get().calibration.state)
+        ) {
+          return;
+        }
+        set({ calibration: { ...get().calibration, state: 'cancelling' } });
+        try {
+          const ack = await bridge.cancelCalibration({ operationId });
+          set({ calibration: { ...get().calibration, state: ack.state as CalibrationUiState } });
+        } catch (error) {
+          set({
+            calibration: {
+              ...get().calibration,
+              state: 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      setCalibrationOpen(open) {
+        const current = get().calibration;
+        if (!open && ['starting', 'running', 'cancelling'].includes(current.state)) return;
+        set({ calibration: { ...current, open } });
       },
     };
   });

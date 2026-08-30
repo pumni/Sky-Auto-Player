@@ -26,6 +26,9 @@ pub fn run() {
             commands::set_library_viewport,
             commands::get_settings,
             commands::patch_settings,
+            commands::set_diagnostics_enabled,
+            commands::start_calibration,
+            commands::cancel_calibration,
             commands::prepare_playback,
             commands::start_playback,
             commands::stop_playback,
@@ -241,6 +244,81 @@ mod ipc_tests {
                     }
                 }),
                 14,
+            ),
+        );
+        assert!(wrong.is_err(), "legacy request envelope must fail");
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn generated_tauri_handler_decodes_diagnostics_and_calibration_payloads() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::set_diagnostics_enabled,
+                super::commands::start_calibration,
+                super::commands::cancel_calibration,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
+        app.state::<AppState>()
+            .inner()
+            .install_ready_for_test(supervisor.clone());
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let enabled = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "set_diagnostics_enabled",
+                json!({"params": {"enabled": true}}),
+                24,
+            ),
+        )
+        .expect("diagnostics params envelope should decode");
+        let enabled_value: serde_json::Value = enabled.deserialize().expect("enabled JSON");
+        assert_eq!(enabled_value["enabled"], true);
+
+        let started = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_calibration",
+                json!({
+                    "params": {
+                        "mode": "quick",
+                        "className": null,
+                        "polyphony": null,
+                        "samples": null,
+                        "timeoutSeconds": null
+                    }
+                }),
+                26,
+            ),
+        )
+        .expect("calibration params envelope should decode");
+        let started_value: serde_json::Value = started.deserialize().expect("start JSON");
+        assert_eq!(started_value["operation_id"], "d".repeat(32));
+
+        let cancelled = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "cancel_calibration",
+                json!({"params": {"operationId": "d".repeat(32)}}),
+                28,
+            ),
+        )
+        .expect("calibration cancel params envelope should decode");
+        let cancelled_value: serde_json::Value = cancelled.deserialize().expect("cancel JSON");
+        assert_eq!(cancelled_value["state"], "cancelled");
+
+        let wrong = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "set_diagnostics_enabled",
+                json!({"request": {"enabled": true}}),
+                32,
             ),
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");

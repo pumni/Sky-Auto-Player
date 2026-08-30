@@ -146,7 +146,7 @@ def _read_bounded_process_stream(stream: Any, *, context: str) -> str:
 
 
 def _run_native_command(
-    command: list[str], *, timeout_seconds: float
+    command: list[str], *, timeout_seconds: float, cancel_event: Any | None = None
 ) -> tuple[int, str, str]:
     """Run native calibration with bounded in-memory output.
 
@@ -159,14 +159,38 @@ def _run_native_command(
     with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
         mode="w+b"
     ) as stderr_file:
-        completed = subprocess.run(
-            command,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
-        )
+        if cancel_event is None:
+            completed = subprocess.run(
+                command,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout_seconds,
+                check=False,
+                shell=False,
+            )
+        else:
+            process = subprocess.Popen(
+                command,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                shell=False,
+            )
+            deadline = time.monotonic() + timeout_seconds
+            while process.poll() is None:
+                if cancel_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=0.5)
+                    raise NativeCalibrationError("native calibration was cancelled")
+                if time.monotonic() >= deadline:
+                    process.kill()
+                    process.wait(timeout=0.5)
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                time.sleep(0.02)
+            completed = process
         for stream, file in (
             (getattr(completed, "stdout", None), stdout_file),
             (getattr(completed, "stderr", None), stderr_file),
@@ -773,6 +797,7 @@ def _execute_native_bucket(
     timeout_seconds: float,
     progress: bool,
     publishable: bool = True,
+    cancel_event: Any | None = None,
     # Kept as a rejected compatibility argument so independent directional
     # evidence cannot silently re-enter the protocol.
     kind: str | None = None,
@@ -802,7 +827,7 @@ def _execute_native_bucket(
     ]
     try:
         returncode, output, diagnostics = _run_native_command(
-            command, timeout_seconds=timeout_seconds
+            command, timeout_seconds=timeout_seconds, cancel_event=cancel_event
         )
     except subprocess.TimeoutExpired as exc:
         report = _failure_report(
@@ -844,6 +869,7 @@ def _run_process(
     budget_seconds: int,
     timeout_seconds: float,
     samples: int,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     command = [
         str(binary),
@@ -860,7 +886,7 @@ def _run_process(
     ]
     try:
         returncode, output, diagnostics = _run_native_command(
-            command, timeout_seconds=timeout_seconds
+            command, timeout_seconds=timeout_seconds, cancel_event=cancel_event
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NativeCalibrationError("native calibration process failed") from exc
@@ -883,6 +909,7 @@ def run_diagnostic_calibration(
     output_path: Path | str = ".cache/calibration-diagnostic.json",
     failure_report_path: Path | str | None = None,
     timeout_seconds: float | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     if class_name not in CALIBRATION_CLASSES:
         raise NativeCalibrationError("class_name must be hot or cold")
@@ -903,6 +930,7 @@ def run_diagnostic_calibration(
             timeout_seconds=child_timeout,
             progress=True,
             publishable=False,
+            cancel_event=cancel_event,
         )
     except NativeCalibrationError as exc:
         if failure_report_path is not None:
@@ -1116,6 +1144,7 @@ def run_full_calibration(
     checkpoint_dir: Path | str = ".cache/calibration-full",
     resume: bool = False,
     timeout_seconds: float | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     timeout = _finite_timeout(timeout_seconds, default=FULL_CALIBRATION_TIMEOUT_SECONDS)
     if timeout < MIN_FULL_CALIBRATION_TIMEOUT_SECONDS:
@@ -1144,6 +1173,8 @@ def run_full_calibration(
     run_deadline = time.monotonic() + timeout
     binary = _find_binary()
     for polyphony, class_name in calibration_bucket_keys():
+        if cancel_event is not None and cancel_event.is_set():
+            raise NativeCalibrationError("native calibration was cancelled")
         key = _bucket_key(polyphony, class_name)
         artifact_path = checkpoint / f"{polyphony}-{class_name}.json"
         if resume and artifact_path.is_file():
@@ -1180,6 +1211,7 @@ def run_full_calibration(
             budget_seconds=budget,
             timeout_seconds=child_timeout,
             progress=True,
+            cancel_event=cancel_event,
         )
         artifact_provenance = _provenance_identity(bucket)
         if stable_provenance is None:
@@ -1276,6 +1308,7 @@ def run_native_calibration(
     polyphony: int | None = None,
     samples: int | None = None,
     failure_report_path: Path | str | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     if kind is not None:
         raise NativeCalibrationError("independent directional calibration is retired in protocol vNext")
@@ -1289,10 +1322,14 @@ def run_native_calibration(
             output_path=output_path or ".cache/calibration-diagnostic.json",
             failure_report_path=failure_report_path,
             timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
         )
     if mode == "full":
         return run_full_calibration(
-            checkpoint_dir=checkpoint_dir, resume=resume, timeout_seconds=timeout_seconds
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
         )
     if mode != "quick":
         raise NativeCalibrationError("mode must be diagnostic, quick, or full")
@@ -1305,6 +1342,7 @@ def run_native_calibration(
         budget_seconds=budget,
         timeout_seconds=child_timeout,
         samples=FULL_SAMPLE_COUNT,
+        cancel_event=cancel_event,
     )
     raw_output = Path(output_path) if output_path is not None else Path(".cache/calibration-native.json")
     cache = _cache_v8(result)

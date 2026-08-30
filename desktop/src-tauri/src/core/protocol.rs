@@ -1,5 +1,6 @@
 use crate::ui_events::{
-    CatalogChangedPayload, CoreFatalPayload, CoreReadyPayload, PlaybackFailedPayload,
+    CalibrationFinishedPayload, CalibrationProgressPayload, CatalogChangedPayload,
+    CoreFatalPayload, CoreReadyPayload, DiagnosticsSnapshotDto, PlaybackFailedPayload,
     PlaybackFinishedPayload, PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -27,7 +28,7 @@ pub struct CoreResponse {
     pub error: Option<CoreErrorPayload>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoreEvent {
     Ready(CoreReadyPayload),
     Fatal(CoreFatalPayload),
@@ -36,6 +37,9 @@ pub enum CoreEvent {
     PlaybackSnapshot(PlaybackSnapshotPayload),
     PlaybackFinished(PlaybackFinishedPayload),
     PlaybackFailed(PlaybackFailedPayload),
+    DiagnosticsSnapshot(DiagnosticsSnapshotDto),
+    CalibrationProgress(CalibrationProgressPayload),
+    CalibrationFinished(CalibrationFinishedPayload),
 }
 
 impl CoreEvent {
@@ -66,6 +70,18 @@ impl CoreEvent {
                 payload,
             },
             Self::PlaybackFailed(payload) => UiEvent::PlaybackFailed {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::DiagnosticsSnapshot(payload) => UiEvent::DiagnosticsSnapshot {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::CalibrationProgress(payload) => UiEvent::CalibrationProgress {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::CalibrationFinished(payload) => UiEvent::CalibrationFinished {
                 v: DESKTOP_PROTOCOL_VERSION,
                 payload,
             },
@@ -294,6 +310,24 @@ fn parse_event(name: &str, payload: Value) -> Result<CoreEvent, ProtocolError> {
             UiEvent::validate_playback_failed(&value)
                 .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
             Ok(CoreEvent::PlaybackFailed(value))
+        }
+        "diagnostics.snapshot" => {
+            let value: DiagnosticsSnapshotDto = decode(name, payload)?;
+            UiEvent::validate_diagnostics_snapshot(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::DiagnosticsSnapshot(value))
+        }
+        "calibration.progress" => {
+            let value: CalibrationProgressPayload = decode(name, payload)?;
+            UiEvent::validate_calibration_progress(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::CalibrationProgress(value))
+        }
+        "calibration.finished" => {
+            let value: CalibrationFinishedPayload = decode(name, payload)?;
+            UiEvent::validate_calibration_finished(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::CalibrationFinished(value))
         }
         other => Err(ProtocolError::Invalid(format!(
             "unsupported event name: {other}"
@@ -567,6 +601,60 @@ mod tests {
             )),
             Ok(CoreMessage::Event(CoreEvent::PlaybackFailed(_)))
         ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "diagnostics.snapshot",
+                serde_json::json!({
+                    "seq": 1,
+                    "max_lateness_us": 120,
+                    "p50_ms": 0.4,
+                    "p95_ms": 1.2,
+                    "sigma_onset_ms": 0.2,
+                    "late_2ms": 0,
+                    "late_5ms": 0,
+                    "late_10ms": 0,
+                    "active_keys": 0,
+                    "stuck_keys": 0,
+                    "keys_dropped": 0,
+                    "chord_split_events": 0,
+                    "backend_status": "healthy",
+                    "release_max_us": null,
+                    "release_late_2ms": null,
+                    "session_id": null
+                }),
+            )),
+            Ok(CoreMessage::Event(CoreEvent::DiagnosticsSnapshot(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "calibration.progress",
+                serde_json::json!({
+                    "operation_id": "d".repeat(32),
+                    "state": "running",
+                    "phase": "measuring",
+                    "completed": 1,
+                    "total": 2,
+                    "message": "sample"
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::CalibrationProgress(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "calibration.finished",
+                serde_json::json!({
+                    "operation_id": "d".repeat(32),
+                    "outcome": "succeeded",
+                    "status": "ready",
+                    "margin_us": 800,
+                    "sample_count": 12,
+                    "source": "native",
+                    "message": "complete",
+                    "applied": true
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::CalibrationFinished(_)))
+        ));
     }
 
     #[test]
@@ -627,6 +715,51 @@ mod tests {
                     "health": "healthy",
                     "input_path_degraded": false,
                     "message": null,
+                    "extra": true
+                }),
+            ),
+            event_frame(
+                "diagnostics.snapshot",
+                serde_json::json!({
+                    "seq": 1,
+                    "max_lateness_us": 1,
+                    "p50_ms": "bad",
+                    "p95_ms": 1.0,
+                    "sigma_onset_ms": 0.1,
+                    "late_2ms": 0,
+                    "late_5ms": 0,
+                    "late_10ms": 0,
+                    "active_keys": 0,
+                    "stuck_keys": 0,
+                    "keys_dropped": 0,
+                    "chord_split_events": 0,
+                    "backend_status": "healthy",
+                    "release_max_us": null,
+                    "release_late_2ms": null,
+                    "session_id": null
+                }),
+            ),
+            event_frame(
+                "calibration.progress",
+                serde_json::json!({
+                    "operation_id": "d".repeat(32),
+                    "state": "running",
+                    "phase": "measure",
+                    "completed": 3,
+                    "total": 2,
+                    "message": "bad"
+                }),
+            ),
+            event_frame(
+                "calibration.finished",
+                serde_json::json!({
+                    "operation_id": "d".repeat(32),
+                    "outcome": "succeeded",
+                    "status": "ready",
+                    "sample_count": 1,
+                    "source": "native",
+                    "message": "done",
+                    "applied": true,
                     "extra": true
                 }),
             ),

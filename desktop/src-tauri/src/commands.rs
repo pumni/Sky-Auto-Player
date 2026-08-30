@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::core::CoreSupervisor;
-use crate::ui_events::UiEvent;
+use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -211,6 +211,29 @@ struct CorePlaybackSessionParams {
     session_id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct CoreDiagnosticsSetEnabledParams {
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreCalibrationStartParams {
+    mode: CalibrationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    polyphony: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    samples: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_seconds: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreCalibrationCancelParams {
+    operation_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct NativeBuildDto {
@@ -395,6 +418,57 @@ pub struct CatalogViewportDto {
     pub selected_song_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsSetEnabledRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsEnabledDto {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationStartRequest {
+    pub mode: CalibrationMode,
+    pub class_name: Option<String>,
+    pub polyphony: Option<u8>,
+    pub samples: Option<u32>,
+    pub timeout_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationStartAckDto {
+    pub operation_id: String,
+    pub state: CalibrationState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationCancelRequest {
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationCancelAckDto {
+    pub operation_id: String,
+    pub state: CalibrationState,
+    pub accepted: bool,
+}
+
 fn request_with_supervisor<P, R>(
     supervisor: &CoreSupervisor,
     method: &'static str,
@@ -521,6 +595,55 @@ pub async fn patch_settings(
             telemetry_enabled: params.telemetry_enabled,
             verbose_hud: params.verbose_hud,
             playback_defaults,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn set_diagnostics_enabled(
+    state: State<'_, AppState>,
+    params: DiagnosticsSetEnabledRequest,
+) -> Result<DiagnosticsEnabledDto, String> {
+    blocking_request(
+        state,
+        "diagnostics.set_enabled",
+        CoreDiagnosticsSetEnabledParams {
+            enabled: params.enabled,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn start_calibration(
+    state: State<'_, AppState>,
+    params: CalibrationStartRequest,
+) -> Result<CalibrationStartAckDto, String> {
+    blocking_request(
+        state,
+        "calibration.start",
+        CoreCalibrationStartParams {
+            mode: params.mode,
+            class_name: params.class_name,
+            polyphony: params.polyphony,
+            samples: params.samples,
+            timeout_seconds: params.timeout_seconds,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn cancel_calibration(
+    state: State<'_, AppState>,
+    params: CalibrationCancelRequest,
+) -> Result<CalibrationCancelAckDto, String> {
+    blocking_request(
+        state,
+        "calibration.cancel",
+        CoreCalibrationCancelParams {
+            operation_id: params.operation_id,
         },
     )
     .await

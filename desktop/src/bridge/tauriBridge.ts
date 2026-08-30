@@ -14,6 +14,12 @@ import type {
   PlaybackSession,
   PreparedPlayback,
   SongDetail,
+  CalibrationCancel,
+  CalibrationCancelAck,
+  CalibrationStart,
+  CalibrationStartAck,
+  DiagnosticsEnabled,
+  DiagnosticsSetEnabled,
   UiEvent,
   Unsubscribe,
   ViewportRequest,
@@ -55,6 +61,12 @@ export function createTauriBridge(): DesktopBridge {
       call<PlaybackCommandAck>('resume_playback', request),
     skipPlayback: (request: PlaybackSessionCommand) =>
       call<PlaybackCommandAck>('skip_playback', request),
+    setDiagnosticsEnabled: (request: DiagnosticsSetEnabled) =>
+      call<DiagnosticsEnabled>('set_diagnostics_enabled', request),
+    startCalibration: (request: CalibrationStart) =>
+      call<CalibrationStartAck>('start_calibration', request),
+    cancelCalibration: (request: CalibrationCancel) =>
+      call<CalibrationCancelAck>('cancel_calibration', request),
     subscribeUiEvents: async (listener): Promise<Unsubscribe> => {
       const channel = new Channel<CoreChannelEvent>();
       channel.onmessage = (event) => listener(normalizeEvent(event));

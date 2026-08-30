@@ -19,7 +19,9 @@ from sky_music.infrastructure.desktop_ipc.server import DesktopCoreServer
 from sky_music.orchestration import desktop_playback as playback_module
 from sky_music.orchestration import settings_service as settings_module
 from sky_music.orchestration.catalog_service import CatalogService, song_id_for_path
+from sky_music.orchestration.desktop_calibration import DesktopCalibrationService
 from sky_music.orchestration.native_admission import RustBuildInfo
+from sky_music.orchestration.native_models import ProgressCounters
 from sky_music.orchestration.settings_service import SettingsService
 
 NATIVE_INFO = RustBuildInfo(
@@ -383,6 +385,138 @@ def test_settings_patch_uses_service_and_is_atomic(
     assert invalid["error"]["code"] == "invalid_params"  # type: ignore[index]
     assert server.settings_service.snapshot() == before
     assert len(writes) == 1
+
+
+def test_diagnostics_control_is_disabled_by_default_and_bounded_to_ui_rate(
+    tmp_path: Path,
+) -> None:
+    server = _server(tmp_path)
+    counters = ProgressCounters(100, 1, 0, 0, 0, 0, (100, 200))
+
+    disabled = server.diagnostics.publish_progress(counters, None, now=0.0)
+    enabled = _call(server, _request("diagnostics.set_enabled", {"enabled": True}))
+    first = server.diagnostics.publish_progress(counters, None, now=0.0)
+    throttled = server.diagnostics.publish_progress(counters, None, now=0.05)
+    second = server.diagnostics.publish_progress(counters, None, now=0.1)
+    disabled_response = _call(
+        server, _request("diagnostics.set_enabled", {"enabled": False})
+    )
+    after_disable = server.diagnostics.publish_progress(counters, None, now=0.2)
+
+    assert disabled is False
+    assert enabled["result"] == {"enabled": True}
+    assert (first, throttled, second) == (True, False, True)
+    assert disabled_response["result"] == {"enabled": False}
+    assert after_disable is False
+    events = server.drain_events()
+    assert [event["name"] for event in events] == ["diagnostics.snapshot"]
+    assert events[0]["payload"]["seq"] == 2  # type: ignore[index]
+
+
+def test_calibration_server_path_publishes_terminal_event_once(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+
+    def runner(_request, _cancel, progress):
+        progress("measure", 1, 1, "done")
+        return {"status": "ready", "source": "test", "sample_count": 1}
+
+    server.calibration = DesktopCalibrationService(
+        publish_event=server._publish_event,
+        physical_playback_active=server.playback.is_physical_active,
+        runner=runner,
+    )
+    response = _call(server, _request("calibration.start", {"mode": "quick"}))
+    assert response["ok"] is True
+    operation_id = response["result"]["operation_id"]  # type: ignore[index]
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and server.calibration.state != "succeeded":
+        time.sleep(0.005)
+    events = server.drain_events()
+    finished = [event for event in events if event["name"] == "calibration.finished"]
+
+    assert server.calibration.state == "succeeded"
+    assert len(finished) == 1
+    assert finished[0]["payload"]["operation_id"] == operation_id  # type: ignore[index]
+    assert (
+        _call(server, _request("calibration.cancel", {"operation_id": operation_id}))[
+            "ok"
+        ]
+        is True
+    )
+
+
+def test_core_rejects_playback_while_calibration_is_active_then_allows_it(
+    tmp_path: Path,
+) -> None:
+    server, song_id = _playback_server(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def runner(_request, cancel, _progress):
+        entered.set()
+        while not release.wait(0.01):
+            if cancel.is_set():
+                return {}
+        return {"status": "ready"}
+
+    server.calibration = DesktopCalibrationService(
+        publish_event=server._publish_event,
+        physical_playback_active=server.playback.is_physical_active,
+        runner=runner,
+    )
+    started_calibration = _call(
+        server, _request("calibration.start", {"mode": "quick"})
+    )
+    assert started_calibration["ok"] is True
+    operation_id = started_calibration["result"]["operation_id"]  # type: ignore[index]
+    assert isinstance(operation_id, str)
+    assert entered.wait(2)
+
+    prepared = _call(
+        server,
+        _request(
+            "playback.prepare",
+            {
+                "song_id": song_id,
+                "generation": 1,
+                "config": {
+                    "hold_frames": 1,
+                    "tempo_scale": 1,
+                    "fps": 60,
+                    "dry_run": True,
+                },
+            },
+        ),
+    )
+    assert prepared["ok"] is True
+    prepared_id = prepared["result"]["prepared_id"]  # type: ignore[index]
+    blocked = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared_id, "decisions": []},  # type: ignore[dict-item]
+        ),
+    )
+    assert blocked["ok"] is False
+    assert blocked["error"]["code"] == "calibration_active"  # type: ignore[index]
+
+    cancelled = _call(
+        server, _request("calibration.cancel", {"operation_id": operation_id})
+    )
+    assert cancelled["ok"] is True
+    release.set()
+    _wait_for_playback_event(server, "calibration.finished")
+    assert server.calibration.state == "cancelled"
+
+    allowed = _call(
+        server,
+        _request(
+            "playback.start",
+            {"prepared_id": prepared_id, "decisions": []},  # type: ignore[dict-item]
+        ),
+    )
+    assert allowed["ok"] is True
+    _wait_for_playback_event(server, "playback.finished")
 
 
 def test_unknown_method_and_invalid_params_are_responses() -> None:

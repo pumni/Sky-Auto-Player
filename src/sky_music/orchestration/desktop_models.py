@@ -29,6 +29,11 @@ PlaybackState = Literal[
 ]
 FocusState = Literal["focused", "unfocused", "waiting"]
 HealthState = Literal["healthy", "degraded", "error"]
+CalibrationMode = Literal["quick", "full", "diagnostic"]
+CalibrationState = Literal[
+    "idle", "starting", "running", "cancelling", "succeeded", "failed", "cancelled"
+]
+CalibrationOutcome = Literal["succeeded", "failed", "cancelled"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,11 +210,70 @@ class DiagnosticsSnapshotDto:
     backend_status: str
     release_max_us: int | None
     release_late_2ms: int | None
+    session_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticsEnabledDto:
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationStartDto:
+    mode: CalibrationMode = "quick"
+    class_name: str | None = None
+    polyphony: int | None = None
+    samples: int | None = None
+    timeout_seconds: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationStartAckDto:
+    operation_id: str
+    state: CalibrationState
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationCancelAckDto:
+    operation_id: str
+    state: CalibrationState
+    accepted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationProgressDto:
+    operation_id: str
+    state: CalibrationState
+    phase: str
+    completed: int
+    total: int
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationFinishedDto:
+    operation_id: str
+    outcome: CalibrationOutcome
+    status: str
+    margin_us: int | None
+    sample_count: int
+    source: str
+    message: str
+    applied: bool
 
 
 __all__ = [
     "Admission",
     "BootstrapDto",
+    "CalibrationCancelAckDto",
+    "CalibrationFinishedDto",
+    "CalibrationMode",
+    "CalibrationOutcome",
+    "CalibrationProgressDto",
+    "CalibrationStartAckDto",
+    "CalibrationStartDto",
+    "CalibrationState",
+    "DiagnosticsEnabledDto",
     "DiagnosticsSnapshotDto",
     "FocusState",
     "HealthState",

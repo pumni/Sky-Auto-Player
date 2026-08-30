@@ -6,6 +6,8 @@ import { SettingsPanel } from '../components/settings/SettingsPanel';
 import { SongInspector } from '../components/inspector/SongInspector';
 import { Toolbar } from '../components/shell/Toolbar';
 import { PlayerDock } from '../components/player/PlayerDock';
+import { DiagnosticsDrawer } from '../components/diagnostics/DiagnosticsDrawer';
+import { CalibrationDialog } from '../components/calibration/CalibrationDialog';
 import { createDesktopStore } from '../state/store';
 
 interface AppProps {
@@ -53,7 +55,9 @@ export function App({ bridge }: AppProps) {
             <SongInspector useStore={useStore} />
           </main>
           <PlayerDock useStore={useStore} />
+          <DiagnosticsDrawer useStore={useStore} />
           <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
+          <CalibrationDialog useStore={useStore} />
         </div>
       )}
     </BootstrapGate>

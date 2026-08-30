@@ -349,6 +349,190 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dock-diagnostics-button {
+  margin-left: auto;
+}
+.diagnostics-drawer {
+  position: fixed;
+  right: 16px;
+  bottom: 66px;
+  z-index: 9;
+  width: min(680px, calc(100vw - 32px));
+  max-height: 45vh;
+  overflow: hidden;
+  padding: var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  box-shadow: 0 18px 60px rgb(0 0 0 / 38%);
+}
+.diagnostics-heading,
+.diagnostics-heading h2 {
+  display: flex;
+  align-items: center;
+}
+.diagnostics-heading {
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.diagnostics-heading h2 {
+  gap: 7px;
+  margin-top: 3px;
+}
+.diagnostics-tabs [role='tablist'] {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.diagnostics-tabs [role='tab'] {
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 12px;
+}
+.diagnostics-tabs [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--accent-cyan);
+  color: var(--text);
+}
+.diagnostics-panel {
+  min-height: 116px;
+  padding-top: var(--space-3);
+}
+.diagnostics-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+.diagnostics-metric {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.diagnostics-metric span,
+.diagnostics-status,
+.diagnostics-plot figcaption {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.diagnostics-metric strong {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.diagnostics-status {
+  margin-top: 12px;
+}
+.diagnostics-plot {
+  margin: 0;
+}
+.diagnostics-plot svg {
+  display: block;
+  width: 100%;
+  height: 112px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.plot-axis {
+  stroke: var(--line-strong);
+}
+.plot-line {
+  fill: none;
+  stroke: var(--accent-cyan);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+.diagnostics-plot figcaption {
+  margin-top: 6px;
+}
+.diagnostics-scroll {
+  max-height: 180px;
+  overflow: auto;
+}
+.diagnostics-lines {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.diagnostics-lines li {
+  display: grid;
+  grid-template-columns: 42px 148px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.diagnostics-lines span,
+.diagnostics-lines strong {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.diagnostics-lines span {
+  color: var(--text-muted);
+}
+.diagnostics-lines strong {
+  color: var(--accent-cyan);
+  font-size: 10px;
+}
+.diagnostics-lines em {
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diagnostics-lines .log-error {
+  color: var(--danger);
+}
+.diagnostics-lines .log-warning {
+  color: var(--warning);
+}
+.calibration-copy {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  color: var(--text-secondary);
+}
+.calibration-copy progress {
+  width: 100%;
+  accent-color: var(--accent-cyan);
+}
+.calibration-result-icon {
+  color: var(--success);
+}
+.calibration-dialog .calibration-copy h3 {
+  color: var(--text);
+}
+.spin {
+  color: var(--accent-cyan);
+  animation: diagnostics-spin 1.2s linear infinite;
+}
+@keyframes diagnostics-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 760px) {
+  .diagnostics-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .diagnostics-lines li {
+    grid-template-columns: 36px 120px minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
 .status-led {
   width: 8px;
   height: 8px;

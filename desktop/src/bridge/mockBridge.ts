@@ -1,11 +1,20 @@
 import type {
   Bootstrap,
+  CalibrationCancel,
+  CalibrationCancelAck,
+  CalibrationFinished,
+  CalibrationProgress,
+  CalibrationStart,
+  CalibrationStartAck,
+  CalibrationStateId,
   DesktopBridge,
   DetailRequest,
   SearchRequest,
   SearchResult,
   Settings,
   SettingsPatch,
+  DiagnosticsEnabled,
+  DiagnosticsSetEnabled,
   SongDetail,
   ThemeId,
   UiEvent,
@@ -72,8 +81,55 @@ export function createMockBridge(): DesktopBridge {
   let generation = 1;
   let settings = initialSettings();
   let activeSession: { sessionId: string; songId: string } | null = null;
+  let diagnosticsEnabled = false;
+  let diagnosticsSeq = 0;
+  let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
+  let calibration: { operationId: string; state: CalibrationStateId } | null = null;
+  let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
+  const emitDiagnostics = () => {
+    if (!diagnosticsEnabled) return;
+    diagnosticsSeq += 1;
+    emit({
+      v: 1,
+      name: 'diagnostics.snapshot',
+      payload: {
+        seq: diagnosticsSeq,
+        max_lateness_us: diagnosticsSeq * 10,
+        p50_ms: 0.4,
+        p95_ms: 1.1,
+        sigma_onset_ms: 0.2,
+        late_2ms: 0,
+        late_5ms: 0,
+        late_10ms: 0,
+        active_keys: 0,
+        stuck_keys: 0,
+        keys_dropped: 0,
+        chord_split_events: 0,
+        backend_status: 'healthy',
+        release_max_us: null,
+        release_late_2ms: null,
+        session_id: activeSession?.sessionId ?? null,
+      },
+    });
+  };
+  const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
+    emit({
+      v: 1,
+      name: 'calibration.finished',
+      payload: {
+        operation_id: operationId,
+        outcome,
+        status: outcome === 'succeeded' ? 'ready' : 'cancelled',
+        margin_us: outcome === 'succeeded' ? 850 : null,
+        sample_count: outcome === 'succeeded' ? 24 : 0,
+        source: 'mock',
+        message: outcome === 'succeeded' ? 'Calibration completed.' : 'Calibration cancelled.',
+        applied: outcome === 'succeeded',
+      },
+    });
+  };
   const emitPlaybackState = (
     session: { sessionId: string; songId: string },
     state: 'playing' | 'paused' | 'stopping' | 'finished',
@@ -331,10 +387,69 @@ export function createMockBridge(): DesktopBridge {
         reason: null,
       };
     },
+    async setDiagnosticsEnabled(request: DiagnosticsSetEnabled): Promise<DiagnosticsEnabled> {
+      diagnosticsEnabled = request.enabled;
+      if (diagnosticsTimer !== null) {
+        clearInterval(diagnosticsTimer);
+        diagnosticsTimer = null;
+      }
+      if (diagnosticsEnabled) {
+        emitDiagnostics();
+        diagnosticsTimer = setInterval(emitDiagnostics, 100);
+      }
+      return { enabled: diagnosticsEnabled };
+    },
+    async startCalibration(request: CalibrationStart): Promise<CalibrationStartAck> {
+      if (activeSession) throw new Error('calibration conflicts with active playback');
+      if (calibration && ['starting', 'running', 'cancelling'].includes(calibration.state)) {
+        throw new Error('calibration is already running');
+      }
+      const operationId = `c${Date.now().toString(16).padStart(31, '0')}`.slice(-32);
+      calibration = { operationId, state: 'running' };
+      emit({
+        v: 1,
+        name: 'calibration.progress',
+        payload: {
+          operation_id: operationId,
+          state: 'running',
+          phase: request.mode,
+          completed: 0,
+          total: 3,
+          message: 'Calibration is running.',
+        },
+      });
+      calibrationTimer = setTimeout(() => {
+        if (!calibration || calibration.operationId !== operationId) return;
+        calibration = { operationId, state: 'succeeded' };
+        emitCalibrationFinished(operationId, 'succeeded');
+      }, 30);
+      return { operation_id: operationId, state: 'running' };
+    },
+    async cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck> {
+      if (!calibration || calibration.operationId !== request.operationId) {
+        throw new Error('calibration operation is stale');
+      }
+      if (calibration.state === 'succeeded' || calibration.state === 'cancelled') {
+        return { operation_id: request.operationId, state: calibration.state, accepted: false };
+      }
+      if (calibrationTimer !== null) {
+        clearTimeout(calibrationTimer);
+        calibrationTimer = null;
+      }
+      calibration = { operationId: request.operationId, state: 'cancelled' };
+      emitCalibrationFinished(request.operationId, 'cancelled');
+      return { operation_id: request.operationId, state: 'cancelled', accepted: true };
+    },
     async subscribeUiEvents(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async shutdown() {},
+    async shutdown() {
+      if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer);
+      if (calibrationTimer !== null) clearTimeout(calibrationTimer);
+      diagnosticsTimer = null;
+      calibrationTimer = null;
+      listeners.clear();
+    },
   };
 }
