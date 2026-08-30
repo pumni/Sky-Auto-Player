@@ -85,7 +85,11 @@ export function createTauriBridge(): DesktopBridge {
         channel.onmessage = () => undefined;
       };
     },
-    shutdown: async () => {
+    shutdown: async (failed = false) => {
+      if (failed) {
+        await invoke('shutdown', { params: { failed: true } });
+        return;
+      }
       await invoke('shutdown');
     },
   };

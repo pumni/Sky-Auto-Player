@@ -22,8 +22,9 @@ def test_static_drift_guard() -> None:
         "sky_music/orchestration/engine.py",
         "sky_music/orchestration/desktop_playback.py",
         "sky_music/orchestration/desktop_calibration.py",
-        "sky_music/infrastructure/desktop_ipc/server.py",
-        "sky_music/platform/win32/global_hotkeys.py",
+            "sky_music/infrastructure/desktop_ipc/server.py",
+            "sky_music/cli/desktop_core_selftest.py",
+            "sky_music/platform/win32/global_hotkeys.py",
     }
 
     errors = []

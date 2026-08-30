@@ -4,6 +4,8 @@ use tauri::{Manager, Runtime, Window};
 pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
     let app_handle = window.app_handle().clone();
     let state = app_handle.state::<AppState>().inner().clone();
+    let exit_after_close = state.should_exit_after_close();
+    let exit_code = state.gui_smoke_exit_code();
     if !state.begin_close() {
         return;
     }
@@ -15,6 +17,9 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
         // `destroy` does not emit another CloseRequested event, so the
         // bounded shutdown path cannot recurse through this callback.
         let _ = window.destroy();
+        if exit_after_close {
+            app_handle.exit(exit_code);
+        }
     });
 }
 

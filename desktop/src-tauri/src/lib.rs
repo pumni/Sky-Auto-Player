@@ -15,13 +15,55 @@ type ShellRuntime = tauri::test::MockRuntime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_inner(false);
+}
+
+/// Run the production shell with a packaging-only WebView smoke hook.
+///
+/// The hook is selected only by the hidden release self-test argument. It
+/// dispatches a DOM event after the real frontend has loaded; React then
+/// exercises the production bridge and closes through the normal controlled
+/// lifecycle. No test command or alternate runtime is exposed to the user.
+pub fn run_gui_smoke() {
+    run_inner(true);
+}
+
+fn run_inner(gui_smoke: bool) {
     if let Err(error) = core::check_startup_update_guard() {
         eprintln!("Sky Auto Player startup refused: {error}");
+        if gui_smoke {
+            // The packaging smoke is a process-level gate. A startup guard
+            // rejection must be observable as a failing child, rather than
+            // looking like a clean return before Tauri's event loop starts.
+            std::process::exit(2);
+        }
         return;
     }
-    tauri::Builder::<ShellRuntime>::default()
-        .manage(app_state::AppState::default())
-        .setup(|_| Ok(()))
+    let app_state = app_state::AppState::default();
+    app_state.set_gui_smoke_exit(gui_smoke);
+    let mut builder = tauri::Builder::<ShellRuntime>::default()
+        .manage(app_state)
+        .setup(move |app| {
+            if gui_smoke {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(45));
+                    eprintln!("packaged GUI smoke watchdog expired");
+                    app_handle.exit(1);
+                });
+            }
+            Ok(())
+        });
+    if gui_smoke {
+        builder = builder.on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = webview.eval(
+                    "window.__SKY_PHASE8_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-phase8-gui-smoke'));",
+                );
+            }
+        });
+    }
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::search_songs,
@@ -54,6 +96,51 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Sky Auto Player desktop shell");
+}
+
+/// Validate the release shell/Core pairing without constructing a WebView.
+///
+/// This hidden, packaging-only entrypoint is used by the exact portable
+/// artifact gate. It still uses the production launch command and
+/// ``CoreSupervisor``; it merely replaces the interactive window with a
+/// bounded bootstrap/shutdown assertion so CI never needs to synthesize a
+/// physical input session.
+pub fn selftest_packaged_shell() -> i32 {
+    if let Err(error) = core::check_startup_update_guard() {
+        eprintln!("packaged shell selftest startup guard failed: {error}");
+        return 2;
+    }
+    let supervisor = match core::CoreSupervisor::spawn() {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            eprintln!("packaged shell selftest could not start Core: {error}");
+            return 2;
+        }
+    };
+    let bootstrap = supervisor.request("app.bootstrap", serde_json::json!({}));
+    let result = match bootstrap {
+        Ok(value) if value.get("native_build").is_some() => {
+            supervisor.shutdown();
+            if let Some(marker) = std::env::var_os("SKY_PHASE8_RESTART_MARKER") {
+                let _ = std::fs::write(marker, b"bootstrap-ready\n");
+            }
+            0
+        }
+        Ok(_) => {
+            eprintln!("packaged shell selftest bootstrap omitted native_build");
+            supervisor.shutdown();
+            1
+        }
+        Err(error) => {
+            eprintln!("packaged shell selftest bootstrap failed: {error}");
+            supervisor.shutdown();
+            1
+        }
+    };
+    if result == 0 {
+        println!("Packaged Tauri/Core selftest: PASS");
+    }
+    result
 }
 
 // The mock runtime is intentionally exercised in a no-default-features test

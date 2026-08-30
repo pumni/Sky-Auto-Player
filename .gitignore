@@ -36,6 +36,7 @@ build/
 dist/
 *.spec
 !Sky-Auto-Player.spec
+!Sky-Auto-Player-Core.spec
 windows_version_info.txt
 
 # Packaging Metadata

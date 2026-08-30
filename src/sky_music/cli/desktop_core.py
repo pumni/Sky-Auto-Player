@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -17,6 +18,7 @@ from sky_music.infrastructure.desktop_ipc.protocol import (
 from sky_music.infrastructure.desktop_ipc.server import DesktopCoreServer
 from sky_music.infrastructure.realtime import assert_free_threaded_runtime
 from sky_music.orchestration.catalog_service import CatalogService
+from sky_music.orchestration.desktop_calibration import run_packaged_smoke_calibration
 from sky_music.orchestration.native_admission import require_rust_core
 from sky_music.orchestration.settings_service import SettingsService
 
@@ -85,8 +87,6 @@ def run_desktop_core(
         if install_root is not None:
             if not install_root.is_dir():
                 raise ValueError("--install-root must name an existing directory")
-            import os
-
             os.chdir(install_root)
             from sky_music.infrastructure.update_runtime import (
                 active_update_for_install,
@@ -109,6 +109,11 @@ def run_desktop_core(
             native_build_info=native_info,
             parent_pid=parent_pid,
             install_root=install_root,
+            calibration_runner=(
+                run_packaged_smoke_calibration
+                if os.environ.get("SKY_PHASE8_SAFE_CALIBRATION") == "1"
+                else None
+            ),
         )
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 2

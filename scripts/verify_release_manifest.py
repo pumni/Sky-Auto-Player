@@ -9,8 +9,10 @@ from pathlib import Path
 
 APP_NAME = "Sky-Auto-Player"
 PRIMARY_EXE = f"{APP_NAME}.exe"
+CORE_EXE = f"{APP_NAME}-Core.exe"
 REQUIRED = {
     PRIMARY_EXE,
+    CORE_EXE,
     "native_calibration.exe",
     "Sky-Auto-Player-Updater.exe",
     "MANIFEST.json",
@@ -43,9 +45,23 @@ def verify(release_dir: Path, version: str) -> None:
         for path in all_paths
         if path.is_file()
     }
+    folded: dict[str, str] = {}
+    for relative in actual:
+        previous = folded.setdefault(relative.casefold(), relative)
+        if previous != relative:
+            raise RuntimeError(
+                f"release contains case-colliding paths: {previous!r}, {relative!r}"
+            )
     missing = REQUIRED - actual
     if missing:
         raise RuntimeError(f"release is missing required files: {sorted(missing)}")
+    if not any(
+        path.startswith("_internal/")
+        and Path(path).suffix.casefold() == ".pyd"
+        and Path(path).name.casefold().startswith("sky_player_rs")
+        for path in actual
+    ):
+        raise RuntimeError("release is missing the bundled sky_player_rs native extension")
     forbidden = sorted(
         path
         for path in actual
@@ -97,6 +113,13 @@ def verify(release_dir: Path, version: str) -> None:
             or "/../" in f"/{path}/"
         ):
             raise RuntimeError(f"invalid or duplicate manifest entry: {entry!r}")
+        try:
+            (release_dir / path).resolve().relative_to(release_dir.resolve())
+        except (OSError, ValueError):
+            raise RuntimeError(f"manifest path escapes release tree: {path!r}") from None
+        previous = next((name for name in expected if name.casefold() == path.casefold()), None)
+        if previous is not None and previous != path:
+            raise RuntimeError(f"manifest contains case-colliding paths: {previous!r}, {path!r}")
         expected[path] = (size, digest.lower())
     if set(expected) != actual - {"MANIFEST.json"}:
         raise RuntimeError("manifest file set does not match the release tree")

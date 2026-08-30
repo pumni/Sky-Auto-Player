@@ -865,14 +865,24 @@ pub async fn subscribe_ui_events(
 #[tauri::command]
 pub async fn shutdown(
     window: tauri::WebviewWindow<super::ShellRuntime>,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
+    params: Option<ShutdownRequest>,
 ) -> Result<(), String> {
     // This command is used only after an authoritative update handoff. Keep
     // shell exit under the same prevent-close -> bounded Core cleanup ->
     // destroy lifecycle as a user-initiated close; React never destroys the
     // native window directly.
+    if params.is_some_and(|request| request.failed) {
+        state.inner().set_gui_smoke_failed();
+    }
     crate::lifecycle::close_window(window.as_ref().window());
     Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownRequest {
+    pub failed: bool,
 }
 
 #[cfg(test)]

@@ -11,6 +11,8 @@ struct AppStateInner {
     core: Mutex<CoreState>,
     settings_writes: Mutex<()>,
     closing: AtomicBool,
+    gui_smoke_exit: AtomicBool,
+    gui_smoke_failed: AtomicBool,
 }
 
 enum CoreState {
@@ -27,6 +29,8 @@ impl Default for AppState {
                 core: Mutex::new(CoreState::Idle),
                 settings_writes: Mutex::new(()),
                 closing: AtomicBool::new(false),
+                gui_smoke_exit: AtomicBool::new(false),
+                gui_smoke_failed: AtomicBool::new(false),
             }),
         }
     }
@@ -117,6 +121,26 @@ impl AppState {
 
     pub fn begin_close(&self) -> bool {
         !self.inner.closing.swap(true, Ordering::AcqRel)
+    }
+
+    pub fn set_gui_smoke_exit(&self, enabled: bool) {
+        self.inner.gui_smoke_exit.store(enabled, Ordering::Release);
+    }
+
+    pub fn should_exit_after_close(&self) -> bool {
+        self.inner.gui_smoke_exit.load(Ordering::Acquire)
+    }
+
+    pub fn set_gui_smoke_failed(&self) {
+        self.inner.gui_smoke_failed.store(true, Ordering::Release);
+    }
+
+    pub fn gui_smoke_exit_code(&self) -> i32 {
+        if self.inner.gui_smoke_failed.load(Ordering::Acquire) {
+            1
+        } else {
+            0
+        }
     }
 
     fn is_closing(&self) -> bool {

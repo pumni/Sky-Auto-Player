@@ -56,13 +56,12 @@ def test_native_package_paths_pin_rust_compiler_explicitly() -> None:
     assert "Expected stable Rust 1.98.0 for packaged build" in ci_workflow
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in ci_workflow
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in release_workflow
-    assert "uv run --env-file .env python -m build_app" in release_workflow
-    assert (
-        "- name: Native updater security E2E\n"
-        "        env:\n"
-        "          RUSTUP_TOOLCHAIN: 1.98.0\n"
-        "        run: cargo test"
-    ) in ci_workflow
+    assert "uv run --env-file .env python scripts/build_phase8.py" in release_workflow
+    assert "scripts/build_phase8.py" in ci_workflow
+    assert "Upload exact Phase 8 release candidate" in ci_workflow
+    assert "phase8_exact_artifact" in (ROOT / "scripts" / "build_phase8.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path: Path) -> None:
@@ -70,8 +69,11 @@ def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path
     release_dir = tmp_path / "release"
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
+    (release_dir / "Sky-Auto-Player-Core.exe").write_bytes(b"core")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
     (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
+    (release_dir / "_internal" / "sky_player_rs").mkdir(parents=True)
+    (release_dir / "_internal" / "sky_player_rs" / "sky_player_rs.pyd").write_bytes(b"native")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
@@ -90,8 +92,11 @@ def test_release_tree_rejects_legacy_update_artifacts(tmp_path: Path, legacy_nam
     release_dir = tmp_path / "release"
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
+    (release_dir / "Sky-Auto-Player-Core.exe").write_bytes(b"core")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
     (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
+    (release_dir / "_internal" / "sky_player_rs").mkdir(parents=True)
+    (release_dir / "_internal" / "sky_player_rs" / "sky_player_rs.pyd").write_bytes(b"native")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)

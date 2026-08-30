@@ -220,6 +220,10 @@ def serve(mode: str) -> None:
         raw(b"{not valid json}\n")
         time.sleep(30)
         return
+    if mode == "non_utf8":
+        raw(b"\xff\xfe\n")
+        time.sleep(30)
+        return
     if mode == "duplicate_output":
         raw(b'{"v":1,"type":"event","name":"core.ready","name":"again","payload":{}}\n')
         time.sleep(30)
