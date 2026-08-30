@@ -30,7 +30,10 @@ _PACKAGE_FILES = frozenset(
         "pyproject.toml",
         "uv.lock",
         "windows_version_info.txt",
+        "rust/Cargo.toml",
         "rust/Cargo.lock",
+        "rust/rust-toolchain.toml",
+        "desktop/src-tauri/Cargo.toml",
         "desktop/bun.lock",
         "desktop/package.json",
         "Sky-Auto-Player.spec",
@@ -46,10 +49,13 @@ _PACKAGE_WORKFLOW_FILES = frozenset(
     }
 )
 
-_PACKAGE_SCRIPT_PREFIXES = (
+_PACKAGE_PATH_PREFIXES = (
+    "desktop/src-tauri/capabilities/",
+    "desktop/src-tauri/icons/",
+    "rust/crates/sky_updater/",
     "scripts/build_",
-    "scripts/verify_release_manifest.py",
     "scripts/test_windows_updater_e2e.ps1",
+    "scripts/verify_release_manifest.py",
 )
 
 _CODE_PREFIXES = (
@@ -73,8 +79,8 @@ def _is_package_sensitive(path: str) -> bool:
     return (
         path in _PACKAGE_FILES
         or path in _PACKAGE_WORKFLOW_FILES
-        or path.startswith(("src/", "desktop/", "rust/"))
-        or any(path.startswith(prefix) for prefix in _PACKAGE_SCRIPT_PREFIXES)
+        or path in {"desktop/src-tauri/tauri.conf.json", "src/build_app.py"}
+        or any(path.startswith(prefix) for prefix in _PACKAGE_PATH_PREFIXES)
     )
 
 

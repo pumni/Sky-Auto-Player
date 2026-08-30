@@ -27,6 +27,10 @@ jobs:
     timeout-minutes: 100
 
     steps:
+      - name: Start CI timing
+        run: |
+          "SKY_CI_JOB_STARTED_RELEASE=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +53,13 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-on-failure: true
 
       - name: Repository verification — Rust
         env:
@@ -181,3 +192,7 @@ jobs:
           prerelease: ${{ steps.verlock.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job release -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"

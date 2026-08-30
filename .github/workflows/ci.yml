@@ -37,6 +37,11 @@ jobs:
       classification_reason: ${{ steps.filter.outputs.classification_reason }}
 
     steps:
+      - name: Start CI timing
+        shell: pwsh
+        run: |
+          "SKY_CI_JOB_STARTED_CHANGES=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,6 +81,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Report CI timing
+        if: always()
+        shell: pwsh
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job changes
+
   static:
     name: Static and security gates
     needs: changes
@@ -87,10 +97,15 @@ jobs:
         shell: bash
 
     steps:
+      - name: Start CI timing
+        shell: pwsh
+        run: |
+          "SKY_CI_JOB_STARTED_STATIC=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -112,6 +127,11 @@ jobs:
       - name: Repository verification — static
         run: uv run python scripts/check.py static
 
+      - name: Report CI timing
+        if: always()
+        shell: pwsh
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job static
+
   validate:
     name: Windows compatibility and unit tests
     needs: changes
@@ -120,10 +140,14 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Start CI timing
+        run: |
+          "SKY_CI_JOB_STARTED_VALIDATE=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -143,6 +167,13 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-on-failure: true
 
       - name: Rust — build wheel
         env:
@@ -173,6 +204,10 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: uv run python scripts/check.py desktop
 
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job validate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
+
   packaged:
     name: Packaged frozen unsigned app smoke
     needs: changes
@@ -181,10 +216,14 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      - name: Start CI timing
+        run: |
+          "SKY_CI_JOB_STARTED_PACKAGED=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -206,6 +245,13 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 for packaged build, got: $version"
           }
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-on-failure: true
 
       - name: Build source PyInstaller bootloader
         run: |
@@ -257,6 +303,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job packaged -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
+
   status:
     name: Sky Auto Player — required CI gate
     if: always()
@@ -268,6 +318,11 @@ jobs:
         shell: bash
 
     steps:
+      - name: Start CI timing
+        shell: pwsh
+        run: |
+          "SKY_CI_JOB_STARTED_STATUS=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
       - name: Require relevant gates to pass
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
@@ -284,3 +339,15 @@ jobs:
           if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$PACKAGE_REQUIRED" == "true" ]]; then [[ "$PACKAGED_RESULT" == "success" ]]; else [[ "$PACKAGED_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
+
+      - name: Report CI timing
+        if: always()
+        shell: pwsh
+        run: |
+          $startedAt = [DateTimeOffset]::Parse($env:SKY_CI_JOB_STARTED_STATUS)
+          $elapsedSeconds = [math]::Round(([DateTimeOffset]::UtcNow - $startedAt).TotalSeconds, 2)
+          @"
+          ## CI job timing
+          - Job: ``status``
+          - Elapsed seconds: ``$elapsedSeconds``
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
