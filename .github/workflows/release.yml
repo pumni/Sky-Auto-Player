@@ -69,7 +69,7 @@ jobs:
       - name: Rust — build native wheel
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run --env-file .env python scripts/build_rust_wheel.py
+        run: uv run --env-file .env python scripts/build_rust_wheel.py --profile dist
 
       - name: Repository verification — full Python tests
         run: uv run python scripts/check.py tests-full

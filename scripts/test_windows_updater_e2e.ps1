@@ -969,13 +969,13 @@ try {
     if ($SyntheticTargetVersion -eq $fromManifest.version) { throw "synthetic target version must be newer than source" }
 
     $cargoManifest = Join-Path $script:RepoRoot "rust\Cargo.toml"
-    & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater --release
+    & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater --profile dist
     if ($LASTEXITCODE -ne 0) { throw "production updater build failed" }
     & cargo build --manifest-path $cargoManifest -p sky_updater --bin sky_updater_e2e `
-        --features e2e-local-source,e2e-fault-injection --release
+        --features e2e-local-source,e2e-fault-injection --profile dist
     if ($LASTEXITCODE -ne 0) { throw "E2E updater build failed" }
-    $productionCandidate = Join-Path $script:RepoRoot "rust\target\release\sky_updater.exe"
-    $e2eCandidate = Join-Path $script:RepoRoot "rust\target\release\sky_updater_e2e.exe"
+    $productionCandidate = Join-Path $script:RepoRoot "rust\target\dist\sky_updater.exe"
+    $e2eCandidate = Join-Path $script:RepoRoot "rust\target\dist\sky_updater_e2e.exe"
     if (-not (Test-Path $productionCandidate) -or -not (Test-Path $e2eCandidate)) { throw "updater candidates missing" }
     $packagedUpdater = Join-Path $toRoot "Sky-Auto-Player-Updater.exe"
     $candidateHashes = [ordered]@{

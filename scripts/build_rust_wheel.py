@@ -25,6 +25,13 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
+SUPPORTED_CARGO_PROFILES = ("release", "dist")
+
+
+def cargo_profile_arguments(profile: str) -> list[str]:
+    if profile not in SUPPORTED_CARGO_PROFILES:
+        raise ValueError(f"unsupported Cargo profile: {profile}")
+    return ["--profile", profile]
 
 
 def pinned_rust_toolchain(rust_dir: Path) -> str:
@@ -179,6 +186,12 @@ def main() -> int:
         action="store_true",
         help="build the non-production wheel with native benchmark test support",
     )
+    parser.add_argument(
+        "--profile",
+        choices=("release", "dist"),
+        default="release",
+        help="Cargo profile to use (production artifacts must select dist explicitly)",
+    )
     args = parser.parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     rust_dir = repo_root / "rust"
@@ -213,7 +226,7 @@ def main() -> int:
         "-m",
         "maturin",
         "build",
-        "--release",
+        *cargo_profile_arguments(args.profile),
         "--locked",
         "--manifest-path",
         str(cargo_manifest),

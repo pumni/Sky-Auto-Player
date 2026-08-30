@@ -45,6 +45,13 @@ def test_wheel_build_reads_exact_toolchain_and_checks_compiler_metadata() -> Non
         )
 
 
+def test_cargo_profile_arguments_are_explicit_and_bounded() -> None:
+    assert BUILD.cargo_profile_arguments("release") == ["--profile", "release"]
+    assert BUILD.cargo_profile_arguments("dist") == ["--profile", "dist"]
+    with pytest.raises(ValueError, match="unsupported Cargo profile"):
+        BUILD.cargo_profile_arguments("debug")
+
+
 def test_build_commit_requires_clean_matching_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
     monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")

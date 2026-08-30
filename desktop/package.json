@@ -15,7 +15,7 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:build": "tauri build --profile dist",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test && bun run build:web"
   },
   "dependencies": {

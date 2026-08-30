@@ -418,7 +418,7 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
     env["SKY_NATIVE_SOURCE_FINGERPRINT"] = native_source_fingerprint(ROOT, "cp314t-win_amd64")
     env["SKY_NATIVE_DIRTY_WORKTREE"] = "false"
     try:
-        _run([sys.executable, "scripts/build_rust_wheel.py"], env=env)
+        _run([sys.executable, "scripts/build_rust_wheel.py", "--profile", "dist"], env=env)
         build_app.verify_native_build_info(git_head)
         core_spec = ROOT / "Sky-Auto-Player-Core.spec"
         with build_app._source_bootloader_override():
@@ -439,7 +439,8 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
                 "sky_desktop_shell",
                 "--bin",
                 "sky_desktop_shell",
-                "--release",
+                "--profile",
+                "dist",
                 "--locked",
             ],
             env=env,
@@ -463,7 +464,8 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
                 str(ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml"),
                 "--bin",
                 "sky_updater_e2e",
-                "--release",
+                "--profile",
+                "dist",
                 "--features",
                 "e2e-local-source,e2e-fault-injection",
                 "--locked",
@@ -480,10 +482,10 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
         )
         return (
             core_dist,
-            ROOT / "rust" / "target" / "release" / "sky_desktop_shell.exe",
-            ROOT / "rust" / "target" / "release" / CALIBRATION_EXE,
-            ROOT / "rust" / "target" / "release" / "sky_updater.exe",
-            ROOT / "rust" / "target" / "release" / "sky_updater_e2e.exe",
+            ROOT / "rust" / "target" / "dist" / "sky_desktop_shell.exe",
+            ROOT / "rust" / "target" / "dist" / CALIBRATION_EXE,
+            ROOT / "rust" / "target" / "dist" / "sky_updater.exe",
+            ROOT / "rust" / "target" / "dist" / "sky_updater_e2e.exe",
         )
     finally:
         build_app.VERSION_PY.unlink(missing_ok=True)
