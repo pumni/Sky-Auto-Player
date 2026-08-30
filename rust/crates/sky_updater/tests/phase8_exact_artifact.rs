@@ -16,7 +16,7 @@ use sky_updater::error::Result;
 use sky_updater::github::ReleaseSource;
 use sky_updater::install::{install_verified, read_staged_manifest};
 use sky_updater::local_source::LocalReleaseSource;
-use sky_updater::manifest::{Manifest, ManifestFile};
+use sky_updater::manifest::{Manifest, ManifestFile, PreserveClass, classify_preserved};
 use sky_updater::progress::NoopProgressSink;
 use sky_updater::recovery::{has_unresolved_transaction, recover_before_update, rollback_prepared};
 use sky_updater::transaction::verify_installed_managed;
@@ -312,6 +312,9 @@ fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_sta
     // real transaction never replaces preserved user state such as
     // config.json, songs/, or logs/.
     for file in &target.files {
+        if classify_preserved(&file.path) == PreserveClass::Preserved {
+            continue;
+        }
         let source = staging.join(&file.path);
         let destination = install.join(&file.path);
         fs::create_dir_all(destination.parent().expect("managed file parent"))?;
@@ -421,6 +424,8 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     let local_app_data = temp_root("localappdata");
     let _local_app_data = EnvGuard::set("LOCALAPPDATA", &local_app_data);
     fs::create_dir_all(&local_app_data).expect("local app data");
+    let update_runs = local_app_data.join(APP_NAME).join("update-runs");
+    fs::create_dir_all(&update_runs).expect("update runs");
     let install = temp_root("exact-install-with-spaces");
     fs::create_dir_all(&install).expect("install");
     extract_zip_file(&zip, &install)?;
@@ -449,7 +454,11 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
     no_window(&mut parent);
     let mut parent = ChildGuard(parent.spawn()?);
-    let mut updater = Command::new(&e2e_updater);
+    let e2e_run_root = update_runs.join("run-0123456789abcdef0123456789abcdef");
+    fs::create_dir_all(&e2e_run_root).expect("E2E updater run root");
+    let e2e_updater_canonical = e2e_run_root.join(UPDATER_EXE);
+    fs::copy(&e2e_updater, &e2e_updater_canonical).expect("canonical E2E updater copy");
+    let mut updater = Command::new(&e2e_updater_canonical);
     updater
         .arg("--release-dir")
         .arg(&artifact_dir)
