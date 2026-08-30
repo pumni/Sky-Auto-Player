@@ -9,6 +9,14 @@ ROOT = Path(__file__).parents[1]
 
 def test_dist_profile_preserves_shipping_optimization() -> None:
     cargo = tomllib.loads((ROOT / "rust" / "Cargo.toml").read_text(encoding="utf-8"))
+    assert cargo["profile"]["release"] == {
+        "lto": False,
+        "codegen-units": 16,
+        "opt-level": 2,
+        "panic": "unwind",
+        "strip": "symbols",
+        "overflow-checks": True,
+    }
     assert cargo["profile"]["dist"] == {
         "inherits": "release",
         "lto": "thin",
