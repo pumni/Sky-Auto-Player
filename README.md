@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🎵 Sky Auto Player
+<img src="site/public/assets/sky-auto-player-mark.svg" alt="Sky Auto Player logo" width="96">
+
+# Sky Auto Player
 
 *Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision.*
 

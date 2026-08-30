@@ -21,12 +21,18 @@ const requiredStaticFiles = [
   'sitemap-index.xml',
   'favicon.ico',
   'favicon.svg',
+  'apple-touch-icon.png',
   'assets/sky-auto-player-mark.svg',
+  'assets/sky-auto-player-mark-mono.svg',
+  'assets/sky-auto-player-mark-no-bg.svg',
   'assets/og-banner.jpg',
   'assets/images/library-real-tauri.png',
   'assets/images/minimum-real-tauri.png',
   'assets/images/detail-real-tauri.png',
   'assets/images/settings-real-tauri.png',
+  'assets/images/og-banner.jpg',
+  'assets/images/picker.webp',
+  'assets/images/picker-mobile.webp',
 ];
 
 for (const relativePath of requiredStaticFiles) {

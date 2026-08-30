@@ -108,6 +108,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    icon=str(ROOT / 'branding' / 'exports' / 'windows' / 'sky-auto-player.ico'),
     codesign_identity=None,
     entitlements_file=None,
     version=str(ROOT / 'windows_version_info.txt'),

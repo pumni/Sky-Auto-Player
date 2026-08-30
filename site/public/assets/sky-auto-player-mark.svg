@@ -1,20 +1,48 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
   <title id="title">Sky Auto Player</title>
-  <rect width="128" height="128" rx="28" fill="#07090d"/>
-  <!--
-    Centered constellation (optical center ~64,64).
-    Path endpoints == node centers.
-    Content bbox approx x:34–94 (pad L/R 34/34), y:26–100 (pad T/B 26/28).
-  -->
-  <path
-    d="M40 34 L88 58 L52 94"
-    fill="none"
-    stroke="#ded8cc"
-    stroke-width="5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
+
+  <rect width="128" height="128" rx="28" fill="#07090D"/>
+
+  <!-- Solid triangle edges. Nodes are drawn later and mask the line ends. -->
+  <line
+    x1="40" y1="33" x2="40" y2="95"
+    stroke="#F4EFE3" stroke-width="5" stroke-linecap="round"
   />
-  <circle cx="40" cy="34" r="8" fill="#f7dda2"/>
-  <circle cx="88" cy="58" r="6.5" fill="#b8ccd6"/>
-  <circle cx="52" cy="94" r="6.5" fill="#dcae55"/>
+  <line
+    x1="40" y1="33" x2="93.6936" y2="64"
+    stroke="#F4EFE3" stroke-width="5" stroke-linecap="round"
+  />
+
+  <!-- Explicit dashed edge: deterministic, symmetrical rhythm. -->
+  <line
+    x1="53.8564" y1="87" x2="59.0526" y2="84"
+    stroke="#F4EFE3" stroke-width="5" stroke-linecap="round"
+  />
+  <line
+    x1="64.2487" y1="81" x2="69.4449" y2="78"
+    stroke="#F4EFE3" stroke-width="5" stroke-linecap="round"
+  />
+  <line
+    x1="74.6410" y1="75" x2="79.8372" y2="72"
+    stroke="#F4EFE3" stroke-width="5" stroke-linecap="round"
+  />
+
+  <!-- Top-left diamond -->
+  <rect
+    x="31" y="24" width="18" height="18" rx="1"
+    transform="rotate(45 40 33)"
+    fill="#F7DDA2" stroke="#F4EFE3" stroke-width="2.5"
+  />
+
+  <!-- Bottom-left timing/rhythm node -->
+  <circle
+    cx="40" cy="95" r="9.5"
+    fill="#07090D" stroke="#F7DDA2" stroke-width="5.5"
+  />
+
+  <!-- Right melody/response node -->
+  <circle
+    cx="93.6936" cy="64" r="9.5"
+    fill="#07090D" stroke="#B8CCD6" stroke-width="5.5"
+  />
 </svg>
