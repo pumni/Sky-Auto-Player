@@ -375,7 +375,7 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     write_file(&install, "logs/user.log", b"user log");
 
     let restart_marker = temp_root("restart-marker");
-    let mut parent = Command::new(&install.join(PRIMARY_EXE));
+    let mut parent = Command::new(install.join(PRIMARY_EXE));
     parent
         .arg("--selftest-desktop-parent")
         .current_dir(&install)
