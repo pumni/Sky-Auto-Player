@@ -56,7 +56,7 @@ def test_native_package_paths_pin_rust_compiler_explicitly() -> None:
     assert "Expected stable Rust 1.98.0 for packaged build" in ci_workflow
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in ci_workflow
     assert "RUSTUP_TOOLCHAIN: 1.98.0" in release_workflow
-    assert "uv run --env-file .env python -m build_app" in release_workflow
+    assert "uv run --env-file .env python scripts/build_phase8.py" in release_workflow
     assert "scripts/build_phase8.py" in ci_workflow
     assert "Upload exact Phase 8 release candidate" in ci_workflow
     assert "phase8_exact_artifact" in (ROOT / "scripts" / "build_phase8.py").read_text(

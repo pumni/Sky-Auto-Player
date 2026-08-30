@@ -24,7 +24,7 @@ jobs:
   release:
     name: Build + attest + draft
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 100
 
     steps:
       - name: Checkout
@@ -99,20 +99,26 @@ jobs:
           "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
           "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
-      - name: Build unsigned native app and smoke tests
+      - name: Set up Bun for production frontend build
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Build and qualify exact portable release candidate
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run --env-file .env python -m build_app
-
-      - name: Generate unsigned-byte manifest
-        run: uv run --env-file .env python -m build_app --manifest-only
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player Phase8"
+          uv run --env-file .env python scripts/build_phase8.py --output-root $output
+          "SKY_PHASE8_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify exact release tree and manifest
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
+          $rel = Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$ver"
           uv run --env-file .env python scripts/verify_release_manifest.py `
-            --release-dir "dist\Sky-Auto-Player-v$ver" --version $ver
-          $e2e = Get-ChildItem "dist\Sky-Auto-Player-v$ver" -Recurse -File -ErrorAction SilentlyContinue |
+            --release-dir $rel --version $ver
+          $e2e = Get-ChildItem $rel -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like "sky_updater_e2e*" }
           if ($e2e) { throw "E2E updater artifacts must never enter the public release tree: $($e2e.FullName -join ', ')" }
 
@@ -120,14 +126,17 @@ jobs:
         id: stage
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
-          $rel = "dist\Sky-Auto-Player-v$ver"
-          if (-not (Test-Path $rel)) { throw "Missing release dir: $rel" }
-
-          # Canonical
-          Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip" -Force
-          $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip").Hash
-          "$h  Sky-Auto-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256" -Encoding ASCII
-          Copy-Item "$rel\MANIFEST.json" "$env:RUNNER_TEMP\MANIFEST.json"
+          $artifact = Join-Path $env:SKY_PHASE8_OUTPUT "Sky-Auto-Player-v$ver.zip"
+          $sidecar = "$artifact.sha256"
+          $manifest = Join-Path $env:SKY_PHASE8_OUTPUT "MANIFEST.json"
+          $provenance = Join-Path $env:SKY_PHASE8_OUTPUT "PROVENANCE.json"
+          foreach ($path in @($artifact, $sidecar, $manifest, $provenance)) {
+            if (-not (Test-Path $path)) { throw "Missing exact Phase 8 release asset: $path" }
+          }
+          Copy-Item $artifact "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip"
+          Copy-Item $sidecar "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256"
+          Copy-Item $manifest "$env:RUNNER_TEMP\MANIFEST.json"
+          Copy-Item $provenance "$env:RUNNER_TEMP\PROVENANCE.json"
 
           "version=$ver" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
@@ -137,7 +146,8 @@ jobs:
           $required = @(
             "Sky-Auto-Player-v$ver.zip",
             "Sky-Auto-Player-v$ver.zip.sha256",
-            "MANIFEST.json"
+            "MANIFEST.json",
+            "PROVENANCE.json"
           )
           foreach ($file in $required) {
             if (-not (Test-Path "$env:RUNNER_TEMP\$file")) {
@@ -153,6 +163,7 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
+            ${{ runner.temp }}/PROVENANCE.json
 
       - name: Create draft GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -161,6 +172,7 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
+            ${{ runner.temp }}/PROVENANCE.json
           body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
           generate_release_notes: false
           # Every release starts as a draft. Publish only the exact artifact that
