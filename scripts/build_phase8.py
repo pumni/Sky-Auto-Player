@@ -17,9 +17,9 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from datetime import UTC, datetime
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -123,7 +123,7 @@ def _assert_no_path_escape(root: Path) -> None:
         try:
             path.resolve().relative_to(root)
         except ValueError:
-            raise RuntimeError(f"release path escapes root: {relative}")
+            raise RuntimeError(f"release path escapes root: {relative}") from None
         folded = relative.casefold()
         previous = seen.setdefault(folded, relative)
         if previous != relative:

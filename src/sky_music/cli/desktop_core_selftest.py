@@ -15,7 +15,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from sky_music.infrastructure.desktop_ipc.protocol import encode_frame, iter_bounded_frames
+from sky_music.infrastructure.desktop_ipc.protocol import (
+    encode_frame,
+    iter_bounded_frames,
+)
 
 _TIMEOUT_S = 15.0
 _MAX_STDERR_BYTES = 128 * 1024
