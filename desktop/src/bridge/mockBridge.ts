@@ -21,6 +21,10 @@ import type {
   Unsubscribe,
   ViewportRequest,
   ViewportResult,
+  UpdateCheck,
+  UpdateHandoff,
+  UpdatePatch,
+  UpdatePreferences,
 } from './DesktopBridge';
 
 const MOCK_NATIVE: Bootstrap['native_build'] = {
@@ -241,8 +245,86 @@ export function createMockBridge(): DesktopBridge {
                 ...(playback.fps === undefined ? {} : { fps: playback.fps }),
               },
             }),
+        ...(patch.updatePreferences === undefined
+          ? {}
+          : {
+              update_preferences: {
+                ...settings.update_preferences,
+                ...(patch.updatePreferences.autoCheck === undefined
+                  ? {}
+                  : { auto_check: patch.updatePreferences.autoCheck }),
+                ...(patch.updatePreferences.channel === undefined
+                  ? {}
+                  : { channel: patch.updatePreferences.channel }),
+                ...(patch.updatePreferences.skipVersion === undefined
+                  ? {}
+                  : { skip_version: patch.updatePreferences.skipVersion }),
+              },
+            }),
       };
       return settings;
+    },
+    async checkForUpdate(): Promise<UpdateCheck> {
+      const result: UpdateCheck = {
+        state: 'available',
+        current_version: '3.5.0-mock',
+        available_version: '3.6.0-mock',
+        channel: settings.update_preferences.channel,
+        release_notes: 'A deterministic update fixture for the desktop UI.',
+        published_at: '2026-08-30T00:00:00Z',
+        error: null,
+      };
+      emit({
+        v: 1,
+        name: 'update.available',
+        payload: {
+          current_version: result.current_version,
+          available_version: result.available_version!,
+          channel: result.channel,
+          release_notes: result.release_notes,
+          published_at: result.published_at,
+        },
+      });
+      emit({
+        v: 1,
+        name: 'update.result',
+        payload: {
+          state: result.state,
+          current_version: result.current_version,
+          available_version: result.available_version,
+          channel: result.channel,
+          error: result.error,
+        },
+      });
+      return result;
+    },
+    async getUpdatePreferences(): Promise<UpdatePreferences> {
+      return settings.update_preferences;
+    },
+    async patchUpdatePreferences(patch: UpdatePatch): Promise<UpdatePreferences> {
+      settings = {
+        ...settings,
+        update_preferences: {
+          ...settings.update_preferences,
+          ...(patch.autoCheck === undefined ? {} : { auto_check: patch.autoCheck }),
+          ...(patch.channel === undefined ? {} : { channel: patch.channel }),
+          ...(patch.skipVersion === undefined ? {} : { skip_version: patch.skipVersion }),
+        },
+      };
+      return settings.update_preferences;
+    },
+    async beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff> {
+      const handoff: UpdateHandoff = {
+        handoff_id: `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32),
+        target_version: targetVersion,
+        state: 'handoff_ready',
+      };
+      emit({
+        v: 1,
+        name: 'update.handoff_ready',
+        payload: { handoff_id: handoff.handoff_id, target_version: targetVersion },
+      });
+      return handoff;
     },
     async preparePlayback(request) {
       const found = rows.find((item) => item.song_id === request.songId);

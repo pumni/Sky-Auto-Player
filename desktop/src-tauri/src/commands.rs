@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::core::CoreSupervisor;
-use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent};
+use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -52,6 +52,20 @@ pub struct SettingsPatch {
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackPatch>,
+    pub update_preferences: Option<UpdatePreferencesPatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct UpdatePreferencesPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<UpdateChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -191,6 +205,31 @@ struct CoreSettingsPatch {
     verbose_hud: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     playback_defaults: Option<CorePlaybackPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_preferences: Option<CoreUpdatePreferencesPatch>,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreUpdatePreferencesPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<UpdateChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_version: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CoreUpdateBeginHandoffParams {
+    target_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct UpdateBeginHandoffRequest {
+    pub target_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,8 +305,30 @@ pub struct PlaybackOptionSetsDto {
 #[ts(export)]
 pub struct UpdatePreferencesDto {
     pub auto_check: bool,
-    pub channel: String,
+    pub channel: UpdateChannel,
     pub skip_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCheckDto {
+    pub state: UpdateState,
+    pub current_version: String,
+    pub available_version: Option<String>,
+    pub channel: UpdateChannel,
+    pub release_notes: Option<String>,
+    pub published_at: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateHandoffDto {
+    pub handoff_id: String,
+    pub target_version: String,
+    pub state: UpdateState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -502,7 +563,11 @@ where
     .map_err(|error| format!("Core worker failed: {error}"))?
 }
 
-async fn blocking_settings_request<P, R>(state: State<'_, AppState>, params: P) -> Result<R, String>
+async fn blocking_settings_request<P, R>(
+    state: State<'_, AppState>,
+    method: &'static str,
+    params: P,
+) -> Result<R, String>
 where
     P: Serialize + Send + 'static,
     R: DeserializeOwned + Send + 'static,
@@ -515,7 +580,7 @@ where
         // this guard only prevents overlapping persistence operations.
         let _write_guard = app_state.lock_settings_writes();
         let supervisor = app_state.ensure_core_blocking()?;
-        request_with_supervisor(&supervisor, "settings.patch", params)
+        request_with_supervisor(&supervisor, method, params)
     })
     .await
     .map_err(|error| format!("Core settings worker failed: {error}"))?
@@ -590,11 +655,63 @@ pub async fn patch_settings(
     });
     blocking_settings_request(
         state,
+        "settings.patch",
         CoreSettingsPatch {
             theme: params.theme,
             telemetry_enabled: params.telemetry_enabled,
             verbose_hud: params.verbose_hud,
             playback_defaults,
+            update_preferences: params
+                .update_preferences
+                .map(|value| CoreUpdatePreferencesPatch {
+                    auto_check: value.auto_check,
+                    channel: value.channel,
+                    skip_version: value.skip_version,
+                }),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn check_for_update(state: State<'_, AppState>) -> Result<UpdateCheckDto, String> {
+    blocking_request(state, "update.check", serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn get_update_preferences(
+    state: State<'_, AppState>,
+) -> Result<UpdatePreferencesDto, String> {
+    blocking_request(state, "update.preferences.get", serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn patch_update_preferences(
+    state: State<'_, AppState>,
+    params: UpdatePreferencesPatch,
+) -> Result<UpdatePreferencesDto, String> {
+    blocking_settings_request(
+        state,
+        "update.preferences.patch",
+        CoreUpdatePreferencesPatch {
+            auto_check: params.auto_check,
+            channel: params.channel,
+            skip_version: params.skip_version,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn begin_update_handoff(
+    state: State<'_, AppState>,
+    params: UpdateBeginHandoffRequest,
+) -> Result<UpdateHandoffDto, String> {
+    blocking_request(
+        state,
+        "update.begin_handoff",
+        CoreUpdateBeginHandoffParams {
+            target_version: params.target_version,
         },
     )
     .await
@@ -746,15 +863,15 @@ pub async fn subscribe_ui_events(
 }
 
 #[tauri::command]
-pub async fn shutdown(state: State<'_, AppState>) -> Result<(), String> {
-    let app_state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Ok(supervisor) = app_state.supervisor() {
-            supervisor.shutdown();
-        }
-    })
-    .await
-    .map_err(|error| format!("Core shutdown worker failed: {error}"))?;
+pub async fn shutdown(
+    window: tauri::WebviewWindow<super::ShellRuntime>,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    // This command is used only after an authoritative update handoff. Keep
+    // shell exit under the same prevent-close -> bounded Core cleanup ->
+    // destroy lifecycle as a user-initiated close; React never destroys the
+    // native window directly.
+    crate::lifecycle::close_window(window.as_ref().window());
     Ok(())
 }
 

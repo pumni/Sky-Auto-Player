@@ -24,6 +24,7 @@ _RUN_NAME = re.compile(r"^run-[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_HANDOFF_BYTES = 8 * 1024
+_MAX_PID = 0xFFFFFFFF
 HANDOFF_POLL_INTERVAL_S = 0.05
 HANDOFF_TIMEOUT_S = 5.0
 HANDOFF_TERMINATE_WAIT_S = 2.0
@@ -40,6 +41,10 @@ class UpdateLaunchRequest:
     current_version: str
     target_version: str
     channel: str
+    # The process whose exit releases the native updater's parent wait. For
+    # Desktop this is the Tauri GUI PID; legacy Textual callers pass their own
+    # process PID explicitly at the call site.
+    parent_pid: int
     restart: bool = True
 
 
@@ -75,6 +80,8 @@ def _validate_request(request: UpdateLaunchRequest) -> None:
         raise UpdateLaunchError("install root must be an existing absolute directory")
     if request.channel not in {"stable", "beta"}:
         raise UpdateLaunchError("channel must be stable or beta")
+    if type(request.parent_pid) is not int or not 0 < request.parent_pid <= _MAX_PID:
+        raise UpdateLaunchError("parent PID must be a positive bounded integer")
     if parse_version(request.current_version) is None or parse_version(request.target_version) is None:
         raise UpdateLaunchError("current and target versions must be valid PEP 440 versions")
     if not is_newer(request.target_version, request.current_version):
@@ -370,7 +377,7 @@ def launch_update(request: UpdateLaunchRequest) -> UpdateLaunchResult:
             "--install-root",
             str(install_root),
             "--parent-pid",
-            str(os.getpid()),
+            str(request.parent_pid),
             "--current-version",
             request.current_version,
             "--target-version",

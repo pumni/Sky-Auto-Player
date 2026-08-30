@@ -227,6 +227,34 @@ def test_settings_service_rejects_invalid_write_enums_and_booleans(
     assert cfg.game_fps == 60
 
 
+def test_settings_service_persists_normalized_update_preferences_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AppConfig()
+    saved: list[AppConfig] = []
+    monkeypatch.setattr(settings_module, "save_config", saved.append)
+    service = SettingsService(cfg)
+
+    settings = service.patch(
+        {
+            "update_auto_check": False,
+            "update_channel": " BETA ",
+            "update_skip_version": " 3.6.0 ",
+        }
+    )
+
+    assert settings.update_preferences.auto_check is False
+    assert settings.update_preferences.channel == "beta"
+    assert settings.update_preferences.skip_version == "3.6.0"
+    assert len(saved) == 1
+
+    before = service.snapshot()
+    with pytest.raises(ValueError):
+        service.patch({"update_auto_check": True, "update_channel": "nightly"})
+    assert service.snapshot() == before
+    assert len(saved) == 1
+
+
 def test_metadata_priority_preserves_selected_visible_overscan_filtered_order(tmp_path: Path) -> None:
     selected = tmp_path / "selected.json"
     visible = tmp_path / "visible.json"

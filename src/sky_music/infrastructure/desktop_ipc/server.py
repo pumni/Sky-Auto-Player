@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 import threading
 import traceback
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import asdict
+from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
 
 from sky_music import __version__
 from sky_music.config import VALID_FPS
 from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.domain.update_checker import UpdateCheckResult
 from sky_music.infrastructure.desktop_ipc.protocol import (
     DESKTOP_PROTOCOL_VERSION,
     ProtocolError,
@@ -26,6 +29,12 @@ from sky_music.infrastructure.desktop_ipc.protocol import (
     response_ok,
     write_frame,
 )
+from sky_music.infrastructure.update_launcher import (
+    UpdateLaunchError,
+    UpdateLaunchRequest,
+    launch_update,
+)
+from sky_music.infrastructure.update_runtime import active_update_for_install
 from sky_music.orchestration.catalog_service import (
     CatalogError,
     CatalogGenerationError,
@@ -45,6 +54,8 @@ from sky_music.orchestration.desktop_models import (
     PlaybackRecommendationDto,
     RiskSummaryDto,
     SongDetailDto,
+    UpdateCheckDto,
+    UpdateHandoffDto,
     UpdatePreferencesDto,
 )
 from sky_music.orchestration.desktop_playback import (
@@ -58,14 +69,26 @@ from sky_music.orchestration.settings_service import (
     SettingsService,
 )
 from sky_music.orchestration.song_metadata_service import get_song_ui_metadata
+from sky_music.orchestration.update_service import (
+    check_for_update,
+    record_check_error,
+    record_successful_check,
+)
 
 MAX_OFFSET = 1_000_000_000
 MAX_VIEWPORT_SPAN = 2_000
 MAX_BUFFERED_EVENTS = 128
 PATCH_FIELDS = frozenset(
-    {"theme", "telemetry_enabled", "verbose_hud", "playback_defaults"}
+    {
+        "theme",
+        "telemetry_enabled",
+        "verbose_hud",
+        "playback_defaults",
+        "update_preferences",
+    }
 )
 PLAYBACK_PATCH_FIELDS = frozenset({"hold_frames", "tempo_scale", "fps"})
+UPDATE_PATCH_FIELDS = frozenset({"auto_check", "channel", "skip_version"})
 SUPPORTED_METHODS = frozenset(
     {
         "app.bootstrap",
@@ -76,6 +99,10 @@ SUPPORTED_METHODS = frozenset(
         "catalog.set_viewport",
         "settings.get",
         "settings.patch",
+        "update.check",
+        "update.preferences.get",
+        "update.preferences.patch",
+        "update.begin_handoff",
         "playback.prepare",
         "playback.start",
         "playback.stop",
@@ -108,7 +135,7 @@ def parent_process_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except PermissionError:
         return True
-    except OSError, ProcessLookupError:
+    except (OSError, ProcessLookupError):
         return False
     return True
 
@@ -217,6 +244,7 @@ class DesktopCoreServer:
         native_build_info: RustBuildInfo,
         app_version: str = __version__,
         parent_pid: int | None = None,
+        install_root: Path | None = None,
     ) -> None:
         self.settings_service = settings_service
         self.catalog_service = catalog_service
@@ -229,6 +257,12 @@ class DesktopCoreServer:
         self._events_lock = threading.Lock()
         self._event_buffer_overflowed = False
         self._viewport: dict[str, object] | None = None
+        self.install_root = (
+            Path(install_root).resolve(strict=False) if install_root is not None else None
+        )
+        self._last_update: UpdateCheckResult | None = None
+        self._update_handoff_id: str | None = None
+        self._update_handoff_started = False
         self._stop_event = threading.Event()
         self.diagnostics = DesktopDiagnosticsService(publish_event=self._publish_event)
         self.playback = DesktopPlaybackService(
@@ -393,6 +427,15 @@ class DesktopCoreServer:
             return _settings_dict(self.settings_service)
         if method == "settings.patch":
             return self._patch_settings(params)
+        if method == "update.check":
+            return self._check_update(params)
+        if method == "update.preferences.get":
+            _object_params(params, frozenset())
+            return self._update_preferences()
+        if method == "update.preferences.patch":
+            return self._patch_update_preferences(params)
+        if method == "update.begin_handoff":
+            return self._begin_update_handoff(params)
         if method == "diagnostics.set_enabled":
             return self._set_diagnostics_enabled(
                 _object_params(params, frozenset({"enabled"}))
@@ -643,12 +686,191 @@ class DesktopCoreServer:
             translated.update(
                 {field_map[key]: value for key, value in playback.items()}
             )
+        if "update_preferences" in params:
+            update = params["update_preferences"]
+            if not isinstance(update, dict):
+                raise CoreRequestError(
+                    "invalid_params", "update_preferences must be an object"
+                )
+            unknown_update = set(update) - UPDATE_PATCH_FIELDS
+            if unknown_update:
+                raise CoreRequestError(
+                    "invalid_params",
+                    f"unsupported update settings: {', '.join(sorted(unknown_update))}",
+                )
+            update_map = {
+                "auto_check": "update_auto_check",
+                "channel": "update_channel",
+                "skip_version": "update_skip_version",
+            }
+            translated.update(
+                {update_map[key]: value for key, value in update.items()}
+            )
         try:
             self.settings_service.patch(translated)
             self.playback.invalidate_settings()
             return _settings_dict(self.settings_service)
         except (TypeError, ValueError) as exc:
             raise CoreRequestError("invalid_params", str(exc)) from exc
+
+    def _update_preferences(self) -> dict[str, object]:
+        settings = self.settings_service.snapshot().update_preferences
+        return asdict(
+            UpdatePreferencesDto(
+                auto_check=settings.auto_check,
+                channel=settings.channel,  # type: ignore[arg-type]
+                skip_version=settings.skip_version,
+            )
+        )
+
+    def _patch_update_preferences(self, params: Mapping[str, object]) -> dict[str, object]:
+        update = _object_params(params, UPDATE_PATCH_FIELDS)
+        translated = {
+            {
+                "auto_check": "update_auto_check",
+                "channel": "update_channel",
+                "skip_version": "update_skip_version",
+            }[key]: value
+            for key, value in update.items()
+        }
+        try:
+            self.settings_service.patch(translated)
+        except (TypeError, ValueError) as exc:
+            raise CoreRequestError("invalid_params", str(exc)) from exc
+        return self._update_preferences()
+
+    def _check_update(self, params: Mapping[str, object]) -> dict[str, object]:
+        _object_params(params, frozenset())
+        settings = self.settings_service.config_snapshot()
+        preferences = self.settings_service.snapshot().update_preferences
+        try:
+            result = check_for_update(
+                settings,
+                current_version=self.app_version,
+                skip_version=preferences.skip_version or None,
+                channel=preferences.channel,
+            )
+        except Exception as exc:
+            result = UpdateCheckResult(
+                update=None,
+                current_version=self.app_version,
+                error=str(exc),
+            )
+        self._last_update = result
+        if result.error:
+            record_check_error(settings)
+            state = "error"
+        else:
+            record_successful_check(settings)
+            state = "available" if result.update is not None else "current"
+        update = result.update
+        dto = UpdateCheckDto(
+            state=state,  # type: ignore[arg-type]
+            current_version=result.current_version,
+            available_version=update.latest_version if update else None,
+            channel=preferences.channel,  # type: ignore[arg-type]
+            release_notes=update.release_notes if update else None,
+            published_at=update.published_at if update else None,
+            error=result.error,
+        )
+        if update is not None and not result.error:
+            self._publish_event(
+                "update.available",
+                {
+                    "current_version": result.current_version,
+                    "available_version": update.latest_version,
+                    "channel": preferences.channel,
+                    "release_notes": update.release_notes,
+                    "published_at": update.published_at,
+                },
+            )
+        self._publish_event(
+            "update.result",
+            {
+                "state": dto.state,
+                "current_version": dto.current_version,
+                "available_version": dto.available_version,
+                "channel": dto.channel,
+                "error": dto.error,
+            },
+        )
+        return asdict(dto)
+
+    def _begin_update_handoff(self, params: Mapping[str, object]) -> dict[str, object]:
+        if set(params) != {"target_version"}:
+            raise CoreRequestError(
+                "invalid_params", "update.begin_handoff requires target_version"
+            )
+        target = _required_text(params, "target_version", max_bytes=64)
+        if self._last_update is None or self._last_update.update is None:
+            raise CoreRequestError("update_unavailable", "check for an update first")
+        update = self._last_update.update
+        if target != update.latest_version:
+            raise CoreRequestError("stale_update", "update metadata is stale")
+        if self._update_handoff_started:
+            if self._update_handoff_id is None:
+                raise CoreRequestError("update_busy", "update handoff is in progress")
+            return asdict(
+                UpdateHandoffDto(self._update_handoff_id, target, "handoff_ready")
+            )
+        if self.install_root is None:
+            raise CoreRequestError("update_unavailable", "install root is unavailable")
+        if type(self.parent_pid) is not int or not 0 < self.parent_pid <= 0xFFFFFFFF:
+            raise CoreRequestError(
+                "update_unavailable", "desktop parent PID is unavailable"
+            )
+        if self.playback.is_physical_active() or self.calibration.is_active():
+            raise CoreRequestError(
+                "update_busy", "stop playback and calibration before updating"
+            )
+        active = active_update_for_install(self.install_root)
+        if active is not None:
+            raise CoreRequestError("update_busy", "an update is already active")
+        preferences = self.settings_service.snapshot().update_preferences
+        try:
+            launch_result = launch_update(
+                UpdateLaunchRequest(
+                    install_root=self.install_root,
+                    current_version=self.app_version,
+                    target_version=target,
+                    channel=preferences.channel,
+                    parent_pid=self.parent_pid,
+                )
+            )
+        except UpdateLaunchError as exc:
+            self._publish_event(
+                "update.result",
+                {
+                    "state": "error",
+                    "current_version": self.app_version,
+                    "available_version": target,
+                    "channel": preferences.channel,
+                    "error": str(exc),
+                },
+            )
+            raise CoreRequestError("update_handoff_failed", str(exc)) from exc
+        if launch_result.status != "ready":
+            self._publish_event(
+                "update.result",
+                {
+                    "state": "error",
+                    "current_version": self.app_version,
+                    "available_version": target,
+                    "channel": preferences.channel,
+                    "error": "an update is already running",
+                },
+            )
+            raise CoreRequestError(
+                "update_busy", "another updater won the handoff lock race"
+            )
+        self._update_handoff_started = True
+        self._update_handoff_id = secrets.token_hex(16)
+        handoff = UpdateHandoffDto(self._update_handoff_id, target, "handoff_ready")
+        self._publish_event(
+            "update.handoff_ready",
+            {"handoff_id": handoff.handoff_id, "target_version": target},
+        )
+        return asdict(handoff)
 
     def _set_diagnostics_enabled(
         self, params: Mapping[str, object]

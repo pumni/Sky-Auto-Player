@@ -1148,6 +1148,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def _launch_native_update(self, release: Any) -> None:
         """Stage and spawn the native updater, then exit only after spawn."""
+        import os
         import sys
         from pathlib import Path
 
@@ -1169,6 +1170,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                     current_version=VERSION,
                     target_version=release.latest_version,
                     channel=self.cfg.update.channel,
+                    parent_pid=os.getpid(),
                     restart=True,
                 )
             )

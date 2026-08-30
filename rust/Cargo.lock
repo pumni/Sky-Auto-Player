@@ -3063,6 +3063,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sky_dispatch_win32",
+ "sky_updater",
  "tauri",
  "tauri-build",
  "thiserror 2.0.20",

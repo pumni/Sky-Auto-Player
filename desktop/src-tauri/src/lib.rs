@@ -15,6 +15,10 @@ type ShellRuntime = tauri::test::MockRuntime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = core::check_startup_update_guard() {
+        eprintln!("Sky Auto Player startup refused: {error}");
+        return;
+    }
     tauri::Builder::<ShellRuntime>::default()
         .manage(app_state::AppState::default())
         .setup(|_| Ok(()))
@@ -26,6 +30,10 @@ pub fn run() {
             commands::set_library_viewport,
             commands::get_settings,
             commands::patch_settings,
+            commands::check_for_update,
+            commands::get_update_preferences,
+            commands::patch_update_preferences,
+            commands::begin_update_handoff,
             commands::set_diagnostics_enabled,
             commands::start_calibration,
             commands::cancel_calibration,
@@ -322,6 +330,82 @@ mod ipc_tests {
             ),
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn generated_tauri_handler_decodes_typed_update_payloads() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::check_for_update,
+                super::commands::get_update_preferences,
+                super::commands::patch_update_preferences,
+                super::commands::begin_update_handoff,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
+        app.state::<AppState>()
+            .inner()
+            .install_ready_for_test(supervisor.clone());
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let check =
+            tauri::test::get_ipc_response(&webview, request("check_for_update", json!({}), 50))
+                .expect("update check must decode");
+        let check_value: serde_json::Value = check.deserialize().expect("update check JSON");
+        assert_eq!(check_value["state"], "available");
+
+        let preferences = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_update_preferences",
+                json!({
+                    "params": {"autoCheck": false, "channel": "beta", "skipVersion": "3.6.0"}
+                }),
+                52,
+            ),
+        )
+        .expect("update preference patch must decode");
+        let preferences_value: serde_json::Value =
+            preferences.deserialize().expect("update preferences JSON");
+        assert_eq!(preferences_value["channel"], "beta");
+
+        let handoff = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "begin_update_handoff",
+                json!({
+                    "params": {"targetVersion": "3.6.0"}
+                }),
+                54,
+            ),
+        )
+        .expect("update handoff must decode");
+        let handoff_value: serde_json::Value = handoff.deserialize().expect("handoff JSON");
+        assert_eq!(handoff_value["state"], "handoff_ready");
+        assert_eq!(handoff_value["target_version"], "3.6.0");
+
+        let shutdown = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 55))
+            .expect("successful handoff must use the controlled shell close command");
+        let _: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
+        assert!(app.state::<AppState>().inner().is_closing_for_test());
+
+        let wrong = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "begin_update_handoff",
+                json!({
+                    "params": {"target_version": "3.6.0"}
+                }),
+                56,
+            ),
+        );
+        assert!(wrong.is_err(), "snake_case frontend payload must fail");
         supervisor.shutdown();
     }
 

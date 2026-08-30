@@ -19,6 +19,8 @@ import type {
   PlaybackDecisionAcceptance,
   PlaybackPrepare,
   PreparedPlayback,
+  UpdateCheck,
+  UpdateChannelId,
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 
@@ -83,6 +85,17 @@ export interface DesktopStore {
     result: CalibrationFinished | null;
     error: string | null;
   };
+  update: {
+    state: UpdateCheck['state'];
+    dialogOpen: boolean;
+    currentVersion: string | null;
+    availableVersion: string | null;
+    channel: UpdateChannelId;
+    releaseNotes: string | null;
+    publishedAt: string | null;
+    error: string | null;
+    handoffId: string | null;
+  };
   playback: {
     state: PlaybackUiState;
     sessionId: string | null;
@@ -99,6 +112,9 @@ export interface DesktopStore {
   setViewport: (first: number, last: number) => Promise<void>;
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<void>;
+  checkForUpdate: () => Promise<void>;
+  setUpdateDialogOpen: (open: boolean) => void;
+  beginUpdateHandoff: () => Promise<void>;
   prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;
   startPreparedPlayback: (decision?: PlaybackDecisionId) => Promise<void>;
   stopPlayback: () => Promise<void>;
@@ -162,6 +178,12 @@ export function createDesktopStore(bridge: DesktopBridge) {
         return `${event.payload.phase}: ${event.payload.completed}/${event.payload.total}`;
       case 'calibration.finished':
         return `${event.payload.outcome}: ${event.payload.status}`;
+      case 'update.available':
+        return `Update ${event.payload.available_version} is available`;
+      case 'update.result':
+        return `Update check: ${event.payload.state}`;
+      case 'update.handoff_ready':
+        return `Update handoff ready for ${event.payload.target_version}`;
       case 'playback.state_changed':
         return `${event.payload.song_id} → ${event.payload.state}`;
       case 'playback.snapshot':
@@ -313,6 +335,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
         result: null,
         error: null,
       },
+      update: {
+        state: 'idle',
+        dialogOpen: false,
+        currentVersion: null,
+        availableVersion: null,
+        channel: 'stable',
+        releaseNotes: null,
+        publishedAt: null,
+        error: null,
+        handoffId: null,
+      },
       playback: {
         state: 'idle',
         sessionId: null,
@@ -338,6 +371,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: { ...get().library, generation: bootstrap.catalog_generation },
           });
           await get().search();
+          if (bootstrap.update_preferences.auto_check) void get().checkForUpdate();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ bootstrapState: 'fatal', fatal: message });
@@ -533,6 +567,41 @@ export function createDesktopStore(bridge: DesktopBridge) {
               prepareRequestEpoch += 1;
             });
           }
+        } else if (event.name === 'update.available') {
+          set({
+            update: {
+              ...get().update,
+              state: 'available',
+              currentVersion: event.payload.current_version,
+              availableVersion: event.payload.available_version,
+              channel: event.payload.channel,
+              releaseNotes: event.payload.release_notes,
+              publishedAt: event.payload.published_at,
+              error: null,
+              dialogOpen: get().update.dialogOpen,
+            },
+          });
+        } else if (event.name === 'update.result') {
+          set({
+            update: {
+              ...get().update,
+              state: event.payload.state,
+              currentVersion: event.payload.current_version,
+              availableVersion: event.payload.available_version,
+              channel: event.payload.channel,
+              error: event.payload.error,
+            },
+          });
+        } else if (event.name === 'update.handoff_ready') {
+          set({
+            update: {
+              ...get().update,
+              state: 'handoff_ready',
+              handoffId: event.payload.handoff_id,
+              availableVersion: event.payload.target_version,
+              error: null,
+            },
+          });
         }
       },
 
@@ -663,6 +732,66 @@ export function createDesktopStore(bridge: DesktopBridge) {
           () => undefined,
         );
         return mutation;
+      },
+
+      async checkForUpdate() {
+        set({ update: { ...get().update, state: 'checking', error: null } });
+        try {
+          const result = await bridge.checkForUpdate();
+          set({
+            update: {
+              ...get().update,
+              state: result.state,
+              currentVersion: result.current_version,
+              availableVersion: result.available_version,
+              channel: result.channel,
+              releaseNotes: result.release_notes,
+              publishedAt: result.published_at,
+              error: result.error,
+              dialogOpen: get().update.dialogOpen,
+            },
+          });
+        } catch (error) {
+          set({
+            update: {
+              ...get().update,
+              state: 'error',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
+
+      setUpdateDialogOpen(open) {
+        set({ update: { ...get().update, dialogOpen: open } });
+      },
+
+      async beginUpdateHandoff() {
+        const targetVersion = get().update.availableVersion;
+        if (!targetVersion) return;
+        set({ update: { ...get().update, state: 'handoff_in_progress', error: null } });
+        try {
+          const handoff = await bridge.beginUpdateHandoff(targetVersion);
+          set({
+            update: {
+              ...get().update,
+              state: handoff.state,
+              handoffId: handoff.handoff_id,
+              error: null,
+            },
+          });
+          // The Core has completed its authoritative handoff. Shutdown keeps
+          // the existing cleanup lifecycle in charge before the shell exits.
+          await bridge.shutdown();
+        } catch (error) {
+          set({
+            update: {
+              ...get().update,
+              state: 'error',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
       },
 
       async prepareSelectedPlayback(overrides) {

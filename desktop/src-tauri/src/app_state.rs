@@ -127,6 +127,11 @@ impl AppState {
     pub(crate) fn install_ready_for_test(&self, supervisor: Arc<CoreSupervisor>) {
         *self.inner.core.lock().expect("desktop state poisoned") = CoreState::Ready(supervisor);
     }
+
+    #[cfg(all(test, feature = "tauri-test", not(feature = "desktop-runtime")))]
+    pub(crate) fn is_closing_for_test(&self) -> bool {
+        self.is_closing()
+    }
 }
 
 #[cfg(test)]

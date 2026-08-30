@@ -1,4 +1,4 @@
-import { ListRestart, Settings2, Search } from 'lucide-react';
+import { ListRestart, Settings2, Search, Sparkles } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useEffect, useState } from 'react';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
@@ -14,6 +14,8 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
   const search = useStore((store: DesktopStore) => store.search);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
   const setSettingsOpen = useStore((store: DesktopStore) => store.setSettingsOpen);
+  const update = useStore((store: DesktopStore) => store.update);
+  const setUpdateDialogOpen = useStore((store: DesktopStore) => store.setUpdateDialogOpen);
   const [draft, setDraft] = useState(query);
 
   useEffect(() => setDraft(query), [query]);
@@ -50,6 +52,16 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
       </label>
       <div className="toolbar-actions">
         <span className="version-label">v{bootstrap.app_version}</span>
+        {update.state === 'available' && (
+          <Button
+            className="update-indicator"
+            aria-label={`Open update ${update.availableVersion}`}
+            onPress={() => setUpdateDialogOpen(true)}
+          >
+            <Sparkles size={14} aria-hidden="true" />
+            Update
+          </Button>
+        )}
         <Button className="icon-button" aria-label="Reload songs" onPress={() => void reload()}>
           <ListRestart size={17} aria-hidden="true" />
         </Button>

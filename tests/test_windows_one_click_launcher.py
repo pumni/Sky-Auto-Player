@@ -32,6 +32,7 @@ def test_real_python_launcher_completes_ready_handoff() -> None:
             current_version=current_version,
             target_version=target_version,
             channel="stable",
+            parent_pid=os.getpid(),
             restart=True,
         )
     )

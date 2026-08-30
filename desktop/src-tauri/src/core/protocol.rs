@@ -2,6 +2,7 @@ use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationProgressPayload, CatalogChangedPayload,
     CoreFatalPayload, CoreReadyPayload, DiagnosticsSnapshotDto, PlaybackFailedPayload,
     PlaybackFinishedPayload, PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
+    UpdateAvailablePayload, UpdateHandoffReadyPayload, UpdateResultPayload,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
@@ -40,6 +41,9 @@ pub enum CoreEvent {
     DiagnosticsSnapshot(DiagnosticsSnapshotDto),
     CalibrationProgress(CalibrationProgressPayload),
     CalibrationFinished(CalibrationFinishedPayload),
+    UpdateAvailable(UpdateAvailablePayload),
+    UpdateResult(UpdateResultPayload),
+    UpdateHandoffReady(UpdateHandoffReadyPayload),
 }
 
 impl CoreEvent {
@@ -82,6 +86,18 @@ impl CoreEvent {
                 payload,
             },
             Self::CalibrationFinished(payload) => UiEvent::CalibrationFinished {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::UpdateAvailable(payload) => UiEvent::UpdateAvailable {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::UpdateResult(payload) => UiEvent::UpdateResult {
+                v: DESKTOP_PROTOCOL_VERSION,
+                payload,
+            },
+            Self::UpdateHandoffReady(payload) => UiEvent::UpdateHandoffReady {
                 v: DESKTOP_PROTOCOL_VERSION,
                 payload,
             },
@@ -328,6 +344,24 @@ fn parse_event(name: &str, payload: Value) -> Result<CoreEvent, ProtocolError> {
             UiEvent::validate_calibration_finished(&value)
                 .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
             Ok(CoreEvent::CalibrationFinished(value))
+        }
+        "update.available" => {
+            let value: UpdateAvailablePayload = decode(name, payload)?;
+            UiEvent::validate_update_available(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::UpdateAvailable(value))
+        }
+        "update.result" => {
+            let value: UpdateResultPayload = decode(name, payload)?;
+            UiEvent::validate_update_result(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::UpdateResult(value))
+        }
+        "update.handoff_ready" => {
+            let value: UpdateHandoffReadyPayload = decode(name, payload)?;
+            UiEvent::validate_update_handoff(&value)
+                .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
+            Ok(CoreEvent::UpdateHandoffReady(value))
         }
         other => Err(ProtocolError::Invalid(format!(
             "unsupported event name: {other}"
@@ -655,6 +689,42 @@ mod tests {
             )),
             Ok(CoreMessage::Event(CoreEvent::CalibrationFinished(_)))
         ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "update.available",
+                serde_json::json!({
+                    "current_version": "3.5.0",
+                    "available_version": "3.6.0",
+                    "channel": "stable",
+                    "release_notes": "release",
+                    "published_at": "2026-08-30T00:00:00Z"
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::UpdateAvailable(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "update.result",
+                serde_json::json!({
+                    "state": "current",
+                    "current_version": "3.5.0",
+                    "available_version": null,
+                    "channel": "stable",
+                    "error": null
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::UpdateResult(_)))
+        ));
+        assert!(matches!(
+            parse_message(&event_frame(
+                "update.handoff_ready",
+                serde_json::json!({
+                    "handoff_id": "e".repeat(32),
+                    "target_version": "3.6.0"
+                })
+            )),
+            Ok(CoreMessage::Event(CoreEvent::UpdateHandoffReady(_)))
+        ));
     }
 
     #[test]
@@ -761,6 +831,24 @@ mod tests {
                     "message": "done",
                     "applied": true,
                     "extra": true
+                }),
+            ),
+            event_frame(
+                "update.result",
+                serde_json::json!({
+                    "state": "current",
+                    "current_version": "3.5.0",
+                    "available_version": null,
+                    "channel": "stable",
+                    "error": null,
+                    "extra": true
+                }),
+            ),
+            event_frame(
+                "update.handoff_ready",
+                serde_json::json!({
+                    "handoff_id": "e".repeat(32),
+                    "target_version": 3.6
                 }),
             ),
         ];

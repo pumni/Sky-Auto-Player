@@ -1,7 +1,73 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::{Result, UpdaterError};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessImage {
+    Alive(PathBuf),
+    Exited,
+}
+
+/// Query a bounded process identity for updater startup admission.
+///
+/// `Exited` is only returned when Windows definitively reports an invalid PID.
+/// Access/query failures remain errors so callers cannot mistake an
+/// uninspectable process for a stale transaction.
+pub fn query_process_image(pid: u32) -> Result<ProcessImage> {
+    if pid == 0 {
+        return Err(UpdaterError::InvalidArgument(
+            "process PID must be nonzero".into(),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, HANDLE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            QueryFullProcessImageNameW,
+        };
+
+        let handle: HANDLE = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
+        if handle.is_null() {
+            if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+                return Ok(ProcessImage::Exited);
+            }
+            return Err(UpdaterError::NetworkFailure(
+                "could not open process for bounded identity query".into(),
+            ));
+        }
+        let mut buffer = [0u16; 32_768];
+        let mut length = buffer.len() as u32;
+        let success =
+            unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
+        unsafe { CloseHandle(handle) };
+        if !success || length == 0 || length as usize > buffer.len() {
+            return Err(UpdaterError::NetworkFailure(
+                "could not query process image".into(),
+            ));
+        }
+        Ok(ProcessImage::Alive(PathBuf::from(
+            std::ffi::OsString::from_wide(&buffer[..length as usize]),
+        )))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        Err(UpdaterError::NetworkFailure(
+            "native updater startup admission requires Windows".into(),
+        ))
+    }
+}
 
 pub fn wait_for_parent(
     parent_pid: u32,

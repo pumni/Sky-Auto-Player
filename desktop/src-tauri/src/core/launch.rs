@@ -18,10 +18,10 @@ fn apply_no_window(command: &mut Command) {
     }
 }
 
-pub(crate) fn build_core_command() -> Result<Command, SupervisorError> {
+pub(crate) fn desktop_install_root() -> Result<PathBuf, SupervisorError> {
     let current_exe =
         std::env::current_exe().map_err(|error| SupervisorError::Launch(error.to_string()))?;
-    let root = if cfg!(debug_assertions) {
+    Ok(if cfg!(debug_assertions) {
         repository_root()
     } else {
         current_exe
@@ -30,7 +30,31 @@ pub(crate) fn build_core_command() -> Result<Command, SupervisorError> {
                 SupervisorError::Launch("desktop executable has no parent directory".into())
             })?
             .to_path_buf()
-    };
+    })
+}
+
+pub(crate) fn check_startup_update_guard() -> Result<(), SupervisorError> {
+    let root = desktop_install_root()?;
+    let active = sky_updater::active_state::active_update_for_install(&root).map_err(|error| {
+        SupervisorError::Launch(format!("update startup guard failed: {error}"))
+    })?;
+    enforce_update_startup_admission(active.as_ref())
+}
+
+fn enforce_update_startup_admission(
+    active: Option<&sky_updater::active_state::ActiveUpdateState>,
+) -> Result<(), SupervisorError> {
+    if let Some(state) = active {
+        return Err(SupervisorError::Launch(format!(
+            "an updater transaction is already active for this installation ({})",
+            state.run_id
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn build_core_command() -> Result<Command, SupervisorError> {
+    let root = desktop_install_root()?;
     let mut command = if cfg!(debug_assertions) {
         let python = root.join(".venv\\Scripts\\python.exe");
         if !python.is_file() {
@@ -68,4 +92,37 @@ pub(crate) fn build_core_command() -> Result<Command, SupervisorError> {
         .current_dir(Path::new(&root));
     apply_no_window(&mut command);
     Ok(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enforce_update_startup_admission;
+    use sky_updater::active_state::ActiveUpdateState;
+
+    fn active_state() -> ActiveUpdateState {
+        ActiveUpdateState {
+            schema_version: 1,
+            install_id: "a".repeat(64),
+            run_id: format!("run-{}", "b".repeat(32)),
+            updater_pid: 4711,
+            target_version: "3.6.0".into(),
+            phase: "WaitingForParent".into(),
+            started_at_utc: "2026-08-30T00:00:00Z".into(),
+            updated_at_utc: "2026-08-30T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn startup_admission_allows_clear_state() {
+        enforce_update_startup_admission(None).expect("clear state starts normally");
+    }
+
+    #[test]
+    fn startup_admission_rejects_live_owned_transaction_before_gui_start() {
+        let state = active_state();
+        let error = enforce_update_startup_admission(Some(&state))
+            .expect_err("active updater must block ordinary GUI startup");
+        assert!(error.to_string().contains("already active"));
+        assert!(error.to_string().contains(&state.run_id));
+    }
 }

@@ -34,6 +34,10 @@ CalibrationState = Literal[
     "idle", "starting", "running", "cancelling", "succeeded", "failed", "cancelled"
 ]
 CalibrationOutcome = Literal["succeeded", "failed", "cancelled"]
+UpdateChannel = Literal["stable", "beta"]
+UpdateState = Literal[
+    "idle", "checking", "current", "available", "error", "handoff_in_progress", "handoff_ready"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +68,26 @@ class PlaybackOptionSetsDto:
 @dataclass(frozen=True, slots=True)
 class UpdatePreferencesDto:
     auto_check: bool
-    channel: Literal["stable", "beta"]
+    channel: UpdateChannel
     skip_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateCheckDto:
+    state: UpdateState
+    current_version: str
+    available_version: str | None
+    channel: UpdateChannel
+    release_notes: str | None
+    published_at: str | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateHandoffDto:
+    handoff_id: str
+    target_version: str
+    state: Literal["handoff_ready"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,5 +320,9 @@ __all__ = [
     "RiskSummaryDto",
     "SongDetailDto",
     "SongRowDto",
+    "UpdateChannel",
+    "UpdateCheckDto",
+    "UpdateHandoffDto",
     "UpdatePreferencesDto",
+    "UpdateState",
 ]
