@@ -2,7 +2,7 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if std::env::var_os("SKY_PHASE8_RESTART_SELFTEST").is_some() {
+    if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         std::process::exit(sky_desktop_shell_lib::selftest_packaged_shell());
     }
     if args.iter().any(|arg| arg == "--selftest-desktop-parent") {

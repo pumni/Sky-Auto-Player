@@ -58,7 +58,7 @@ fn run_inner(gui_smoke: bool) {
         builder = builder.on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = webview.eval(
-                    "window.__SKY_PHASE8_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-phase8-gui-smoke'));",
+                    "window.__SKY_DESKTOP_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-desktop-gui-smoke'));",
                 );
             }
         });
@@ -121,7 +121,7 @@ pub fn selftest_packaged_shell() -> i32 {
     let result = match bootstrap {
         Ok(value) if value.get("native_build").is_some() => {
             supervisor.shutdown();
-            if let Some(marker) = std::env::var_os("SKY_PHASE8_RESTART_MARKER") {
+            if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
                 let _ = std::fs::write(marker, b"bootstrap-ready\n");
             }
             0

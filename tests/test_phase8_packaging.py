@@ -11,10 +11,10 @@ ROOT = Path(__file__).parents[1]
 
 
 def _load_phase8():
-    path = ROOT / "scripts" / "build_phase8.py"
+    path = ROOT / "scripts" / "build_portable_release.py"
     spec = importlib.util.spec_from_file_location("build_phase8_under_test", path)
     if spec is None or spec.loader is None:
-        raise RuntimeError("could not load Phase 8 builder")
+        raise RuntimeError("could not load portable release builder")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

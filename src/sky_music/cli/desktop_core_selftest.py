@@ -62,18 +62,18 @@ class _ChildOutput:
 
 def _root_and_command() -> tuple[Path, list[str]]:
     executable = Path(sys.executable).resolve()
-    override = os.environ.get("SKY_PHASE8_SELFTEST_CHILD")
+    override = os.environ.get("SKY_DESKTOP_SELFTEST_CHILD")
     if override:
         try:
             values = json.loads(override)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("SKY_PHASE8_SELFTEST_CHILD is not valid JSON") from exc
+            raise RuntimeError("SKY_DESKTOP_SELFTEST_CHILD is not valid JSON") from exc
         if (
             not isinstance(values, list)
             or not values
             or any(not isinstance(value, str) or not value for value in values)
         ):
-            raise RuntimeError("SKY_PHASE8_SELFTEST_CHILD must be a non-empty string list")
+            raise RuntimeError("SKY_DESKTOP_SELFTEST_CHILD must be a non-empty string list")
         return executable.parent, values
     if getattr(sys, "frozen", False):
         return executable.parent, [str(executable)]
@@ -208,7 +208,7 @@ def run_core_selftest(
 
 
 def run_packaged_core_selftest() -> int:
-    raw_timeout = os.environ.get("SKY_PHASE8_SELFTEST_TIMEOUT_SECONDS")
+    raw_timeout = os.environ.get("SKY_DESKTOP_SELFTEST_TIMEOUT_SECONDS")
     timeout = _TIMEOUT_S
     if raw_timeout is not None:
         try:

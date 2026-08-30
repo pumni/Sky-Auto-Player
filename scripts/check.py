@@ -34,6 +34,10 @@ GROUPS: dict[str, tuple[Check, ...]] = {
             (sys.executable, "scripts/audit_agent_context.py"),
         ),
         Check(
+            "durable phase-name audit",
+            (sys.executable, "scripts/audit_durable_phase_names.py"),
+        ),
+        Check(
             "security mandates",
             (sys.executable, "scripts/audit_security_mandates.py"),
         ),

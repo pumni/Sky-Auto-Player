@@ -1007,9 +1007,11 @@ def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> No
     root = Path(__file__).parents[1]
     workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     verifier = (root / "scripts" / "check.py").read_text(encoding="utf-8")
-    manual_branch = 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]'
+    manual_branch = 'if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]'
     path_diff = 'changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"'
     assert workflow.index(manual_branch) < workflow.index(path_diff)
+    assert "scripts/classify_ci_changes.py" in workflow
+    assert "package_required" in workflow
     assert "fetch-depth: 0" in workflow
     assert "uv run python scripts/check.py rust" in workflow
     assert "scripts/build_rust_wheel.py --test-support" in workflow

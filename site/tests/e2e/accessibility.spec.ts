@@ -51,11 +51,11 @@ test.describe('accessibility and responsive contracts', () => {
     );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'width',
-      '1214',
+      '920',
     );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'height',
-      '798',
+      '620',
     );
     await expect(page.locator('.screenshot-frame__caption-meta')).toHaveText(
       'PNG · REAL TAURI WINDOW',
@@ -64,6 +64,49 @@ test.describe('accessibility and responsive contracts', () => {
       'alt',
       'Sky Auto Player desktop Library',
     );
+    const screenshot = page.locator('.screenshot-frame img');
+    await expect(screenshot).toHaveJSProperty('complete', true);
+    const imageMetrics = await screenshot.evaluate((element) => {
+      const image = element as HTMLImageElement;
+      const box = image.getBoundingClientRect();
+      const frame = image.closest('.screenshot-frame')!.getBoundingClientRect();
+      return {
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        renderedWidth: box.width,
+        renderedHeight: box.height,
+        insideFrame: box.left >= frame.left && box.right <= frame.right + 1,
+      };
+    });
+    expect(imageMetrics.naturalWidth).toBeGreaterThan(0);
+    expect(imageMetrics.naturalHeight).toBeGreaterThan(0);
+    expect(imageMetrics.renderedWidth).toBeGreaterThan(200);
+    expect(imageMetrics.renderedHeight).toBeGreaterThan(100);
+    expect(imageMetrics.insideFrame).toBe(true);
+    const pixelMetrics = await screenshot.evaluate((element) => {
+      const image = element as HTMLImageElement;
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas 2D context unavailable');
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let nonBlack = 0;
+      const colors = new Set<string>();
+      for (let index = 0; index < pixels.length; index += 4) {
+        const red = pixels[index];
+        const green = pixels[index + 1];
+        const blue = pixels[index + 2];
+        if (red + green + blue > 24) nonBlack += 1;
+        if (colors.size < 128) colors.add(`${red},${green},${blue}`);
+      }
+      return { nonBlack, colors: colors.size };
+    });
+    expect(pixelMetrics.nonBlack).toBeGreaterThan(1000);
+    expect(pixelMetrics.colors).toBeGreaterThan(32);
+    const renderedEvidence = await page.locator('.screenshot-frame').screenshot();
+    expect(renderedEvidence.byteLength).toBeGreaterThan(10_000);
     await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute(
       'href',
       /sky-auto-player-mark\.svg/,

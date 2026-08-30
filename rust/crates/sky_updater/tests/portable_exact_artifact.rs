@@ -1,8 +1,8 @@
-//! Exact Phase 8 artifact qualification.
+//! Exact portable artifact qualification.
 //!
 //! The normal updater tests use small synthetic payloads.  When
-//! `SKY_PHASE8_ARTIFACT_DIR` is supplied, this test consumes the exact ZIP,
-//! sidecar, external manifest, and embedded manifest emitted by the Phase 8
+//! `SKY_PORTABLE_ARTIFACT_DIR` is supplied, this test consumes the exact ZIP,
+//! sidecar, external manifest, and embedded manifest emitted by the portable
 //! assembler, then runs the real install/rollback transaction against a
 //! 3.4.5-style install.
 
@@ -54,7 +54,7 @@ impl Drop for EnvGuard {
 
 fn temp_root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "sky-phase8-{label}-{}-{}",
+        "sky-portable-{label}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -201,11 +201,11 @@ fn no_window(command: &mut Command) {
 fn no_window(_command: &mut Command) {}
 
 #[test]
-fn exact_phase8_artifact_updates_previous_stable_and_preserves_user_state() -> Result<()> {
-    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+fn exact_portable_artifact_updates_previous_stable_and_preserves_user_state() -> Result<()> {
+    let artifact_dir = match std::env::var_os("SKY_PORTABLE_ARTIFACT_DIR") {
         Some(value) => PathBuf::from(value),
         None => {
-            eprintln!("SKY_PHASE8_ARTIFACT_DIR is not set; exact artifact qualification skipped");
+            eprintln!("SKY_PORTABLE_ARTIFACT_DIR is not set; exact artifact qualification skipped");
             return Ok(());
         }
     };
@@ -280,8 +280,9 @@ fn exact_phase8_artifact_updates_previous_stable_and_preserves_user_state() -> R
 }
 
 #[test]
-fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_state() -> Result<()> {
-    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+fn exact_portable_artifact_interrupted_transaction_recovers_and_preserves_user_state() -> Result<()>
+{
+    let artifact_dir = match std::env::var_os("SKY_PORTABLE_ARTIFACT_DIR") {
         Some(value) => PathBuf::from(value),
         None => return Ok(()),
     };
@@ -342,9 +343,9 @@ fn exact_phase8_artifact_interrupted_transaction_recovers_and_preserves_user_sta
 
 #[cfg(feature = "e2e-fault-injection")]
 #[test]
-fn exact_phase8_artifact_injected_apply_failure_rolls_back_and_preserves_user_state() -> Result<()>
+fn exact_portable_artifact_injected_apply_failure_rolls_back_and_preserves_user_state() -> Result<()>
 {
-    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+    let artifact_dir = match std::env::var_os("SKY_PORTABLE_ARTIFACT_DIR") {
         Some(value) => PathBuf::from(value),
         None => return Ok(()),
     };
@@ -402,11 +403,11 @@ fn exact_phase8_artifact_injected_apply_failure_rolls_back_and_preserves_user_st
 
 #[test]
 fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
-    let artifact_dir = match std::env::var_os("SKY_PHASE8_ARTIFACT_DIR") {
+    let artifact_dir = match std::env::var_os("SKY_PORTABLE_ARTIFACT_DIR") {
         Some(value) => PathBuf::from(value),
         None => return Ok(()),
     };
-    let e2e_updater = match std::env::var_os("SKY_PHASE8_E2E_UPDATER") {
+    let e2e_updater = match std::env::var_os("SKY_PORTABLE_E2E_UPDATER") {
         Some(value) => PathBuf::from(value),
         None => panic!("exact package updater qualification runner is missing"),
     };
@@ -461,7 +462,7 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     parent
         .arg("--selftest-desktop-parent")
         .current_dir(&install)
-        .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
+        .env("SKY_DESKTOP_RESTART_MARKER", &restart_marker);
     no_window(&mut parent);
     let mut parent = ChildGuard(parent.spawn()?);
 
@@ -512,8 +513,8 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .arg("stable")
         .arg("--restart")
         .current_dir(&install)
-        .env("SKY_PHASE8_RESTART_SELFTEST", "1")
-        .env("SKY_PHASE8_RESTART_MARKER", &restart_marker);
+        .env("SKY_DESKTOP_RESTART_SELFTEST", "1")
+        .env("SKY_DESKTOP_RESTART_MARKER", &restart_marker);
     no_window(&mut updater);
     let mut updater = ChildGuard(updater.spawn()?);
     let _run_root = wait_for_ready_handoff(&local_app_data, updater.id());
