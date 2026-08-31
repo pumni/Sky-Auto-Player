@@ -120,16 +120,27 @@ fn run_inner(gui_smoke: bool) {
         });
     if gui_smoke {
         builder = builder.on_page_load(|webview, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                record_gui_smoke_phase("webview.page_load.finished");
-                let result = webview.eval(
-                    "window.__SKY_DESKTOP_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-desktop-gui-smoke'));",
-                );
-                record_gui_smoke_phase(if result.is_ok() {
-                    "webview.smoke_dispatched"
-                } else {
-                    "webview.smoke_dispatch.failed"
-                });
+            match payload.event() {
+                tauri::webview::PageLoadEvent::Started => {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.started {}",
+                        payload.url()
+                    ));
+                }
+                tauri::webview::PageLoadEvent::Finished => {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.finished {}",
+                        payload.url()
+                    ));
+                    let result = webview.eval(
+                        "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
+                    );
+                    record_gui_smoke_phase(if result.is_ok() {
+                        "webview.smoke_dispatched"
+                    } else {
+                        "webview.smoke_dispatch.failed"
+                    });
+                }
             }
         });
     }

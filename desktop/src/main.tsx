@@ -15,6 +15,7 @@ import './styles/themes.css';
 // both stable Tauri origins for the packaged shell.
 const isTauri =
   '__TAURI_INTERNALS__' in window ||
+  'isTauri' in window ||
   window.location.protocol === 'tauri:' ||
   window.location.hostname === 'tauri.localhost';
 const bridge = isTauri ? createTauriBridge() : createMockBridge();
