@@ -10,7 +10,7 @@ React / TypeScript
         ▼
 sky_desktop_shell  ── composition root and delivery adapter
         │
-        ├── sky_app_core ── domain, use cases, and inward ports
+        ├── sky_app_core ── pure application/domain home; ports added just-in-time
         ├── sky_player ──── playback adapter
         ├── sky_updater ─── hardened update adapter
         └── dispatch adapters ── sky_dispatch_core + sky_dispatch_win32
@@ -21,7 +21,9 @@ xtask ── developer/release tooling only
 ## Dependency rules
 
 - `sky_app_core` has no Tauri, Win32, PyO3, WebView, or concrete filesystem/HTTP
-  dependency.
+  dependency. It remains an architecture-only foundation until a subsystem
+  migration supplies current-behavior evidence and parity fixtures for each
+  model or port introduced.
 - `sky_player` remains a pure Rust production engine; the temporary Python
   bridge is isolated and deleted after parity.
 - `sky_dispatch_core` remains platform-neutral; `sky_dispatch_win32` owns QPC,

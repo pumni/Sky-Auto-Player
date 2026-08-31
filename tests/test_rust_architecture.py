@@ -215,3 +215,19 @@ def test_checker_rejects_player_adapter_source_dispatch_import(tmp_path):
     report = _checker().check_repository(tmp_path)
 
     assert any(item.rule == "player_adapter_dependency" for item in report.errors)
+
+
+def test_checker_rejects_forbidden_sky_app_core_dependency(tmp_path):
+    crate = tmp_path / "rust" / "crates" / "sky_app_core"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        "[package]\nname = 'sky_app_core'\nversion = '0.1.0'\n"
+        "[dependencies]\ntauri = '2'\n",
+        encoding="utf-8",
+    )
+    (crate / "src").mkdir()
+    (crate / "src" / "lib.rs").write_text("pub fn core() {}\n", encoding="utf-8")
+
+    report = _checker().check_repository(tmp_path)
+
+    assert any(item.rule == "app_core_dependency" for item in report.errors)
