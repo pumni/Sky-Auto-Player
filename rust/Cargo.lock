@@ -3059,6 +3059,13 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 [[package]]
 name = "sky_app_core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "unicode-normalization",
+]
 
 [[package]]
 name = "sky_desktop_shell"
@@ -3094,6 +3101,15 @@ dependencies = [
  "sky_dispatch_core",
  "smallvec",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "sky_native_adapters"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sky_app_core",
  "windows-sys 0.61.2",
 ]
 
@@ -4053,6 +4069,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

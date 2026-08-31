@@ -1,5 +1,6 @@
 mod app_state;
 mod bindings;
+mod command_ownership;
 mod commands;
 mod lifecycle;
 mod ui_events;

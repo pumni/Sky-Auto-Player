@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "default_normalized": {
+    "theme": "aurora",
+    "ui_background_mode": "transparent",
+    "default_hold_frames": 1.0,
+    "default_tempo_scale": 1.0,
+    "game_fps": 60,
+    "telemetry_enabled": false,
+    "verbose_hud": false,
+    "songs_dir": "songs-from-fixture",
+    "sky_process_names": [
+      "Sky.exe"
+    ],
+    "allow_title_fallback": false,
+    "hotkeys": {
+      "pause": "f8",
+      "skip": "f9",
+      "quit": "f10",
+      "refocus": "f6",
+      "panic": "ctrl+alt+backspace"
+    },
+    "safety": {
+      "prompt_on_medium_risk": true,
+      "prompt_on_high_risk": true
+    },
+    "update_preferences": {
+      "auto_check": true,
+      "channel": "stable",
+      "skip_version": "",
+      "check_interval_s": 86400
+    }
+  },
+  "valid_patch": {
+    "theme": "slate",
+    "ui_background_mode": "transparent",
+    "default_hold_frames": 1.25,
+    "default_tempo_scale": 0.95,
+    "game_fps": 120,
+    "telemetry_enabled": true,
+    "verbose_hud": true,
+    "songs_dir": "songs",
+    "sky_process_names": [
+      "Sky.exe",
+      "Sky Children of the Light.exe"
+    ],
+    "allow_title_fallback": false,
+    "hotkeys": {
+      "pause": "f8",
+      "skip": "f9",
+      "quit": "f10",
+      "refocus": "f6",
+      "panic": "ctrl+alt+backspace"
+    },
+    "safety": {
+      "prompt_on_medium_risk": true,
+      "prompt_on_high_risk": true
+    },
+    "update_preferences": {
+      "auto_check": false,
+      "channel": "beta",
+      "skip_version": "3.6.0",
+      "check_interval_s": 86400
+    }
+  },
+  "invalid_patch": {
+    "error": "update_channel must be stable or beta",
+    "state_after": {
+      "theme": "slate",
+      "ui_background_mode": "transparent",
+      "default_hold_frames": 1.25,
+      "default_tempo_scale": 0.95,
+      "game_fps": 120,
+      "telemetry_enabled": true,
+      "verbose_hud": true,
+      "songs_dir": "songs",
+      "sky_process_names": [
+        "Sky.exe",
+        "Sky Children of the Light.exe"
+      ],
+      "allow_title_fallback": false,
+      "hotkeys": {
+        "pause": "f8",
+        "skip": "f9",
+        "quit": "f10",
+        "refocus": "f6",
+        "panic": "ctrl+alt+backspace"
+      },
+      "safety": {
+        "prompt_on_medium_risk": true,
+        "prompt_on_high_risk": true
+      },
+      "update_preferences": {
+        "auto_check": false,
+        "channel": "beta",
+        "skip_version": "3.6.0",
+        "check_interval_s": 86400
+      }
+    }
+  },
+  "state_before_invalid": {
+    "theme": "slate",
+    "ui_background_mode": "transparent",
+    "default_hold_frames": 1.25,
+    "default_tempo_scale": 0.95,
+    "game_fps": 120,
+    "telemetry_enabled": true,
+    "verbose_hud": true,
+    "songs_dir": "songs",
+    "sky_process_names": [
+      "Sky.exe",
+      "Sky Children of the Light.exe"
+    ],
+    "allow_title_fallback": false,
+    "hotkeys": {
+      "pause": "f8",
+      "skip": "f9",
+      "quit": "f10",
+      "refocus": "f6",
+      "panic": "ctrl+alt+backspace"
+    },
+    "safety": {
+      "prompt_on_medium_risk": true,
+      "prompt_on_high_risk": true
+    },
+    "update_preferences": {
+      "auto_check": false,
+      "channel": "beta",
+      "skip_version": "3.6.0",
+      "check_interval_s": 86400
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "paths": [
+    "C:\\Wave2\\Songs\\Dandelions.txt",
+    "C:\\Wave2\\Songs\\Cà Phê.json",
+    "C:\\Wave2\\Songs\\Đàn Bay.skysheet",
+    "C:\\Wave2\\Songs\\ignored.csv"
+  ],
+  "snapshot": {
+    "generation": 1,
+    "total": 3,
+    "items": [
+      {
+        "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+        "title": "Cà Phê"
+      },
+      {
+        "song_id": "0e09d9e4626386c9d6a110463c854973",
+        "title": "Đàn Bay"
+      },
+      {
+        "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+        "title": "Dandelions"
+      }
+    ]
+  },
+  "queries": {
+    "": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 3,
+      "items": [
+        {
+          "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+          "title": "Cà Phê"
+        },
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        }
+      ]
+    },
+    "ca phe": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 1,
+      "items": [
+        {
+          "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+          "title": "Cà Phê"
+        }
+      ]
+    },
+    "dan": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        }
+      ]
+    },
+    "d": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        }
+      ]
+    }
+  },
+  "normalized": {
+    "Cà Phê": "ca phe",
+    "Đàn": "dan",
+    "Élan": "elan"
+  },
+  "stale_generation_error": "catalog generation is stale"
+}

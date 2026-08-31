@@ -22,9 +22,17 @@ def test_sky_app_core_is_pure_and_does_not_depend_on_player_or_delivery() -> Non
     assert "#![forbid(unsafe_code)]" in source
     assert "ApplicationCore" not in source
     assert "PlaybackRequest" not in source
-    assert "SongSource" not in source
     assert "UpdateGateway" not in source
+    assert "SongSource" in source
+    assert "SettingsStore" in source
+    assert "FuzzyRanker" in source
+    assert "EventSink" in source
+    assert "std::fs" not in source
+    assert "std::net" not in source
     assert sorted(path.name for path in (ROOT / "rust" / "crates" / "sky_app_core" / "src").glob("*.rs")) == [
-        "lib.rs"
+        "catalog.rs",
+        "events.rs",
+        "lib.rs",
+        "settings.rs",
+        "update.rs",
     ]
-    assert not (ROOT / "rust" / "crates" / "sky_app_core" / "tests" / "use_cases.rs").exists()

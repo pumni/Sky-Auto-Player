@@ -1,9 +1,13 @@
-//! Pure application/domain home for the Rust-first migration.
+//! Pure application/domain services for the Rust-first migration.
 //!
-//! The crate is intentionally an architecture-only foundation in this phase.
-//! Its first real model or port must be introduced together with a concrete
-//! subsystem migration, current-behavior evidence, and a parity fixture. This
-//! keeps speculative contracts from becoming a second application-service
-//! owner while the existing runtime remains canonical.
+//! Every module in this crate is backed by a current production behavior and
+//! is deliberately independent from delivery, filesystem, network, Python,
+//! and Windows APIs. Concrete effects are expressed as inward ports and are
+//! implemented by `sky_native_adapters` or existing outer services.
 
 #![forbid(unsafe_code)]
+
+pub mod catalog;
+pub mod events;
+pub mod settings;
+pub mod update;

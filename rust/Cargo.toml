@@ -4,6 +4,7 @@ members = [
     "crates/sky_dispatch_core",
     "crates/sky_dispatch_win32",
     "crates/sky_app_core",
+    "crates/sky_native_adapters",
     "crates/sky_player",
     "crates/sky_player_rs",
     "crates/sky_updater",
