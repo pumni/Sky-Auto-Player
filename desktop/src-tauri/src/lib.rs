@@ -38,22 +38,6 @@ type ShellRuntime = tauri::Wry;
 #[cfg(all(not(feature = "desktop-runtime"), feature = "tauri-test"))]
 type ShellRuntime = tauri::test::MockRuntime;
 
-fn generate_shell_context() -> tauri::Context<ShellRuntime> {
-    #[cfg(feature = "tauri-test")]
-    {
-        // All-features validation also enables the mock-runtime feature. Keep
-        // that compile-only surface independent of generated frontend assets;
-        // the production desktop-runtime path below still compiles the real
-        // tauri.conf.json and embeds the built frontend through
-        // tauri/custom-protocol.
-        tauri::generate_context!("tauri.test.conf.json", test = true)
-    }
-    #[cfg(not(feature = "tauri-test"))]
-    {
-        tauri::generate_context!()
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     run_inner(false);
@@ -191,7 +175,7 @@ fn run_inner(gui_smoke: bool) {
                 close_window(window.clone());
             }
         })
-        .run(generate_shell_context());
+        .run(tauri::generate_context!());
     if gui_smoke {
         record_gui_smoke_phase("tauri.run.return");
     }

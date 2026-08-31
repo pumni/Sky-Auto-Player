@@ -50,12 +50,10 @@ def test_production_native_build_commands_select_dist() -> None:
 
     tauri_package = tomllib.loads((ROOT / "desktop" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8"))
     assert "tauri/custom-protocol" in tauri_package["features"]["desktop-runtime"]
-    tauri_source = (ROOT / "desktop" / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
-    assert 'generate_context!("tauri.test.conf.json", test = true)' in tauri_source
-    assert "generate_context!()" in tauri_source
-
-    test_config = json.loads((ROOT / "desktop" / "src-tauri" / "tauri.test.conf.json").read_text(encoding="utf-8"))
-    assert "frontendDist" not in test_config["build"]
+    tauri_build_source = (ROOT / "desktop" / "src-tauri" / "build.rs").read_text(encoding="utf-8")
+    assert 'CARGO_FEATURE_TAURI_TEST' in tauri_build_source
+    assert 'cargo:rustc-env=TAURI_CONFIG=' in tauri_build_source
+    assert '"frontendDist":null' in tauri_build_source
 
 
 def test_wheel_builder_defaults_are_fail_safe() -> None:
