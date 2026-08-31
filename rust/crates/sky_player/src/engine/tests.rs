@@ -500,8 +500,17 @@ fn run_startup_first_physical_lead_probe(
         hook.first_physical_send_started.load(Ordering::Acquire) > 0,
         "startup probe did not reach physical dispatch: snapshot={snapshot:?}"
     );
-    if !session.snapshot().is_finished {
-        session.quit().expect("probe quit");
+    if !session.snapshot().is_finished
+        && let Err(error) = session.quit()
+    {
+        // The worker may finish between the state check and quit().  That is
+        // benign cleanup for this probe; any other quit failure must still
+        // fail the test rather than being hidden.
+        assert_eq!(
+            error, "session commands require a running worker",
+            "probe quit"
+        );
+        assert!(session.snapshot().is_finished, "probe quit after race");
     }
     assert!(session.join(Duration::from_secs(5)).expect("probe join"));
     serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -5123,7 +5132,7 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid disjoint mixed schedule");
-    let session = NativeDispatchSession::new(test_session_options(
+    let mut options = test_session_options(
         schedule,
         1,
         BackendConfig::Mock {
@@ -5131,8 +5140,14 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
             latency_per_key_us: 0,
             fault_script: FaultInjectionScript::none(),
         },
-    ))
-    .expect("test session admission");
+    );
+    // This test asserts mixed-packet telemetry cardinality, not the production
+    // 500-us deadline policy.  Keep the real worker/QPC path, but give the
+    // Windows test runner enough scheduling margin that host preemption does
+    // not turn the telemetry assertion into an unrelated startup deadline
+    // failure.  Production configuration remains unchanged.
+    options.timing.down_late_grace_us = 20_000;
+    let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
