@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
+import sky_music.config as config_module
 from sky_music.config import AppConfig, UpdateSettings
 from sky_music.domain.update_policy import get_policy
 from sky_music.orchestration.catalog_service import CatalogService
@@ -52,11 +54,62 @@ def settings_fixture() -> dict[str, object]:
         raise RuntimeError("current settings oracle unexpectedly accepted invalid patch")
     return {
         "schema": 1,
+        "config_layouts": config_layout_fixture(),
         "default_normalized": asdict(normalize_application_settings(malformed)),
         "valid_patch": asdict(valid),
         "invalid_patch": {"error": invalid_error, "state_after": asdict(service.snapshot())},
         "state_before_invalid": before_invalid,
     }
+
+
+def config_layout_fixture() -> dict[str, object]:
+    """Capture migration and preservation behavior from the current config oracle."""
+    original_path = config_module.CONFIG_PATH
+    try:
+        with tempfile.TemporaryDirectory(prefix="sky-wave2-fixture-") as directory:
+            path = Path(directory) / "config.json"
+            legacy = {
+                "schema_version": 2,
+                "default_timing_profile": "audience-safe",
+                "timing_profiles": {"audience_safe": {"min_hold_frames": 1.5}},
+                "future_field": {"keep": True},
+            }
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            config_module.CONFIG_PATH = path
+            config_module.clear_config_cache()
+            loaded_legacy = config_module.load_config(force_reload=True)
+            migrated = json.loads(path.read_text(encoding="utf-8"))
+
+            current = {
+                "schema_version": 3,
+                "theme": " SLATE ",
+                "default_hold_frames": 1.25,
+                "game_fps": 120,
+                "future_field": ["preserve"],
+                "update": {"channel": "BETA", "unknown": 7},
+            }
+            path.write_text(json.dumps(current), encoding="utf-8")
+            config_module.clear_config_cache()
+            loaded_current = config_module.load_config(force_reload=True)
+            normalized_current = normalize_application_settings(loaded_current)
+            return {
+                "legacy_v2": {
+                    "input": legacy,
+                    "normalized_hold_frames": loaded_legacy.default_hold_frames,
+                    "migrated_schema_version": migrated.get("schema_version"),
+                    "migrated_has_legacy_profile": "default_timing_profile" in migrated,
+                    "unknown_field_preserved": migrated.get("future_field"),
+                },
+                "current_v3": {
+                    "input": current,
+                    "normalized_theme": normalized_current.theme,
+                    "normalized_channel": normalized_current.update_preferences.channel,
+                    "normalized_fps": normalized_current.game_fps,
+                },
+            }
+    finally:
+        config_module.CONFIG_PATH = original_path
+        config_module.clear_config_cache()
 
 
 def catalog_fixture() -> dict[str, object]:

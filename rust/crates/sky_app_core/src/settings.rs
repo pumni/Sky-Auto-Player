@@ -57,17 +57,12 @@ impl Default for SafetySettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
+    #[default]
     Stable,
     Beta,
-}
-
-impl Default for UpdateChannel {
-    fn default() -> Self {
-        Self::Stable
-    }
 }
 
 impl UpdateChannel {
@@ -244,9 +239,6 @@ pub fn normalize_settings(mut settings: ApplicationSettings) -> ApplicationSetti
     settings.playback_defaults.fps = normalize_fps(settings.playback_defaults.fps);
     settings.sky_process_names = normalize_process_names(settings.sky_process_names);
     settings.update.check_interval_s = settings.update.check_interval_s.max(0);
-    if UpdateChannel::parse(settings.update.channel.as_str()).is_none() {
-        settings.update.channel = UpdateChannel::Stable;
-    }
     settings
 }
 
@@ -394,7 +386,7 @@ fn validate_fps(value: u16) -> Result<u16, SettingsError> {
 }
 
 fn validate_skip_version(value: &str) -> Result<String, SettingsError> {
-    if value.as_bytes().len() > MAX_SKIP_VERSION_BYTES || value.contains('\0') {
+    if value.len() > MAX_SKIP_VERSION_BYTES || value.contains('\0') {
         return Err(SettingsError::InvalidField {
             field: "skip_version".into(),
             message: "must be bounded text".into(),

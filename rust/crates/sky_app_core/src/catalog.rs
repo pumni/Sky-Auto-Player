@@ -88,20 +88,11 @@ pub trait SongSource {
     fn entries(&self) -> Result<Vec<CatalogSourceEntry>, CatalogError>;
 }
 
+#[derive(Default)]
 pub struct CatalogIndex {
     generation: u64,
     entries: Vec<CatalogEntry>,
     by_id: HashMap<String, usize>,
-}
-
-impl Default for CatalogIndex {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            entries: Vec::new(),
-            by_id: HashMap::new(),
-        }
-    }
 }
 
 impl CatalogIndex {

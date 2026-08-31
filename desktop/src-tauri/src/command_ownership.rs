@@ -42,6 +42,16 @@ pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
         .find_map(|(name, owner)| (*name == method).then_some(*owner))
 }
 
+pub(crate) fn matrix_is_complete() -> bool {
+    // Keep both ownership states represented in the delivery contract even
+    // while all live routes remain Python-owned for cache-coherence reasons.
+    let _native_owner_is_available = CommandOwner::Native;
+    COMMAND_OWNERS.len() == 21
+        && COMMAND_OWNERS
+            .iter()
+            .all(|(method, owner)| owner_for(method) == Some(*owner))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +64,6 @@ mod tests {
         }
         assert_eq!(owner_for("settings.patch"), Some(CommandOwner::Python));
         assert_eq!(owner_for("unknown"), None);
+        assert!(matrix_is_complete());
     }
 }

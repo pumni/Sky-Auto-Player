@@ -14,6 +14,7 @@ def test_sky_app_core_is_pure_and_does_not_depend_on_player_or_delivery() -> Non
         )
     )
     assert not FORBIDDEN.intersection(manifest.get("dependencies", {}))
+    assert "sky_native_adapters" not in manifest.get("dependencies", {})
     source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "rust" / "crates" / "sky_app_core" / "src").rglob("*.rs"))

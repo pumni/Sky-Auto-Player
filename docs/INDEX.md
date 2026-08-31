@@ -22,6 +22,8 @@ sources.
   ownership.
 - [architecture-target.md](architecture-target.md) — Rust-first migration target and dependency
   invariants; current runtime remains in `architecture.md` until each phase passes.
+- [wave2-native-application-services.md](wave2-native-application-services.md) — current Wave 2
+  application-core, adapter, ownership, event, and deliberate cutover boundaries.
 - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — current native real-time dispatch
   contract and runtime boundary.
 - [timing-principles.md](timing-principles.md) — timing semantics, targets, measurement domains, and

@@ -35,6 +35,18 @@ impl SettingsStore for MemoryStore {
 #[test]
 fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     let raw = fixture("settings");
+    assert_eq!(
+        raw["config_layouts"]["legacy_v2"]["normalized_hold_frames"],
+        1.5
+    );
+    assert_eq!(
+        raw["config_layouts"]["legacy_v2"]["migrated_schema_version"],
+        3
+    );
+    assert_eq!(
+        raw["config_layouts"]["current_v3"]["normalized_theme"],
+        "slate"
+    );
     let valid = &raw["valid_patch"];
     let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
     let patched = service

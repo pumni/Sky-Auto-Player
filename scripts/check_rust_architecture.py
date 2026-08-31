@@ -59,6 +59,7 @@ APP_CORE_FORBIDDEN_DEPENDENCIES = {
     "windows-sys",
     "sky_desktop_shell",
     "sky_player",
+    "sky_native_adapters",
 }
 
 ALLOWED_UNSAFE_MODULES = {

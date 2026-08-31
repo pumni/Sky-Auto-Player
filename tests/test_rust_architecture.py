@@ -231,3 +231,19 @@ def test_checker_rejects_forbidden_sky_app_core_dependency(tmp_path):
     report = _checker().check_repository(tmp_path)
 
     assert any(item.rule == "app_core_dependency" for item in report.errors)
+
+
+def test_checker_rejects_sky_app_core_dependency_on_outer_adapter(tmp_path):
+    crate = tmp_path / "rust" / "crates" / "sky_app_core"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        "[package]\nname = 'sky_app_core'\nversion = '0.1.0'\n"
+        "[dependencies]\nsky_native_adapters = { path = '../sky_native_adapters' }\n",
+        encoding="utf-8",
+    )
+    (crate / "src").mkdir()
+    (crate / "src" / "lib.rs").write_text("pub fn core() {}\n", encoding="utf-8")
+
+    report = _checker().check_repository(tmp_path)
+
+    assert any(item.rule == "app_core_dependency" for item in report.errors)

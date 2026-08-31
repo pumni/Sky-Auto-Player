@@ -423,4 +423,44 @@ mod tests {
         let source = FileCatalogSource::new(std::env::temp_dir().join("sky-w2-no-such-directory"));
         assert!(source.entries().expect("missing root").is_empty());
     }
+
+    #[test]
+    fn settings_store_reads_legacy_timing_profile_and_preserves_unknown_data() {
+        let root =
+            std::env::temp_dir().join(format!("sky-w2-legacy-settings-{}", std::process::id()));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{"schema_version":2,"default_timing_profile":"audience-safe","timing_profiles":{"audience_safe":{"min_hold_frames":1.5}},"future":true}"#,
+        )
+        .expect("seed");
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load legacy settings");
+        assert_eq!(settings.playback_defaults.hold_frames, 1.5);
+        store.save(&settings).expect("save migrated settings");
+        let raw: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
+        assert_eq!(raw["future"], true);
+        assert!(raw.get("default_timing_profile").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_source_rejects_non_directory_and_ignores_unsupported_files() {
+        let root = std::env::temp_dir().join(format!("sky-w2-catalog-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(root.join("song.txt"), "notes").expect("song");
+        fs::write(root.join("ignored.csv"), "ignored").expect("ignored");
+        let entries = FileCatalogSource::new(&root).entries().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].canonical_path.ends_with("song.txt"));
+        let file = root.join("not-a-directory");
+        fs::write(&file, "file").expect("file");
+        assert!(matches!(
+            FileCatalogSource::new(file).entries(),
+            Err(CatalogError::SourceUnavailable(_))
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
 }

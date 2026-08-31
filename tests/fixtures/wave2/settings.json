@@ -1,5 +1,45 @@
 {
   "schema": 1,
+  "config_layouts": {
+    "legacy_v2": {
+      "input": {
+        "schema_version": 2,
+        "default_timing_profile": "audience-safe",
+        "timing_profiles": {
+          "audience_safe": {
+            "min_hold_frames": 1.5
+          }
+        },
+        "future_field": {
+          "keep": true
+        }
+      },
+      "normalized_hold_frames": 1.5,
+      "migrated_schema_version": 3,
+      "migrated_has_legacy_profile": false,
+      "unknown_field_preserved": {
+        "keep": true
+      }
+    },
+    "current_v3": {
+      "input": {
+        "schema_version": 3,
+        "theme": " SLATE ",
+        "default_hold_frames": 1.25,
+        "game_fps": 120,
+        "future_field": [
+          "preserve"
+        ],
+        "update": {
+          "channel": "BETA",
+          "unknown": 7
+        }
+      },
+      "normalized_theme": "slate",
+      "normalized_channel": "beta",
+      "normalized_fps": 120
+    }
+  },
   "default_normalized": {
     "theme": "aurora",
     "ui_background_mode": "transparent",
