@@ -9,6 +9,30 @@ mod core;
 
 use lifecycle::close_window;
 
+/// Write packaging-only GUI smoke phase markers when the release harness has
+/// explicitly requested them. The trace is intentionally file-based because
+/// the packaged child is launched with hidden windows and its stdout/stderr
+/// are not a reliable startup diagnostic channel on Windows.
+pub(crate) fn record_gui_smoke_phase(phase: &str) {
+    let Some(path) = std::env::var_os("SKY_GUI_SMOKE_PHASE_LOG") else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    use std::io::Write;
+    let _ = writeln!(file, "{timestamp} {phase}");
+    let _ = file.flush();
+}
+
 #[cfg(feature = "desktop-runtime")]
 type ShellRuntime = tauri::Wry;
 #[cfg(all(not(feature = "desktop-runtime"), feature = "tauri-test"))]
@@ -30,11 +54,25 @@ pub fn run_gui_smoke() {
 }
 
 fn run_inner(gui_smoke: bool) {
+    if gui_smoke {
+        record_gui_smoke_phase("run_inner.enter");
+        record_gui_smoke_phase("command_ownership.check.enter");
+    }
     if !command_ownership::matrix_is_complete() {
+        if gui_smoke {
+            record_gui_smoke_phase("command_ownership.check.failed");
+        }
         eprintln!("Sky Auto Player startup refused: incomplete command ownership matrix");
         return;
     }
+    if gui_smoke {
+        record_gui_smoke_phase("command_ownership.check.pass");
+        record_gui_smoke_phase("startup_update_guard.check.enter");
+    }
     if let Err(error) = core::check_startup_update_guard() {
+        if gui_smoke {
+            record_gui_smoke_phase("startup_update_guard.check.failed");
+        }
         eprintln!("Sky Auto Player startup refused: {error}");
         if gui_smoke {
             // The packaging smoke is a process-level gate. A startup guard
@@ -44,31 +82,48 @@ fn run_inner(gui_smoke: bool) {
         }
         return;
     }
+    if gui_smoke {
+        record_gui_smoke_phase("startup_update_guard.check.pass");
+    }
     let app_state = app_state::AppState::default();
     app_state.set_gui_smoke_exit(gui_smoke);
+    if gui_smoke {
+        record_gui_smoke_phase("app_state.ready");
+        record_gui_smoke_phase("tauri.builder.create");
+    }
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .manage(app_state)
         .setup(move |app| {
             if gui_smoke {
+                record_gui_smoke_phase("tauri.setup.enter");
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(45));
+                    record_gui_smoke_phase("watchdog.expired");
                     eprintln!("packaged GUI smoke watchdog expired");
                     app_handle.exit(1);
                 });
+                record_gui_smoke_phase("watchdog.spawned");
+                record_gui_smoke_phase("tauri.setup.complete");
             }
             Ok(())
         });
     if gui_smoke {
         builder = builder.on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                let _ = webview.eval(
+                record_gui_smoke_phase("webview.page_load.finished");
+                let result = webview.eval(
                     "window.__SKY_DESKTOP_GUI_SMOKE__ = true; window.dispatchEvent(new Event('sky-desktop-gui-smoke'));",
                 );
+                record_gui_smoke_phase(if result.is_ok() {
+                    "webview.smoke_dispatched"
+                } else {
+                    "webview.smoke_dispatch.failed"
+                });
             }
         });
     }
-    builder
+    let result = builder
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::search_songs,
@@ -99,8 +154,11 @@ fn run_inner(gui_smoke: bool) {
                 close_window(window.clone());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Sky Auto Player desktop shell");
+        .run(tauri::generate_context!());
+    if gui_smoke {
+        record_gui_smoke_phase("tauri.run.return");
+    }
+    result.expect("error while running Sky Auto Player desktop shell");
 }
 
 /// Validate the release shell/Core pairing without constructing a WebView.
