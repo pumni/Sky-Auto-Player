@@ -47,6 +47,16 @@ def test_production_native_build_commands_select_dist() -> None:
     assert desktop_package["scripts"]["tauri:build"] == "tauri build --profile dist"
 
 
+def test_wheel_builder_defaults_are_fail_safe() -> None:
+    source = (ROOT / "scripts" / "build_rust_wheel.py").read_text(encoding="utf-8")
+    tests_source = (ROOT / "tests" / "test_build_rust_wheel.py").read_text(encoding="utf-8")
+    assert 'resolve_cargo_profile(None, test_support=False) == "dist"' in tests_source
+    assert 'PRODUCTION_DEFAULT_PROFILE = "dist"' in source
+    assert 'TEST_SUPPORT_DEFAULT_PROFILE = "release"' in source
+    assert "default=None" in source
+    assert "resolve_cargo_profile(args.profile, test_support=args.test_support)" in source
+
+
 def test_shipping_binary_paths_match_dist_profile() -> None:
     build_app_source = (ROOT / "src" / "build_app.py").read_text(encoding="utf-8")
     portable_source = (ROOT / "scripts" / "build_portable_release.py").read_text(encoding="utf-8")

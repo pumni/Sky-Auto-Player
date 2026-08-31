@@ -52,6 +52,23 @@ def test_cargo_profile_arguments_are_explicit_and_bounded() -> None:
         BUILD.cargo_profile_arguments("debug")
 
 
+def test_wheel_profile_defaults_fail_safe_by_build_kind() -> None:
+    assert BUILD.resolve_cargo_profile(None, test_support=False) == "dist"
+    assert BUILD.resolve_cargo_profile(None, test_support=True) == "release"
+
+
+def test_wheel_profile_explicit_values_are_honored_for_both_build_kinds() -> None:
+    assert BUILD.resolve_cargo_profile("dist", test_support=False) == "dist"
+    assert BUILD.resolve_cargo_profile("dist", test_support=True) == "dist"
+    assert BUILD.resolve_cargo_profile("release", test_support=False) == "release"
+    assert BUILD.resolve_cargo_profile("release", test_support=True) == "release"
+
+
+def test_wheel_profile_resolution_rejects_unsupported_profiles() -> None:
+    with pytest.raises(ValueError, match="unsupported Cargo profile"):
+        BUILD.resolve_cargo_profile("debug", test_support=False)
+
+
 def test_build_commit_requires_clean_matching_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
     monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")
