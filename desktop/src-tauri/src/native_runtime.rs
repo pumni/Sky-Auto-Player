@@ -16,9 +16,9 @@ use crate::commands::{
     SettingsPatch, SongDetailDto, UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::ui_events::{
-    CatalogChangedPayload, PlaybackEventState, PlaybackFailedPayload, PlaybackFinishedPayload,
-    PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, PlaybackStateChangedPayload,
-    UiEvent,
+    CatalogChangedPayload, DiagnosticsBackendStatus, PlaybackEventState, PlaybackFailedPayload,
+    PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
+    PlaybackStateChangedPayload, UiEvent,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -54,6 +54,7 @@ use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
 const MAX_PREPARED_PLANS: usize = 64;
+const MAX_DECISION_COUNT: usize = 8;
 
 pub(crate) struct NativeDesktopRuntime {
     #[allow(dead_code)]
@@ -173,6 +174,7 @@ impl NativeDesktopRuntime {
             "playback.start" => {
                 let request: NativePlaybackStartRequest =
                     serde_json::from_value(params).map_err(json_error)?;
+                validate_playback_start_request(&request)?;
                 encode_result(self.start_playback(request.into_public()))
             }
             "playback.stop" | "playback.pause" | "playback.resume" | "playback.skip" => {
@@ -552,6 +554,7 @@ impl NativeDesktopRuntime {
         &self,
         request: crate::commands::PlaybackStartRequest,
     ) -> Result<PlaybackSessionDto, String> {
+        validate_public_playback_start_request(&request)?;
         let settings = self.settings_snapshot()?;
         self.playback.start(request, &settings, self.events.clone())
     }
@@ -778,6 +781,33 @@ impl NativePlaybackStartRequest {
             decisions: self.decisions,
         }
     }
+}
+
+fn validate_prepared_id(prepared_id: &str) -> Result<(), String> {
+    if prepared_id.len() != 32
+        || !prepared_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid_params: prepared_id is invalid".into());
+    }
+    Ok(())
+}
+
+fn validate_playback_start_request(request: &NativePlaybackStartRequest) -> Result<(), String> {
+    validate_prepared_id(&request.prepared_id)?;
+    if request.decisions.len() > MAX_DECISION_COUNT {
+        return Err("invalid_params: decisions must be a bounded array".into());
+    }
+    Ok(())
+}
+
+fn validate_public_playback_start_request(request: &PlaybackStartRequest) -> Result<(), String> {
+    validate_prepared_id(&request.prepared_id)?;
+    if request.decisions.len() > MAX_DECISION_COUNT {
+        return Err("invalid_params: decisions must be a bounded array".into());
+    }
+    Ok(())
 }
 
 fn opaque_native_id() -> Result<String, String> {
@@ -1218,7 +1248,48 @@ impl NativePlaybackService {
                 settings,
             ) {
                 Ok((player, target)) => (Some(player), Some(target)),
-                Err(error) => return Err(error),
+                Err(error) => {
+                    // Match the Python supervisor's observable failure path:
+                    // a start that cannot pass focus/target admission still
+                    // has an ordered starting -> failed -> failed-event trace.
+                    let failed_active = Arc::new(NativeActivePlayback {
+                        session_id: session_id.clone(),
+                        prepared_id: request.prepared_id.clone(),
+                        song_id: record.song_id.clone(),
+                        title: record.song.name.clone(),
+                        total_us: variant.schedule.duration_us,
+                        config: variant.config.clone(),
+                        plan_fingerprint: variant.fingerprint.clone(),
+                        physical: true,
+                        activity_lease,
+                        target_hwnd: None,
+                        state: Mutex::new(PlaybackSessionState::Starting),
+                        pending: Mutex::new(None),
+                        player: None,
+                        started_at: Instant::now(),
+                        paused_since: Mutex::new(None),
+                        paused_total: Mutex::new(Duration::ZERO),
+                        stop_requested: AtomicBool::new(false),
+                        skip_requested: AtomicBool::new(false),
+                        done: AtomicBool::new(true),
+                        sequence: AtomicU64::new(0),
+                    });
+                    let _ = publish_playback_state(
+                        &events,
+                        &failed_active,
+                        PlaybackEventState::Starting,
+                        None,
+                        None,
+                    );
+                    let mut last_event_state = PlaybackEventState::Starting;
+                    let _ = publish_terminal_poll_result(
+                        &events,
+                        &failed_active,
+                        &mut last_event_state,
+                        EnginePollStatus::Error,
+                    );
+                    return Err(error);
+                }
             }
         };
         let active = Arc::new(NativeActivePlayback {
@@ -1395,13 +1466,19 @@ impl NativePlaybackService {
                     let _ = player.quit();
                     let _ = player.join(Duration::from_secs(5));
                 }
-                let _ = set_playback_state(&active, PlaybackSessionState::Finished);
                 let outcome = if active.skip_requested.load(Ordering::Acquire) {
                     "skipped"
                 } else {
                     "quit"
                 };
-                if publish_playback_finished(&events, &active, outcome, "Playback stopped").is_err()
+                if publish_stopped_completion(
+                    &events,
+                    &active,
+                    &mut last_event_state,
+                    outcome,
+                    "Playback stopped",
+                )
+                .is_err()
                 {
                     cleanup_failed_event_delivery(&active);
                 }
@@ -1415,47 +1492,42 @@ impl NativePlaybackService {
                 let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
                 player.set_focus_hint(focused);
             }
-            let (elapsed, pre_roll_remaining, paused, finished, status) =
-                if let Some(player) = &active.player {
-                    if last_heartbeat.elapsed() >= Duration::from_millis(200) {
-                        let _ = player.heartbeat();
-                        last_heartbeat = Instant::now();
-                    }
-                    let state = player.poll_state();
-                    (
-                        state.elapsed_us,
-                        state.pre_roll_remaining_us,
-                        state.is_paused,
-                        state.is_finished,
-                        state.status.as_str(),
-                    )
-                } else {
-                    let elapsed = dry_run_elapsed(&active);
-                    let paused = active
-                        .state
-                        .lock()
-                        .map(|state| *state == PlaybackSessionState::Paused)
-                        .unwrap_or(false);
-                    (
-                        elapsed,
-                        0,
-                        paused,
-                        elapsed >= active.total_us,
-                        if paused { "paused" } else { "playing" },
-                    )
-                };
-            let event_state = if paused {
-                PlaybackEventState::Paused
-            } else if status == EnginePollStatus::Playing.as_str() {
-                PlaybackEventState::Playing
-            } else if matches!(
-                status,
-                "error" | "panicked" | "poisoned" | "invalid" | "quit"
-            ) {
-                PlaybackEventState::Failed
+            let (elapsed, pre_roll_remaining, status) = if let Some(player) = &active.player {
+                if last_heartbeat.elapsed() >= Duration::from_millis(200) {
+                    let _ = player.heartbeat();
+                    last_heartbeat = Instant::now();
+                }
+                let state = player.poll_state();
+                (state.elapsed_us, state.pre_roll_remaining_us, state.status)
             } else {
-                PlaybackEventState::Starting
+                let elapsed = dry_run_elapsed(&active);
+                let paused = active
+                    .state
+                    .lock()
+                    .map(|state| *state == PlaybackSessionState::Paused)
+                    .unwrap_or(false);
+                (
+                    elapsed,
+                    0,
+                    if elapsed >= active.total_us {
+                        EnginePollStatus::Finished
+                    } else if paused {
+                        EnginePollStatus::Paused
+                    } else {
+                        EnginePollStatus::Playing
+                    },
+                )
             };
+            let paused = status == EnginePollStatus::Paused;
+            let event_state = playback_event_state(status);
+            if is_terminal_status(status) {
+                if publish_terminal_poll_result(&events, &active, &mut last_event_state, status)
+                    .is_err()
+                {
+                    cleanup_failed_event_delivery(&active);
+                }
+                break;
+            }
             if event_state != last_event_state {
                 let state = match event_state {
                     PlaybackEventState::Starting => PlaybackSessionState::Starting,
@@ -1502,36 +1574,6 @@ impl NativePlaybackService {
                     break;
                 }
                 last_snapshot = Instant::now();
-            }
-            if finished {
-                let outcome = if status == EnginePollStatus::Skipped.as_str()
-                    || active.skip_requested.load(Ordering::Acquire)
-                {
-                    "skipped"
-                } else {
-                    "finished"
-                };
-                if matches!(status, "error" | "panicked" | "poisoned" | "invalid") {
-                    let _ = set_playback_state(&active, PlaybackSessionState::Failed);
-                    if publish_playback_failed(
-                        &events,
-                        &active,
-                        "native_player_failed",
-                        "Native playback worker failed",
-                    )
-                    .is_err()
-                    {
-                        cleanup_failed_event_delivery(&active);
-                    }
-                } else {
-                    let _ = set_playback_state(&active, PlaybackSessionState::Finished);
-                    if publish_playback_finished(&events, &active, outcome, "Playback finished")
-                        .is_err()
-                    {
-                        cleanup_failed_event_delivery(&active);
-                    }
-                }
-                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -1773,7 +1815,30 @@ impl NativePlaybackService {
     fn shutdown(&self, events: Arc<Mutex<NativeEventHub>>) {
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
         if let Some(active) = active {
-            active.stop_requested.store(true, Ordering::Release);
+            let current = active.state.lock().ok().map(|state| *state);
+            if matches!(
+                current,
+                Some(
+                    PlaybackSessionState::Starting
+                        | PlaybackSessionState::Playing
+                        | PlaybackSessionState::Paused
+                )
+            ) {
+                active.stop_requested.store(true, Ordering::Release);
+                if let Ok(mut pending) = active.pending.lock() {
+                    *pending = None;
+                }
+                let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
+                let _ = publish_playback_state(
+                    &events,
+                    &active,
+                    PlaybackEventState::Stopping,
+                    None,
+                    None,
+                );
+            } else {
+                active.stop_requested.store(true, Ordering::Release);
+            }
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -1783,13 +1848,6 @@ impl NativePlaybackService {
             while !active.done.load(Ordering::Acquire) && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
             }
-            let _ = publish_playback_state(
-                &events,
-                &active,
-                PlaybackEventState::Finished,
-                Some("shutdown".into()),
-                Some("quit".into()),
-            );
         }
     }
 }
@@ -1815,24 +1873,132 @@ impl NativePlaybackServiceHandle {
     }
 }
 
+fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
+    match status {
+        EnginePollStatus::Ready | EnginePollStatus::Preroll => PlaybackEventState::Starting,
+        EnginePollStatus::Playing => PlaybackEventState::Playing,
+        EnginePollStatus::Paused => PlaybackEventState::Paused,
+        EnginePollStatus::Finished | EnginePollStatus::Skipped | EnginePollStatus::Quit => {
+            PlaybackEventState::Finished
+        }
+        EnginePollStatus::Error
+        | EnginePollStatus::Panicked
+        | EnginePollStatus::Poisoned
+        | EnginePollStatus::Invalid => PlaybackEventState::Failed,
+    }
+}
+
+fn is_terminal_status(status: EnginePollStatus) -> bool {
+    matches!(
+        status,
+        EnginePollStatus::Finished
+            | EnginePollStatus::Skipped
+            | EnginePollStatus::Quit
+            | EnginePollStatus::Error
+            | EnginePollStatus::Panicked
+            | EnginePollStatus::Poisoned
+            | EnginePollStatus::Invalid
+    )
+}
+
+fn is_failure_status(status: EnginePollStatus) -> bool {
+    matches!(
+        status,
+        EnginePollStatus::Error
+            | EnginePollStatus::Panicked
+            | EnginePollStatus::Poisoned
+            | EnginePollStatus::Invalid
+    )
+}
+
+fn terminal_success_outcome(status: EnginePollStatus, skip_requested: bool) -> &'static str {
+    match status {
+        EnginePollStatus::Skipped => "skipped",
+        EnginePollStatus::Quit => "quit",
+        EnginePollStatus::Finished if skip_requested => "skipped",
+        _ => "finished",
+    }
+}
+
 fn publish_diagnostics_snapshot_for_active(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
     gate: &DiagnosticsPublicationGate,
 ) -> Result<(), String> {
-    let Some(player) = &active.player else {
-        return Ok(());
-    };
-    let snapshot = player.snapshot_lite();
-    let recent = snapshot.recent_latencies_us.as_slice();
+    let sample = active
+        .player
+        .as_ref()
+        .map(|player| NativeDiagnosticsSample::from_player(player))
+        .unwrap_or_else(NativeDiagnosticsSample::unavailable);
     let session_id = active.session_id.clone();
     let _published = gate.try_publish(Instant::now(), |sequence| {
         let payload = crate::ui_events::DiagnosticsSnapshotDto {
             seq: sequence,
+            max_lateness_us: sample.max_lateness_us,
+            p50_ms: percentile_ms(&sample.recent_latencies_us, 0.50),
+            p95_ms: percentile_ms(&sample.recent_latencies_us, 0.95),
+            sigma_onset_ms: population_sigma_ms(&sample.recent_latencies_us),
+            late_2ms: sample.late_2ms,
+            late_5ms: sample.late_5ms,
+            late_10ms: sample.late_10ms,
+            active_keys: sample.active_keys,
+            stuck_keys: sample.stuck_keys,
+            keys_dropped: sample.keys_dropped,
+            chord_split_events: sample.chord_split_events,
+            backend_status: sample.backend_status,
+            release_max_us: sample.release_max_us,
+            release_late_2ms: sample.release_late_2ms,
+            session_id: Some(session_id),
+        };
+        events
+            .lock()
+            .map_err(|_| "native event hub lock poisoned".to_string())?
+            .publish(UiEvent::DiagnosticsSnapshot {
+                v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+                payload,
+            })
+    })?;
+    Ok(())
+}
+
+struct NativeDiagnosticsSample {
+    max_lateness_us: u64,
+    recent_latencies_us: Vec<i64>,
+    late_2ms: u64,
+    late_5ms: u64,
+    late_10ms: u64,
+    active_keys: u64,
+    stuck_keys: u64,
+    keys_dropped: u64,
+    chord_split_events: u64,
+    backend_status: DiagnosticsBackendStatus,
+    release_max_us: Option<u64>,
+    release_late_2ms: Option<u64>,
+}
+
+impl NativeDiagnosticsSample {
+    fn unavailable() -> Self {
+        Self {
+            max_lateness_us: 0,
+            recent_latencies_us: Vec::new(),
+            late_2ms: 0,
+            late_5ms: 0,
+            late_10ms: 0,
+            active_keys: 0,
+            stuck_keys: 0,
+            keys_dropped: 0,
+            chord_split_events: 0,
+            backend_status: DiagnosticsBackendStatus::Unavailable,
+            release_max_us: None,
+            release_late_2ms: None,
+        }
+    }
+
+    fn from_player(player: &NativeDispatchSession) -> Self {
+        let snapshot = player.snapshot_lite();
+        Self {
             max_lateness_us: snapshot.max_lateness_us,
-            p50_ms: percentile_ms(recent, 0.50),
-            p95_ms: percentile_ms(recent, 0.95),
-            sigma_onset_ms: population_sigma_ms(recent),
+            recent_latencies_us: snapshot.recent_latencies_us,
             late_2ms: snapshot.late_2ms,
             late_5ms: snapshot.late_5ms,
             late_10ms: snapshot.late_10ms,
@@ -1851,17 +2017,8 @@ fn publish_diagnostics_snapshot_for_active(
             ),
             release_max_us: (snapshot.release_max_us > 0).then_some(snapshot.release_max_us),
             release_late_2ms: (snapshot.release_late_2ms > 0).then_some(snapshot.release_late_2ms),
-            session_id: Some(session_id),
-        };
-        events
-            .lock()
-            .map_err(|_| "native event hub lock poisoned".to_string())?
-            .publish(UiEvent::DiagnosticsSnapshot {
-                v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
-                payload,
-            })
-    })?;
-    Ok(())
+        }
+    }
 }
 
 fn diagnostics_backend_status(
@@ -2037,6 +2194,72 @@ fn publish_playback_snapshot(
         .lock()
         .map_err(|_| "native event hub lock poisoned".to_string())?
         .publish(event)
+}
+
+fn publish_terminal_poll_result(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    last_event_state: &mut PlaybackEventState,
+    status: EnginePollStatus,
+) -> Result<(), String> {
+    let terminal_state = playback_event_state(status);
+    let is_failure = is_failure_status(status);
+    if *last_event_state != terminal_state {
+        set_playback_state(
+            active,
+            if is_failure {
+                PlaybackSessionState::Failed
+            } else {
+                PlaybackSessionState::Finished
+            },
+        )?;
+        let (message, outcome) = if is_failure {
+            (Some("Native playback worker failed".into()), None)
+        } else {
+            (
+                Some("Playback finished".into()),
+                Some(
+                    terminal_success_outcome(status, active.skip_requested.load(Ordering::Acquire))
+                        .into(),
+                ),
+            )
+        };
+        publish_playback_state(events, active, terminal_state, message, outcome)?;
+        *last_event_state = terminal_state;
+    }
+    if is_failure {
+        publish_playback_failed(
+            events,
+            active,
+            "native_player_failed",
+            "Native playback worker failed",
+        )
+    } else {
+        let outcome =
+            terminal_success_outcome(status, active.skip_requested.load(Ordering::Acquire));
+        publish_playback_finished(events, active, outcome, "Playback finished")
+    }
+}
+
+fn publish_stopped_completion(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    last_event_state: &mut PlaybackEventState,
+    outcome: &str,
+    message: &str,
+) -> Result<(), String> {
+    set_playback_state(active, PlaybackSessionState::Finished)?;
+    if *last_event_state != PlaybackEventState::Finished {
+        publish_playback_state(
+            events,
+            active,
+            PlaybackEventState::Finished,
+            Some(message.into()),
+            Some(outcome.into()),
+        )?;
+        *last_event_state = PlaybackEventState::Finished;
+    }
+    publish_playback_finished(events, active, outcome, message)
 }
 
 fn publish_playback_failed(
@@ -2397,20 +2620,23 @@ fn remove_oldest_snapshot(buffered: &mut VecDeque<UiEvent>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticsPublicationGate, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
-        MaterializedTimingPolicy, NativeActivePlayback, NativeDesktopRuntime, NativeEventHub,
-        NativePlaybackService, PlaybackPendingControl, diagnostics_backend_status,
-        opaque_native_id, percentile_ms, plan_fingerprint, population_sigma_ms,
-        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
-        settings_fingerprint,
+        DiagnosticsPublicationGate, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
+        MaterializedTimingPolicy, NativeActivePlayback, NativeDesktopRuntime,
+        NativeDiagnosticsSample, NativeEventHub, NativePlaybackService, PlaybackPendingControl,
+        diagnostics_backend_status, opaque_native_id, percentile_ms, plan_fingerprint,
+        population_sigma_ms, publish_diagnostics_snapshot_for_active, publish_playback_state,
+        publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
+        resolve_install_root, retain_prepared_capacity, settings_fingerprint,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, PlaybackSessionState};
     use crate::ui_events::{
-        PlaybackEventState, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
-        UiEvent,
+        DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState, PlaybackHealthState,
+        PlaybackSnapshotPayload, UiEvent,
     };
     use serde_json::Value;
+    use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use std::fs;
     use std::sync::atomic::Ordering;
@@ -2420,6 +2646,14 @@ mod tests {
     fn active_for_control(
         state: PlaybackSessionState,
         pending: Option<PlaybackPendingControl>,
+    ) -> Arc<NativeActivePlayback> {
+        active_for_control_with_physical(state, pending, false)
+    }
+
+    fn active_for_control_with_physical(
+        state: PlaybackSessionState,
+        pending: Option<PlaybackPendingControl>,
+        physical: bool,
     ) -> Arc<NativeActivePlayback> {
         Arc::new(NativeActivePlayback {
             session_id: "a".repeat(32),
@@ -2434,7 +2668,7 @@ mod tests {
                 dry_run: true,
             },
             plan_fingerprint: "d".repeat(64),
-            physical: false,
+            physical,
             activity_lease: None,
             target_hwnd: None,
             state: Mutex::new(state),
@@ -2448,6 +2682,25 @@ mod tests {
             done: std::sync::atomic::AtomicBool::new(false),
             sequence: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    fn playback_trace(events: &Arc<Mutex<NativeEventHub>>) -> Vec<String> {
+        events
+            .lock()
+            .expect("event hub")
+            .buffered
+            .iter()
+            .filter_map(|event| match event {
+                UiEvent::PlaybackStateChanged { payload, .. } => {
+                    Some(format!("state:{}", payload.state.as_str()))
+                }
+                UiEvent::PlaybackFinished { payload, .. } => {
+                    Some(format!("finished:{}", payload.outcome))
+                }
+                UiEvent::PlaybackFailed { payload, .. } => Some(format!("failed:{}", payload.code)),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -2676,6 +2929,79 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_dry_run_publishes_unavailable_snapshot() {
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let gate = DiagnosticsPublicationGate::default();
+        gate.set_enabled(true).expect("enable");
+        let active = active_for_control(PlaybackSessionState::Playing, None);
+
+        publish_diagnostics_snapshot_for_active(&events, &active, &gate)
+            .expect("dry-run diagnostics");
+        let hub = events.lock().expect("event hub");
+        assert_eq!(hub.buffered.len(), 1);
+        let UiEvent::DiagnosticsSnapshot { payload, .. } = &hub.buffered[0] else {
+            panic!("expected diagnostics snapshot");
+        };
+        assert_eq!(payload.session_id.as_deref(), Some("a".repeat(32).as_str()));
+        assert_eq!(
+            payload.backend_status,
+            DiagnosticsBackendStatus::Unavailable
+        );
+        assert_eq!(payload.active_keys, 0);
+        assert_eq!(payload.stuck_keys, 0);
+        assert_eq!(payload.keys_dropped, 0);
+        assert_eq!(payload.chord_split_events, 0);
+        assert_eq!(payload.release_max_us, None);
+        assert_eq!(payload.release_late_2ms, None);
+        assert_eq!(payload.seq, 1);
+    }
+
+    #[test]
+    fn diagnostics_unavailable_path_keeps_rate_gate_and_monotonic_sequence() {
+        let gate = DiagnosticsPublicationGate::default();
+        gate.set_enabled(true).expect("enable");
+        let start = Instant::now();
+        let mut sequences = Vec::new();
+        for offset in [0, 1, 99, 100, 101] {
+            assert!(
+                gate.try_publish(start + Duration::from_millis(offset), |sequence| {
+                    sequences.push(sequence);
+                    Ok(())
+                })
+                .is_ok()
+            );
+        }
+        assert_eq!(sequences, vec![1, 2]);
+        gate.set_enabled(false).expect("disable");
+        assert!(
+            !gate
+                .try_publish(start + Duration::from_millis(200), |_| Ok(()))
+                .expect("disabled publication")
+        );
+        gate.set_enabled(true).expect("re-enable");
+        assert!(
+            gate.try_publish(start + Duration::from_millis(200), |sequence| {
+                sequences.push(sequence);
+                Ok(())
+            })
+            .expect("re-enabled publication")
+        );
+        assert_eq!(sequences, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn diagnostics_physical_healthy_status_remains_healthy() {
+        assert_eq!(
+            diagnostics_backend_status(false, false, 0, 0, 0, 0, 0),
+            DiagnosticsBackendStatus::Healthy
+        );
+        assert_eq!(
+            NativeDiagnosticsSample::unavailable().backend_status,
+            DiagnosticsBackendStatus::Unavailable
+        );
+    }
+
+    #[test]
     fn terminal_stop_returns_the_stored_terminal_state() {
         for terminal_state in [PlaybackSessionState::Finished, PlaybackSessionState::Failed] {
             let service = NativePlaybackService::new(ActivityCoordinator::default());
@@ -2691,6 +3017,304 @@ mod tests {
             assert_eq!(acknowledgement.state, terminal_state);
             assert!(acknowledgement.accepted);
         }
+    }
+
+    #[test]
+    fn terminal_player_statuses_publish_state_before_terminal_event() {
+        use sky_player::engine::EnginePollStatus;
+
+        for (status, expected) in [
+            (
+                EnginePollStatus::Finished,
+                vec!["state:finished", "finished:finished"],
+            ),
+            (
+                EnginePollStatus::Skipped,
+                vec!["state:finished", "finished:skipped"],
+            ),
+            (
+                EnginePollStatus::Quit,
+                vec!["state:finished", "finished:quit"],
+            ),
+            (
+                EnginePollStatus::Error,
+                vec!["state:failed", "failed:native_player_failed"],
+            ),
+            (
+                EnginePollStatus::Panicked,
+                vec!["state:failed", "failed:native_player_failed"],
+            ),
+            (
+                EnginePollStatus::Poisoned,
+                vec!["state:failed", "failed:native_player_failed"],
+            ),
+            (
+                EnginePollStatus::Invalid,
+                vec!["state:failed", "failed:native_player_failed"],
+            ),
+        ] {
+            let events = Arc::new(Mutex::new(NativeEventHub::default()));
+            let active =
+                active_for_control_with_physical(PlaybackSessionState::Playing, None, true);
+            let mut last_event_state = PlaybackEventState::Playing;
+            publish_terminal_poll_result(&events, &active, &mut last_event_state, status)
+                .expect("terminal event trace");
+            assert_eq!(
+                playback_trace(&events),
+                expected.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                "status {}",
+                status.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn focus_rejection_publishes_starting_then_failed_trace() {
+        use sky_player::engine::EnginePollStatus;
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let active = active_for_control_with_physical(PlaybackSessionState::Starting, None, true);
+        publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
+            .expect("starting event");
+        let mut last_event_state = PlaybackEventState::Starting;
+        publish_terminal_poll_result(
+            &events,
+            &active,
+            &mut last_event_state,
+            EnginePollStatus::Error,
+        )
+        .expect("focus rejection trace");
+        assert_eq!(
+            playback_trace(&events),
+            [
+                "state:starting",
+                "state:failed",
+                "failed:native_player_failed"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dry_run_completion_publishes_finished_before_terminal_event() {
+        use sky_player::engine::EnginePollStatus;
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let active = active_for_control(PlaybackSessionState::Playing, None);
+        let mut last_event_state = PlaybackEventState::Playing;
+        publish_terminal_poll_result(
+            &events,
+            &active,
+            &mut last_event_state,
+            EnginePollStatus::Finished,
+        )
+        .expect("dry-run completion trace");
+        assert_eq!(
+            playback_trace(&events),
+            ["state:finished", "finished:finished"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn stop_paths_publish_stopping_finished_then_finished_event() {
+        for initial_state in [
+            PlaybackSessionState::Starting,
+            PlaybackSessionState::Playing,
+            PlaybackSessionState::Paused,
+        ] {
+            let events = Arc::new(Mutex::new(NativeEventHub::default()));
+            let service = NativePlaybackService::new(ActivityCoordinator::default());
+            let active = active_for_control_with_physical(initial_state, None, true);
+            *service.active.lock().expect("active") = Some(active.clone());
+            service
+                .command("playback.stop", active.session_id.clone(), events.clone())
+                .expect("stop");
+            let mut last_event_state = match initial_state {
+                PlaybackSessionState::Starting => PlaybackEventState::Starting,
+                PlaybackSessionState::Playing => PlaybackEventState::Playing,
+                PlaybackSessionState::Paused => PlaybackEventState::Paused,
+                _ => unreachable!(),
+            };
+            publish_stopped_completion(
+                &events,
+                &active,
+                &mut last_event_state,
+                "quit",
+                "Playback stopped",
+            )
+            .expect("stop terminal event trace");
+            assert_eq!(
+                playback_trace(&events),
+                ["state:stopping", "state:finished", "finished:quit"]
+            );
+        }
+    }
+
+    #[test]
+    fn shutdown_completion_uses_the_same_terminal_event_sequence() {
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let active = active_for_control(PlaybackSessionState::Starting, None);
+        let mut last_event_state = PlaybackEventState::Starting;
+        publish_playback_state(&events, &active, PlaybackEventState::Stopping, None, None)
+            .expect("stopping event");
+        publish_stopped_completion(
+            &events,
+            &active,
+            &mut last_event_state,
+            "quit",
+            "Playback stopped",
+        )
+        .expect("shutdown terminal event trace");
+        assert_eq!(
+            playback_trace(&events),
+            ["state:stopping", "state:finished", "finished:quit"]
+        );
+    }
+
+    #[test]
+    fn playback_start_validation_distinguishes_malformed_and_stale_ids() {
+        let malformed = super::NativePlaybackStartRequest {
+            prepared_id: "A".repeat(32),
+            decisions: Vec::new(),
+        };
+        let error = validate_playback_start_request(&malformed).expect_err("invalid ID");
+        assert!(error.starts_with("invalid_params:"));
+
+        let well_formed_stale = super::NativePlaybackStartRequest {
+            prepared_id: "a".repeat(32),
+            decisions: Vec::new(),
+        };
+        validate_playback_start_request(&well_formed_stale).expect("well-formed ID");
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let error = service
+            .start(
+                well_formed_stale.into_public(),
+                &ApplicationSettings::default(),
+                Arc::new(Mutex::new(NativeEventHub::default())),
+            )
+            .expect_err("stale ID");
+        assert!(error.contains("stale or already consumed"));
+    }
+
+    #[test]
+    fn playback_start_validation_bounds_decisions_before_admission() {
+        let oversized = super::NativePlaybackStartRequest {
+            prepared_id: "a".repeat(32),
+            decisions: vec![
+                crate::commands::PlaybackDecisionAcceptanceDto {
+                    decision: crate::commands::PlaybackDecision::Proceed,
+                    accepted: false,
+                };
+                super::MAX_DECISION_COUNT + 1
+            ],
+        };
+        let error = validate_playback_start_request(&oversized).expect_err("bounded decisions");
+        assert!(error.contains("decisions must be a bounded array"));
+    }
+
+    #[test]
+    fn routed_playback_start_validates_input_before_confirmation_and_lookup() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-start-validation-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/ready.json"),
+            r#"{"name":"Ready","songNotes":[{"time":0,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let bootstrap = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        let generation = bootstrap["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": "ready",
+                    "offset": 0,
+                    "limit": 10,
+                    "generation": generation
+                }),
+            )
+            .expect("search");
+        let song_id = search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned();
+        let prepared = runtime
+            .dispatch(
+                "playback.prepare",
+                serde_json::json!({
+                    "song_id": song_id,
+                    "generation": generation,
+                    "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                }),
+            )
+            .expect("prepare");
+        let prepared_id = prepared["prepared_id"]
+            .as_str()
+            .expect("prepared ID")
+            .to_owned();
+
+        let malformed = runtime.dispatch(
+            "playback.start",
+            serde_json::json!({"prepared_id":"A".repeat(32),"decisions":[]}),
+        );
+        assert!(
+            malformed
+                .expect_err("malformed ID")
+                .contains("invalid_params: prepared_id is invalid")
+        );
+
+        let oversized = runtime.dispatch(
+            "playback.start",
+            serde_json::json!({
+                "prepared_id": prepared_id,
+                "decisions": (0..=MAX_DECISION_COUNT)
+                    .map(|_| serde_json::json!({"decision":"proceed","accepted":false}))
+                    .collect::<Vec<_>>()
+            }),
+        );
+        assert!(
+            oversized
+                .expect_err("oversized decisions")
+                .contains("decisions must be a bounded array")
+        );
+
+        let wrong_confirmation = runtime.dispatch(
+            "playback.start",
+            serde_json::json!({
+                "prepared_id": prepared_id,
+                "decisions": [{"decision":"proceed","accepted":true}]
+            }),
+        );
+        assert!(
+            wrong_confirmation
+                .expect_err("ready plan must reject confirmation")
+                .contains("ready playback accepts no risk decisions")
+        );
+
+        let valid = runtime
+            .dispatch(
+                "playback.start",
+                serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+            )
+            .expect("valid ready start");
+        assert_eq!(valid["state"], "starting");
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
