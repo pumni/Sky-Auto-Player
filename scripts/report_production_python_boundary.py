@@ -187,12 +187,24 @@ def _python_boundary_accounting(
     return {
         "command_ownership": ownership,
         "production_python_modules_still_required": python_modules,
+        # These modules still serve the Textual/CLI surfaces or the eight
+        # remaining Python-owned desktop routes. Do not label an entire module
+        # non-authoritative until its last production consumer is gone.
         "python_modules_made_non_authoritative": [],
+        "native_command_count": ownership["after"]["native_count"],
+        "python_command_count": ownership["after"]["python_count"],
+        "python_core_process_required": True,
+        "python_runtime_shipped": True,
+        "pyinstaller_required_for_portable_desktop": True,
+        "pyo3_required_for_production_tauri_playback": False,
+        "coresupervisor_use": "yes: settings.get, settings.patch, update.check, update.preferences.get, update.preferences.patch, update.begin_handoff, calibration.start, calibration.cancel",
+        "desktop_ipc_use": "yes: the eight remaining Python-owned commands and their event stream",
         "remaining_blockers": {
-            "settings.*": "Python Core caches AppConfig; native writes stay shadow-only until live coherence is proven.",
-            "catalog.*": "Python owns RapidFuzz WRatio, rich detail, and the live generation until equivalent Rust evidence exists.",
-            "update.*": "Python update orchestration remains live; Rust policy is fixture-backed shadow logic and sky_updater remains the apply owner.",
-            "playback.*": "Realtime execution and SendInput ownership are frozen for Wave 2.",
+            "settings.*": "Python Core still owns persisted settings routes because its process-local AppConfig cache remains live; native services read the atomically persisted shadow but do not write through a second authority.",
+            "update.check": "Python still owns release metadata orchestration; preferences remain with Core until the settings/update family can move coherently through one authority.",
+            "update.preferences.*": "Python Core owns the cached update preferences; moving only these routes to Native would create stale policy reads in update.check.",
+            "update.begin_handoff": "Python still correlates the checked update to handoff; the native gateway has not yet taken over this transaction boundary.",
+            "calibration.*": "Python still owns process isolation, evidence validation, cancellation, and cache publication.",
         },
     }
 

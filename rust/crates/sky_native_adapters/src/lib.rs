@@ -16,6 +16,394 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub const DEFAULT_TRANSPORT_MARGIN_US: u64 = 300;
+pub const CALIBRATION_MARGIN_SOURCE_DEFAULT: &str = "default_transport_300";
+pub const CALIBRATION_MARGIN_SOURCE_DEVICE: &str = "device_cache";
+pub const CALIBRATION_MARGIN_SOURCE_INVALID: &str = "invalid_cache_transport_300";
+pub const CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE: &str = "incompatible_host_transport_300";
+pub const CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE: &str = "out_of_envelope_transport_300";
+
+const CALIBRATION_CACHE_VERSION: u64 = 8;
+const CALIBRATION_EVIDENCE_KIND: &str = "sender_completion_hold_shrink";
+const CALIBRATION_ARTIFACT_SCHEMA_VERSION: u64 = 11;
+const CALIBRATION_NATIVE_VERSION: u64 = 15;
+const CALIBRATION_MEASUREMENT_PROTOCOL_VERSION: u64 = 10;
+const CALIBRATION_SOURCE_FORMULA_VERSION: u64 = 6;
+const CALIBRATION_HOST_FINGERPRINT_VERSION: u64 = 2;
+const CALIBRATION_SAMPLE_COUNT: u64 = 100;
+const CALIBRATION_MAX_SHRINK_US: i64 = 100_000;
+const CALIBRATION_REQUIRED_BUCKETS: [&str; 6] =
+    ["1/hot", "1/cold", "5/hot", "5/cold", "15/hot", "15/cold"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalibrationResolution {
+    pub margin_us: u64,
+    pub source: String,
+}
+
+/// Read the publishable sender-calibration result using the same fail-closed
+/// categories as the Python loader.  The cache is evidence, not a source of
+/// arbitrary timing values: only the current schema/formula/constants and a
+/// valid applied margin are accepted.
+pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolution {
+    let fallback = |source: &str| CalibrationResolution {
+        margin_us: DEFAULT_TRANSPORT_MARGIN_US,
+        source: source.into(),
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return fallback(CALIBRATION_MARGIN_SOURCE_DEFAULT);
+    };
+    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    };
+    if root.get("version").and_then(Value::as_u64) != Some(CALIBRATION_CACHE_VERSION)
+        || root.get("evidence_kind").and_then(Value::as_str) != Some(CALIBRATION_EVIDENCE_KIND)
+        || root.get("artifact_schema_version").and_then(Value::as_u64)
+            != Some(CALIBRATION_ARTIFACT_SCHEMA_VERSION)
+        || root
+            .get("native_calibration_version")
+            .and_then(Value::as_u64)
+            != Some(CALIBRATION_NATIVE_VERSION)
+        || root
+            .get("measurement_protocol_version")
+            .and_then(Value::as_u64)
+            != Some(CALIBRATION_MEASUREMENT_PROTOCOL_VERSION)
+        || root.get("source").and_then(Value::as_str) != Some("device_cache")
+        || root.get("source_formula_version").and_then(Value::as_u64)
+            != Some(CALIBRATION_SOURCE_FORMULA_VERSION)
+    {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE);
+    }
+    let Some(qualification) = root.get("qualification").and_then(Value::as_object) else {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    };
+    let Some(host) = valid_host_fingerprint(root.get("host_fingerprint")) else {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    };
+    if !valid_provenance(&root) || !valid_scheduling_aids(root.get("scheduling_aids")) {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    }
+    let Some((global_transport, worst_bucket)) = valid_pair_buckets(&root) else {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    };
+    let (expected_status, candidate, applied) = qualification_values(global_transport);
+    let status = qualification
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| root.get("status").and_then(Value::as_str));
+    if status == Some("out_of_envelope") {
+        if !qualification_matches(
+            &root,
+            qualification,
+            QualificationValues {
+                status,
+                worst_bucket: &worst_bucket,
+                global_transport,
+                candidate,
+                applied,
+                expected_status,
+            },
+        ) {
+            return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+        }
+        return fallback(CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE);
+    }
+    if !qualification_matches(
+        &root,
+        qualification,
+        QualificationValues {
+            status,
+            worst_bucket: &worst_bucket,
+            global_transport,
+            candidate,
+            applied,
+            expected_status,
+        },
+    ) || status != Some("valid")
+    {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INVALID);
+    }
+    let margin = applied.expect("valid qualification has an applied margin");
+    #[cfg(windows)]
+    if !host_matches_current(host) {
+        return fallback(CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE);
+    }
+    CalibrationResolution {
+        margin_us: margin,
+        source: CALIBRATION_MARGIN_SOURCE_DEVICE.into(),
+    }
+}
+
+fn object(value: Option<&Value>) -> Option<&Map<String, Value>> {
+    value?.as_object()
+}
+
+fn unsigned(object: &Map<String, Value>, key: &str) -> Option<u64> {
+    object.get(key)?.as_u64()
+}
+
+fn signed(object: &Map<String, Value>, key: &str) -> Option<i64> {
+    object.get(key)?.as_i64()
+}
+
+fn nonempty_string(object: &Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty() && value != "unknown")
+}
+
+fn valid_host_fingerprint(value: Option<&Value>) -> Option<&Map<String, Value>> {
+    let host = object(value)?;
+    if unsigned(host, "host_fingerprint_version") != Some(CALIBRATION_HOST_FINGERPRINT_VERSION)
+        || unsigned(host, "qpc_frequency_hz").is_none()
+        || !nonempty_string(host, "win32_build")
+        || !nonempty_string(host, "processor_architecture")
+        || !nonempty_string(host, "cpu_vendor")
+        || [
+            "cpu_family",
+            "cpu_model",
+            "cpu_stepping",
+            "logical_processor_count",
+            "processor_group_count",
+        ]
+        .iter()
+        .any(|key| unsigned(host, key).is_none())
+    {
+        return None;
+    }
+    let efficiency = host.get("cpu_set_efficiency_classes")?.as_array()?;
+    if efficiency.iter().any(|value| value.as_u64().is_none()) {
+        return None;
+    }
+    for key in ["highest_efficiency_class", "lowest_efficiency_class"] {
+        if host
+            .get(key)
+            .is_some_and(|value| !value.is_null() && value.as_u64().is_none())
+        {
+            return None;
+        }
+    }
+    if host
+        .get("sampled_at_us")
+        .is_some_and(|value| !value.is_null() && value.as_u64().is_none())
+    {
+        return None;
+    }
+    Some(host)
+}
+
+fn valid_provenance(root: &Map<String, Value>) -> bool {
+    [
+        "source_git_sha",
+        "native_build_id",
+        "native_source_fingerprint",
+        "rustc_version",
+    ]
+    .iter()
+    .all(|key| nonempty_string(root, key))
+        && root.get("source_git_sha") == root.get("native_build_id")
+        && root.get("dirty_worktree") == Some(&Value::Bool(false))
+}
+
+fn valid_scheduling_aids(value: Option<&Value>) -> bool {
+    let Some(aids) = object(value) else {
+        return false;
+    };
+    let Some(mmcss) = aids.get("mmcss_acquired").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(mmcss_active) = aids.get("mmcss_active").and_then(Value::as_bool) else {
+        return false;
+    };
+    let Some(_power_active) = aids.get("power_throttling_active").and_then(Value::as_bool) else {
+        return false;
+    };
+    let Some(waiter_mode) = aids.get("waiter_mode").and_then(Value::as_str) else {
+        return false;
+    };
+    [
+        "off",
+        "mmcss:Games",
+        "thread:highest",
+        "thread:time_critical",
+    ]
+    .contains(&mmcss)
+        && mmcss_active == (mmcss != "off")
+        && [
+            "event+high_resolution_timer",
+            "high_resolution_timer",
+            "event+timer_resolution_fallback",
+            "timer_resolution_fallback",
+        ]
+        .contains(&waiter_mode)
+        && ["off", "mmcss:Games", "thread:highest"].contains(&mmcss)
+        && waiter_mode == "event+high_resolution_timer"
+}
+
+fn valid_signed_quantiles(value: Option<&Value>, unsigned_values: bool) -> bool {
+    let Some(values) = object(value) else {
+        return false;
+    };
+    let fields = ["min", "p50", "p90", "p95", "p99", "max", "mean"];
+    let Some(parsed) = fields
+        .iter()
+        .map(|key| signed(values, key))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let ordered = &parsed[..6];
+    ordered.windows(2).all(|pair| pair[0] <= pair[1])
+        && parsed[0] <= parsed[6]
+        && parsed[6] <= parsed[5]
+        && ordered.iter().all(|value| {
+            (unsigned_values && *value >= 0)
+                || (!unsigned_values && value.abs() <= CALIBRATION_MAX_SHRINK_US)
+        })
+}
+
+fn valid_pair_buckets(root: &Map<String, Value>) -> Option<(i64, String)> {
+    let required = root.get("required_buckets")?.as_array()?;
+    if required.len() != CALIBRATION_REQUIRED_BUCKETS.len()
+        || required
+            .iter()
+            .zip(CALIBRATION_REQUIRED_BUCKETS)
+            .any(|(actual, expected)| actual.as_str() != Some(expected))
+    {
+        return None;
+    }
+    let buckets = object(root.get("pair_buckets"))?;
+    if buckets.len() != CALIBRATION_REQUIRED_BUCKETS.len()
+        || CALIBRATION_REQUIRED_BUCKETS
+            .iter()
+            .any(|key| !buckets.contains_key(*key))
+    {
+        return None;
+    }
+    let mut global = 0_i64;
+    let mut worst = CALIBRATION_REQUIRED_BUCKETS[0];
+    for key in CALIBRATION_REQUIRED_BUCKETS {
+        let bucket = object(buckets.get(key))?;
+        let attempted = unsigned(bucket, "attempted")?;
+        let clean = unsigned(bucket, "clean_pair_count")?;
+        let rejected = unsigned(bucket, "rejected")?;
+        if !(CALIBRATION_SAMPLE_COUNT..=CALIBRATION_SAMPLE_COUNT * 2).contains(&attempted)
+            || clean != CALIBRATION_SAMPLE_COUNT
+            || rejected != attempted.saturating_sub(clean)
+            || unsigned(bucket, "anomaly_count")? != rejected
+            || unsigned(bucket, "class_mismatch_count")? != rejected
+            || unsigned(bucket, "timeout_count")? != 0
+            || unsigned(bucket, "partial_send")? != 0
+            || !valid_signed_quantiles(bucket.get("pair_sender_hold_shrink_us"), false)
+            || !valid_signed_quantiles(bucket.get("scheduler_shrink_us"), false)
+            || !valid_signed_quantiles(bucket.get("sendinput_shrink_us"), false)
+            || !valid_signed_quantiles(bucket.get("down_call_duration_us"), true)
+            || !valid_signed_quantiles(bucket.get("up_call_duration_us"), true)
+        {
+            return None;
+        }
+        let bucket_max = signed(object(bucket.get("sendinput_shrink_us"))?, "max")?;
+        if bucket_max > global {
+            global = bucket_max;
+            worst = key;
+        }
+    }
+    Some((global.max(0), worst.into()))
+}
+
+fn qualification_values(global_transport: i64) -> (&'static str, u64, Option<u64>) {
+    let candidate = global_transport as u64 + 100;
+    if candidate > 2_000 {
+        ("out_of_envelope", candidate, None)
+    } else {
+        ("valid", candidate, Some(300_u64.max(candidate)))
+    }
+}
+
+struct QualificationValues<'a> {
+    status: Option<&'a str>,
+    worst_bucket: &'a str,
+    global_transport: i64,
+    candidate: u64,
+    applied: Option<u64>,
+    expected_status: &'a str,
+}
+
+fn qualification_matches(
+    root: &Map<String, Value>,
+    qualification: &Map<String, Value>,
+    values: QualificationValues<'_>,
+) -> bool {
+    let Some(worst_serialized) = qualification.get("worst_bucket").and_then(Value::as_str) else {
+        return false;
+    };
+    qualification.get("basis").and_then(Value::as_str)
+        == Some("max_required_bucket_max_positive_sendinput_shrink")
+        && worst_serialized == values.worst_bucket
+        && qualification
+            .get("transport_worst_positive_us")
+            .and_then(Value::as_i64)
+            == Some(values.global_transport)
+        && qualification.get("guard_us").and_then(Value::as_u64) == Some(100)
+        && qualification.get("floor_us").and_then(Value::as_u64) == Some(300)
+        && qualification.get("ceiling_us").and_then(Value::as_u64) == Some(2_000)
+        && qualification
+            .get("candidate_transport_margin_us")
+            .and_then(Value::as_u64)
+            == Some(values.candidate)
+        && qualification
+            .get("applied_transport_margin_us")
+            .and_then(Value::as_u64)
+            == values.applied
+        && values.status == Some(values.expected_status)
+        && root.get("status").and_then(Value::as_str) == values.status
+        && root.get("transport_margin_us").and_then(Value::as_u64) == values.applied
+        && root.get("transport_margin_source").and_then(Value::as_str)
+            == Some(CALIBRATION_MARGIN_SOURCE_DEVICE)
+        && root
+            .get("transport_worst_positive_us")
+            .and_then(Value::as_i64)
+            == Some(values.global_transport)
+        && root.get("transport_guard_us").and_then(Value::as_u64) == Some(100)
+        && root.get("transport_floor_us").and_then(Value::as_u64) == Some(300)
+        && root.get("transport_ceiling_us").and_then(Value::as_u64) == Some(2_000)
+        && root
+            .get("calibration_timing_qualified")
+            .and_then(Value::as_bool)
+            == Some(values.expected_status == "valid")
+}
+
+#[cfg(windows)]
+fn host_matches_current(host: &Map<String, Value>) -> bool {
+    let Ok(current) = sky_player::adapter_support::build_host_fingerprint() else {
+        return false;
+    };
+    let Ok(current) = serde_json::to_value(current) else {
+        return false;
+    };
+    let Some(current) = current.as_object() else {
+        return false;
+    };
+    [
+        "host_fingerprint_version",
+        "qpc_frequency_hz",
+        "win32_build",
+        "processor_architecture",
+        "cpu_vendor",
+        "cpu_family",
+        "cpu_model",
+        "cpu_stepping",
+        "logical_processor_count",
+        "processor_group_count",
+        "cpu_set_efficiency_classes",
+        "highest_efficiency_class",
+        "lowest_efficiency_class",
+    ]
+    .iter()
+    .all(|key| host.get(*key) == current.get(*key))
+}
+
 #[derive(Clone)]
 pub struct JsonSettingsStore {
     path: PathBuf,
@@ -659,6 +1047,152 @@ mod tests {
         assert_eq!(raw["future"], true);
         assert!(raw.get("default_timing_profile").is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn calibration_resolution_accepts_only_publishable_current_cache() {
+        let root =
+            std::env::temp_dir().join(format!("sky-w3-calibration-{}-{}", std::process::id(), 1));
+        fs::create_dir_all(root.parent().expect("temp parent")).expect("temp parent");
+        let path = root.with_extension("json");
+        fs::write(&path, valid_calibration_cache(677).to_string()).expect("cache");
+        assert_eq!(
+            load_calibration_resolution(&path),
+            CalibrationResolution {
+                margin_us: 777,
+                source: CALIBRATION_MARGIN_SOURCE_DEVICE.into()
+            }
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn calibration_resolution_fails_closed_for_invalid_and_unhealthy_cache() {
+        let path = std::env::temp_dir().join(format!(
+            "sky-w3-invalid-calibration-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, b"{not-json").expect("cache");
+        assert_eq!(
+            load_calibration_resolution(&path).source,
+            CALIBRATION_MARGIN_SOURCE_INVALID
+        );
+        fs::write(&path, valid_calibration_cache(2_500).to_string()).expect("cache");
+        assert_eq!(
+            load_calibration_resolution(&path).source,
+            CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    fn quantiles(min: i64, max: i64) -> Value {
+        serde_json::json!({
+            "min": min,
+            "p50": min,
+            "p90": min.max(0),
+            "p95": min.max(0),
+            "p99": max,
+            "max": max,
+            "mean": min.max(0)
+        })
+    }
+
+    fn calibration_host() -> Value {
+        #[cfg(windows)]
+        {
+            serde_json::to_value(
+                sky_player::adapter_support::build_host_fingerprint().expect("host fingerprint"),
+            )
+            .expect("host JSON")
+        }
+        #[cfg(not(windows))]
+        serde_json::json!({
+            "host_fingerprint_version": 2,
+            "qpc_frequency_hz": 10_000_000,
+            "win32_build": "Windows test",
+            "processor_architecture": "AMD64",
+            "cpu_vendor": "test",
+            "cpu_family": 6,
+            "cpu_model": 1,
+            "cpu_stepping": 1,
+            "logical_processor_count": 1,
+            "processor_group_count": 1,
+            "cpu_set_efficiency_classes": [0],
+            "highest_efficiency_class": 0,
+            "lowest_efficiency_class": 0,
+            "sampled_at_us": 1
+        })
+    }
+
+    fn valid_calibration_cache(sendinput_max: i64) -> Value {
+        let mut pair_buckets = serde_json::Map::new();
+        for key in CALIBRATION_REQUIRED_BUCKETS {
+            pair_buckets.insert(
+                key.into(),
+                serde_json::json!({
+                    "attempted": 100,
+                    "clean_pair_count": 100,
+                    "rejected": 0,
+                    "anomaly_count": 0,
+                    "class_mismatch_count": 0,
+                    "timeout_count": 0,
+                    "partial_send": 0,
+                    "pair_sender_hold_shrink_us": quantiles(-4, sendinput_max),
+                    "scheduler_shrink_us": quantiles(-4, 8),
+                    "sendinput_shrink_us": quantiles(-4, sendinput_max),
+                    "down_call_duration_us": quantiles(1, 3),
+                    "up_call_duration_us": quantiles(1, 3)
+                }),
+            );
+        }
+        let status = if sendinput_max + 100 > 2_000 {
+            "out_of_envelope"
+        } else {
+            "valid"
+        };
+        let applied =
+            (300_i64.max(sendinput_max + 100) <= 2_000).then_some(300_i64.max(sendinput_max + 100));
+        serde_json::json!({
+            "version": 8,
+            "evidence_kind": "sender_completion_hold_shrink",
+            "artifact_schema_version": 11,
+            "native_calibration_version": 15,
+            "measurement_protocol_version": 10,
+            "source": "device_cache",
+            "source_formula_version": 6,
+            "status": status,
+            "source_git_sha": "test-sha",
+            "native_build_id": "test-sha",
+            "native_source_fingerprint": "test-fingerprint",
+            "rustc_version": "rustc test",
+            "dirty_worktree": false,
+            "host_fingerprint": calibration_host(),
+            "scheduling_aids": {
+                "mmcss_acquired": "mmcss:Games",
+                "mmcss_active": true,
+                "power_throttling_active": true,
+                "waiter_mode": "event+high_resolution_timer"
+            },
+            "required_buckets": CALIBRATION_REQUIRED_BUCKETS,
+            "pair_buckets": pair_buckets,
+            "transport_margin_us": applied,
+            "transport_margin_source": "device_cache",
+            "transport_worst_positive_us": sendinput_max,
+            "transport_guard_us": 100,
+            "transport_floor_us": 300,
+            "transport_ceiling_us": 2000,
+            "calibration_timing_qualified": status == "valid",
+            "qualification": {
+                "basis": "max_required_bucket_max_positive_sendinput_shrink",
+                "worst_bucket": "1/hot",
+                "transport_worst_positive_us": sendinput_max,
+                "guard_us": 100,
+                "floor_us": 300,
+                "ceiling_us": 2000,
+                "candidate_transport_margin_us": sendinput_max + 100,
+                "applied_transport_margin_us": applied
+            }
+        })
     }
 
     #[test]

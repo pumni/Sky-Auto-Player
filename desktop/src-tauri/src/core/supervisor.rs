@@ -4,6 +4,7 @@ use crate::ui_events::{CoreFatalPayload, UiEvent};
 use serde::Serialize;
 use serde_json::Value;
 use sky_dispatch_win32::emergency_release_canonical;
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,6 +12,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+pub(crate) type CoreEventObserver =
+    Arc<dyn for<'event> Fn(&'event CoreEvent) -> Result<(), String> + Send + Sync>;
+type CoreFailureObserver = Arc<dyn Fn() + Send + Sync>;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -77,6 +82,7 @@ pub struct CoreSupervisor {
     lifecycle: Mutex<CoreLifecycle>,
     ready: Mutex<Option<Receiver<Result<(), String>>>>,
     events: Mutex<EventState>,
+    failure_observer: Mutex<Option<CoreFailureObserver>>,
     shutdown_requested: AtomicBool,
     physical_session_active: AtomicBool,
     emergency_release_done: AtomicBool,
@@ -160,6 +166,7 @@ impl CoreSupervisor {
             lifecycle: Mutex::new(CoreLifecycle::Starting),
             ready: Mutex::new(Some(ready_receiver)),
             events: Mutex::new(EventState::default()),
+            failure_observer: Mutex::new(None),
             shutdown_requested: AtomicBool::new(false),
             physical_session_active: AtomicBool::new(false),
             emergency_release_done: AtomicBool::new(false),
@@ -208,6 +215,59 @@ impl CoreSupervisor {
                     "Core exited before ready".into(),
                 ))
             }
+        }
+    }
+
+    /// Install a shell-level observer and drain the pre-observer history as
+    /// one ordered transition.  Core's reader is a single producer, but the
+    /// observer callback and backlog drain can otherwise race: a newer live
+    /// event could overtake an older buffered event.  EventState owns both
+    /// the queue and the transition flag, while callbacks run without its
+    /// lock so frontend delivery can never block Core's transport mutex.
+    pub(crate) fn install_event_observer_and_drain(
+        &self,
+        observer: CoreEventObserver,
+    ) -> Result<(), String> {
+        let should_drain = {
+            let mut events = self
+                .events
+                .lock()
+                .map_err(|_| "event buffer poisoned".to_string())?;
+            if events.overflowed {
+                return Err("Core event history overflowed its bounded capacity".into());
+            }
+            events.observer = Some(observer);
+            if events.buffered.is_empty() || events.draining {
+                false
+            } else {
+                events.draining = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain_observer_events();
+        }
+        Ok(())
+    }
+
+    /// Install a side-effect-only observer for an unexpected Core termination
+    /// or delivery failure.  It deliberately carries no Core event payload:
+    /// the failure path may have no valid wire event to relay, and publishing
+    /// a synthetic event here could recurse through the delivery observer.
+    pub(crate) fn set_failure_observer(&self, observer: CoreFailureObserver) {
+        if let Ok(mut slot) = self.failure_observer.lock() {
+            *slot = Some(observer);
+        }
+    }
+
+    fn notify_failure_observer(&self) {
+        let observer = self
+            .failure_observer
+            .lock()
+            .ok()
+            .and_then(|observer| observer.clone());
+        if let Some(observer) = observer {
+            observer();
         }
     }
 
@@ -340,6 +400,7 @@ impl CoreSupervisor {
                 if status.is_err() || !supervisor.shutdown_requested.load(Ordering::Acquire) {
                     supervisor.pending.fail_all("Core process exited");
                     supervisor.emergency_release_if_needed();
+                    supervisor.notify_failure_observer();
                     let mut lifecycle = supervisor.lifecycle.lock().expect("lifecycle poisoned");
                     if *lifecycle != CoreLifecycle::Fatal {
                         *lifecycle = CoreLifecycle::Exited;
@@ -415,65 +476,72 @@ impl CoreSupervisor {
     }
 
     fn publish_event(&self, event: CoreEvent) {
-        let ui_event = event.into_ui_event();
-        let mut events = self.events.lock().expect("event buffer poisoned");
-        if events.overflowed {
-            return;
+        let mut observer_should_drain = false;
+        let mut direct_channel = None;
+        {
+            let mut events = self.events.lock().expect("event buffer poisoned");
+            if events.overflowed {
+                return;
+            }
+
+            if events.observer.is_some() {
+                if !enqueue_core_event(&mut events.buffered, event) {
+                    events.overflowed = true;
+                    return;
+                }
+                if !events.draining {
+                    events.draining = true;
+                    observer_should_drain = true;
+                }
+            } else if let Some(channel) = events.channel.clone() {
+                direct_channel = Some((channel, event.into_ui_event()));
+            } else if !enqueue_core_event(&mut events.buffered, event) {
+                events.overflowed = true;
+            }
         }
 
-        // The replay buffer is only for events produced before a usable UI
-        // subscriber exists. Once live delivery is installed, retaining a
-        // second copy would turn the bounded backlog into lifetime history.
-        if let Some(channel) = events.channel.clone() {
+        if let Some((channel, ui_event)) = direct_channel {
             if channel.send(ui_event).is_err() {
-                events.channel = None;
-                events.overflowed = true;
-                drop(events);
+                if let Ok(mut events) = self.events.lock() {
+                    events.channel = None;
+                    events.overflowed = true;
+                }
                 self.event_delivery_fatal();
             }
             return;
         }
 
-        let snapshot_session_id = match &ui_event {
-            UiEvent::PlaybackSnapshot { payload, .. } => Some(payload.session_id.as_str()),
-            _ => None,
-        };
-        if let Some(session_id) = snapshot_session_id {
-            if let Some(index) = events.buffered.iter().rposition(|buffered| {
-                matches!(
-                    buffered,
-                    UiEvent::PlaybackSnapshot { payload, .. }
-                        if payload.session_id == session_id
-                )
-            }) {
-                events.buffered[index] = ui_event;
-            } else if events.buffered.len() < MAX_BUFFERED_EVENTS {
-                events.buffered.push(ui_event);
-            }
-            return;
-        }
-
-        // Before subscription, lifecycle events are retained in order. A
-        // buffered snapshot may be reclaimed to preserve that lifecycle
-        // ordering, but lifecycle events themselves are never silently lost.
-        if events.buffered.len() >= MAX_BUFFERED_EVENTS
-            && let Some(index) = events
-                .buffered
-                .iter()
-                .position(|buffered| matches!(buffered, UiEvent::PlaybackSnapshot { .. }))
-        {
-            events.buffered.remove(index);
-        }
-        if events.buffered.len() < MAX_BUFFERED_EVENTS {
-            events.buffered.push(ui_event);
-        } else {
-            // There is no safe way to drop a lifecycle event. Mark the
-            // replay history unusable and fail closed for future command
-            // and subscription calls instead of silently losing state.
-            events.overflowed = true;
+        if observer_should_drain {
+            self.drain_observer_events();
         }
     }
 
+    fn drain_observer_events(&self) {
+        loop {
+            let next = {
+                let mut events = self.events.lock().expect("event buffer poisoned");
+                if events.overflowed || events.observer.is_none() || events.buffered.is_empty() {
+                    events.draining = false;
+                    return;
+                }
+                (
+                    events.observer.clone().expect("observer exists"),
+                    events.buffered.pop_front().expect("event exists"),
+                )
+            };
+            if next.0(&next.1).is_err() {
+                if let Ok(mut events) = self.events.lock() {
+                    events.draining = false;
+                    events.overflowed = true;
+                    events.buffered.clear();
+                }
+                self.event_delivery_fatal();
+                return;
+            }
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn subscribe(&self, channel: tauri::ipc::Channel<UiEvent>) -> Result<(), SupervisorError> {
         let mut events = self.events.lock().expect("event buffer poisoned");
         if events.overflowed {
@@ -482,7 +550,7 @@ impl CoreSupervisor {
             ));
         }
         for event in &events.buffered {
-            if let Err(error) = channel.send(event.clone()) {
+            if let Err(error) = channel.send(event.clone().into_ui_event()) {
                 events.channel = None;
                 events.overflowed = true;
                 let message = error.to_string();
@@ -499,6 +567,7 @@ impl CoreSupervisor {
     fn event_delivery_fatal(&self) {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending.fail_all("UI event channel delivery failed");
+        self.notify_failure_observer();
         self.terminate_child_before_emergency_release();
     }
 
@@ -732,9 +801,58 @@ impl CoreSupervisor {
 
 #[derive(Default)]
 struct EventState {
-    buffered: Vec<UiEvent>,
+    buffered: VecDeque<CoreEvent>,
     channel: Option<tauri::ipc::Channel<UiEvent>>,
+    observer: Option<CoreEventObserver>,
+    draining: bool,
     overflowed: bool,
+}
+
+fn enqueue_core_event(buffered: &mut VecDeque<CoreEvent>, event: CoreEvent) -> bool {
+    let ui_event = event.clone().into_ui_event();
+    let snapshot_key = match &ui_event {
+        UiEvent::PlaybackSnapshot { payload, .. } => Some((1_u8, payload.session_id.clone())),
+        UiEvent::DiagnosticsSnapshot { payload, .. } => {
+            Some((2_u8, payload.session_id.clone().unwrap_or_default()))
+        }
+        UiEvent::CalibrationProgress { payload, .. } => Some((3_u8, payload.operation_id.clone())),
+        _ => None,
+    };
+    if let Some(key) = snapshot_key {
+        if let Some(index) = buffered.iter().position(|candidate| {
+            let candidate_ui = candidate.clone().into_ui_event();
+            let candidate_key = match candidate_ui {
+                UiEvent::PlaybackSnapshot { payload, .. } => Some((1_u8, payload.session_id)),
+                UiEvent::DiagnosticsSnapshot { payload, .. } => {
+                    Some((2_u8, payload.session_id.unwrap_or_default()))
+                }
+                UiEvent::CalibrationProgress { payload, .. } => Some((3_u8, payload.operation_id)),
+                _ => None,
+            };
+            candidate_key == Some(key.clone())
+        }) {
+            buffered[index] = event;
+            return true;
+        }
+        if buffered.len() >= MAX_BUFFERED_EVENTS
+            && let Some(index) = buffered.iter().position(|candidate| {
+                matches!(
+                    candidate.clone().into_ui_event(),
+                    UiEvent::PlaybackSnapshot { .. }
+                        | UiEvent::DiagnosticsSnapshot { .. }
+                        | UiEvent::CalibrationProgress { .. }
+                )
+            })
+        {
+            buffered.remove(index);
+        }
+    }
+    if buffered.len() < MAX_BUFFERED_EVENTS {
+        buffered.push_back(event);
+        true
+    } else {
+        false
+    }
 }
 
 impl Drop for CoreSupervisor {
@@ -750,11 +868,15 @@ impl Drop for CoreSupervisor {
 mod tests {
     use super::super::protocol::CoreEvent;
     use super::{
-        CoreLifecycle, CoreSupervisor, MAX_BUFFERED_EVENTS, SupervisorError, SupervisorTimeouts,
+        CoreEventObserver, CoreLifecycle, CoreSupervisor, MAX_BUFFERED_EVENTS, SupervisorError,
+        SupervisorTimeouts,
     };
     use crate::ui_events::{
+        CalibrationFinishedPayload, CalibrationOutcome, CalibrationProgressPayload,
+        CalibrationState, CatalogChangedPayload, CoreReadyPayload, NativeBuildPayload,
         PlaybackEventState, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
-        PlaybackSnapshotPayload, UiEvent,
+        PlaybackSnapshotPayload, UiEvent, UpdateAvailablePayload, UpdateChannel,
+        UpdateResultPayload, UpdateState,
     };
     use serde_json::json;
     use sky_dispatch_win32::input::ReleaseAllOutcome;
@@ -778,6 +900,57 @@ mod tests {
             .arg(mode)
             .env("PYTHONUNBUFFERED", "1");
         command
+    }
+
+    fn ready_event() -> CoreEvent {
+        CoreEvent::Ready(CoreReadyPayload {
+            app_version: "3.5.0".into(),
+            protocol_version: 1,
+            native_build: NativeBuildPayload {
+                native_build_commit: "fixture".into(),
+                native_version: "fixture".into(),
+                schema_version: 1,
+                native_abi: "fixture".into(),
+                rustc_version: "fixture".into(),
+                win32_backend: true,
+            },
+        })
+    }
+
+    fn catalog_event(generation: u64) -> CoreEvent {
+        CoreEvent::CatalogChanged(CatalogChangedPayload {
+            generation,
+            total: generation,
+        })
+    }
+
+    fn event_label(event: &CoreEvent) -> String {
+        match event {
+            CoreEvent::Ready(_) => "core.ready".into(),
+            CoreEvent::CatalogChanged(payload) => format!("catalog:{}", payload.generation),
+            CoreEvent::CalibrationProgress(payload) => {
+                format!("calibration.progress:{}", payload.completed)
+            }
+            CoreEvent::CalibrationFinished(payload) => {
+                format!("calibration.finished:{:?}", payload.outcome)
+            }
+            CoreEvent::UpdateAvailable(payload) => {
+                format!("update.available:{}", payload.available_version)
+            }
+            CoreEvent::UpdateResult(payload) => {
+                format!("update.result:{:?}", payload.state)
+            }
+            _ => "other".into(),
+        }
+    }
+
+    fn clear_startup_history(supervisor: &CoreSupervisor) {
+        supervisor
+            .events
+            .lock()
+            .expect("event buffer poisoned")
+            .buffered
+            .clear();
     }
 
     fn short_timeouts() -> SupervisorTimeouts {
@@ -907,14 +1080,14 @@ mod tests {
                 .expect("event buffer poisoned")
                 .buffered
                 .iter()
-                .any(|event| matches!(event, UiEvent::CoreFatal { .. }))
+                .any(|event| matches!(event, CoreEvent::Fatal(..)))
         }));
         let events = supervisor.events.lock().expect("event buffer poisoned");
         let fatal = events
             .buffered
             .iter()
             .find_map(|event| match event {
-                UiEvent::CoreFatal { payload, .. } => Some(payload),
+                CoreEvent::Fatal(payload) => Some(payload),
                 _ => None,
             })
             .expect("original fatal event");
@@ -1125,13 +1298,241 @@ mod tests {
             .buffered
             .iter()
             .filter_map(|event| match event {
-                UiEvent::PlaybackSnapshot { payload, .. } => Some(payload),
+                CoreEvent::PlaybackSnapshot(payload) => Some(payload),
                 _ => None,
             })
             .collect();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].seq, 1_000);
         drop(events);
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn observer_install_drains_core_ready_before_new_live_event() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(ready_event());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer_seen = Arc::clone(&seen);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            Ok(())
+        });
+        supervisor
+            .install_event_observer_and_drain(observer)
+            .expect("observer install");
+        supervisor.publish_event(catalog_event(2));
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec!["core.ready", "catalog:2"]
+        );
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn transition_followed_by_live_core_events_preserves_order() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(catalog_event(20));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer_seen = Arc::clone(&seen);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            Ok(())
+        });
+        supervisor
+            .install_event_observer_and_drain(observer)
+            .expect("observer install");
+        supervisor.publish_event(catalog_event(21));
+        supervisor.publish_event(catalog_event(22));
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec!["catalog:20", "catalog:21", "catalog:22"]
+        );
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn core_event_during_native_route_creation_waits_behind_backlog() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(catalog_event(1));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let release_receiver = Arc::new(Mutex::new(release_receiver));
+        let block_first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let observer_seen = Arc::clone(&seen);
+        let observer_release = Arc::clone(&release_receiver);
+        let observer_block_first = Arc::clone(&block_first);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            if observer_block_first.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                entered_sender.send(()).expect("entered receiver");
+                observer_release
+                    .lock()
+                    .expect("release receiver")
+                    .recv()
+                    .expect("release sender");
+            }
+            Ok(())
+        });
+        let install_supervisor = Arc::clone(&supervisor);
+        let install =
+            thread::spawn(move || install_supervisor.install_event_observer_and_drain(observer));
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("observer entered");
+        supervisor.publish_event(catalog_event(2));
+        release_sender.send(()).expect("release observer");
+        install.join().expect("observer thread").expect("install");
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec!["catalog:1", "catalog:2"]
+        );
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn core_event_during_backlog_drain_cannot_overtake_older_event() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(catalog_event(10));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let release_receiver = Arc::new(Mutex::new(release_receiver));
+        let block_first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let observer_seen = Arc::clone(&seen);
+        let observer_release = Arc::clone(&release_receiver);
+        let observer_block_first = Arc::clone(&block_first);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            if observer_block_first.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                entered_sender.send(()).expect("entered receiver");
+                observer_release
+                    .lock()
+                    .expect("release receiver")
+                    .recv()
+                    .expect("release sender");
+            }
+            Ok(())
+        });
+        let install_supervisor = Arc::clone(&supervisor);
+        let install =
+            thread::spawn(move || install_supervisor.install_event_observer_and_drain(observer));
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("observer entered");
+        supervisor.publish_event(catalog_event(11));
+        release_sender.send(()).expect("release observer");
+        install.join().expect("observer thread").expect("install");
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec!["catalog:10", "catalog:11"]
+        );
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn calibration_progress_always_precedes_finished_event() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(CoreEvent::CalibrationProgress(CalibrationProgressPayload {
+            operation_id: "op".into(),
+            state: CalibrationState::Running,
+            phase: "measure".into(),
+            completed: 1,
+            total: 2,
+            message: "one".into(),
+        }));
+        supervisor.publish_event(CoreEvent::CalibrationFinished(CalibrationFinishedPayload {
+            operation_id: "op".into(),
+            outcome: CalibrationOutcome::Succeeded,
+            status: "ok".into(),
+            margin_us: Some(777),
+            sample_count: 2,
+            source: "fixture".into(),
+            message: "done".into(),
+            applied: true,
+        }));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer_seen = Arc::clone(&seen);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            Ok(())
+        });
+        supervisor
+            .install_event_observer_and_drain(observer)
+            .expect("observer install");
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec!["calibration.progress:1", "calibration.finished:Succeeded"]
+        );
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn update_events_preserve_core_source_order_across_transition() {
+        let supervisor = start("normal");
+        clear_startup_history(&supervisor);
+        supervisor.publish_event(CoreEvent::UpdateAvailable(UpdateAvailablePayload {
+            current_version: "3.5.0".into(),
+            available_version: "3.6.0".into(),
+            channel: UpdateChannel::Stable,
+            release_notes: None,
+            published_at: None,
+        }));
+        supervisor.publish_event(CoreEvent::UpdateResult(UpdateResultPayload {
+            state: UpdateState::Available,
+            current_version: "3.5.0".into(),
+            available_version: Some("3.6.0".into()),
+            channel: UpdateChannel::Stable,
+            error: None,
+        }));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer_seen = Arc::clone(&seen);
+        let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
+            observer_seen
+                .lock()
+                .expect("event log")
+                .push(event_label(event));
+            Ok(())
+        });
+        supervisor
+            .install_event_observer_and_drain(observer)
+            .expect("observer install");
+        supervisor.publish_event(CoreEvent::UpdateResult(UpdateResultPayload {
+            state: UpdateState::Current,
+            current_version: "3.6.0".into(),
+            available_version: None,
+            channel: UpdateChannel::Stable,
+            error: None,
+        }));
+        assert_eq!(
+            *seen.lock().expect("event log"),
+            vec![
+                "update.available:3.6.0",
+                "update.result:Available",
+                "update.result:Current"
+            ]
+        );
         supervisor.shutdown();
     }
 

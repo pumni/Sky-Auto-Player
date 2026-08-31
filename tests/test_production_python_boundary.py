@@ -72,7 +72,12 @@ def test_payload_reports_explicit_command_ownership_and_cutover_blockers() -> No
     assert ownership["status"] == "ok"
     assert ownership["before"]["python_count"] == 21
     assert ownership["before"]["native_count"] == 0
-    assert ownership["after"]["python_count"] == 21
-    assert ownership["after"]["native_count"] == 0
-    assert "settings.*" in accounting["remaining_blockers"]
-    assert "catalog.*" in accounting["remaining_blockers"]
+    assert ownership["after"]["python_count"] == 8
+    assert ownership["after"]["native_count"] == 13
+    assert accounting["native_command_count"] == 13
+    assert accounting["python_command_count"] == 8
+    assert accounting["python_core_process_required"] is True
+    assert accounting["python_runtime_shipped"] is True
+    assert accounting["pyo3_required_for_production_tauri_playback"] is False
+    assert "update.check" in accounting["remaining_blockers"]
+    assert "calibration.*" in accounting["remaining_blockers"]

@@ -156,6 +156,16 @@ fn catalog_fixture_preserves_ids_order_normalization_and_generation() {
             other => panic!("unexpected catalog fixture status {other}"),
         }
     }
+    for case in raw["fuzzy_cases"].as_array().unwrap() {
+        let query = case["query"].as_str().unwrap();
+        let candidate = case["candidate"].as_str().unwrap();
+        let expected = case["score"].as_f64().unwrap();
+        let actual = sky_app_core::catalog::wratio_score(query, candidate);
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "WRatio fixture {query:?} vs {candidate:?}: expected {expected}, got {actual}"
+        );
+    }
     assert!(
         index
             .search_substrings("", 1_000_000_001, 1, Some(1))

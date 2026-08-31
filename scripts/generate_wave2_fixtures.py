@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
+
+from rapidfuzz import fuzz
 
 import sky_music.config as config_module
 from sky_music.config import AppConfig, UpdateSettings
@@ -328,6 +331,35 @@ def catalog_fixture() -> dict[str, object]:
         window_case("query_too_long_1025_unicode", "é" * 1025),
         window_case("query_multibyte_under_codepoint_limit", "é" * 600),
     ]
+    fuzzy_pairs = [
+        ("this is a test", "this is a test!"),
+        ("fuzzy was a bear", "fuzzy fuzzy was a bear"),
+        ("fuzzy was a bear but not a dog", "fuzzy was a bear but not a cat"),
+        ("abcd", "xxabceyy"),
+        ("strasse", "straße"),
+        ("sky child", "sky children of the light"),
+        ("alpha beta", "beta alpha"),
+        ("abc", "xyzabcq"),
+        ("a b c", "a a b c"),
+        ("xabcdy", "abcd"),
+        ("abc", "zab"),
+        ("abc", "qabc"),
+        ("a b", "x a b y"),
+        ("foo bar", "foo baz qux"),
+        ("testing", "test"),
+        ("aa bb aa", "bb aa"),
+        ("a", "bbbbba"),
+    ]
+    rng = random.Random(20260831)
+    alphabet = "abcde rstuv"
+    for _ in range(96):
+        left = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 48))).strip()
+        right = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 64))).strip()
+        fuzzy_pairs.append((left or "a", right or "b"))
+    fuzzy_cases = [
+        {"query": query, "candidate": candidate, "score": fuzz.WRatio(query, candidate)}
+        for query, candidate in fuzzy_pairs
+    ]
     return {
         "schema": 1,
         "paths": [str(path) for path in paths],
@@ -346,6 +378,7 @@ def catalog_fixture() -> dict[str, object]:
             )
         },
         "window_cases": window_cases,
+        "fuzzy_cases": fuzzy_cases,
         "stale_generation_error": "catalog generation is stale",
     }
 

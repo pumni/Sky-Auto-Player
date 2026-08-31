@@ -26,6 +26,10 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
         if let Ok(supervisor) = state.supervisor() {
             supervisor.shutdown();
         }
+        // `app.shutdown` is a Native-owned command.  Route lifecycle cleanup
+        // through the same executable handler so ownership accounting and the
+        // real close path cannot diverge.
+        state.shutdown_native();
         if exit_after_close {
             crate::record_gui_smoke_phase("lifecycle.shutdown_core.return");
             crate::record_gui_smoke_phase("lifecycle.window_destroy.enter");

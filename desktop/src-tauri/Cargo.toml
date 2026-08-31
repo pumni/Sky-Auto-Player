@@ -18,7 +18,7 @@ desktop-runtime = [
     "tauri/x11",
     "tauri/dbus",
 ]
-tauri-test = ["tauri/test"]
+tauri-test = ["tauri/test", "sky_player/test-support"]
 
 [lib]
 name = "sky_desktop_shell_lib"
@@ -32,6 +32,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "=2.11.5", default-features = false, features = [] }
 sky_dispatch_win32 = { path = "../../rust/crates/sky_dispatch_win32" }
+sky_player = { path = "../../rust/crates/sky_player" }
+sha2 = "0.11"
+smallvec = "1"
+sky_app_core = { path = "../../rust/crates/sky_app_core" }
+sky_native_adapters = { path = "../../rust/crates/sky_native_adapters" }
 sky_updater = { path = "../../rust/crates/sky_updater" }
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 thiserror = "2"
+getrandom = "0.3"

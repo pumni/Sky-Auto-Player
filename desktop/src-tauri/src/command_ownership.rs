@@ -1,10 +1,10 @@
 //! Explicit ownership matrix for the strangler boundary.
 //!
-//! Wave 2 native service shadows are implemented and fixture-tested outside
-//! the live Tauri route, but the running Python Core still owns these commands
-//! because it retains cached application state and catalog/detail authority. A
-//! failed Python-owned command is returned as a failure; the shell never
-//! performs an implicit native-then-Python fallback.
+//! Explicit command ownership for the Wave 3 native strangler boundary.
+//!
+//! The matrix is executable policy: the selected handler is authoritative and
+//! a failure is returned to the caller.  There is no implicit native/Python
+//! fallback and no command may have two live owners.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandOwner {
@@ -13,27 +13,73 @@ pub(crate) enum CommandOwner {
 }
 
 pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
-    ("app.bootstrap", CommandOwner::Python),
-    ("app.shutdown", CommandOwner::Python),
-    ("catalog.search", CommandOwner::Python),
-    ("catalog.detail", CommandOwner::Python),
-    ("catalog.reload", CommandOwner::Python),
-    ("catalog.set_viewport", CommandOwner::Python),
+    ("app.bootstrap", CommandOwner::Native),
+    ("app.shutdown", CommandOwner::Native),
+    ("catalog.search", CommandOwner::Native),
+    ("catalog.detail", CommandOwner::Native),
+    ("catalog.reload", CommandOwner::Native),
+    ("catalog.set_viewport", CommandOwner::Native),
+    // Keep the complete settings family with Core while its process-local
+    // AppConfig cache is still live. Native services only read the same
+    // atomically persisted file as a shadow during this transition.
     ("settings.get", CommandOwner::Python),
     ("settings.patch", CommandOwner::Python),
     ("update.check", CommandOwner::Python),
     ("update.preferences.get", CommandOwner::Python),
     ("update.preferences.patch", CommandOwner::Python),
     ("update.begin_handoff", CommandOwner::Python),
-    ("playback.prepare", CommandOwner::Python),
-    ("playback.start", CommandOwner::Python),
-    ("playback.stop", CommandOwner::Python),
-    ("playback.pause", CommandOwner::Python),
-    ("playback.resume", CommandOwner::Python),
-    ("playback.skip", CommandOwner::Python),
-    ("diagnostics.set_enabled", CommandOwner::Python),
+    ("playback.prepare", CommandOwner::Native),
+    ("playback.start", CommandOwner::Native),
+    ("playback.stop", CommandOwner::Native),
+    ("playback.pause", CommandOwner::Native),
+    ("playback.resume", CommandOwner::Native),
+    ("playback.skip", CommandOwner::Native),
+    ("diagnostics.set_enabled", CommandOwner::Native),
     ("calibration.start", CommandOwner::Python),
     ("calibration.cancel", CommandOwner::Python),
+];
+
+/// Native handlers are enumerated separately from policy so the matrix cannot
+/// claim a route is native merely because a lifecycle helper happens to call
+/// an internal cleanup function.
+pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
+    "app.bootstrap",
+    "app.shutdown",
+    "catalog.search",
+    "catalog.detail",
+    "catalog.reload",
+    "catalog.set_viewport",
+    "playback.prepare",
+    "playback.start",
+    "playback.stop",
+    "playback.pause",
+    "playback.resume",
+    "playback.skip",
+    "diagnostics.set_enabled",
+];
+
+const REQUIRED_COMMANDS: [&str; 21] = [
+    "app.bootstrap",
+    "app.shutdown",
+    "catalog.search",
+    "catalog.detail",
+    "catalog.reload",
+    "catalog.set_viewport",
+    "settings.get",
+    "settings.patch",
+    "update.check",
+    "update.preferences.get",
+    "update.preferences.patch",
+    "update.begin_handoff",
+    "playback.prepare",
+    "playback.start",
+    "playback.stop",
+    "playback.pause",
+    "playback.resume",
+    "playback.skip",
+    "diagnostics.set_enabled",
+    "calibration.start",
+    "calibration.cancel",
 ];
 
 pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
@@ -43,13 +89,27 @@ pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
 }
 
 pub(crate) fn matrix_is_complete() -> bool {
-    // Keep both ownership states represented in the delivery contract even
-    // while all live routes remain Python-owned for cache-coherence reasons.
-    let _native_owner_is_available = CommandOwner::Native;
-    COMMAND_OWNERS.len() == 21
+    // Keep both ownership states represented in the delivery contract while
+    // the remaining update-handoff and calibration routes stay Python-owned.
+    COMMAND_OWNERS.len() == REQUIRED_COMMANDS.len()
+        && REQUIRED_COMMANDS.iter().all(|method| {
+            COMMAND_OWNERS
+                .iter()
+                .filter(|(name, _)| name == method)
+                .count()
+                == 1
+        })
         && COMMAND_OWNERS
             .iter()
             .all(|(method, owner)| owner_for(method) == Some(*owner))
+        && NATIVE_HANDLER_METHODS.len()
+            == COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Native)
+                .count()
+        && NATIVE_HANDLER_METHODS
+            .iter()
+            .all(|method| owner_for(method) == Some(CommandOwner::Native))
 }
 
 #[cfg(test)]
@@ -59,11 +119,45 @@ mod tests {
     #[test]
     fn every_current_core_method_has_exactly_one_explicit_owner() {
         assert_eq!(COMMAND_OWNERS.len(), 21);
+        assert_eq!(
+            COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Native)
+                .count(),
+            13
+        );
+        assert_eq!(
+            COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Python)
+                .count(),
+            8
+        );
         for (method, owner) in COMMAND_OWNERS {
             assert_eq!(owner_for(method), Some(*owner));
         }
         assert_eq!(owner_for("settings.patch"), Some(CommandOwner::Python));
+        assert_eq!(
+            owner_for("update.preferences.patch"),
+            Some(CommandOwner::Python)
+        );
         assert_eq!(owner_for("unknown"), None);
         assert!(matrix_is_complete());
+        assert_eq!(NATIVE_HANDLER_METHODS.len(), 13);
+        for method in NATIVE_HANDLER_METHODS {
+            assert_eq!(owner_for(method), Some(CommandOwner::Native));
+            assert!(
+                include_str!("native_runtime.rs").contains(&format!("\"{method}\"")),
+                "native ownership has no dispatch branch for {method}"
+            );
+        }
+        assert_eq!(
+            COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Native)
+                .map(|(method, _)| *method)
+                .collect::<Vec<_>>(),
+            NATIVE_HANDLER_METHODS
+        );
     }
 }

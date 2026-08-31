@@ -71,7 +71,7 @@ impl NativeDispatchSessionPy {
         let strict_timing = parsed_profile.strict_timing();
         let strict_down_completion_late_us = 2_000;
         let strict_up_completion_late_us = 2_000;
-        let supervisor_lease_timeout_us = 3_000_000;
+        let supervisor_lease_timeout_us = sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
         if min_hold_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "min_hold_us must be at most 60000000",

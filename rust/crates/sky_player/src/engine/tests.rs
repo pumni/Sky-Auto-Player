@@ -3992,6 +3992,87 @@ fn supervisor_lease_preserves_fresh_boundary_and_expiration() {
 }
 
 #[test]
+fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 200_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "lease-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 300_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "lease-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid lease lifecycle schedule");
+
+    let mut heartbeat_options = test_session_options(
+        schedule.clone(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    heartbeat_options.wait.supervisor_lease_timeout_us = 50_000;
+    let heartbeat_session =
+        NativeDispatchSession::new(heartbeat_options).expect("heartbeat session admission");
+    heartbeat_session.arm(0).expect("heartbeat session arm");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !heartbeat_session.snapshot().is_finished && Instant::now() < deadline {
+        heartbeat_session.heartbeat().expect("supervisor heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        heartbeat_session
+            .join(Duration::from_secs(2))
+            .expect("heartbeat join")
+    );
+    let heartbeat_snapshot = heartbeat_session.snapshot();
+    assert_ne!(
+        heartbeat_snapshot.terminal_error.as_deref(),
+        Some("supervisor_lease_expired"),
+        "periodic heartbeat must keep the worker admitted: {heartbeat_snapshot:?}"
+    );
+    assert_eq!(heartbeat_snapshot.active_count, 0);
+    assert_eq!(heartbeat_snapshot.possibly_active_count, 0);
+
+    let mut expiry_options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    expiry_options.wait.supervisor_lease_timeout_us = 50_000;
+    let expiry_session = NativeDispatchSession::new(expiry_options).expect("expiry admission");
+    expiry_session.arm(0).expect("expiry session arm");
+    assert!(
+        expiry_session
+            .join(Duration::from_secs(2))
+            .expect("expiry join")
+    );
+    let expiry_snapshot = expiry_session.snapshot();
+    assert_eq!(
+        expiry_snapshot.terminal_error.as_deref(),
+        Some("supervisor_lease_expired"),
+        "stopped heartbeat must terminate the worker: {expiry_snapshot:?}"
+    );
+    assert_eq!(expiry_snapshot.active_count, 0);
+    assert_eq!(expiry_snapshot.possibly_active_count, 0);
+    assert!(expiry_snapshot.release_outcome.is_some());
+}
+
+#[test]
 fn supervisor_lease_disabled_is_never_expired() {
     let heartbeat = AtomicU64::new(1);
     assert_eq!(
