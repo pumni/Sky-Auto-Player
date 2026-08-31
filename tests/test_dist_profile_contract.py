@@ -48,6 +48,9 @@ def test_production_native_build_commands_select_dist() -> None:
     desktop_package = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
     assert desktop_package["scripts"]["tauri:build"] == "tauri build --profile dist"
 
+    tauri_package = tomllib.loads((ROOT / "desktop" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8"))
+    assert "tauri/custom-protocol" in tauri_package["features"]["desktop-runtime"]
+
 
 def test_wheel_builder_defaults_are_fail_safe() -> None:
     source = (ROOT / "scripts" / "build_rust_wheel.py").read_text(encoding="utf-8")
