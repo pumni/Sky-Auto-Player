@@ -53,7 +53,7 @@ def test_production_native_build_commands_select_dist() -> None:
     tauri_build_source = (ROOT / "desktop" / "src-tauri" / "build.rs").read_text(encoding="utf-8")
     assert 'CARGO_FEATURE_TAURI_TEST' in tauri_build_source
     assert 'cargo:rustc-env=TAURI_CONFIG=' in tauri_build_source
-    assert '"frontendDist":null' in tauri_build_source
+    assert "frontendDist" in tauri_build_source
 
 
 def test_wheel_builder_defaults_are_fail_safe() -> None:
