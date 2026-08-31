@@ -3064,6 +3064,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "unicode-casefold",
  "unicode-normalization",
 ]
 
@@ -3073,9 +3074,7 @@ version = "3.5.0"
 dependencies = [
  "serde",
  "serde_json",
- "sky_app_core",
  "sky_dispatch_win32",
- "sky_native_adapters",
  "sky_updater",
  "tauri",
  "tauri-build",
@@ -4065,6 +4064,12 @@ checksum = "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4"
 dependencies = [
  "unic-common",
 ]
+
+[[package]]
+name = "unicode-casefold"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f66b1c8f8caa2ab31dc6d3f35386f16efdab89668f93411e565ac368908e8f"
 
 [[package]]
 name = "unicode-ident"

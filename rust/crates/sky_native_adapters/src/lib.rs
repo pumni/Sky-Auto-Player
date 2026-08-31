@@ -9,7 +9,7 @@ use sky_app_core::catalog::{CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIO
 use sky_app_core::settings::{
     ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
     DEFAULT_SONGS_DIR, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
-    SafetySettings, SettingsError, SettingsStore, UpdateChannel, UpdatePreferences,
+    SafetySettings, SettingsError, SettingsStore, UpdateChannel, UpdatePreferences, VALID_FPS,
     normalize_settings,
 };
 use std::fs;
@@ -47,7 +47,14 @@ impl JsonSettingsStore {
 
 impl SettingsStore for JsonSettingsStore {
     fn load(&self) -> Result<ApplicationSettings, SettingsError> {
-        Ok(settings_from_raw(&self.read_object()))
+        let raw = self.read_object();
+        let migrated = migrate_raw(&raw);
+        if migrated != raw {
+            let encoded = serde_json::to_vec_pretty(&Value::Object(migrated.clone()))
+                .map_err(|error| SettingsError::Storage(error.to_string()))?;
+            atomic_replace(&self.path, &encoded)?;
+        }
+        Ok(settings_from_raw(&migrated))
     }
 
     fn save(&self, settings: &ApplicationSettings) -> Result<(), SettingsError> {
@@ -128,9 +135,10 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     settings.theme = raw_string(raw, "theme", &settings.theme);
     settings.ui_background_mode =
         raw_string(raw, "ui_background_mode", &settings.ui_background_mode);
-    settings.playback_defaults.hold_frames = raw_hold_frames(raw);
+    settings.playback_defaults.hold_frames =
+        raw_f64(raw, "default_hold_frames", DEFAULT_HOLD_FRAMES);
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
-    settings.playback_defaults.fps = raw_u16(raw, "game_fps", DEFAULT_GAME_FPS);
+    settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.telemetry_enabled = raw_bool(raw, "telemetry_enabled_by_default", false);
     settings.verbose_hud = raw_bool(raw, "verbose_hud", false);
     settings.songs_dir = raw_string(raw, "songs_dir", DEFAULT_SONGS_DIR);
@@ -163,12 +171,12 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
             auto_check: object_bool(update, "auto_check", true),
             channel: UpdateChannel::parse(&object_string(update, "channel", "stable"))
                 .unwrap_or(UpdateChannel::Stable),
-            skip_version: object_string(update, "skip_version", ""),
+            skip_version: object_string_only(update, "skip_version", ""),
             check_interval_s: object_i64(update, "check_interval_s", DEFAULT_UPDATE_INTERVAL_S)
                 .max(0),
             last_check_ts: object_i64(update, "last_check_ts", 0),
             last_error_ts: object_i64(update, "last_error_ts", 0),
-            last_notified_version: object_string(update, "last_notified_version", ""),
+            last_notified_version: object_string_only(update, "last_notified_version", ""),
             legacy_old_dir_sweep_pending: object_bool(
                 update,
                 "legacy_old_dir_sweep_pending",
@@ -180,67 +188,274 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     normalize_settings(settings)
 }
 
-fn raw_hold_frames(raw: &Map<String, Value>) -> f64 {
-    if let Some(value) = raw.get("default_hold_frames").and_then(Value::as_f64)
-        && HOLD_FRAME_OPTIONS.contains(&value)
-    {
-        return value;
-    }
+fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
+    let mut migrated = raw.clone();
+    let fps = resolve_fps(
+        raw.get("game_fps")
+            .and_then(python_int)
+            .unwrap_or(i64::from(DEFAULT_GAME_FPS)),
+    );
     let profile = raw
         .get("default_timing_profile")
-        .and_then(Value::as_str)
-        .unwrap_or("balanced")
-        .trim()
-        .to_ascii_lowercase()
+        .map(python_string)
+        .unwrap_or_else(|| "balanced".into())
+        .to_lowercase()
         .replace('-', "_");
-    match profile.as_str() {
+    let selected = selected_timing_profile(raw.get("timing_profiles"), &profile);
+
+    let mut candidate = selected.and_then(|profile| {
+        ["min_hold_frames", "hold_frames"]
+            .into_iter()
+            .find_map(|key| {
+                profile
+                    .get(key)
+                    .and_then(legacy_float)
+                    .and_then(nearest_hold_frames)
+            })
+    });
+    if candidate.is_none() {
+        let frame_us = (1_000_000_i64 + i64::from(fps) - 1) / i64::from(fps);
+        candidate = selected.and_then(|profile| {
+            ["min_hold_us", "hold_us"].into_iter().find_map(|key| {
+                profile
+                    .get(key)
+                    .and_then(legacy_float)
+                    .and_then(|value| nearest_hold_frames(value / frame_us as f64))
+            })
+        });
+    }
+    let candidate = candidate.unwrap_or_else(|| legacy_profile_hold(&profile));
+    let hold = raw
+        .get("default_hold_frames")
+        .and_then(numeric_float)
+        .and_then(nearest_supported_hold)
+        .unwrap_or(DEFAULT_HOLD_FRAMES);
+    migrated.insert("schema_version".into(), Value::from(3_u32));
+    migrated.insert(
+        "default_hold_frames".into(),
+        Value::from(if raw.contains_key("default_hold_frames") {
+            hold
+        } else {
+            candidate
+        }),
+    );
+    for key in [
+        "default_timing_profile",
+        "timing_profiles",
+        "frame_timing",
+        "hold_us",
+        "min_hold_us",
+        "hold_frames",
+        "min_hold_frames",
+        "hold_unframed_us",
+        "min_hold_unframed_us",
+    ] {
+        migrated.remove(key);
+    }
+    migrated
+}
+
+fn legacy_profile_hold(profile: &str) -> f64 {
+    match profile {
         "audience_safe" | "remote_safe" | "online_audible_safe" | "online_audible" => 1.5,
         _ => DEFAULT_HOLD_FRAMES,
     }
 }
 
+fn selected_timing_profile<'a>(
+    value: Option<&'a Value>,
+    profile: &str,
+) -> Option<&'a Map<String, Value>> {
+    let profiles = value?.as_object()?;
+    if let Some(selected) = profiles.get(profile) {
+        if let Some(object) = selected.as_object() {
+            if !object.is_empty() {
+                return Some(object);
+            }
+        } else if !json_is_falsy(selected) {
+            // Python keeps a truthy non-dict exact match and then discards it;
+            // it does not continue looking for an alias in that case.
+            return None;
+        }
+    }
+    profiles
+        .iter()
+        .find(|(key, _)| key.to_lowercase().replace('-', "_") == profile)
+        .and_then(|(_, selected)| selected.as_object())
+}
+
+fn json_is_falsy(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(value) => !value,
+        Value::Number(value) => value.as_f64().is_some_and(|number| number == 0.0),
+        Value::String(value) => value.is_empty(),
+        Value::Array(value) => value.is_empty(),
+        Value::Object(value) => value.is_empty(),
+    }
+}
+
 fn raw_string(raw: &Map<String, Value>, key: &str, default: &str) -> String {
     raw.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or(default)
-        .to_owned()
+        .map(python_string)
+        .unwrap_or_else(|| default.into())
 }
+
 fn raw_bool(raw: &Map<String, Value>, key: &str, default: bool) -> bool {
     raw.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
+
 fn raw_f64(raw: &Map<String, Value>, key: &str, default: f64) -> f64 {
     raw.get(key)
-        .and_then(Value::as_f64)
+        .and_then(python_float)
         .filter(|value| value.is_finite())
         .unwrap_or(default)
 }
-fn raw_u16(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
-    raw.get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(default)
+
+fn raw_fps(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
+    resolve_fps(
+        raw.get(key)
+            .and_then(python_int)
+            .unwrap_or(i64::from(default)),
+    )
 }
+
 fn raw_string_list(value: Option<&Value>) -> Option<Vec<String>> {
-    value?.as_array().map(|items| {
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect()
-    })
+    value?
+        .as_array()
+        .map(|items| items.iter().map(python_string).collect())
 }
+
 fn object_string(object: &Map<String, Value>, key: &str, default: &str) -> String {
+    object
+        .get(key)
+        .map(python_string)
+        .unwrap_or_else(|| default.into())
+}
+
+fn object_string_only(object: &Map<String, Value>, key: &str, default: &str) -> String {
     object
         .get(key)
         .and_then(Value::as_str)
         .unwrap_or(default)
         .to_owned()
 }
+
 fn object_bool(object: &Map<String, Value>, key: &str, default: bool) -> bool {
     object.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
+
 fn object_i64(object: &Map<String, Value>, key: &str, default: i64) -> i64 {
     object.get(key).and_then(Value::as_i64).unwrap_or(default)
+}
+
+fn python_string(value: &Value) -> String {
+    match value {
+        Value::Null => "None".into(),
+        Value::Bool(value) => {
+            if *value {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(python_repr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!("{}: {}", python_repr_string(key), python_repr(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn python_repr(value: &Value) -> String {
+    match value {
+        Value::String(value) => python_repr_string(value),
+        _ => python_string(value),
+    }
+}
+
+fn python_repr_string(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn python_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(_) | Value::Null => None,
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => value.trim().parse::<f64>().ok(),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn legacy_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
+        _ => python_float(value),
+    }
+}
+
+fn numeric_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(_) | Value::Null | Value::String(_) | Value::Array(_) | Value::Object(_) => {
+            None
+        }
+        Value::Number(value) => value.as_f64(),
+    }
+}
+
+fn python_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Bool(_) | Value::Null => None,
+        Value::Number(value) => value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .map(|value| value.trunc())
+                    .filter(|value| value.is_finite())
+                    .and_then(|value| i64::try_from(value as i128).ok())
+            }),
+        Value::String(value) => value.trim().parse::<i64>().ok(),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn nearest_hold_frames(value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let mut best = HOLD_FRAME_OPTIONS[0];
+    for option in HOLD_FRAME_OPTIONS {
+        if (option - value).abs() <= (best - value).abs() {
+            best = option;
+        }
+    }
+    Some(best)
+}
+
+fn nearest_supported_hold(value: f64) -> Option<f64> {
+    HOLD_FRAME_OPTIONS.contains(&value).then_some(value)
+}
+
+fn resolve_fps(value: i64) -> u16 {
+    u16::try_from(value)
+        .ok()
+        .filter(|value| VALID_FPS.contains(value))
+        .unwrap_or(DEFAULT_GAME_FPS)
 }
 
 fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings) {

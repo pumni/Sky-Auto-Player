@@ -22,11 +22,10 @@ Python application
 - `sky_dispatch_win32`: Windows/QPC/SendInput platform adapter. Must not import PyO3.
 - `sky_player`: Pure Rust runtime orchestration and playback engine. It must not import PyO3.
 - `sky_player_rs`: Temporary Python FFI adapter. Only this crate may import PyO3.
-- `sky_app_core`: Pure application/domain home. During the foundation phase it
-  intentionally has no speculative models or ports; each future abstraction is
-  introduced just-in-time with current-behavior evidence and a parity fixture.
-  It must not depend on Tauri, PyO3, Win32, the desktop shell, or the player
-  crate.
+- `sky_app_core`: Pure application/domain home. Current models and ports are
+  introduced just-in-time with current-behavior evidence and parity fixtures;
+  speculative abstractions are not retained. It must not depend on Tauri,
+  PyO3, Win32, the desktop shell, or the player crate.
 
 ## Module Ownership
 

@@ -8,6 +8,5 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
-pub mod events;
 pub mod settings;
 pub mod update;

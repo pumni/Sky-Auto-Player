@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
+use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub const SUPPORTED_EXTENSIONS: [&str; 3] = ["json", "skysheet", "txt"];
@@ -58,8 +59,6 @@ pub enum CatalogError {
     InvalidQuery,
     #[error("catalog query exceeds {MAX_QUERY_LENGTH} characters")]
     QueryTooLong,
-    #[error("catalog offset must be a non-negative bounded integer")]
-    InvalidOffset,
     #[error("catalog limit must be between 1 and {MAX_PAGE_SIZE}")]
     InvalidLimit,
     #[error("catalog generation is stale")]
@@ -143,7 +142,7 @@ impl CatalogIndex {
         entries.sort_by(|a, b| {
             a.search_key
                 .cmp(&b.search_key)
-                .then_with(|| a.row.title.to_lowercase().cmp(&b.row.title.to_lowercase()))
+                .then_with(|| unicode_casefold(&a.row.title).cmp(&unicode_casefold(&b.row.title)))
         });
         by_id.clear();
         for (index, entry) in entries.iter().enumerate() {
@@ -293,15 +292,19 @@ impl CatalogIndex {
 }
 
 pub fn normalize_search_text(value: &str) -> String {
-    value
+    let decomposed = value
         .nfkd()
         .filter(|character| !is_combining_mark(*character))
         .map(|character| match character {
             'đ' | 'Đ' => 'd',
             other => other,
         })
-        .collect::<String>()
-        .to_lowercase()
+        .collect::<String>();
+    unicode_casefold(&decomposed)
+}
+
+fn unicode_casefold(value: &str) -> String {
+    value.case_fold().collect()
 }
 
 pub fn song_id_for_canonical_path(path: &str) -> String {
@@ -339,17 +342,14 @@ fn is_supported_path(path: &str) -> bool {
 }
 
 fn normalize_query(query: &str) -> Result<String, CatalogError> {
-    if query.len() > MAX_QUERY_LENGTH {
+    if query.chars().count() > MAX_QUERY_LENGTH {
         return Err(CatalogError::QueryTooLong);
     }
     Ok(normalize_search_text(query).trim().to_owned())
 }
 
-fn validate_window(query: &str, offset: usize, limit: usize) -> Result<(), CatalogError> {
+fn validate_window(query: &str, _offset: usize, limit: usize) -> Result<(), CatalogError> {
     let _ = normalize_query(query)?;
-    if offset > 1_000_000_000 {
-        return Err(CatalogError::InvalidOffset);
-    }
     if !(1..=MAX_PAGE_SIZE).contains(&limit) {
         return Err(CatalogError::InvalidLimit);
     }

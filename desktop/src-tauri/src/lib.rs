@@ -2,9 +2,7 @@ mod app_state;
 mod bindings;
 mod command_ownership;
 mod commands;
-mod event_mux;
 mod lifecycle;
-mod native_services;
 mod ui_events;
 
 mod core;
@@ -47,12 +45,9 @@ fn run_inner(gui_smoke: bool) {
         return;
     }
     let app_state = app_state::AppState::default();
-    let native_services = native_services::NativeServices::for_current_install();
-    native_services.assert_composition_contract();
     app_state.set_gui_smoke_exit(gui_smoke);
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .manage(app_state)
-        .manage(native_services)
         .setup(move |app| {
             if gui_smoke {
                 let app_handle = app.handle().clone();

@@ -1,10 +1,10 @@
 //! Explicit ownership matrix for the strangler boundary.
 //!
-//! Wave 2 native services are implemented and parity-tested outside the live
-//! Tauri route, but the running Python Core still owns these commands because
-//! it retains cached application state and catalog/detail authority. A failed
-//! Python-owned command is returned as a failure; the shell never performs an
-//! implicit native-then-Python fallback.
+//! Wave 2 native service shadows are implemented and fixture-tested outside
+//! the live Tauri route, but the running Python Core still owns these commands
+//! because it retains cached application state and catalog/detail authority. A
+//! failed Python-owned command is returned as a failure; the shell never
+//! performs an implicit native-then-Python fallback.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandOwner {

@@ -111,7 +111,7 @@ fn catalog_fixture_preserves_ids_order_normalization_and_generation() {
         snapshot,
         serde_json::from_value(raw["snapshot"].clone()).unwrap()
     );
-    for (query, expected) in raw["queries"].as_object().unwrap() {
+    for (query, expected) in raw["substring_queries"].as_object().unwrap() {
         let page = index
             .search_substrings(query, 0, 20, Some(1))
             .expect("substring query");
@@ -122,6 +122,53 @@ fn catalog_fixture_preserves_ids_order_normalization_and_generation() {
         "ca phe"
     );
     assert_eq!(sky_app_core::catalog::normalize_search_text("Đàn"), "dan");
+    for (value, expected) in raw["normalized"].as_object().unwrap() {
+        assert_eq!(
+            sky_app_core::catalog::normalize_search_text(value),
+            expected.as_str().unwrap(),
+            "normalization fixture {value}"
+        );
+    }
+    for case in raw["window_cases"].as_array().unwrap() {
+        let query = case["query"].as_str().unwrap();
+        let offset = case["offset"].as_u64().unwrap() as usize;
+        let limit = case["limit"].as_u64().unwrap() as usize;
+        let result = index.search_substrings(query, offset, limit, Some(1));
+        match case["status"].as_str().unwrap() {
+            "ok" => {
+                let expected: sky_app_core::catalog::CatalogPage =
+                    serde_json::from_value(case["page"].clone()).unwrap();
+                assert_eq!(
+                    result.expect("accepted catalog window"),
+                    expected,
+                    "window fixture {case}"
+                );
+            }
+            "error" => {
+                let error = result.expect_err("rejected catalog window");
+                let expected_error = if case["error"].as_str().unwrap().contains("query exceeds") {
+                    sky_app_core::catalog::CatalogError::QueryTooLong
+                } else {
+                    sky_app_core::catalog::CatalogError::InvalidLimit
+                };
+                assert_eq!(error, expected_error, "window fixture {case}");
+            }
+            other => panic!("unexpected catalog fixture status {other}"),
+        }
+    }
+    assert!(
+        index
+            .search_substrings("", 1_000_000_001, 1, Some(1))
+            .expect("large Python-compatible offset")
+            .items
+            .is_empty()
+    );
+    assert_eq!(
+        index
+            .canonical_path_for_song_id("not-a-song-id", Some(1))
+            .unwrap_err(),
+        sky_app_core::catalog::CatalogError::UnknownSongId
+    );
 }
 
 #[test]
