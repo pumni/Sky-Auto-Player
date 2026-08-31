@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 METHOD_PATTERN = re.compile(
     r'"((?:app|catalog|settings|update|playback|diagnostics|calibration)'

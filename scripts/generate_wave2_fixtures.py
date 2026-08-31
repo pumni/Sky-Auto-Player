@@ -17,7 +17,10 @@ import sky_music.config as config_module
 from sky_music.config import AppConfig, UpdateSettings
 from sky_music.domain.update_policy import get_policy
 from sky_music.orchestration.catalog_service import CatalogService
-from sky_music.orchestration.settings_service import SettingsService, normalize_application_settings
+from sky_music.orchestration.settings_service import (
+    SettingsService,
+    normalize_application_settings,
+)
 from sky_music.orchestration.update_service import retry_delay_for, should_auto_check
 
 
