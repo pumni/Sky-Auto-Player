@@ -911,14 +911,24 @@ Start-Sleep -Seconds $Seconds
         if ([string]::IsNullOrWhiteSpace($hostPath)) {
             throw "could not determine the current PowerShell host path"
         }
+        # Keep child PowerShell processes from inheriting the harness capture
+        # pipes.  Python's communicate() waits for those pipes to close, and a
+        # hosted Windows runner can otherwise retain them after this script's
+        # five-second polling contract has completed.
+        $writerStdout = Join-Path $root "writer-stdout.txt"
+        $writerStderr = Join-Path $root "writer-stderr.txt"
+        $holderStdout = Join-Path $root "holder-stdout.txt"
+        $holderStderr = Join-Path $root "holder-stderr.txt"
         $writerArguments = @(
             "-NoProfile", "-File", $writerScript, "-ResultPath", $resultPath, "-FinalPath", $finalPath
         )
         $writerLine = ($writerArguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " "
-        $writer = Start-Process -FilePath $hostPath -ArgumentList $writerLine -WindowStyle Hidden -PassThru
+        $writer = Start-Process -FilePath $hostPath -ArgumentList $writerLine -WindowStyle Hidden `
+            -RedirectStandardOutput $writerStdout -RedirectStandardError $writerStderr -PassThru
         $holderArguments = @("-NoProfile", "-File", $holderScript, "-Seconds", "3")
         $holderLine = ($holderArguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join " "
-        $holder = Start-Process -FilePath $hostPath -ArgumentList $holderLine -WindowStyle Hidden -PassThru
+        $holder = Start-Process -FilePath $hostPath -ArgumentList $holderLine -WindowStyle Hidden `
+            -RedirectStandardOutput $holderStdout -RedirectStandardError $holderStderr -PassThru
         $scenario = [pscustomobject]@{ Name = "result-polling-self-test"; Local = $local }
         $runInfo = [pscustomobject]@{ Process = $holder }
         $observed = Wait-ForUpdaterResult $scenario $runInfo "failure" "RESTART_FAILED" 5
