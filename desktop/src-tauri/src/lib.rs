@@ -107,6 +107,11 @@ fn run_inner(gui_smoke: bool) {
                     record_gui_smoke_phase("watchdog.failure_recorded");
                     eprintln!("packaged GUI smoke watchdog expired");
                     app_handle.exit(1);
+                    // Tauri's exit request can terminate the event loop while
+                    // the native entrypoint would otherwise return success.
+                    // The packaging harness must observe this watchdog as a
+                    // process failure, never as a false green smoke.
+                    std::process::exit(1);
                 });
                 record_gui_smoke_phase("watchdog.spawned");
                 record_gui_smoke_phase("tauri.setup.complete");
