@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +49,10 @@ CANONICAL_DISPATCH_FILES = {
     "observer_wake.rs",
 }
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
+PLAYER_ADAPTER_FORBIDDEN_DIRECT_DEPENDENCIES = {
+    "sky_dispatch_core",
+    "sky_dispatch_win32",
+}
 
 ALLOWED_UNSAFE_MODULES = {
     "rust/crates/sky_dispatch_win32/src/calibration.rs",
@@ -306,6 +311,24 @@ def _record(report: CheckReport, violation: Violation, allowlist: dict[tuple[str
         report.errors.append(violation)
 
 
+def _player_adapter_violations(repository_root: Path) -> list[Violation]:
+    """Keep the temporary Python adapter behind sky_player's typed facade."""
+
+    manifest = repository_root / "rust/crates/sky_player_rs/Cargo.toml"
+    if not manifest.exists():
+        return []
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    dependencies = data.get("dependencies", {})
+    return [
+        Violation(
+            "player_adapter_dependency",
+            "rust/crates/sky_player_rs/Cargo.toml",
+            f"sky_player_rs must not depend directly on {name}; use sky_player::adapter_support",
+        )
+        for name in sorted(PLAYER_ADAPTER_FORBIDDEN_DIRECT_DEPENDENCIES.intersection(dependencies))
+    ]
+
+
 def check_repository(repository_root: Path) -> CheckReport:
     report = CheckReport()
     allowlist = _load_allowlist(repository_root)
@@ -313,6 +336,9 @@ def check_repository(repository_root: Path) -> CheckReport:
     if not workspace_root.exists():
         report.errors.append(Violation("workspace", "rust/crates", "workspace not found"))
         return report
+
+    for violation in _player_adapter_violations(repository_root):
+        _record(report, violation, allowlist)
 
     dispatch_dir = repository_root / "rust/crates/sky_player/src/engine/worker/dispatch"
     if not dispatch_dir.exists():
@@ -380,6 +406,21 @@ def check_repository(repository_root: Path) -> CheckReport:
                 _record(report, Violation("pyo3_boundary", relative, "PyO3 import outside Python boundary"), allowlist)
             if crate == "sky_dispatch_core" and ("sky_dispatch_win32::" in joined or "use sky_dispatch_win32" in joined):
                 _record(report, Violation("dependency_direction", relative, "core imports sky_dispatch_win32"), allowlist)
+            if crate == "sky_player_rs" and (
+                "sky_dispatch_core::" in joined
+                or "use sky_dispatch_core" in joined
+                or "sky_dispatch_win32::" in joined
+                or "use sky_dispatch_win32" in joined
+            ):
+                _record(
+                    report,
+                    Violation(
+                        "player_adapter_dependency",
+                        relative,
+                        "sky_player_rs source must use sky_player::adapter_support for dispatch access",
+                    ),
+                    allowlist,
+                )
             if crate in {"sky_dispatch_core", "sky_dispatch_win32"} and (
                 "sky_player_rs::" in joined
                 or "use sky_player_rs" in joined

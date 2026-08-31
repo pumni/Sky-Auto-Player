@@ -3,6 +3,10 @@ use super::{
     PyResult, PyTuple, PyTypeError, PyValueError, RuntimeSchedule,
 };
 use pyo3::types::PyAnyMethods;
+use sky_player::adapter_support::{
+    MAX_ACTIONS, MAX_KEYS, MAX_REASON_BYTES, compile_runtime_intents,
+    validate_min_hold_and_release_gap_feasibility,
+};
 
 pub(super) fn strict_sequence<'py>(
     value: &Bound<'py, PyAny>,
@@ -45,10 +49,10 @@ pub(super) fn strict_scan_codes(
     allowed: Option<&[u16]>,
 ) -> PyResult<smallvec::SmallVec<[u16; 4]>> {
     let items = strict_sequence(value, field)?;
-    if items.is_empty() || items.len() > sky_dispatch_core::model::MAX_KEYS {
+    if items.is_empty() || items.len() > MAX_KEYS {
         return Err(PyValueError::new_err(format!(
             "{field} must contain between 1 and {} scan codes",
-            sky_dispatch_core::model::MAX_KEYS
+            MAX_KEYS
         )));
     }
 
@@ -104,10 +108,10 @@ fn parse_actions_with_allowlist(
     let mut reason_interns = std::collections::HashMap::<String, Arc<str>>::new();
 
     for (position, item_res) in iter.enumerate() {
-        if position >= sky_dispatch_core::compile::MAX_ACTIONS {
+        if position >= MAX_ACTIONS {
             return Err(PyValueError::new_err(format!(
                 "actions exceeds the configured cap of {}",
-                sky_dispatch_core::compile::MAX_ACTIONS
+                MAX_ACTIONS
             )));
         }
         let item = item_res?;
@@ -150,10 +154,10 @@ fn parse_actions_with_allowlist(
             .get_item(4)?
             .extract::<String>()
             .map_err(|_| PyTypeError::new_err(format!("actions[{position}].reason must be str")))?;
-        if reason.len() > sky_dispatch_core::compile::MAX_REASON_BYTES {
+        if reason.len() > MAX_REASON_BYTES {
             return Err(PyValueError::new_err(format!(
                 "actions[{position}].reason exceeds {} UTF-8 bytes",
-                sky_dispatch_core::compile::MAX_REASON_BYTES
+                MAX_REASON_BYTES
             )));
         }
 
@@ -175,11 +179,8 @@ fn parse_actions_with_allowlist(
 
 pub(super) fn parse_schedule(py_actions: &Bound<'_, PyAny>) -> PyResult<RuntimeSchedule> {
     let actions = parse_actions(py_actions)?;
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &actions,
-        &PHYSICAL_INSTRUMENT_SCAN_CODES,
-    )
-    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok(schedule)
 }
 
@@ -191,9 +192,8 @@ pub(super) fn parse_schedule_with_allowlist(
 ) -> PyResult<(RuntimeSchedule, Vec<u16>)> {
     let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
     let actions = parse_actions_with_allowlist(py_actions, &allowed_scan_codes)?;
-    let schedule =
-        sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let schedule = compile_runtime_intents(&actions, &allowed_scan_codes)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok((schedule, allowed_scan_codes))
 }
 
@@ -202,7 +202,7 @@ pub(super) fn validate_schedule_timing(
     effective_min_hold_us: u64,
     min_release_gap_us: u64,
 ) -> PyResult<()> {
-    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
+    validate_min_hold_and_release_gap_feasibility(
         schedule,
         effective_min_hold_us,
         min_release_gap_us,

@@ -1,7 +1,7 @@
 #[cfg(feature = "test-support")]
 use super::engine::FaultInjectionScript;
 use super::engine::{BackendConfig, DispatchProfile, NativeDispatchSession};
-use sky_player::engine::binding_support::{
+use sky_player::adapter_support::{
     ActionKind, KeyActionInput, PHYSICAL_INSTRUMENT_SCAN_CODES, PriorityMode, RuntimeSchedule,
 };
 
@@ -30,7 +30,7 @@ fn instrument_scan_codes() -> Vec<u16> {
 
 #[pyfunction]
 fn host_timing_fingerprint_json() -> PyResult<String> {
-    let fingerprint = sky_dispatch_win32::calibration::build_host_fingerprint()
+    let fingerprint = sky_player::adapter_support::build_host_fingerprint()
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     serde_json::to_string(&fingerprint).map_err(|error| {
         PyRuntimeError::new_err(format!("could not serialize host fingerprint: {error}"))

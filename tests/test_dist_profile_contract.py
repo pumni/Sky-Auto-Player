@@ -68,4 +68,5 @@ def test_shipping_binary_paths_match_dist_profile() -> None:
     assert '"target" / "dist" / "sky_desktop_shell.exe"' in portable_source
     assert '"target" / "dist" / "sky_updater_e2e.exe"' in portable_source
     assert 'rust\\target\\dist\\sky_updater.exe' in updater_e2e_source
-    assert "rust\\target\\dist\\deps\\sky_player_rs.s" in assembly_source
+    assert "target\\dist\\deps" in assembly_source
+    assert "sky_player*.s" in assembly_source

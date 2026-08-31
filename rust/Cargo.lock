@@ -3113,8 +3113,6 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "serde_json",
- "sky_dispatch_core",
- "sky_dispatch_win32",
  "sky_player",
  "smallvec",
 ]

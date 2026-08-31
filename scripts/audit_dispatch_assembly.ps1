@@ -1,8 +1,23 @@
 param(
-    [string]$AssemblyPath = (Join-Path $PSScriptRoot '..\rust\target\dist\deps\sky_player_rs.s')
+    [string]$AssemblyPath = ''
 )
 
+if ([string]::IsNullOrWhiteSpace($AssemblyPath)) {
+    $assemblyDirectory = Join-Path $PSScriptRoot '..\rust\target\dist\deps'
+    $candidates = @(
+        Get-ChildItem -LiteralPath $assemblyDirectory -Filter 'sky_player*.s' -File |
+            Where-Object { $_.Name -match '^sky_player(?:-[0-9a-f]+)?\.s$' }
+    )
+    if ($candidates.Count -ne 1) {
+        throw "expected exactly one authoritative sky_player dist assembly in $assemblyDirectory, found $($candidates.Count)"
+    }
+    $AssemblyPath = $candidates[0].FullName
+}
+
 $resolvedAssemblyPath = Resolve-Path -LiteralPath $AssemblyPath -ErrorAction Stop
+if ($resolvedAssemblyPath.Path -notmatch '[\\/]sky_player(?:-[0-9a-f]+)?\.s$') {
+    throw "assembly audit must inspect authoritative sky_player output, got $resolvedAssemblyPath"
+}
 $lines = Get-Content -LiteralPath $resolvedAssemblyPath
 
 $targets = @(

@@ -82,10 +82,7 @@ pub mod dispatch_primitives {
 /// Narrow native surface needed by delivery adapters without bringing a
 /// delivery framework into the player engine.
 pub mod binding_support {
-    pub use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
-    pub use sky_dispatch_win32::calibration;
-    pub use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
-    pub use sky_dispatch_win32::mmcss::PriorityMode;
+    pub use crate::adapter_support::*;
 }
 
 /// Test-only hooks for §8.12 slow-observer regression scenarios.
