@@ -10,12 +10,12 @@
 //! allocations made by test harness setup before and after are not counted.
 //!
 //! Run with:
-//!   cargo test --manifest-path rust/Cargo.toml -p sky_player_rs \
+//!   cargo test --manifest-path rust/Cargo.toml -p sky_player \
 //!       --features test-support --test rt_dispatch_no_alloc
 
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
-use sky_player_rs::engine::dispatch_primitives::{
+use sky_player::engine::dispatch_primitives::{
     DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep, DownObservation,
     DownTraceObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
     ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
@@ -647,7 +647,7 @@ fn production_metadata_only_stale_commit_no_alloc() {
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         &first,
-        sky_player_rs::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
+        sky_player::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
     ));
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&first),
@@ -668,7 +668,7 @@ fn production_metadata_only_stale_commit_no_alloc() {
     let metadata = harness.plan_current_dispatch();
     assert!(matches!(
         &metadata,
-        sky_player_rs::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
+        sky_player::engine::dispatch_primitives::NextDispatchPlan::Metadata(_)
     ));
     enable_counting();
     let step = harness.dispatch_at_plan_target_for_test(&metadata);

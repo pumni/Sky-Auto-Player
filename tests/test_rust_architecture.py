@@ -182,3 +182,36 @@ def test_checker_accepts_worker_schedule_move(tmp_path):
     report = _checker().check_repository(tmp_path)
 
     assert not any(item.rule == "runtime_schedule_clone" for item in report.errors)
+
+
+def test_checker_rejects_player_adapter_direct_dispatch_dependency(tmp_path):
+    crate = tmp_path / "rust" / "crates" / "sky_player_rs"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        "[package]\nname = 'sky_player_rs'\nversion = '0.1.0'\n"
+        "[dependencies]\nsky_dispatch_core = { path = '../sky_dispatch_core' }\n",
+        encoding="utf-8",
+    )
+    (crate / "src").mkdir()
+    (crate / "src" / "lib.rs").write_text("pub fn adapter() {}\n", encoding="utf-8")
+
+    report = _checker().check_repository(tmp_path)
+
+    assert any(item.rule == "player_adapter_dependency" for item in report.errors)
+
+
+def test_checker_rejects_player_adapter_source_dispatch_import(tmp_path):
+    crate = tmp_path / "rust" / "crates" / "sky_player_rs"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        "[package]\nname = 'sky_player_rs'\nversion = '0.1.0'\n",
+        encoding="utf-8",
+    )
+    (crate / "src").mkdir()
+    (crate / "src" / "lib.rs").write_text(
+        "use sky_dispatch_win32::win32_available;\n", encoding="utf-8"
+    )
+
+    report = _checker().check_repository(tmp_path)
+
+    assert any(item.rule == "player_adapter_dependency" for item in report.errors)

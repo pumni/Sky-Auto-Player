@@ -245,7 +245,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
         dict.set_item("pyo3_version", "0.29.2")?;
         dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
-        dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
+        dict.set_item(
+            "schema_version",
+            sky_player::adapter_support::SCHEMA_VERSION,
+        )?;
         dict.set_item("elapsed_us", snap.elapsed_us)?;
         dict.set_item("total_us", snap.total_us)?;
         dict.set_item("pre_roll_remaining_us", snap.pre_roll_remaining_us)?;

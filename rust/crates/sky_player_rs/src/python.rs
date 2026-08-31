@@ -1,6 +1,9 @@
 #[cfg(feature = "test-support")]
 use super::engine::FaultInjectionScript;
 use super::engine::{BackendConfig, DispatchProfile, NativeDispatchSession};
+use sky_player::adapter_support::{
+    ActionKind, KeyActionInput, PHYSICAL_INSTRUMENT_SCAN_CODES, PriorityMode, RuntimeSchedule,
+};
 
 mod conversion;
 mod session;
@@ -14,9 +17,6 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
 use session::NativeDispatchSessionPy;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
-use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
-use sky_dispatch_win32::mmcss::PriorityMode;
 use snapshot::{BackendHealthSnapshotPy, PollSnapshotPy, ProgressSnapshotPy};
 use std::sync::Arc;
 use telemetry::build_info;
@@ -30,7 +30,7 @@ fn instrument_scan_codes() -> Vec<u16> {
 
 #[pyfunction]
 fn host_timing_fingerprint_json() -> PyResult<String> {
-    let fingerprint = sky_dispatch_win32::calibration::build_host_fingerprint()
+    let fingerprint = sky_player::adapter_support::build_host_fingerprint()
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     serde_json::to_string(&fingerprint).map_err(|error| {
         PyRuntimeError::new_err(format!("could not serialize host fingerprint: {error}"))
