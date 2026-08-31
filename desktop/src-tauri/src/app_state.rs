@@ -1,4 +1,5 @@
 use crate::core::CoreSupervisor;
+use crate::native_runtime::NativeDesktopRuntime;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 
@@ -9,6 +10,7 @@ pub struct AppState {
 
 struct AppStateInner {
     core: Mutex<CoreState>,
+    native: Mutex<Option<Arc<NativeDesktopRuntime>>>,
     settings_writes: Mutex<()>,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
@@ -27,6 +29,7 @@ impl Default for AppState {
         Self {
             inner: Arc::new(AppStateInner {
                 core: Mutex::new(CoreState::Idle),
+                native: Mutex::new(None),
                 settings_writes: Mutex::new(()),
                 closing: AtomicBool::new(false),
                 gui_smoke_exit: AtomicBool::new(false),
@@ -37,6 +40,30 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Lazily construct the single native application runtime.  Production
+    /// commands use this path; Core startup remains available only for the
+    /// transitional Python-owned/test protocol surface.
+    pub(crate) fn ensure_native_blocking(&self) -> Result<Arc<NativeDesktopRuntime>, String> {
+        if self.is_closing() {
+            return Err("Desktop application is closing".into());
+        }
+        let mut native = self.inner.native.lock().expect("native state poisoned");
+        if let Some(runtime) = &*native {
+            return Ok(Arc::clone(runtime));
+        }
+        let runtime = Arc::new(NativeDesktopRuntime::for_current_install()?);
+        *native = Some(Arc::clone(&runtime));
+        Ok(runtime)
+    }
+
+    pub fn shutdown_native(&self) {
+        if let Ok(native) = self.inner.native.lock()
+            && let Some(runtime) = &*native
+        {
+            runtime.shutdown();
+        }
+    }
+
     /// Start the Core at most once and let concurrent callers share its result.
     /// The caller must invoke this from a blocking worker because Core startup
     /// waits for the child process readiness event.

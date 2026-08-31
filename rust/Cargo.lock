@@ -3074,8 +3074,13 @@ version = "3.5.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "sky_app_core",
  "sky_dispatch_win32",
+ "sky_native_adapters",
+ "sky_player",
  "sky_updater",
+ "smallvec",
  "tauri",
  "tauri-build",
  "thiserror 2.0.20",

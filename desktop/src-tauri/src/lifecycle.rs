@@ -26,6 +26,7 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
         if let Ok(supervisor) = state.supervisor() {
             supervisor.shutdown();
         }
+        state.shutdown_native();
         if exit_after_close {
             crate::record_gui_smoke_phase("lifecycle.shutdown_core.return");
             crate::record_gui_smoke_phase("lifecycle.window_destroy.enter");

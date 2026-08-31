@@ -333,7 +333,7 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"packaged Tauri/Core selftest failed ({result.returncode}): "
+            f"packaged Tauri/Native Desktop selftest failed ({result.returncode}): "
             f"{_decode_output(result.stderr)[-4000:]}"
         )
     print(_decode_output(result.stdout).strip())

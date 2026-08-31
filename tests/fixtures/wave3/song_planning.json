@@ -1,0 +1,714 @@
+{
+  "schema": 1,
+  "parser_cases": [
+    {
+      "name": "object_basic",
+      "raw": {
+        "name": "Demo",
+        "songNotes": [
+          {
+            "time": 20,
+            "key": "Key1"
+          },
+          {
+            "time": 0,
+            "key": "Key0"
+          }
+        ]
+      },
+      "status": "ok",
+      "song": {
+        "name": "Demo",
+        "notes": [
+          {
+            "time_ms": 0,
+            "key": "Key0"
+          },
+          {
+            "time_ms": 20,
+            "key": "Key1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "root_list_first_item",
+      "raw": [
+        {
+          "name": "Legacy",
+          "songNotes": [
+            {
+              "time": "12",
+              "key": "Key2"
+            }
+          ]
+        },
+        {
+          "name": "Ignored",
+          "songNotes": []
+        }
+      ],
+      "status": "ok",
+      "song": {
+        "name": "Legacy",
+        "notes": [
+          {
+            "time_ms": 12,
+            "key": "Key2"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty_song",
+      "raw": {
+        "name": "Empty",
+        "songNotes": []
+      },
+      "status": "ok",
+      "song": {
+        "name": "Empty",
+        "notes": []
+      }
+    },
+    {
+      "name": "numeric_string_and_chord",
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "status": "ok",
+      "song": {
+        "name": "Unicode Élan",
+        "notes": [
+          {
+            "time_ms": 10,
+            "key": "Key3"
+          },
+          {
+            "time_ms": 10,
+            "key": "Key4"
+          },
+          {
+            "time_ms": 25,
+            "key": "Key3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate_notes",
+      "raw": {
+        "name": "Duplicates",
+        "songNotes": [
+          {
+            "time": 0,
+            "key": "Key0"
+          },
+          {
+            "time": 0,
+            "key": "Key0"
+          },
+          {
+            "time": 0,
+            "key": "Key1"
+          }
+        ]
+      },
+      "status": "ok",
+      "song": {
+        "name": "Duplicates",
+        "notes": [
+          {
+            "time_ms": 0,
+            "key": "Key0"
+          },
+          {
+            "time_ms": 0,
+            "key": "Key0"
+          },
+          {
+            "time_ms": 0,
+            "key": "Key1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dense_chord",
+      "raw": {
+        "name": "Dense",
+        "songNotes": [
+          {
+            "time": 0,
+            "key": "Key0"
+          },
+          {
+            "time": 1,
+            "key": "Key1"
+          },
+          {
+            "time": 2,
+            "key": "Key2"
+          },
+          {
+            "time": 3,
+            "key": "Key3"
+          },
+          {
+            "time": 4,
+            "key": "Key4"
+          },
+          {
+            "time": 5,
+            "key": "Key5"
+          },
+          {
+            "time": 6,
+            "key": "Key6"
+          }
+        ]
+      },
+      "status": "ok",
+      "song": {
+        "name": "Dense",
+        "notes": [
+          {
+            "time_ms": 0,
+            "key": "Key0"
+          },
+          {
+            "time_ms": 1,
+            "key": "Key1"
+          },
+          {
+            "time_ms": 2,
+            "key": "Key2"
+          },
+          {
+            "time_ms": 3,
+            "key": "Key3"
+          },
+          {
+            "time_ms": 4,
+            "key": "Key4"
+          },
+          {
+            "time_ms": 5,
+            "key": "Key5"
+          },
+          {
+            "time_ms": 6,
+            "key": "Key6"
+          }
+        ]
+      }
+    },
+    {
+      "name": "malformed_json",
+      "raw": "{not json",
+      "status": "error",
+      "error_type": "SongParseError"
+    },
+    {
+      "name": "root_list_empty",
+      "raw": [],
+      "status": "error",
+      "error_type": "SongValidationError"
+    },
+    {
+      "name": "root_not_object",
+      "raw": [
+        "not a song"
+      ],
+      "status": "error",
+      "error_type": "SongValidationError"
+    },
+    {
+      "name": "missing_song_notes",
+      "raw": {
+        "name": "Missing"
+      },
+      "status": "error",
+      "error_type": "SongValidationError"
+    },
+    {
+      "name": "missing_note_time",
+      "raw": {
+        "songNotes": [
+          {
+            "key": "Key0"
+          }
+        ]
+      },
+      "status": "error",
+      "error_type": "SongValidationError"
+    },
+    {
+      "name": "invalid_note_key",
+      "raw": {
+        "songNotes": [
+          {
+            "time": 0,
+            "key": "NotAKey"
+          }
+        ]
+      },
+      "status": "error",
+      "error_type": "SongValidationError"
+    },
+    {
+      "name": "negative_time",
+      "raw": {
+        "songNotes": [
+          {
+            "time": -1,
+            "key": "Key0"
+          }
+        ]
+      },
+      "status": "error",
+      "error_type": "SongValidationError"
+    }
+  ],
+  "schedule_cases": [
+    {
+      "name": "basic_schedule",
+      "raw": {
+        "name": "Demo",
+        "songNotes": [
+          {
+            "time": 20,
+            "key": "Key1"
+          },
+          {
+            "time": 0,
+            "key": "Key0"
+          }
+        ]
+      },
+      "hold_frames": 1.0,
+      "tempo_scale": 1.0,
+      "fps": 60,
+      "schedule": {
+        "actions": [
+          {
+            "at_us": 0,
+            "scan_codes": [
+              21
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 17467,
+            "scan_codes": [
+              21
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 20000,
+            "scan_codes": [
+              22
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 37467,
+            "scan_codes": [
+              22
+            ],
+            "kind": "up",
+            "reason": "release"
+          }
+        ],
+        "source_duration_us": 37467,
+        "playback_duration_us": 37467,
+        "duration_us": 37467,
+        "note_count": 2,
+        "deduplicated_note_count": 2,
+        "duplicate_note_count": 0,
+        "compressed_holds": 0,
+        "impossible_same_key_repeats": 0,
+        "risky_same_key_repeats": 0,
+        "max_polyphony": 1,
+        "shortest_same_key_interval_us": null,
+        "min_same_key_up_gap_us": null
+      },
+      "risk": {
+        "severity": "low",
+        "impossible_repeats": 0,
+        "impossible_same_key_repeats": 0,
+        "compressed_holds": 0,
+        "max_polyphony": 1,
+        "min_any_note_gap_us": 20000,
+        "min_same_key_gap_us": null,
+        "dense_clusters": [],
+        "recommendations": [
+          "No timing conflicts detected. Keep the selected hold."
+        ],
+        "average_notes_per_second": 53.380308004377184,
+        "peak_notes_per_second_1s": 2.0,
+        "suggested_hold_frames": 1.0,
+        "suggested_tempo_scale": 1.0,
+        "reason": "No timing conflicts detected.",
+        "max_chord_size": 1,
+        "chords_count": 0,
+        "timing_stress_rate": 0.0
+      }
+    },
+    {
+      "name": "tempo_rounding",
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "hold_frames": 1.25,
+      "tempo_scale": 0.95,
+      "fps": 120,
+      "schedule": {
+        "actions": [
+          {
+            "at_us": 10526,
+            "scan_codes": [
+              24,
+              25
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 21744,
+            "scan_codes": [
+              24,
+              25
+            ],
+            "kind": "up",
+            "reason": "mixed"
+          },
+          {
+            "at_us": 26316,
+            "scan_codes": [
+              24
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 37534,
+            "scan_codes": [
+              24
+            ],
+            "kind": "up",
+            "reason": "release"
+          }
+        ],
+        "source_duration_us": 37534,
+        "playback_duration_us": 37534,
+        "duration_us": 37534,
+        "note_count": 3,
+        "deduplicated_note_count": 3,
+        "duplicate_note_count": 0,
+        "compressed_holds": 0,
+        "impossible_same_key_repeats": 1,
+        "risky_same_key_repeats": 0,
+        "max_polyphony": 2,
+        "shortest_same_key_interval_us": 15790,
+        "min_same_key_up_gap_us": 4572
+      },
+      "risk": {
+        "severity": "high",
+        "impossible_repeats": 1,
+        "impossible_same_key_repeats": 1,
+        "compressed_holds": 0,
+        "max_polyphony": 2,
+        "min_any_note_gap_us": 15000,
+        "min_same_key_gap_us": 15000,
+        "dense_clusters": [],
+        "recommendations": [
+          "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+          "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+          "Shortest same-key repeat interval: 15.8ms.",
+          "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        ],
+        "average_notes_per_second": 53.28502158043374,
+        "peak_notes_per_second_1s": 2.0,
+        "suggested_hold_frames": 1.0,
+        "suggested_tempo_scale": 0.92,
+        "reason": "infeasible same-key repeats detected",
+        "max_chord_size": 2,
+        "chords_count": 1,
+        "timing_stress_rate": 33.33333333333333
+      }
+    },
+    {
+      "name": "empty_schedule",
+      "raw": {
+        "name": "Empty",
+        "songNotes": []
+      },
+      "hold_frames": 1.0,
+      "tempo_scale": 1.0,
+      "fps": 60,
+      "schedule": {
+        "actions": [],
+        "source_duration_us": 17467,
+        "playback_duration_us": 0,
+        "duration_us": 0,
+        "note_count": 0,
+        "deduplicated_note_count": 0,
+        "duplicate_note_count": 0,
+        "compressed_holds": 0,
+        "impossible_same_key_repeats": 0,
+        "risky_same_key_repeats": 0,
+        "max_polyphony": 0,
+        "shortest_same_key_interval_us": null,
+        "min_same_key_up_gap_us": null
+      },
+      "risk": {
+        "severity": "low",
+        "impossible_repeats": 0,
+        "impossible_same_key_repeats": 0,
+        "compressed_holds": 0,
+        "max_polyphony": 0,
+        "min_any_note_gap_us": null,
+        "min_same_key_gap_us": null,
+        "dense_clusters": [],
+        "recommendations": [
+          "No timing conflicts detected. Keep the selected hold."
+        ],
+        "average_notes_per_second": 0.0,
+        "peak_notes_per_second_1s": 0.0,
+        "suggested_hold_frames": 1.0,
+        "suggested_tempo_scale": 1.0,
+        "reason": "No timing conflicts detected.",
+        "max_chord_size": 0,
+        "chords_count": 0,
+        "timing_stress_rate": 0.0
+      }
+    },
+    {
+      "name": "dense_risk",
+      "raw": {
+        "name": "Dense",
+        "songNotes": [
+          {
+            "time": 0,
+            "key": "Key0"
+          },
+          {
+            "time": 1,
+            "key": "Key1"
+          },
+          {
+            "time": 2,
+            "key": "Key2"
+          },
+          {
+            "time": 3,
+            "key": "Key3"
+          },
+          {
+            "time": 4,
+            "key": "Key4"
+          },
+          {
+            "time": 5,
+            "key": "Key5"
+          },
+          {
+            "time": 6,
+            "key": "Key6"
+          }
+        ]
+      },
+      "hold_frames": 1.0,
+      "tempo_scale": 1.0,
+      "fps": 60,
+      "schedule": {
+        "actions": [
+          {
+            "at_us": 0,
+            "scan_codes": [
+              21
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 1000,
+            "scan_codes": [
+              22
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 2000,
+            "scan_codes": [
+              23
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 3000,
+            "scan_codes": [
+              24
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 4000,
+            "scan_codes": [
+              25
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 5000,
+            "scan_codes": [
+              35
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 6000,
+            "scan_codes": [
+              36
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 17467,
+            "scan_codes": [
+              21
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 18467,
+            "scan_codes": [
+              22
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 19467,
+            "scan_codes": [
+              23
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 20467,
+            "scan_codes": [
+              24
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 21467,
+            "scan_codes": [
+              25
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 22467,
+            "scan_codes": [
+              35
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 23467,
+            "scan_codes": [
+              36
+            ],
+            "kind": "up",
+            "reason": "release"
+          }
+        ],
+        "source_duration_us": 23467,
+        "playback_duration_us": 23467,
+        "duration_us": 23467,
+        "note_count": 7,
+        "deduplicated_note_count": 7,
+        "duplicate_note_count": 0,
+        "compressed_holds": 0,
+        "impossible_same_key_repeats": 0,
+        "risky_same_key_repeats": 0,
+        "max_polyphony": 7,
+        "shortest_same_key_interval_us": null,
+        "min_same_key_up_gap_us": null
+      },
+      "risk": {
+        "severity": "low",
+        "impossible_repeats": 0,
+        "impossible_same_key_repeats": 0,
+        "compressed_holds": 0,
+        "max_polyphony": 7,
+        "min_any_note_gap_us": 1000,
+        "min_same_key_gap_us": null,
+        "dense_clusters": [
+          {
+            "start_us": 0,
+            "end_us": 6000,
+            "note_count": 7
+          }
+        ],
+        "recommendations": [
+          "No timing conflicts detected. Keep the selected hold."
+        ],
+        "average_notes_per_second": 298.29121745429757,
+        "peak_notes_per_second_1s": 7.0,
+        "suggested_hold_frames": 1.5,
+        "suggested_tempo_scale": 1.0,
+        "reason": "No timing conflicts detected.",
+        "max_chord_size": 1,
+        "chords_count": 0,
+        "timing_stress_rate": 0.0
+      }
+    }
+  ]
+}

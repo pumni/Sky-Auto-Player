@@ -9,4 +9,5 @@
 
 pub mod catalog;
 pub mod settings;
+pub mod song;
 pub mod update;

@@ -10,6 +10,7 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CatalogSearchRequest {
     pub query: String,
     pub offset: u64,
@@ -20,6 +21,7 @@ pub struct CatalogSearchRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CatalogDetailRequest {
     pub song_id: String,
     pub generation: Option<u64>,
@@ -28,6 +30,7 @@ pub struct CatalogDetailRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CatalogViewportRequest {
     pub generation: u64,
     pub first_index: u64,
@@ -47,6 +50,7 @@ pub struct PlaybackPatch {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct SettingsPatch {
     pub theme: Option<String>,
     pub telemetry_enabled: Option<bool>,
@@ -71,6 +75,7 @@ pub struct UpdatePreferencesPatch {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackPrepareRequest {
     pub song_id: String,
     pub generation: u64,
@@ -105,7 +110,7 @@ pub enum PlaybackAdmission {
     Blocked,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq, Hash)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackDecision {
@@ -158,6 +163,7 @@ pub enum PlaybackPendingControl {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackStartRequest {
     pub prepared_id: String,
     pub decisions: Vec<PlaybackDecisionAcceptanceDto>,
@@ -166,6 +172,7 @@ pub struct PlaybackStartRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct PlaybackSessionCommandRequest {
     pub session_id: String,
 }
@@ -539,8 +546,10 @@ where
     P: Serialize,
     R: DeserializeOwned,
 {
-    if crate::command_ownership::owner_for(method).is_none() {
-        return Err(format!("unowned desktop command: {method}"));
+    if crate::command_ownership::owner_for(method)
+        != Some(crate::command_ownership::CommandOwner::Python)
+    {
+        return Err(format!("unowned or non-Python desktop command: {method}"));
     }
     let value = supervisor
         .request(method, params)
@@ -559,8 +568,20 @@ where
 {
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let supervisor = app_state.ensure_core_blocking()?;
-        request_with_supervisor(&supervisor, method, params)
+        match crate::command_ownership::owner_for(method) {
+            Some(crate::command_ownership::CommandOwner::Native) => {
+                let runtime = app_state.ensure_native_blocking()?;
+                let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
+                let value = runtime.dispatch(method, params)?;
+                serde_json::from_value(value)
+                    .map_err(|error| format!("invalid native {method} response: {error}"))
+            }
+            Some(crate::command_ownership::CommandOwner::Python) => {
+                let supervisor = app_state.ensure_core_blocking()?;
+                request_with_supervisor(&supervisor, method, params)
+            }
+            None => Err(format!("unowned desktop command: {method}")),
+        }
     })
     .await
     .map_err(|error| format!("Core worker failed: {error}"))?
@@ -582,8 +603,20 @@ where
         // frontend queue. The frontend Promise tail owns user-intent order;
         // this guard only prevents overlapping persistence operations.
         let _write_guard = app_state.lock_settings_writes();
-        let supervisor = app_state.ensure_core_blocking()?;
-        request_with_supervisor(&supervisor, method, params)
+        match crate::command_ownership::owner_for(method) {
+            Some(crate::command_ownership::CommandOwner::Native) => {
+                let runtime = app_state.ensure_native_blocking()?;
+                let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
+                let value = runtime.dispatch(method, params)?;
+                serde_json::from_value(value)
+                    .map_err(|error| format!("invalid native {method} response: {error}"))
+            }
+            Some(crate::command_ownership::CommandOwner::Python) => {
+                let supervisor = app_state.ensure_core_blocking()?;
+                request_with_supervisor(&supervisor, method, params)
+            }
+            None => Err(format!("unowned desktop command: {method}")),
+        }
     })
     .await
     .map_err(|error| format!("Core settings worker failed: {error}"))?
@@ -856,8 +889,17 @@ pub async fn subscribe_ui_events(
 ) -> Result<(), String> {
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let supervisor = app_state.ensure_core_blocking()?;
-        supervisor
+        // Event subscriptions are delivery infrastructure rather than one of
+        // the 21 request methods. During the strangler transition both live
+        // producers use the same delivery channel: Native publishes native
+        // lifecycle/snapshot events and Core preserves the eight remaining
+        // Python-owned update/calibration streams. Each producer retains its
+        // own ordering; no command failure is hidden by cross-owner fallback.
+        app_state
+            .ensure_native_blocking()?
+            .subscribe(channel.clone())?;
+        app_state
+            .ensure_core_blocking()?
             .subscribe(channel)
             .map_err(|error| error.to_string())
     })

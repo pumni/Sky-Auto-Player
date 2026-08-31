@@ -387,5 +387,572 @@
       }
     }
   ],
+  "fuzzy_cases": [
+    {
+      "query": "this is a test",
+      "candidate": "this is a test!",
+      "score": 96.55172413793103
+    },
+    {
+      "query": "fuzzy was a bear",
+      "candidate": "fuzzy fuzzy was a bear",
+      "score": 95.0
+    },
+    {
+      "query": "fuzzy was a bear but not a dog",
+      "candidate": "fuzzy was a bear but not a cat",
+      "score": 90.0
+    },
+    {
+      "query": "abcd",
+      "candidate": "xxabceyy",
+      "score": 67.5
+    },
+    {
+      "query": "strasse",
+      "candidate": "straße",
+      "score": 76.92307692307692
+    },
+    {
+      "query": "sky child",
+      "candidate": "sky children of the light",
+      "score": 90.0
+    },
+    {
+      "query": "alpha beta",
+      "candidate": "beta alpha",
+      "score": 95.0
+    },
+    {
+      "query": "abc",
+      "candidate": "xyzabcq",
+      "score": 90.0
+    },
+    {
+      "query": "a b c",
+      "candidate": "a a b c",
+      "score": 95.0
+    },
+    {
+      "query": "xabcdy",
+      "candidate": "abcd",
+      "score": 90.0
+    },
+    {
+      "query": "abc",
+      "candidate": "zab",
+      "score": 66.66666666666667
+    },
+    {
+      "query": "abc",
+      "candidate": "qabc",
+      "score": 85.71428571428572
+    },
+    {
+      "query": "a b",
+      "candidate": "x a b y",
+      "score": 90.0
+    },
+    {
+      "query": "foo bar",
+      "candidate": "foo baz qux",
+      "score": 85.5
+    },
+    {
+      "query": "testing",
+      "candidate": "test",
+      "score": 90.0
+    },
+    {
+      "query": "aa bb aa",
+      "candidate": "bb aa",
+      "score": 90.0
+    },
+    {
+      "query": "a",
+      "candidate": "bbbbba",
+      "score": 90.0
+    },
+    {
+      "query": "dtesvbstvurvb",
+      "candidate": "v tdrevtceuracbudaduv bsrbert stdsr  dvuusebvce",
+      "score": 48.46153846153846
+    },
+    {
+      "query": "ba rtcttbvdcstvauetrc",
+      "candidate": "ub brvutacbtvuaraabdtsrseaut ubsdbsutebuda b cbdusvturve et",
+      "score": 48.64864864864865
+    },
+    {
+      "query": "ssvrrder u cssrbaseassbuteeae",
+      "candidate": "etvabbuarcsrbucrud dus",
+      "score": 37.254901960784316
+    },
+    {
+      "query": "e scurre bvtd bdbdtsrcbtcedesvddu  cr",
+      "candidate": "b urvatvebdaaart  dvrbebbsc drecbaeavccse tdacrtr",
+      "score": 42.976190476190474
+    },
+    {
+      "query": "tvu busdbrcesv vcavartderscae",
+      "candidate": "dtdvrbcsvbuavbcuvrc rsdaacvub ade",
+      "score": 48.38709677419355
+    },
+    {
+      "query": "crbtea dtrddeudde ssauvrtcss rrsbcsvvtts  vr",
+      "candidate": "ebvsdtue  er rcbva uudac",
+      "score": 37.17391304347826
+    },
+    {
+      "query": "cvvd",
+      "candidate": "sttsradbseduebtucseda esrcvudaasutvrurbdveeescd btddsdc es",
+      "score": 45.0
+    },
+    {
+      "query": "rtvca avrdttauac d  vteb  u c bea",
+      "candidate": "stsau asdcc veer t",
+      "score": 45.0
+    },
+    {
+      "query": "bescrsrs",
+      "candidate": "deuabasdacrttes uavrrt  ddrsuvdrtsdav",
+      "score": 45.0
+    },
+    {
+      "query": "bteuaeauc",
+      "candidate": "ecusdtvtsvcsssrrcs",
+      "score": 32.727272727272734
+    },
+    {
+      "query": "acbtet re esassursbacecabdatbtd bd detavb",
+      "candidate": "euuvueeturebtavbaecdueedadauu",
+      "score": 37.142857142857146
+    },
+    {
+      "query": "rdae veta  sca du",
+      "candidate": "cvusrctcs cubvdtec rrvbuetbetubbrbdcrs srdrtvbesseuevvedcd",
+      "score": 38.0
+    },
+    {
+      "query": "dvv rdutsabteeavceeeubvrttsv vur",
+      "candidate": "sdevvdudttu vcubvcseatsbbr  ddvraddvsvee",
+      "score": 47.22222222222222
+    },
+    {
+      "query": "bdduadetrctbaeecectauab vve ea",
+      "candidate": "vta bscdde cscsu dvt",
+      "score": 41.45454545454545
+    },
+    {
+      "query": "dccuesvd",
+      "candidate": "ad svb savasvtdcudr",
+      "score": 55.38461538461539
+    },
+    {
+      "query": "ctacs acbrrrruccvtbbuc  urrvu bsseddtbc",
+      "candidate": "b",
+      "score": 60.0
+    },
+    {
+      "query": "aucbbtrratvrsv  csarrc abb seuaaa trtudtu",
+      "candidate": "tusv tavd",
+      "score": 48.857142857142854
+    },
+    {
+      "query": "v   eecsubcsseastdb",
+      "candidate": "ata",
+      "score": 60.00000000000001
+    },
+    {
+      "query": "r",
+      "candidate": "ubcee  eae bduvbtde udta",
+      "score": 0.0
+    },
+    {
+      "query": "ubasavvvvvbubetber erdbvbee dvac",
+      "candidate": "rbtaeatut ctvdeacuvdvbac bbtbsubscsbsaebecv",
+      "score": 40.0
+    },
+    {
+      "query": "eudbeua bd evuaubres escdrusbtvrvru",
+      "candidate": "buc rautedred cbrbdrstd rv eau ats",
+      "score": 46.37681159420289
+    },
+    {
+      "query": "cc tcv beavbuvv",
+      "candidate": "debesevbrdrcctrrbbssbbst vvuetbevct",
+      "score": 42.75
+    },
+    {
+      "query": "scraurbcverstdvabacre",
+      "candidate": "dabdbvas rru caevbcv  vd b  er",
+      "score": 38.77551020408163
+    },
+    {
+      "query": "bedd s ab",
+      "candidate": "daudddbutscebvetavvecbsuv  bssateu",
+      "score": 40.0
+    },
+    {
+      "query": "tbreeard adbdcbdaabasusbrcredabce bartsad vt",
+      "candidate": "usv vaarsssretcedvrcs abrusdsdrbbrevbtavc",
+      "score": 42.470588235294116
+    },
+    {
+      "query": "rrvbd",
+      "candidate": "e etdbr eduur as dacutcvadcbbacuvub vbudacdvdasburecvsdsdrves",
+      "score": 36.0
+    },
+    {
+      "query": "d   dtstr asbastt vabtssc udaed cucda v acd ttrs",
+      "candidate": "b sddetuadbdsuartcvtbcaacs aurc",
+      "score": 42.049180327868854
+    },
+    {
+      "query": "tacstcar d ueradcvartrauvcattudctvbt",
+      "candidate": "acdudcrbdrssvetdruvdad rav",
+      "score": 45.16129032258065
+    },
+    {
+      "query": "sbcsvavcr edvrv evdcdvseuu",
+      "candidate": "cc  rrecuvtt",
+      "score": 37.5
+    },
+    {
+      "query": "srvteb",
+      "candidate": "tduvcuacdtrbbcrussdcssr  bbrvscrsscbtsruscdtsaard",
+      "score": 30.0
+    },
+    {
+      "query": "ssevse sdsdsduevatdvbeevtesstrusv",
+      "candidate": "cudvaedsussacu vtvsrd tvsave euvb",
+      "score": 42.42424242424242
+    },
+    {
+      "query": "esbusctressrredssrsdcu tcd vab",
+      "candidate": "u d tvcvbussu cdatstsvesudbrdrserettbtetcbductbv",
+      "score": 39.0
+    },
+    {
+      "query": "vraaaedtc  st surcr btr",
+      "candidate": "uaes bu astc bvtbet sdurcbrv carstdvsvsde",
+      "score": 46.95652173913043
+    },
+    {
+      "query": "u avd",
+      "candidate": "d ecebbvsa acdavccaedesu",
+      "score": 54.0
+    },
+    {
+      "query": "tcvc",
+      "candidate": "dra sa rdtrudbrbeue ear bvesudvbuau",
+      "score": 19.0
+    },
+    {
+      "query": "crs",
+      "candidate": "vd aaabvddddsu rsdvvaueasctbec r",
+      "score": 40.0
+    },
+    {
+      "query": "ucu",
+      "candidate": "avt vardcus c tbausu  daabdcs etdv cdvarbbarvs",
+      "score": 40.0
+    },
+    {
+      "query": "vesred budbtvbursccsd etrueurvv ad",
+      "candidate": "ertervcbbav csbsubsdbb raaub",
+      "score": 42.903225806451616
+    },
+    {
+      "query": "baetuttedvudt",
+      "candidate": "reecu cc vdt",
+      "score": 40.0
+    },
+    {
+      "query": "dasrvecur",
+      "candidate": "vedsv ubtuestad  rcerraeuvdua cr",
+      "score": 48.0
+    },
+    {
+      "query": "cbav udd dsbsec bu",
+      "candidate": "ercddu rc",
+      "score": 45.6
+    },
+    {
+      "query": "bueutsvarctt",
+      "candidate": "tdbrab du rdectuuuu rrvbtsuetsds vtva",
+      "score": 52.5
+    },
+    {
+      "query": "cv tt stt eausbdtdut s",
+      "candidate": "ur",
+      "score": 30.0
+    },
+    {
+      "query": "acesevdvrreaatarvtsdsurbe",
+      "candidate": "s dsstdtbbrcvsvtdscbuvvsuc  rtrbsdr",
+      "score": 36.66666666666667
+    },
+    {
+      "query": "vdrbcbuecau  eucs",
+      "candidate": "ubsbbae sbud  acdasabdtuuv atbrb b tssucaree",
+      "score": 42.35294117647059
+    },
+    {
+      "query": "abscsacvdca uaebsrvredbvursssvtv",
+      "candidate": "b ctvcbuurccucsr",
+      "score": 34.61538461538461
+    },
+    {
+      "query": "cuvractbbrsr buvv be cbtcdusabdsa sestcdt",
+      "candidate": "vucaarssesseaa  tvec b  ecvcrrdc dtaerebe",
+      "score": 38.0
+    },
+    {
+      "query": "a e",
+      "candidate": "bruv  u v tvutt c",
+      "score": 36.0
+    },
+    {
+      "query": "ta rerssecauusetdrabvac tvb uacsabesceuearbb",
+      "candidate": "retdtd  btrseaddc rvarrc  tsbaareeva",
+      "score": 47.5
+    },
+    {
+      "query": "ucdccecesbsddcvabredv",
+      "candidate": "tbars dru uv basdrt vab",
+      "score": 31.818181818181824
+    },
+    {
+      "query": "a",
+      "candidate": "rbevvac s",
+      "score": 60.0
+    },
+    {
+      "query": "arsasdtdvuvcadbbdb",
+      "candidate": "uvrb sdvsbede",
+      "score": 38.70967741935484
+    },
+    {
+      "query": "bsvbvdb",
+      "candidate": "cbscucbtddeevubrartbrcsae",
+      "score": 38.57142857142858
+    },
+    {
+      "query": "turdrudde",
+      "candidate": "sv bssrt ar bubasbvesbsdsctvt c aub eradtbusscatrcbdrvut",
+      "score": 50.0
+    },
+    {
+      "query": "cur edbaets",
+      "candidate": "adrveevru rvcvdvucvssvas beur aads",
+      "score": 50.0
+    },
+    {
+      "query": "t va",
+      "candidate": "bdut vtecd  sacs ucbsstsbr",
+      "score": 67.5
+    },
+    {
+      "query": "vsauc e c ctbrdsarrauevaaudcus ba",
+      "candidate": "tb sacevsucbcbebbvv",
+      "score": 39.375
+    },
+    {
+      "query": "ravcuae cvrtecsbttrearerdcbbaeebcdadussaeered s",
+      "candidate": "srbesdruadbvrccav",
+      "score": 45.6
+    },
+    {
+      "query": "s aec u  bctcvtcdeta vbtuutdusdsavu",
+      "candidate": "btbsrus",
+      "score": 38.57142857142858
+    },
+    {
+      "query": "uc dcueb sbut",
+      "candidate": "edcdsutbcasdeveeturesavtcttv c",
+      "score": 45.0
+    },
+    {
+      "query": "rueadesv esetc tescbb c  us a",
+      "candidate": "dduurrtreavr tdsvaresaeeaurbadedbrvvssrac rseaaver",
+      "score": 40.50632911392405
+    },
+    {
+      "query": "b",
+      "candidate": "rsdcucscvdutts udsdsvvb srtbsue",
+      "score": 60.0
+    },
+    {
+      "query": "asbcdvubudb cevu avsvavteuvst",
+      "candidate": "utdcrtcdde t",
+      "score": 38.0
+    },
+    {
+      "query": "vvaa sb utbebvaea",
+      "candidate": "vcte ebeacc bcr drbebavbcbbuav",
+      "score": 42.75
+    },
+    {
+      "query": "d ctedavvttv cabvvcdvsrste e sttsacseds  uabsbs",
+      "candidate": "tuvcrdatt sudrudsaavubd eaust sauu etteausuue",
+      "score": 39.13043478260869
+    },
+    {
+      "query": "rt sddtrb sab e sauvsadt bvvdvbatctsua ctreeeb",
+      "candidate": "auadectradtvbvvtreuvttcevubsbaus",
+      "score": 38.46153846153846
+    },
+    {
+      "query": "ebrecbdv",
+      "candidate": "cs ebacercdeudaaaccddtvuvseacvdseud cttrdabrr ccdbrtstsrdcad",
+      "score": 56.25
+    },
+    {
+      "query": "r rve sdreeeturttruvbrdtdsceraervvtcsru",
+      "candidate": "av",
+      "score": 30.0
+    },
+    {
+      "query": "rdauasu uusavrrudsdua",
+      "candidate": "bcca crdsdaa cauvbeut",
+      "score": 40.714285714285715
+    },
+    {
+      "query": "bu ercvvdtustbdss brdueacascbc du bura",
+      "candidate": "rvrausebssvv bresdaa aeu rb udacusu uubccrabvt  ur v",
+      "score": 46.666666666666664
+    },
+    {
+      "query": "tvetravadevtauc aevuavucc",
+      "candidate": "b",
+      "score": 0.0
+    },
+    {
+      "query": "svrrttvvcbubs",
+      "candidate": "debvevedvev dvredabrsdebcsdcuebsda",
+      "score": 40.909090909090914
+    },
+    {
+      "query": "vcrs u aecerbtrsvtdrb",
+      "candidate": "eb",
+      "score": 40.0
+    },
+    {
+      "query": "eu csatsre e",
+      "candidate": "srrb cddcbatvtubvaeddcauaebrecdvbcdrbatcb",
+      "score": 37.5
+    },
+    {
+      "query": "ceuacaaas",
+      "candidate": "adecuteucdvdsreebcutssdubudurvuaertdc vrsedrubs crdtuvurde",
+      "score": 40.0
+    },
+    {
+      "query": "ccvscuburae",
+      "candidate": "ar sab v ttartcsa ccuduvsaacd  d duta",
+      "score": 40.909090909090914
+    },
+    {
+      "query": "a ucdur a tvascravdvdcub buectubtvbaur tuu eta",
+      "candidate": "asttbds",
+      "score": 38.57142857142858
+    },
+    {
+      "query": "ruvadu",
+      "candidate": "bt suuevsestauc",
+      "score": 40.0
+    },
+    {
+      "query": "bredevr s v",
+      "candidate": "esccebdescr ressc utscssrvdabrubvbreba vtdebvubsvu vcsuttec bsc",
+      "score": 49.090909090909086
+    },
+    {
+      "query": "sdbrcsc euvb sdcuvceddu vauuubdrvuc ddrutv",
+      "candidate": "ts",
+      "score": 40.0
+    },
+    {
+      "query": "saedsvaud bcccvd",
+      "candidate": "susucvsrvvds e bbb asabrddcedeersc d",
+      "score": 40.909090909090914
+    },
+    {
+      "query": "u",
+      "candidate": "tatssud  cdtees tevc",
+      "score": 60.0
+    },
+    {
+      "query": "vdceuecaeuv bbrevb",
+      "candidate": "tr",
+      "score": 30.0
+    },
+    {
+      "query": "tcsdvetbrbvc uaeucu raderrbas s",
+      "candidate": "rvdddbaudcbbtcrbrcv cdtuuvtc",
+      "score": 30.508474576271183
+    },
+    {
+      "query": "tvassrc",
+      "candidate": "ae edvdruts sr vb adseudccd sdavat",
+      "score": 51.42857142857142
+    },
+    {
+      "query": "dsbvctbtac drdvvcaetsavbcbdssas  e ubsaevvcc",
+      "candidate": "dubsbauttccrdc  dsc  scrdcessbccabvrb",
+      "score": 44.44444444444444
+    },
+    {
+      "query": "rst tbddbaaru e",
+      "candidate": "dtvrrvttu esctcet adt",
+      "score": 33.333333333333336
+    },
+    {
+      "query": "vtcteauvvebsbsdbsabce ecbtadr",
+      "candidate": "bvrs eevt",
+      "score": 47.5
+    },
+    {
+      "query": "tuubu caaavrus dr ur  vdrdetbudvtedu",
+      "candidate": "s tsvatedubrutdsbbsbrsb",
+      "score": 33.75
+    },
+    {
+      "query": "ut uerbduvvb",
+      "candidate": "sbuvurvbr cceevscdadsr  s cbr  tvvusa",
+      "score": 49.87499999999999
+    },
+    {
+      "query": "bdvdrttcd",
+      "candidate": "dcbu",
+      "score": 36.0
+    },
+    {
+      "query": "dcsvsrdeddbetrd  beacbtvdbtv",
+      "candidate": "ss vttdsvt  er barrcrvtbsdbdsveceudeuv",
+      "score": 41.5625
+    },
+    {
+      "query": "ecsvstrrratdeuuttcdtdd",
+      "candidate": "bubbedubruutdasussedestbcuadc",
+      "score": 31.372549019607842
+    },
+    {
+      "query": "deb rc rbdbtat a budevdacucb uuda srscdaevvdvutt",
+      "candidate": "uetubvvveduveur",
+      "score": 46.95652173913043
+    },
+    {
+      "query": "scvbdv teuvrvuervdvceerasassu",
+      "candidate": "b  evttvvdea",
+      "score": 45.0
+    },
+    {
+      "query": "crctdrubv cevsrtdt ddstut v tb",
+      "candidate": "eudebertcdct bbvtdb dbtvdabs srcuu rsbar t  bctatbu tvtvvda",
+      "score": 43.474576271186436
+    }
+  ],
   "stale_generation_error": "catalog generation is stale"
 }

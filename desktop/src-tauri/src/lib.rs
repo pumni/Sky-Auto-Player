@@ -3,6 +3,7 @@ mod bindings;
 mod command_ownership;
 mod commands;
 mod lifecycle;
+mod native_runtime;
 mod ui_events;
 
 mod core;
@@ -190,47 +191,45 @@ fn run_inner(gui_smoke: bool) {
     result.expect("error while running Sky Auto Player desktop shell");
 }
 
-/// Validate the release shell/Core pairing without constructing a WebView.
+/// Validate the release native desktop composition without constructing a WebView.
 ///
 /// This hidden, packaging-only entrypoint is used by the exact portable
-/// artifact gate. It still uses the production launch command and
-/// ``CoreSupervisor``; it merely replaces the interactive window with a
-/// bounded bootstrap/shutdown assertion so CI never needs to synthesize a
-/// physical input session.
+/// artifact gate. It uses the same native composition root as the production
+/// shell and replaces the interactive window with a bounded bootstrap/shutdown
+/// assertion so CI never needs to synthesize a physical input session.
 pub fn selftest_packaged_shell() -> i32 {
     if let Err(error) = core::check_startup_update_guard() {
         eprintln!("packaged shell selftest startup guard failed: {error}");
         return 2;
     }
-    let supervisor = match core::CoreSupervisor::spawn() {
-        Ok(supervisor) => supervisor,
+    let runtime = match native_runtime::NativeDesktopRuntime::for_current_install() {
+        Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("packaged shell selftest could not start Core: {error}");
+            eprintln!("packaged native selftest could not start runtime: {error}");
             return 2;
         }
     };
-    let bootstrap = supervisor.request("app.bootstrap", serde_json::json!({}));
-    let result = match bootstrap {
-        Ok(value) if value.get("native_build").is_some() => {
-            supervisor.shutdown();
+    let result = match runtime.bootstrap() {
+        Ok(value) if !value.native_build.native_build_commit.is_empty() => {
+            runtime.shutdown();
             if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
                 let _ = std::fs::write(marker, b"bootstrap-ready\n");
             }
             0
         }
         Ok(_) => {
-            eprintln!("packaged shell selftest bootstrap omitted native_build");
-            supervisor.shutdown();
+            eprintln!("packaged native selftest bootstrap omitted native build identity");
+            runtime.shutdown();
             1
         }
         Err(error) => {
-            eprintln!("packaged shell selftest bootstrap failed: {error}");
-            supervisor.shutdown();
+            eprintln!("packaged native selftest bootstrap failed: {error}");
+            runtime.shutdown();
             1
         }
     };
     if result == 0 {
-        println!("Packaged Tauri/Core selftest: PASS");
+        println!("Packaged Tauri/Native Desktop selftest: PASS");
     }
     result
 }
@@ -291,10 +290,6 @@ mod ipc_tests {
             .invoke_handler(tauri::generate_handler![super::commands::search_songs])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
-        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
-        app.state::<AppState>()
-            .inner()
-            .install_ready_for_test(supervisor.clone());
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
@@ -315,7 +310,9 @@ mod ipc_tests {
         )
         .expect("params envelope should reach command");
         let value: serde_json::Value = valid.deserialize().expect("search response JSON");
-        assert_eq!(value["total"], 0);
+        assert_eq!(value["offset"], 0);
+        assert_eq!(value["limit"], 200);
+        assert!(value["generation"].as_u64().is_some_and(|value| value > 0));
 
         let wrong = tauri::test::get_ipc_response(
             &webview,
@@ -332,7 +329,6 @@ mod ipc_tests {
             ),
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");
-        supervisor.shutdown();
     }
 
     #[test]
@@ -340,23 +336,37 @@ mod ipc_tests {
         let app = tauri::test::mock_builder()
             .manage(AppState::default())
             .invoke_handler(tauri::generate_handler![
+                super::commands::bootstrap,
+                super::commands::search_songs,
                 super::commands::prepare_playback,
                 super::commands::start_playback,
                 super::commands::stop_playback,
-                super::commands::pause_playback,
-                super::commands::resume_playback,
-                super::commands::skip_playback,
+                super::commands::shutdown,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
-        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
-        app.state::<AppState>()
-            .inner()
-            .install_ready_for_test(supervisor.clone());
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-        let song_id = "c".repeat(32);
+        let bootstrap = tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 1))
+            .expect("native bootstrap should succeed");
+        let bootstrap_value: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
+        let generation = bootstrap_value["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"blue","offset":0,"limit":1,"generation":generation}}),
+                2,
+            ),
+        )
+        .expect("native catalog search should succeed");
+        let search_value: serde_json::Value = search.deserialize().expect("search JSON");
+        let song_id = search_value["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID");
         let prepared = tauri::test::get_ipc_response(
             &webview,
             request(
@@ -378,7 +388,8 @@ mod ipc_tests {
         )
         .expect("playback params envelope should reach command");
         let prepared_value: serde_json::Value = prepared.deserialize().expect("prepared JSON");
-        assert_eq!(prepared_value["prepared_id"], "a".repeat(32));
+        assert!(prepared_value["prepared_id"].as_str().is_some());
+        let prepared_id = prepared_value["prepared_id"].as_str().unwrap_or_default();
 
         let started = tauri::test::get_ipc_response(
             &webview,
@@ -386,7 +397,7 @@ mod ipc_tests {
                 "start_playback",
                 json!({
                     "params": {
-                        "preparedId": "a".repeat(32),
+                        "preparedId": prepared_id,
                         "decisions": []
                     }
                 }),
@@ -395,24 +406,18 @@ mod ipc_tests {
         )
         .expect("playback start params envelope should reach command");
         let started_value: serde_json::Value = started.deserialize().expect("session JSON");
-        assert_eq!(started_value["session_id"], "b".repeat(32));
+        assert_eq!(started_value["state"], "starting");
+        let session_id = started_value["session_id"].as_str().expect("session ID");
 
-        for (callback, command) in [
-            (16, "stop_playback"),
-            (18, "pause_playback"),
-            (20, "resume_playback"),
-            (22, "skip_playback"),
-        ] {
-            tauri::test::get_ipc_response(
-                &webview,
-                request(
-                    command,
-                    json!({"params": {"sessionId": "b".repeat(32)}}),
-                    callback,
-                ),
-            )
-            .unwrap_or_else(|error| panic!("{command} params envelope should decode: {error}"));
-        }
+        tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "stop_playback",
+                json!({"params":{"sessionId":session_id}}),
+                16,
+            ),
+        )
+        .expect("native stop params envelope should decode");
 
         let wrong = tauri::test::get_ipc_response(
             &webview,
@@ -434,7 +439,7 @@ mod ipc_tests {
             ),
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");
-        supervisor.shutdown();
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 18));
     }
 
     #[test]
