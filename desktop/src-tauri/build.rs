@@ -5,9 +5,7 @@ fn main() {
         // context so it can use noop assets; production desktop-runtime
         // builds still read tauri.conf.json and require frontendDist through
         // tauri/custom-protocol.
-        println!(
-            "cargo:rustc-env=TAURI_CONFIG={{\"build\":{{\"frontendDist\":null}}}}"
-        );
+        println!("cargo:rustc-env=TAURI_CONFIG={{\"build\":{{\"frontendDist\":null}}}}");
     }
     tauri_build::build();
 }
