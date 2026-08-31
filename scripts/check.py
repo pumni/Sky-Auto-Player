@@ -63,19 +63,9 @@ GROUPS: dict[str, tuple[Check, ...]] = {
             "Rust format",
             ("cargo", "fmt", "--manifest-path", "rust/Cargo.toml", "--all", "--", "--check"),
         ),
-        Check(
-            "Rust check",
-            (
-                "cargo",
-                "check",
-                "--manifest-path",
-                "rust/Cargo.toml",
-                "--workspace",
-                "--all-targets",
-                "--all-features",
-                "--locked",
-            ),
-        ),
+        # Clippy performs the same workspace/all-target/all-feature Cargo
+        # compilation as the standalone check, then adds lint analysis. Keep
+        # one compilation surface in the CI-oriented Rust group.
         Check(
             "Rust clippy",
             (

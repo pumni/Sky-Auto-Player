@@ -25,6 +25,24 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
+SUPPORTED_CARGO_PROFILES = ("release", "dist")
+PRODUCTION_DEFAULT_PROFILE = "dist"
+TEST_SUPPORT_DEFAULT_PROFILE = "release"
+
+
+def resolve_cargo_profile(profile: str | None, *, test_support: bool) -> str:
+    """Resolve the wheel builder's safe default for the requested build kind."""
+
+    resolved = profile or (TEST_SUPPORT_DEFAULT_PROFILE if test_support else PRODUCTION_DEFAULT_PROFILE)
+    if resolved not in SUPPORTED_CARGO_PROFILES:
+        raise ValueError(f"unsupported Cargo profile: {resolved}")
+    return resolved
+
+
+def cargo_profile_arguments(profile: str) -> list[str]:
+    if profile not in SUPPORTED_CARGO_PROFILES:
+        raise ValueError(f"unsupported Cargo profile: {profile}")
+    return ["--profile", profile]
 
 
 def pinned_rust_toolchain(rust_dir: Path) -> str:
@@ -179,7 +197,17 @@ def main() -> int:
         action="store_true",
         help="build the non-production wheel with native benchmark test support",
     )
+    parser.add_argument(
+        "--profile",
+        choices=("release", "dist"),
+        default=None,
+        help="Cargo profile (defaults to dist for production, release for --test-support)",
+    )
     args = parser.parse_args()
+    try:
+        profile = resolve_cargo_profile(args.profile, test_support=args.test_support)
+    except ValueError as exc:
+        parser.error(str(exc))
     repo_root = Path(__file__).resolve().parent.parent
     rust_dir = repo_root / "rust"
 
@@ -213,7 +241,7 @@ def main() -> int:
         "-m",
         "maturin",
         "build",
-        "--release",
+        *cargo_profile_arguments(profile),
         "--locked",
         "--manifest-path",
         str(cargo_manifest),

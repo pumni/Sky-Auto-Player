@@ -68,6 +68,12 @@ def native_build_environment() -> dict[str, str]:
 
 
 def cargo_release_build_command(manifest: Path, binary: str) -> list[str]:
+    """Return the locked Cargo command for a shipped native binary.
+
+    The historical function name is retained for callers and tests. Release
+    packaging now uses the explicit ``dist`` profile so an engineering profile
+    change cannot silently affect distributed binaries.
+    """
     return [
         "cargo",
         "build",
@@ -75,7 +81,8 @@ def cargo_release_build_command(manifest: Path, binary: str) -> list[str]:
         str(manifest),
         "--bin",
         binary,
-        "--release",
+        "--profile",
+        "dist",
         "--locked",
     ]
 
@@ -508,7 +515,7 @@ def main() -> None:
         build_script = PROJECT_ROOT / "scripts" / "build_rust_wheel.py"
         native_build_env = native_build_environment()
         subprocess.run(
-            [sys.executable, str(build_script)],
+            [sys.executable, str(build_script), "--profile", "dist"],
             check=True,
             cwd=str(PROJECT_ROOT),
             env=native_build_env,
@@ -558,14 +565,14 @@ def main() -> None:
         shutil.rmtree(release_dir)
     shutil.move(str(raw_dist), str(release_dir))
 
-    calibration_binary = rust_dir / "target" / "release" / NATIVE_CALIBRATION_BINARY
+    calibration_binary = rust_dir / "target" / "dist" / NATIVE_CALIBRATION_BINARY
     if not calibration_binary.is_file():
         raise RuntimeError(f"Native calibration binary is missing: {calibration_binary}")
     copy_asset(calibration_binary, release_dir / NATIVE_CALIBRATION_BINARY)
     if not run_native_calibration_smoke_test(release_dir / NATIVE_CALIBRATION_BINARY):
         raise RuntimeError("Native calibration binary smoke test failed")
 
-    updater_binary = rust_dir / "target" / "release" / "sky_updater.exe"
+    updater_binary = rust_dir / "target" / "dist" / "sky_updater.exe"
     if not updater_binary.is_file():
         raise RuntimeError(f"Native updater binary is missing: {updater_binary}")
     copy_asset(updater_binary, release_dir / NATIVE_UPDATER_BINARY)

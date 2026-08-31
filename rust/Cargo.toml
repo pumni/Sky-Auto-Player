@@ -16,9 +16,21 @@ rust-version = "1.98"
 authors = ["Sky Auto Player Team"]
 
 [profile.release]
-lto = "thin"
-codegen-units = 1
-opt-level = 3
+# Keep routine optimized engineering builds responsive. Shipped artifacts use
+# the explicit `dist` profile below, so this profile may trade some throughput
+# for shorter compile/link cycles.
+lto = false
+codegen-units = 16
+opt-level = 2
 panic = "unwind"
 strip = "symbols"
 overflow-checks = true
+
+# Engineering builds may use the faster `release` profile. Every shipped
+# native artifact must use this profile so distribution optimization remains
+# explicit and cannot drift when the engineering profile changes.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+opt-level = 3

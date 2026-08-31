@@ -179,7 +179,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
           SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
+        run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support --profile release
 
       - name: Repository verification — Rust
         env:

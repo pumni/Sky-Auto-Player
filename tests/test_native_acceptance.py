@@ -1018,7 +1018,6 @@ def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> No
     assert "uv run python scripts/check.py tests" in workflow
     for required in (
         '"cargo", "fmt", "--manifest-path", "rust/Cargo.toml", "--all", "--", "--check"',
-        '"cargo",\n                "check",',
         '"cargo",\n                "clippy",',
         '"cargo",\n                "test",',
         'sys.executable, "-m", "pytest", "-m", "not slow"',
@@ -1032,6 +1031,7 @@ def test_workflow_keeps_required_gates_without_optional_benchmark_wiring() -> No
     assert "--backend sendinput" not in workflow
     assert "--allow-real-input" not in workflow
     assert "SKY_NATIVE_TARGET_HWND" not in workflow
+    assert '"Rust check"' not in verifier
 
 
 @pytest.mark.windows

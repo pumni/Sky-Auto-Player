@@ -1,5 +1,5 @@
 param(
-    [string]$AssemblyPath = (Join-Path $PSScriptRoot '..\rust\target\release\deps\sky_player_rs.s')
+    [string]$AssemblyPath = (Join-Path $PSScriptRoot '..\rust\target\dist\deps\sky_player_rs.s')
 )
 
 $resolvedAssemblyPath = Resolve-Path -LiteralPath $AssemblyPath -ErrorAction Stop
