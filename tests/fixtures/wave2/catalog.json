@@ -1,0 +1,391 @@
+{
+  "schema": 1,
+  "paths": [
+    "C:\\Wave2\\Songs\\Dandelions.txt",
+    "C:\\Wave2\\Songs\\Cà Phê.json",
+    "C:\\Wave2\\Songs\\Đàn Bay.skysheet",
+    "C:\\Wave2\\Songs\\Straße.json",
+    "C:\\Wave2\\Songs\\STRASSE.txt",
+    "C:\\Wave2\\Songs\\ΟΣ.skysheet",
+    "C:\\Wave2\\Songs\\ος.json",
+    "C:\\Wave2\\Songs\\Élan.json",
+    "C:\\Wave2\\Songs\\ALPHA.json",
+    "C:\\Wave2\\Songs\\alpha.txt",
+    "C:\\Wave2\\Songs\\Dandelions.txt",
+    "C:\\Wave2\\Songs\\ignored.csv"
+  ],
+  "snapshot": {
+    "generation": 1,
+    "total": 10,
+    "items": [
+      {
+        "song_id": "e6cc391bb9a398b6de507925304eb107",
+        "title": "ALPHA"
+      },
+      {
+        "song_id": "6e6cbdbf2f3e6586bf4cafab082ae5f2",
+        "title": "alpha"
+      },
+      {
+        "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+        "title": "Cà Phê"
+      },
+      {
+        "song_id": "0e09d9e4626386c9d6a110463c854973",
+        "title": "Đàn Bay"
+      },
+      {
+        "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+        "title": "Dandelions"
+      },
+      {
+        "song_id": "e8a3666559c4e5081b73f665086946cc",
+        "title": "Élan"
+      },
+      {
+        "song_id": "9fcc192a672b50bdd1cff29e498bb3a4",
+        "title": "Straße"
+      },
+      {
+        "song_id": "eb9fcb27168dae412b4e915f3f82bcf4",
+        "title": "STRASSE"
+      },
+      {
+        "song_id": "98a65d12844f313a5f45b31396b24579",
+        "title": "ΟΣ"
+      },
+      {
+        "song_id": "0424c96ffe7f3a4b786ae74a128b24ac",
+        "title": "ος"
+      }
+    ]
+  },
+  "substring_queries": {
+    "": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 10,
+      "items": [
+        {
+          "song_id": "e6cc391bb9a398b6de507925304eb107",
+          "title": "ALPHA"
+        },
+        {
+          "song_id": "6e6cbdbf2f3e6586bf4cafab082ae5f2",
+          "title": "alpha"
+        },
+        {
+          "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+          "title": "Cà Phê"
+        },
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        },
+        {
+          "song_id": "e8a3666559c4e5081b73f665086946cc",
+          "title": "Élan"
+        },
+        {
+          "song_id": "9fcc192a672b50bdd1cff29e498bb3a4",
+          "title": "Straße"
+        },
+        {
+          "song_id": "eb9fcb27168dae412b4e915f3f82bcf4",
+          "title": "STRASSE"
+        },
+        {
+          "song_id": "98a65d12844f313a5f45b31396b24579",
+          "title": "ΟΣ"
+        },
+        {
+          "song_id": "0424c96ffe7f3a4b786ae74a128b24ac",
+          "title": "ος"
+        }
+      ]
+    },
+    "ca phe": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 1,
+      "items": [
+        {
+          "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+          "title": "Cà Phê"
+        }
+      ]
+    },
+    "dan": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        }
+      ]
+    },
+    "d": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "0e09d9e4626386c9d6a110463c854973",
+          "title": "Đàn Bay"
+        },
+        {
+          "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+          "title": "Dandelions"
+        }
+      ]
+    },
+    "strasse": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "9fcc192a672b50bdd1cff29e498bb3a4",
+          "title": "Straße"
+        },
+        {
+          "song_id": "eb9fcb27168dae412b4e915f3f82bcf4",
+          "title": "STRASSE"
+        }
+      ]
+    },
+    "οσ": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "98a65d12844f313a5f45b31396b24579",
+          "title": "ΟΣ"
+        },
+        {
+          "song_id": "0424c96ffe7f3a4b786ae74a128b24ac",
+          "title": "ος"
+        }
+      ]
+    },
+    "ss": {
+      "generation": 1,
+      "offset": 0,
+      "limit": 20,
+      "total": 2,
+      "items": [
+        {
+          "song_id": "9fcc192a672b50bdd1cff29e498bb3a4",
+          "title": "Straße"
+        },
+        {
+          "song_id": "eb9fcb27168dae412b4e915f3f82bcf4",
+          "title": "STRASSE"
+        }
+      ]
+    }
+  },
+  "normalized": {
+    "Cà Phê": "ca phe",
+    "Đàn": "dan",
+    "Élan": "elan",
+    "Straße": "strasse",
+    "STRASSE": "strasse",
+    "ΟΣ": "οσ",
+    "ος": "οσ"
+  },
+  "window_cases": [
+    {
+      "name": "offset_zero",
+      "query": "",
+      "offset": 0,
+      "limit": 20,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 0,
+        "limit": 20,
+        "total": 10,
+        "items": [
+          {
+            "song_id": "e6cc391bb9a398b6de507925304eb107",
+            "title": "ALPHA"
+          },
+          {
+            "song_id": "6e6cbdbf2f3e6586bf4cafab082ae5f2",
+            "title": "alpha"
+          },
+          {
+            "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+            "title": "Cà Phê"
+          },
+          {
+            "song_id": "0e09d9e4626386c9d6a110463c854973",
+            "title": "Đàn Bay"
+          },
+          {
+            "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+            "title": "Dandelions"
+          },
+          {
+            "song_id": "e8a3666559c4e5081b73f665086946cc",
+            "title": "Élan"
+          },
+          {
+            "song_id": "9fcc192a672b50bdd1cff29e498bb3a4",
+            "title": "Straße"
+          },
+          {
+            "song_id": "eb9fcb27168dae412b4e915f3f82bcf4",
+            "title": "STRASSE"
+          },
+          {
+            "song_id": "98a65d12844f313a5f45b31396b24579",
+            "title": "ΟΣ"
+          },
+          {
+            "song_id": "0424c96ffe7f3a4b786ae74a128b24ac",
+            "title": "ος"
+          }
+        ]
+      }
+    },
+    {
+      "name": "offset_positive",
+      "query": "",
+      "offset": 2,
+      "limit": 3,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 2,
+        "limit": 3,
+        "total": 10,
+        "items": [
+          {
+            "song_id": "888f5011ab3b2a2a0c0d4507949e95c2",
+            "title": "Cà Phê"
+          },
+          {
+            "song_id": "0e09d9e4626386c9d6a110463c854973",
+            "title": "Đàn Bay"
+          },
+          {
+            "song_id": "05e7bc81c2240f0a518acbba9a783ea5",
+            "title": "Dandelions"
+          }
+        ]
+      }
+    },
+    {
+      "name": "offset_beyond_total",
+      "query": "",
+      "offset": 1000000001,
+      "limit": 1,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 1000000001,
+        "limit": 1,
+        "total": 10,
+        "items": []
+      }
+    },
+    {
+      "name": "limit_zero",
+      "query": "",
+      "offset": 0,
+      "limit": 0,
+      "status": "error",
+      "error_type": "CatalogError",
+      "error": "catalog page_size must be between 1 and 200"
+    },
+    {
+      "name": "limit_above_max",
+      "query": "",
+      "offset": 0,
+      "limit": 201,
+      "status": "error",
+      "error_type": "CatalogError",
+      "error": "catalog page_size must be between 1 and 200"
+    },
+    {
+      "name": "query_exactly_1024_ascii",
+      "query": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "offset": 0,
+      "limit": 20,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 0,
+        "limit": 20,
+        "total": 0,
+        "items": []
+      }
+    },
+    {
+      "name": "query_too_long_1025_ascii",
+      "query": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "offset": 0,
+      "limit": 20,
+      "status": "error",
+      "error_type": "CatalogError",
+      "error": "catalog query exceeds 1024 characters"
+    },
+    {
+      "name": "query_exactly_1024_unicode",
+      "query": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "offset": 0,
+      "limit": 20,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 0,
+        "limit": 20,
+        "total": 0,
+        "items": []
+      }
+    },
+    {
+      "name": "query_too_long_1025_unicode",
+      "query": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "offset": 0,
+      "limit": 20,
+      "status": "error",
+      "error_type": "CatalogError",
+      "error": "catalog query exceeds 1024 characters"
+    },
+    {
+      "name": "query_multibyte_under_codepoint_limit",
+      "query": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "offset": 0,
+      "limit": 20,
+      "status": "ok",
+      "page": {
+        "generation": 1,
+        "offset": 0,
+        "limit": 20,
+        "total": 0,
+        "items": []
+      }
+    }
+  ],
+  "stale_generation_error": "catalog generation is stale"
+}

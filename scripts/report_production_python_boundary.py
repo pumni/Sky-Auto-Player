@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -63,6 +64,10 @@ EXCLUDED_PARTS: Final[frozenset[str]] = frozenset(
     }
 )
 REPORTER_PATH = "scripts/report_production_python_boundary.py"
+COMMAND_OWNERSHIP_PATH = "desktop/src-tauri/src/command_ownership.rs"
+COMMAND_OWNER_PATTERN = re.compile(
+    r'\("(?P<method>[a-z_]+(?:\.[a-z_]+)+)",\s*CommandOwner::(?P<owner>Python|Native)\)'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,12 +141,68 @@ def _git_head(repository_root: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def _command_ownership(repository_root: Path) -> dict[str, object]:
+    """Read the delivery matrix without importing the Tauri crate."""
+    path = repository_root / COMMAND_OWNERSHIP_PATH
+    if not path.is_file():
+        return {
+            "status": "unavailable",
+            "source": COMMAND_OWNERSHIP_PATH,
+            "before": {"commands": [], "native_count": 0, "python_count": 0},
+            "after": {"commands": [], "native_count": 0, "python_count": 0},
+        }
+    current = [
+        {"method": match.group("method"), "owner": match.group("owner")}
+        for match in COMMAND_OWNER_PATTERN.finditer(path.read_text(encoding="utf-8"))
+    ]
+    before = [{"method": item["method"], "owner": "Python"} for item in current]
+
+    def summary(commands: list[dict[str, str]]) -> dict[str, object]:
+        return {
+            "commands": commands,
+            "native_count": sum(item["owner"] == "Native" for item in commands),
+            "python_count": sum(item["owner"] == "Python" for item in commands),
+        }
+
+    return {
+        "status": "ok",
+        "source": COMMAND_OWNERSHIP_PATH,
+        "before": summary(before),
+        "after": summary(current),
+    }
+
+
+def _python_boundary_accounting(
+    repository_root: Path,
+    references: tuple[Reference, ...],
+) -> dict[str, object]:
+    ownership = _command_ownership(repository_root)
+    python_modules = sorted(
+        {
+            item.path
+            for item in references
+            if item.path.startswith("src/") and item.path.endswith(".py")
+        }
+    )
+    return {
+        "command_ownership": ownership,
+        "production_python_modules_still_required": python_modules,
+        "python_modules_made_non_authoritative": [],
+        "remaining_blockers": {
+            "settings.*": "Python Core caches AppConfig; native writes stay shadow-only until live coherence is proven.",
+            "catalog.*": "Python owns RapidFuzz WRatio, rich detail, and the live generation until equivalent Rust evidence exists.",
+            "update.*": "Python update orchestration remains live; Rust policy is fixture-backed shadow logic and sky_updater remains the apply owner.",
+            "playback.*": "Realtime execution and SendInput ownership are frozen for Wave 2.",
+        },
+    }
+
+
 def _payload(repository_root: Path, references: tuple[Reference, ...]) -> dict[str, object]:
     grouped: dict[str, list[Reference]] = {marker: [] for marker in MARKERS}
     for reference in references:
         grouped[reference.marker].append(reference)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "repository_head": _git_head(repository_root),
         "scan_directories": list(SCAN_DIRECTORIES),
         "scan_files": list(SCAN_FILES),
@@ -153,6 +214,7 @@ def _payload(repository_root: Path, references: tuple[Reference, ...]) -> dict[s
             }
             for marker, items in grouped.items()
         },
+        "python_boundary": _python_boundary_accounting(repository_root, references),
     }
 
 
@@ -177,6 +239,16 @@ def main() -> int:
         data = payload["markers"][marker]
         assert isinstance(data, dict)
         print(f"- {marker}: {data['count']} references in {len(data['files'])} files")
+    accounting = payload["python_boundary"]
+    assert isinstance(accounting, dict)
+    ownership = accounting["command_ownership"]
+    assert isinstance(ownership, dict)
+    after = ownership["after"]
+    assert isinstance(after, dict)
+    print(
+        "command ownership: "
+        f"{after['native_count']} native / {after['python_count']} Python"
+    )
     return 0
 
 

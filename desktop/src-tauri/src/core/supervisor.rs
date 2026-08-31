@@ -123,6 +123,10 @@ impl CoreSupervisor {
         emergency_release: fn() -> sky_dispatch_win32::input::ReleaseAllOutcome,
         track_child_reaped: bool,
     ) -> Result<Arc<Self>, SupervisorError> {
+        let gui_trace = std::env::var_os("SKY_GUI_SMOKE_PHASE_LOG").is_some();
+        if gui_trace {
+            crate::record_gui_smoke_phase("core.spawn.enter");
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -132,6 +136,9 @@ impl CoreSupervisor {
         let mut child = command
             .spawn()
             .map_err(|error| SupervisorError::Launch(error.to_string()))?;
+        if gui_trace {
+            crate::record_gui_smoke_phase("core.spawn.child_created");
+        }
         let stdin = child
             .stdin
             .take()
@@ -172,16 +179,30 @@ impl CoreSupervisor {
             .take()
             .expect("ready receiver missing");
         match receiver.recv_timeout(supervisor.timeouts.startup) {
-            Ok(Ok(())) => Ok(supervisor),
+            Ok(Ok(())) => {
+                if gui_trace {
+                    crate::record_gui_smoke_phase("core.spawn.ready");
+                }
+                Ok(supervisor)
+            }
             Ok(Err(error)) => {
+                if gui_trace {
+                    crate::record_gui_smoke_phase("core.spawn.ready.failed");
+                }
                 supervisor.terminate_child();
                 Err(SupervisorError::Unavailable(error))
             }
             Err(RecvTimeoutError::Timeout) => {
+                if gui_trace {
+                    crate::record_gui_smoke_phase("core.spawn.ready.timeout");
+                }
                 supervisor.terminate_child();
                 Err(SupervisorError::Timeout)
             }
             Err(RecvTimeoutError::Disconnected) => {
+                if gui_trace {
+                    crate::record_gui_smoke_phase("core.spawn.ready.disconnected");
+                }
                 supervisor.terminate_child();
                 Err(SupervisorError::Unavailable(
                     "Core exited before ready".into(),
@@ -494,11 +515,19 @@ impl CoreSupervisor {
     }
 
     pub fn request<P: Serialize>(&self, method: &str, params: P) -> Result<Value, SupervisorError> {
+        let gui_trace = std::env::var_os("SKY_GUI_SMOKE_PHASE_LOG").is_some();
+        if gui_trace {
+            crate::record_gui_smoke_phase(&format!("core.request.{method}.enter"));
+        }
         let lifecycle = self.lifecycle();
         if !lifecycle.accepts_requests() {
-            return Err(SupervisorError::Unavailable(format!(
+            let result = Err(SupervisorError::Unavailable(format!(
                 "Core state is {lifecycle:?}"
             )));
+            if gui_trace {
+                crate::record_gui_smoke_phase(&format!("core.request.{method}.return.error"));
+            }
+            return result;
         }
         if self
             .events
@@ -506,16 +535,27 @@ impl CoreSupervisor {
             .expect("event buffer poisoned")
             .overflowed
         {
-            return Err(SupervisorError::Unavailable(
+            let result = Err(SupervisorError::Unavailable(
                 "Core event history overflowed its bounded capacity".into(),
             ));
+            if gui_trace {
+                crate::record_gui_smoke_phase(&format!("core.request.{method}.return.error"));
+            }
+            return result;
         }
         let timeout = if method == "catalog.reload" {
             self.timeouts.reload
         } else {
             self.timeouts.request
         };
-        self.request_inner(method, params, timeout)
+        let result = self.request_inner(method, params, timeout);
+        if gui_trace {
+            crate::record_gui_smoke_phase(&format!(
+                "core.request.{method}.return.{}",
+                if result.is_ok() { "ok" } else { "error" }
+            ));
+        }
+        result
     }
 
     fn request_inner<P: Serialize>(
@@ -577,19 +617,42 @@ impl CoreSupervisor {
     }
 
     pub fn shutdown(&self) {
+        let gui_trace = std::env::var_os("SKY_GUI_SMOKE_PHASE_LOG").is_some();
+        if gui_trace {
+            crate::record_gui_smoke_phase("core.shutdown.enter");
+        }
         if self.shutdown_requested.swap(true, Ordering::AcqRel) {
+            if gui_trace {
+                crate::record_gui_smoke_phase("core.shutdown.duplicate");
+            }
             return;
         }
         if matches!(
             self.lifecycle(),
             CoreLifecycle::Fatal | CoreLifecycle::Exited
         ) {
+            if gui_trace {
+                crate::record_gui_smoke_phase("core.shutdown.terminal");
+            }
             self.terminate_child();
             return;
         }
         self.set_lifecycle(CoreLifecycle::ShuttingDown);
+        if gui_trace {
+            crate::record_gui_smoke_phase("core.request.app.shutdown.enter");
+        }
         let shutdown_result =
             self.request_inner("app.shutdown", serde_json::json!({}), self.timeouts.request);
+        if gui_trace {
+            crate::record_gui_smoke_phase(&format!(
+                "core.request.app.shutdown.return.{}",
+                if shutdown_result.is_ok() {
+                    "ok"
+                } else {
+                    "error"
+                }
+            ));
+        }
         if shutdown_result.is_err() {
             // Normal app shutdown lets the Core/native session clean itself up.
             // The canonical allowlisted release is only a fallback when that
@@ -597,6 +660,9 @@ impl CoreSupervisor {
             self.terminate_child_before_emergency_release();
         } else {
             self.terminate_child();
+        }
+        if gui_trace {
+            crate::record_gui_smoke_phase("core.shutdown.return");
         }
     }
 

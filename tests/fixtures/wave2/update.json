@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "channels": {
+    "stable": {
+      "include_prerelease": false,
+      "github_api_path": "/releases/latest"
+    },
+    "beta": {
+      "include_prerelease": true,
+      "github_api_path": "/releases?per_page=10"
+    },
+    "unknown": {
+      "include_prerelease": false,
+      "github_api_path": "/releases/latest"
+    }
+  },
+  "throttle": {
+    "within_success_interval": false,
+    "at_success_boundary": true,
+    "retry_delay": 200,
+    "retry_at_boundary": true
+  }
+}

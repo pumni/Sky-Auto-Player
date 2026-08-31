@@ -11,6 +11,7 @@ build = "build.rs"
 default = ["desktop-runtime"]
 desktop-runtime = [
     "tauri/wry",
+    "tauri/custom-protocol",
     "tauri/compression",
     "tauri/common-controls-v6",
     "tauri/dynamic-acl",

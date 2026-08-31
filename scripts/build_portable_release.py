@@ -18,6 +18,7 @@ import sys
 import tempfile
 import zipfile
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,15 @@ def _decode_output(value: object) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _read_gui_smoke_phase_log(path: Path) -> str:
+    """Read the bounded startup/shutdown trace emitted by the packaged shell."""
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return f"<unavailable: {error}>"
+    return content[-8000:] or "<empty>"
 
 
 def _capture(command: Sequence[str], *, cwd: Path = ROOT) -> str:
@@ -335,6 +345,10 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
     # packaging-only environment selects the explicit no-input seam so the
     # actual Tauri/Core smoke can exercise calibration safely in CI.
     env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
+    phase_log = cwd / "gui-smoke-phases.log"
+    with suppress(OSError):
+        phase_log.unlink(missing_ok=True)
+    env["SKY_GUI_SMOKE_PHASE_LOG"] = str(phase_log)
     try:
         result = subprocess.run(
             [str(primary_exe), "--selftest-desktop-gui"],
@@ -350,13 +364,19 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
         raise RuntimeError(
             "packaged Tauri GUI smoke timed out; "
             f"stdout={_decode_output(error.stdout)!r} "
-            f"stderr={_decode_output(error.stderr)!r}"
+            f"stderr={_decode_output(error.stderr)!r} "
+            f"phase_log={_read_gui_smoke_phase_log(phase_log)!r}"
         ) from error
     if result.returncode != 0:
         raise RuntimeError(
             f"packaged Tauri GUI smoke failed ({result.returncode}): "
-            f"{_decode_output(result.stderr)[-4000:]}"
+            f"{_decode_output(result.stderr)[-4000:]} "
+            f"phase_log={_read_gui_smoke_phase_log(phase_log)!r}"
         )
+    print(
+        "Packaged Tauri GUI smoke phases:\n"
+        f"{_read_gui_smoke_phase_log(phase_log)}"
+    )
     print("Packaged Tauri GUI smoke: PASS")
 
 

@@ -539,6 +539,9 @@ where
     P: Serialize,
     R: DeserializeOwned,
 {
+    if crate::command_ownership::owner_for(method).is_none() {
+        return Err(format!("unowned desktop command: {method}"));
+    }
     let value = supervisor
         .request(method, params)
         .map_err(|error| error.to_string())?;

@@ -59,3 +59,20 @@ def test_current_report_captures_known_transitional_boundaries() -> None:
         and item.path == "src/sky_music/infrastructure/desktop_ipc/server.py"
         for item in references
     )
+
+
+def test_payload_reports_explicit_command_ownership_and_cutover_blockers() -> None:
+    module = _load()
+    references = module.collect(ROOT)
+    payload = module._payload(ROOT, references)
+
+    assert payload["schema_version"] == 2
+    accounting = payload["python_boundary"]
+    ownership = accounting["command_ownership"]
+    assert ownership["status"] == "ok"
+    assert ownership["before"]["python_count"] == 21
+    assert ownership["before"]["native_count"] == 0
+    assert ownership["after"]["python_count"] == 21
+    assert ownership["after"]["native_count"] == 0
+    assert "settings.*" in accounting["remaining_blockers"]
+    assert "catalog.*" in accounting["remaining_blockers"]

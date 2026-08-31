@@ -6,19 +6,40 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
     let state = app_handle.state::<AppState>().inner().clone();
     let exit_after_close = state.should_exit_after_close();
     let exit_code = state.gui_smoke_exit_code();
+    if exit_after_close {
+        crate::record_gui_smoke_phase("lifecycle.close.enter");
+    }
     if !state.begin_close() {
+        if exit_after_close {
+            crate::record_gui_smoke_phase("lifecycle.close.duplicate");
+        }
         return;
+    }
+    if exit_after_close {
+        crate::record_gui_smoke_phase("lifecycle.close.accepted");
     }
 
     tauri::async_runtime::spawn_blocking(move || {
+        if exit_after_close {
+            crate::record_gui_smoke_phase("lifecycle.shutdown_core.enter");
+        }
         if let Ok(supervisor) = state.supervisor() {
             supervisor.shutdown();
+        }
+        if exit_after_close {
+            crate::record_gui_smoke_phase("lifecycle.shutdown_core.return");
+            crate::record_gui_smoke_phase("lifecycle.window_destroy.enter");
         }
         // `destroy` does not emit another CloseRequested event, so the
         // bounded shutdown path cannot recurse through this callback.
         let _ = window.destroy();
         if exit_after_close {
+            crate::record_gui_smoke_phase("lifecycle.window_destroy.return");
+        }
+        if exit_after_close {
+            crate::record_gui_smoke_phase("lifecycle.app_exit.enter");
             app_handle.exit(exit_code);
+            crate::record_gui_smoke_phase("lifecycle.app_exit.return");
         }
     });
 }
