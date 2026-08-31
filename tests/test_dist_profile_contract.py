@@ -19,6 +19,8 @@ def test_dist_profile_preserves_shipping_optimization() -> None:
     }
     assert cargo["profile"]["dist"] == {
         "inherits": "release",
+        "debug": False,
+        "debug-assertions": False,
         "lto": "thin",
         "codegen-units": 1,
         "opt-level": 3,

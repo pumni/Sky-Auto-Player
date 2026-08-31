@@ -34,6 +34,11 @@ overflow-checks = true
 # explicit and cannot drift when the engineering profile changes.
 [profile.dist]
 inherits = "release"
+# The shipped profile must compile as a production build. In particular,
+# Tauri selects devUrl under debug assertions, which would make a directly
+# Cargo-built packaged shell depend on a local frontend server.
+debug = false
+debug-assertions = false
 lto = "thin"
 codegen-units = 1
 opt-level = 3
