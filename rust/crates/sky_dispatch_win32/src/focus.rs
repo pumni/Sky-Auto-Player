@@ -186,3 +186,22 @@ pub fn focus_window(hwnd: isize) -> bool {
 pub fn focus_window(_hwnd: isize) -> bool {
     false
 }
+
+/// Request the documented minimal focus change and verify the exact HWND for
+/// a bounded interval before a physical worker is armed.  The polling is
+/// read-only and intentionally does not attach input queues or force z-order.
+pub fn focus_window_and_verify(hwnd: isize, budget: std::time::Duration) -> bool {
+    if !focus_window(hwnd) {
+        return false;
+    }
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        if foreground_window_matches(hwnd) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}

@@ -196,6 +196,8 @@ pub struct ScheduleMetadata {
     pub max_polyphony: usize,
     pub shortest_same_key_interval_us: Option<u64>,
     pub min_same_key_up_gap_us: Option<u64>,
+    pub recommended_hold_frames: Option<f64>,
+    pub recommended_tempo_scale: Option<f64>,
     pub warnings: Vec<String>,
 }
 
@@ -238,20 +240,31 @@ pub fn build_schedule(
     tempo_scale: f64,
     fps: u16,
 ) -> Result<ScheduleMetadata, SongError> {
+    let policy = crate::timing::MaterializedTimingPolicy::from_calibration(
+        fps,
+        hold_frames,
+        MIN_TRANSPORT_MARGIN_US,
+        "default_transport_300",
+    )?;
+    build_schedule_with_policy(song, tempo_scale, &policy)
+}
+
+pub fn build_schedule_with_policy(
+    song: &Song,
+    tempo_scale: f64,
+    policy: &crate::timing::MaterializedTimingPolicy,
+) -> Result<ScheduleMetadata, SongError> {
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    if !hold_frames.is_finite() || !HOLD_FRAMES.contains(&hold_frames) {
-        return Err(SongError::InvalidHold);
-    }
-    let frame = frame_us(fps)?;
-    let base_hold = (hold_frames * frame as f64).ceil() as u64;
-    let hold_us = base_hold
-        .saturating_add(DOWN_LATE_GRACE_US)
-        .saturating_add(MIN_TRANSPORT_MARGIN_US);
-    let release_gap = frame
-        .saturating_add(DOWN_LATE_GRACE_US)
-        .saturating_add(MIN_TRANSPORT_MARGIN_US);
+    // The current materialized policy intentionally uses the same effective
+    // value for target and minimum hold. Keep both names here because the
+    // Python contract distinguishes them when a policy supplies a compressed
+    // hold, and doing so prevents this loop from silently regressing to an
+    // always-uncompressed implementation.
+    let target_hold_us = policy.min_hold_us;
+    let min_hold_us = policy.min_hold_us;
+    let release_gap = policy.min_release_gap_us;
 
     let mut drafts = Vec::with_capacity(song.notes.len());
     for note in &song.notes {
@@ -274,9 +287,9 @@ pub fn build_schedule(
     }
 
     let mut actions = Vec::with_capacity(drafts.len() * 2);
-    let compressed = 0;
+    let mut compressed = 0;
     let mut impossible = 0;
-    let risky = 0;
+    let mut risky = 0;
     let mut shortest = None;
     let mut min_up_gap = None;
     for (at, scan, source_index) in &drafts {
@@ -285,14 +298,23 @@ pub fn build_schedule(
             let interval = next_at.saturating_sub(*at);
             shortest = Some(shortest.map_or(interval, |current: u64| current.min(interval)));
             let max_hold = interval.saturating_sub(release_gap);
-            if max_hold < hold_us {
+            if max_hold < min_hold_us {
                 impossible += 1;
-                hold_us
+                min_hold_us
+            } else if max_hold < target_hold_us {
+                // Keep this branch explicit: if a future policy materializes
+                // a target hold distinct from its minimum hold, Python's
+                // scheduler compresses the hold while preserving the full
+                // release gap.  The current policy normally makes these
+                // values equal, but the behavior is part of the contract.
+                risky += 1;
+                compressed += 1;
+                max_hold
             } else {
-                hold_us
+                target_hold_us
             }
         } else {
-            hold_us
+            target_hold_us
         };
         if let Some(next_at) = next_at {
             let gap = next_at.saturating_sub(*at).saturating_sub(actual_hold);
@@ -348,6 +370,21 @@ pub fn build_schedule(
         .last()
         .map(|action| action.at_us)
         .unwrap_or_default();
+    let (recommended_hold_frames, recommended_tempo_scale) = if impossible > 0 {
+        if let Some(shortest) = shortest {
+            let min_cycle = min_hold_us.saturating_add(release_gap);
+            let suggested = if min_cycle == 0 {
+                tempo_scale
+            } else {
+                tempo_scale * shortest as f64 / min_cycle as f64
+            };
+            (Some(1.0), Some(python_round_two(suggested).clamp(0.1, 1.0)))
+        } else {
+            (Some(1.0), None)
+        }
+    } else {
+        (None, None)
+    };
     Ok(ScheduleMetadata {
         actions: final_actions,
         source_duration_us: drafts
@@ -355,7 +392,7 @@ pub fn build_schedule(
             .map(|(at, _, _)| *at)
             .max()
             .unwrap_or_default()
-            .saturating_add(hold_us),
+            .saturating_add(target_hold_us),
         playback_duration_us: duration,
         duration_us: duration,
         note_count: song.notes.len(),
@@ -367,6 +404,8 @@ pub fn build_schedule(
         max_polyphony,
         shortest_same_key_interval_us: shortest,
         min_same_key_up_gap_us: min_up_gap,
+        recommended_hold_frames,
+        recommended_tempo_scale,
         warnings: Vec::new(),
     })
 }
@@ -388,6 +427,23 @@ fn python_round_nonnegative(value: f64) -> u64 {
         lower
     };
     rounded as u64
+}
+
+fn python_round_two(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 0.0;
+    }
+    let scaled = value * 100.0;
+    let lower = scaled.floor();
+    let fraction = scaled - lower;
+    let rounded = if fraction < 0.5 {
+        lower
+    } else if fraction > 0.5 || (lower as i64) % 2 != 0 {
+        lower + 1.0
+    } else {
+        lower
+    };
+    rounded / 100.0
 }
 
 fn max_polyphony(actions: &[KeyAction]) -> usize {

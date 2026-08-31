@@ -5,6 +5,7 @@
 //! plus outer adapters.  It never delegates a native-owned command to the
 //! Python Core.
 
+use crate::app_state::{ActivityCoordinator, PhysicalActivityLease};
 use crate::commands::{
     BootstrapDto, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto, CatalogSearchDto,
     CatalogSearchRequest, CatalogViewportDto, CatalogViewportRequest, DiagnosticsEnabledDto,
@@ -28,10 +29,11 @@ use sky_app_core::settings::{
     UpdatePreferencesPatch as CoreUpdatePreferencesPatch,
 };
 use sky_app_core::song::{
-    ActionKind, DOWN_LATE_GRACE_US, MIN_TRANSPORT_MARGIN_US, RiskReport, ScheduleMetadata, Song,
-    analyze_schedule_with_context, build_schedule, frame_us, parse_song_json,
+    ActionKind, RiskReport, ScheduleMetadata, Song, analyze_schedule_with_context,
+    build_schedule_with_policy, parse_song_json,
 };
-use sky_native_adapters::{FileCatalogSource, JsonSettingsStore};
+use sky_app_core::timing::MaterializedTimingPolicy;
+use sky_native_adapters::{FileCatalogSource, JsonSettingsStore, load_calibration_resolution};
 use sky_player::adapter_support::{
     ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
 };
@@ -52,7 +54,6 @@ use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
 const MAX_PREPARED_PLANS: usize = 64;
-static NEXT_NATIVE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) struct NativeDesktopRuntime {
     #[allow(dead_code)]
@@ -62,15 +63,33 @@ pub(crate) struct NativeDesktopRuntime {
     catalog: Mutex<CatalogIndex>,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
+    activity: ActivityCoordinator,
     closed: AtomicBool,
 }
 
 impl NativeDesktopRuntime {
     pub(crate) fn for_current_install() -> Result<Self, String> {
-        Self::from_install_root(resolve_install_root()?)
+        Self::from_install_root_with_activity(
+            resolve_install_root()?,
+            ActivityCoordinator::default(),
+        )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
+        Self::from_install_root_with_activity(install_root, ActivityCoordinator::default())
+    }
+
+    pub(crate) fn for_current_install_with_activity(
+        activity: ActivityCoordinator,
+    ) -> Result<Self, String> {
+        Self::from_install_root_with_activity(resolve_install_root()?, activity)
+    }
+
+    pub(crate) fn from_install_root_with_activity(
+        install_root: PathBuf,
+        activity: ActivityCoordinator,
+    ) -> Result<Self, String> {
         let settings_path = install_root.join("config.json");
         let settings_store = JsonSettingsStore::new(settings_path);
         let settings = SettingsService::load(settings_store)
@@ -82,7 +101,8 @@ impl NativeDesktopRuntime {
             catalog_source: FileCatalogSource::new(songs_dir),
             catalog: Mutex::new(CatalogIndex::default()),
             events: Arc::new(Mutex::new(NativeEventHub::default())),
-            playback: Arc::new(NativePlaybackService::new()),
+            playback: Arc::new(NativePlaybackService::new(activity.clone())),
+            activity,
             closed: AtomicBool::new(false),
         })
     }
@@ -93,7 +113,7 @@ impl NativeDesktopRuntime {
     }
 
     pub(crate) fn dispatch(&self, method: &str, params: Value) -> Result<Value, String> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) && method != "app.shutdown" {
             return Err("native desktop runtime is shut down".into());
         }
         if crate::command_ownership::owner_for(method)
@@ -105,6 +125,10 @@ impl NativeDesktopRuntime {
         }
         match method {
             "app.bootstrap" => encode_result(self.bootstrap()),
+            "app.shutdown" => {
+                self.shutdown();
+                Ok(Value::Object(Default::default()))
+            }
             "catalog.search" => {
                 let request: CatalogSearchRequest =
                     serde_json::from_value(params).map_err(json_error)?;
@@ -364,18 +388,18 @@ impl NativeDesktopRuntime {
             .unwrap_or(&entry.row.title);
         let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
         let settings = self.settings_snapshot()?;
-        let schedule = build_schedule(
-            &song,
-            settings.playback_defaults.hold_frames,
-            1.0,
+        let policy = self.timing_policy(
             settings.playback_defaults.fps,
-        )
-        .map_err(|error| error.to_string())?;
+            settings.playback_defaults.hold_frames,
+        )?;
+        let schedule =
+            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, &policy)
+                .map_err(|error| error.to_string())?;
         let risk = analyze_schedule_with_context(
             &schedule,
             Some(&song.notes),
             settings.playback_defaults.hold_frames,
-            1.0,
+            settings.playback_defaults.tempo_scale,
         );
         let risk_level = match risk.severity.as_str() {
             "low" | "medium" | "high" => risk.severity.clone(),
@@ -485,27 +509,43 @@ impl NativeDesktopRuntime {
             .and_then(|value| value.to_str())
             .unwrap_or(&entry.row.title);
         let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
-        let schedule = build_schedule(
-            &song,
-            request.config.hold_frames,
-            request.config.tempo_scale,
-            request.config.fps,
-        )
-        .map_err(|error| error.to_string())?;
+        let settings = self.settings_snapshot()?;
+        let policy = self.timing_policy(request.config.fps, request.config.hold_frames)?;
+        let schedule = build_schedule_with_policy(&song, request.config.tempo_scale, &policy)
+            .map_err(|error| error.to_string())?;
         let risk = analyze_schedule_with_context(
             &schedule,
             Some(&song.notes),
             request.config.hold_frames,
             request.config.tempo_scale,
         );
-        self.playback.prepare(
-            request.song_id,
-            request.generation,
-            request.config,
+        self.playback.prepare(NativePreparedInput {
+            song_id: request.song_id,
+            generation: request.generation,
+            config: request.config,
             song,
             schedule,
             risk,
+            timing_policy: policy,
+            settings_fingerprint: settings_fingerprint(&settings)?,
+        })
+    }
+
+    fn timing_policy(
+        &self,
+        fps: u16,
+        hold_frames: f64,
+    ) -> Result<MaterializedTimingPolicy, String> {
+        let resolution = load_calibration_resolution(
+            self.install_root.join(".cache").join("input_latency.json"),
+        );
+        MaterializedTimingPolicy::from_calibration(
+            fps,
+            hold_frames,
+            resolution.margin_us,
+            resolution.source,
         )
+        .map_err(|error| error.to_string())
     }
 
     fn start_playback(
@@ -543,6 +583,18 @@ impl NativeDesktopRuntime {
             .subscribe(channel)
     }
 
+    pub(crate) fn invalidate_prepared_for_calibration(&self) {
+        self.playback.invalidate_settings();
+    }
+
+    pub(crate) fn invalidate_prepared_for_external_mutation(&self) {
+        self.playback.invalidate_settings();
+    }
+
+    pub(crate) fn relay_core_event(&self, event: UiEvent) -> Result<(), String> {
+        self.publish(event)
+    }
+
     fn publish(&self, event: UiEvent) -> Result<(), String> {
         self.events
             .lock()
@@ -551,6 +603,7 @@ impl NativeDesktopRuntime {
     }
 
     pub(crate) fn shutdown(&self) {
+        self.activity.begin_shutdown();
         if !self.closed.swap(true, Ordering::AcqRel) {
             self.playback.shutdown(self.events.clone());
             if let Ok(mut events) = self.events.lock() {
@@ -564,17 +617,19 @@ impl NativeDesktopRuntime {
 /// `sky_player`; this service owns prepared-plan admission, the single active
 /// session rule, and the bounded supervisor loop around that worker.
 struct NativePlaybackService {
-    prepared: Mutex<HashMap<String, NativePreparedPlan>>,
+    prepared: Mutex<VecDeque<(String, NativePreparedPlan)>>,
     active: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
     diagnostics_enabled: Arc<AtomicBool>,
     diagnostics_sequence: Arc<AtomicU64>,
+    activity: ActivityCoordinator,
 }
 
 #[derive(Clone)]
 struct NativePreparedPlan {
     song_id: String,
     generation: u64,
+    settings_fingerprint: String,
     song: Song,
     dto: PreparedPlaybackDto,
     variants: HashMap<PlaybackDecision, NativePlaybackVariant>,
@@ -585,6 +640,18 @@ struct NativePlaybackVariant {
     config: PlaybackConfigDto,
     schedule: ScheduleMetadata,
     fingerprint: String,
+    timing_policy: MaterializedTimingPolicy,
+}
+
+struct NativePreparedInput {
+    song_id: String,
+    generation: u64,
+    config: PlaybackConfigDto,
+    song: Song,
+    schedule: ScheduleMetadata,
+    risk: RiskReport,
+    timing_policy: MaterializedTimingPolicy,
+    settings_fingerprint: String,
 }
 
 struct NativeActivePlayback {
@@ -596,6 +663,8 @@ struct NativeActivePlayback {
     config: PlaybackConfigDto,
     plan_fingerprint: String,
     physical: bool,
+    activity_lease: Option<PhysicalActivityLease>,
+    target_hwnd: Option<isize>,
     state: Mutex<PlaybackSessionState>,
     pending: Mutex<Option<PlaybackPendingControl>>,
     player: Option<Arc<NativeDispatchSession>>,
@@ -648,28 +717,25 @@ impl NativePlaybackStartRequest {
     }
 }
 
-fn opaque_native_id() -> String {
-    let sequence = NEXT_NATIVE_ID.fetch_add(1, Ordering::Relaxed);
-    let mut hasher = Sha256::new();
-    hasher.update(sequence.to_le_bytes());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    hasher.update(now.as_nanos().to_le_bytes());
-    hasher.update(std::process::id().to_le_bytes());
-    let digest = hasher.finalize();
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn opaque_native_id() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| format!("secure native identifier generation failed: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn retain_prepared_capacity<T>(prepared: &mut VecDeque<T>) {
+    while prepared.len() > MAX_PREPARED_PLANS {
+        prepared.pop_front();
+    }
 }
 
 fn plan_fingerprint(
     song_id: &str,
     config: &PlaybackConfigDto,
     schedule: &ScheduleMetadata,
+    policy: &MaterializedTimingPolicy,
 ) -> Result<String, String> {
-    let frame = frame_us(config.fps).map_err(|error| error.to_string())?;
     let actions = schedule
         .actions
         .iter()
@@ -684,22 +750,48 @@ fn plan_fingerprint(
             ])
         })
         .collect::<Vec<_>>();
+    // Construct every nested object with json! rather than serializing the
+    // Rust DTO directly.  The Python oracle uses
+    // json.dumps(..., sort_keys=True, separators=(",", ":")); DTO struct
+    // declaration order is not the canonical fingerprint order.
     let payload = serde_json::json!({
         "song_id": song_id,
-        "config": config,
-        "policy": {
+        "config": {
+            "dry_run": config.dry_run,
             "fps": config.fps,
-            "min_hold_us": ((config.hold_frames * frame as f64).ceil() as u64)
-                .saturating_add(DOWN_LATE_GRACE_US)
-                .saturating_add(MIN_TRANSPORT_MARGIN_US),
-            "min_release_gap_us": frame
-                .saturating_add(DOWN_LATE_GRACE_US)
-                .saturating_add(MIN_TRANSPORT_MARGIN_US),
+            "hold_frames": config.hold_frames,
+            "tempo_scale": config.tempo_scale,
+        },
+        "policy": {
+            "fps": policy.fps,
+            "min_hold_us": policy.min_hold_us,
+            "min_release_gap_us": policy.min_release_gap_us,
         },
         "actions": actions,
     });
     let bytes = serde_json::to_vec(&payload).map_err(json_error)?;
     let digest = Sha256::digest(bytes);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn settings_fingerprint(settings: &ApplicationSettings) -> Result<String, String> {
+    // Keep this in lockstep with DesktopPlaybackService._settings_fingerprint.
+    // Update timestamps and unrelated preferences must not invalidate a plan;
+    // the routed settings.patch path explicitly invalidates every plan after a
+    // successful mutation, while update metadata writes remain independent.
+    // Python's settings fingerprint uses json.dumps with sorted keys and its
+    // default separators (`, ` and `: `). Keep the flat payload explicit so
+    // this cross-runtime identity cannot depend on Rust struct field order.
+    let theme = serde_json::to_string(&settings.theme).map_err(json_error)?;
+    let payload = format!(
+        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}}}",
+        settings.playback_defaults.fps,
+        settings.playback_defaults.hold_frames,
+        settings.telemetry_enabled,
+        settings.playback_defaults.tempo_scale,
+        theme,
+    );
+    let digest = Sha256::digest(payload.as_bytes());
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
@@ -718,6 +810,52 @@ fn risk_summary(risk: &RiskReport) -> RiskSummaryDto {
             vec![risk.reason.clone()]
         },
         recommendations: risk.recommendations.clone(),
+    }
+}
+
+fn blocked_playback_dto(
+    song_id: &str,
+    config: PlaybackConfigDto,
+    code: &str,
+    message: String,
+    recommended_tempo_scale: Option<f64>,
+    recommended_hold_frames: Option<f64>,
+) -> PreparedPlaybackDto {
+    // Keep blocked preparation responses aligned with the Python
+    // DesktopPlaybackService: the failure is represented as a typed blocked
+    // DTO, not as a new transport error or an implementation-specific code.
+    let recommendations = [
+        recommended_tempo_scale.map(|tempo| format!("Try tempo {tempo:.2}×")),
+        recommended_hold_frames.map(|hold| format!("Try hold {hold:.2} frames")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let risk = RiskSummaryDto {
+        level: "high".into(),
+        headline: "Playback blocked".into(),
+        reasons: vec![message.clone()],
+        recommendations,
+    };
+    PreparedPlaybackDto {
+        prepared_id: None,
+        song: SongDetailDto {
+            song_id: song_id.into(),
+            title: song_id.into(),
+            duration_us: 0,
+            note_count: 0,
+            format_label: "UNKNOWN".into(),
+            risk: risk.clone(),
+            recommendation: None,
+        },
+        config,
+        admission: PlaybackAdmission::Blocked,
+        risk,
+        decisions: Vec::new(),
+        plan_fingerprint: None,
+        variants: Vec::new(),
+        error_code: Some(code.into()),
+        error_message: Some(message),
     }
 }
 
@@ -774,13 +912,14 @@ fn compile_dispatch_schedule(
 }
 
 impl NativePlaybackService {
-    fn new() -> Self {
+    fn new(activity: ActivityCoordinator) -> Self {
         Self {
-            prepared: Mutex::new(HashMap::new()),
+            prepared: Mutex::new(VecDeque::new()),
             active: Arc::new(Mutex::new(None)),
             last_terminal: Arc::new(Mutex::new(None)),
             diagnostics_enabled: Arc::new(AtomicBool::new(false)),
             diagnostics_sequence: Arc::new(AtomicU64::new(0)),
+            activity,
         }
     }
 
@@ -796,41 +935,44 @@ impl NativePlaybackService {
         Ok(())
     }
 
-    fn prepare(
-        &self,
-        song_id: String,
-        generation: u64,
-        config: PlaybackConfigDto,
-        song: Song,
-        schedule: ScheduleMetadata,
-        risk: RiskReport,
-    ) -> Result<PreparedPlaybackDto, String> {
+    fn prepare(&self, input: NativePreparedInput) -> Result<PreparedPlaybackDto, String> {
+        let NativePreparedInput {
+            song_id,
+            generation,
+            config,
+            song,
+            schedule,
+            risk,
+            timing_policy,
+            settings_fingerprint,
+        } = input;
         let detail = song_detail(&song_id, &song, &schedule, &risk);
         if !config.dry_run && schedule.impossible_same_key_repeats > 0 {
-            return Ok(PreparedPlaybackDto {
-                prepared_id: None,
-                song: detail,
+            let message = format!(
+                "Detected {} infeasible same-key repeat(s): the authored interval is shorter than the configured hold.",
+                schedule.impossible_same_key_repeats
+            );
+            return Ok(blocked_playback_dto(
+                &song_id,
                 config,
-                admission: PlaybackAdmission::Blocked,
-                risk: risk_summary(&risk),
-                decisions: Vec::new(),
-                plan_fingerprint: None,
-                variants: Vec::new(),
-                error_code: Some("physical_infeasible".into()),
-                error_message: Some("playback contains infeasible same-key repeats".into()),
-            });
+                "validation_failed",
+                message,
+                schedule.recommended_tempo_scale,
+                schedule.recommended_hold_frames,
+            ));
         }
-        let fingerprint = plan_fingerprint(&song_id, &config, &schedule)?;
+        let fingerprint = plan_fingerprint(&song_id, &config, &schedule, &timing_policy)?;
         let admission = if risk.severity == "low" {
             PlaybackAdmission::Ready
         } else {
             PlaybackAdmission::ConfirmationRequired
         };
-        let prepared_id = opaque_native_id();
+        let prepared_id = opaque_native_id()?;
         let base_variant = NativePlaybackVariant {
             config: config.clone(),
             schedule: schedule.clone(),
             fingerprint: fingerprint.clone(),
+            timing_policy: timing_policy.clone(),
         };
         let mut decisions = Vec::new();
         let mut variants = HashMap::from([(PlaybackDecision::Proceed, base_variant)]);
@@ -847,8 +989,14 @@ impl NativePlaybackService {
             if let (Some(hold_frames), Some(tempo_scale)) =
                 (risk.suggested_hold_frames, risk.suggested_tempo_scale)
                 && (hold_frames != config.hold_frames || tempo_scale != config.tempo_scale)
+                && let Ok(recommended_policy) = MaterializedTimingPolicy::from_calibration(
+                    config.fps,
+                    hold_frames,
+                    timing_policy.transport_margin_us,
+                    timing_policy.transport_margin_source.clone(),
+                )
                 && let Ok(recommended_schedule) =
-                    build_schedule(&song, hold_frames, tempo_scale, config.fps)
+                    build_schedule_with_policy(&song, tempo_scale, &recommended_policy)
                 && (config.dry_run || recommended_schedule.impossible_same_key_repeats == 0)
             {
                 let recommended_config = PlaybackConfigDto {
@@ -857,14 +1005,19 @@ impl NativePlaybackService {
                     fps: config.fps,
                     dry_run: config.dry_run,
                 };
-                let recommended_fingerprint =
-                    plan_fingerprint(&song_id, &recommended_config, &recommended_schedule)?;
+                let recommended_fingerprint = plan_fingerprint(
+                    &song_id,
+                    &recommended_config,
+                    &recommended_schedule,
+                    &recommended_policy,
+                )?;
                 variants.insert(
                     PlaybackDecision::UseRecommended,
                     NativePlaybackVariant {
                         config: recommended_config.clone(),
                         schedule: recommended_schedule,
                         fingerprint: recommended_fingerprint.clone(),
+                        timing_policy: recommended_policy,
                     },
                 );
                 variant_dtos.push(PlaybackPlanVariantDto {
@@ -882,13 +1035,15 @@ impl NativePlaybackService {
                     dry_run: true,
                     ..config.clone()
                 };
-                let dry_run_fingerprint = plan_fingerprint(&song_id, &dry_run_config, &schedule)?;
+                let dry_run_fingerprint =
+                    plan_fingerprint(&song_id, &dry_run_config, &schedule, &timing_policy)?;
                 variants.insert(
                     PlaybackDecision::DryRun,
                     NativePlaybackVariant {
                         config: dry_run_config.clone(),
                         schedule: schedule.clone(),
                         fingerprint: dry_run_fingerprint.clone(),
+                        timing_policy: timing_policy.clone(),
                     },
                 );
                 variant_dtos.push(PlaybackPlanVariantDto {
@@ -918,22 +1073,18 @@ impl NativePlaybackService {
             .prepared
             .lock()
             .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
-        prepared.insert(
+        prepared.push_back((
             prepared_id,
             NativePreparedPlan {
                 song_id,
                 generation,
+                settings_fingerprint,
                 song,
                 dto: dto.clone(),
                 variants,
             },
-        );
-        while prepared.len() > MAX_PREPARED_PLANS {
-            let oldest = prepared.keys().next().cloned();
-            if let Some(oldest) = oldest {
-                prepared.remove(&oldest);
-            }
-        }
+        ));
+        retain_prepared_capacity(&mut prepared);
         Ok(dto)
     }
 
@@ -955,9 +1106,13 @@ impl NativePlaybackService {
             .lock()
             .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
         let record = prepared
-            .get(&request.prepared_id)
-            .cloned()
+            .iter()
+            .find(|(id, _)| id == &request.prepared_id)
+            .map(|(_, record)| record.clone())
             .ok_or_else(|| "prepared playback is stale or already consumed".to_string())?;
+        if record.settings_fingerprint != settings_fingerprint(settings)? {
+            return Err("prepared playback is stale after settings mutation".into());
+        }
         let accepted = request
             .decisions
             .iter()
@@ -988,12 +1143,25 @@ impl NativePlaybackService {
             .get(&selected)
             .cloned()
             .ok_or_else(|| "selected risk decision has no prepared plan".to_string())?;
-        let player = if variant.config.dry_run {
+        let session_id = opaque_native_id()?;
+        let activity_lease = if variant.config.dry_run {
             None
         } else {
-            Some(self.create_native_player(&variant.schedule, &variant.config, settings)?)
+            Some(self.activity.reserve_playback(&session_id)?)
         };
-        let session_id = opaque_native_id();
+        let (player, target_hwnd) = if variant.config.dry_run {
+            (None, None)
+        } else {
+            match self.create_native_player(
+                &variant.schedule,
+                &variant.config,
+                &variant.timing_policy,
+                settings,
+            ) {
+                Ok((player, target)) => (Some(player), Some(target)),
+                Err(error) => return Err(error),
+            }
+        };
         let active = Arc::new(NativeActivePlayback {
             session_id: session_id.clone(),
             prepared_id: request.prepared_id.clone(),
@@ -1003,6 +1171,8 @@ impl NativePlaybackService {
             config: variant.config.clone(),
             plan_fingerprint: variant.fingerprint.clone(),
             physical: player.is_some(),
+            activity_lease,
+            target_hwnd,
             state: Mutex::new(PlaybackSessionState::Starting),
             pending: Mutex::new(None),
             player,
@@ -1014,7 +1184,11 @@ impl NativePlaybackService {
             done: AtomicBool::new(false),
             sequence: AtomicU64::new(0),
         });
-        prepared.remove(&request.prepared_id);
+        let prepared_index = prepared
+            .iter()
+            .position(|(id, _)| id == &request.prepared_id)
+            .expect("prepared record was found above");
+        prepared.remove(prepared_index);
         *active_slot = Some(active.clone());
         drop(prepared);
         drop(active_slot);
@@ -1034,7 +1208,7 @@ impl NativePlaybackService {
                 *slot = None;
             }
             if let Ok(mut prepared) = self.prepared.lock() {
-                prepared.insert(request.prepared_id, record);
+                prepared.push_back((request.prepared_id, record));
             }
             return Err(error);
         }
@@ -1057,7 +1231,7 @@ impl NativePlaybackService {
                 *slot = None;
             }
             if let Ok(mut prepared) = self.prepared.lock() {
-                prepared.insert(request.prepared_id, record);
+                prepared.push_back((request.prepared_id, record));
             }
             return Err(format!(
                 "failed to start native playback supervisor: {error}"
@@ -1079,6 +1253,7 @@ impl NativePlaybackService {
             last_terminal: self.last_terminal.clone(),
             diagnostics_enabled: self.diagnostics_enabled.clone(),
             diagnostics_sequence: self.diagnostics_sequence.clone(),
+            activity: self.activity.clone(),
         }
     }
 
@@ -1086,29 +1261,27 @@ impl NativePlaybackService {
         &self,
         schedule: &ScheduleMetadata,
         config: &PlaybackConfigDto,
+        policy: &MaterializedTimingPolicy,
         settings: &ApplicationSettings,
-    ) -> Result<Arc<NativeDispatchSession>, String> {
+    ) -> Result<(Arc<NativeDispatchSession>, isize), String> {
         let runtime_schedule = compile_dispatch_schedule(schedule)?;
         let target = sky_dispatch_win32::focus::find_sky_window(
             &settings.sky_process_names,
             settings.allow_title_fallback,
         )
         .ok_or_else(|| "no admissible visible Sky window was found".to_string())?;
-        if !sky_dispatch_win32::focus::focus_window(target) {
+        if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }
-        let frame = frame_us(config.fps).map_err(|error| error.to_string())?;
         let player = Arc::new(NativeDispatchSession::new(NativeSessionOptions {
             schedule: runtime_schedule,
             backend: BackendConfig::Production,
             profile: DispatchProfile::Production,
             timing: TimingOptions {
                 game_fps: config.fps,
-                min_hold_us: ((config.hold_frames * frame as f64).ceil() as u64)
-                    .saturating_add(500)
-                    .saturating_add(300),
-                min_release_gap_us: frame.saturating_add(500).saturating_add(300),
-                down_late_grace_us: 500,
+                min_hold_us: policy.min_hold_us,
+                min_release_gap_us: policy.min_release_gap_us,
+                down_late_grace_us: policy.down_late_grace_us,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -1116,12 +1289,13 @@ impl NativePlaybackService {
             },
             focus: FocusOptions {
                 require_focus: true,
-                focus_restore_grace_us: 100_000,
+                focus_restore_grace_us: policy.focus_restore_grace_us,
             },
             wait: WaitOptions {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
-                supervisor_lease_timeout_us: 0,
+                supervisor_lease_timeout_us:
+                    sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
                 #[cfg(feature = "tauri-test")]
                 test_spin_threshold_us: None,
                 #[cfg(feature = "tauri-test")]
@@ -1129,7 +1303,7 @@ impl NativePlaybackService {
             },
             telemetry: TelemetryOptions {
                 mode: TelemetryMode::Ring,
-                capacity: 64,
+                capacity: 1_024,
             },
             priority: PriorityOptions {
                 mode: PriorityMode::Auto,
@@ -1144,11 +1318,18 @@ impl NativePlaybackService {
         player.set_target_hwnd(target);
         player.set_focus_hint(true);
         player.arm(0)?;
-        Ok(player)
+        Ok((player, target))
     }
 
     fn monitor(&self, active: Arc<NativeActivePlayback>, events: Arc<Mutex<NativeEventHub>>) {
+        // Keep the lease inside the active record for its full lifetime.  Its
+        // Drop implementation releases the cross-owner activity gate on all
+        // terminal and startup-failure paths.
+        let _activity_lease = active.activity_lease.as_ref();
         let mut last_snapshot = Instant::now();
+        let mut last_heartbeat = Instant::now()
+            .checked_sub(Duration::from_millis(200))
+            .unwrap_or_else(Instant::now);
         let mut last_event_state = PlaybackEventState::Starting;
         loop {
             if active.stop_requested.load(Ordering::Acquire) {
@@ -1168,9 +1349,20 @@ impl NativePlaybackService {
                 }
                 break;
             }
+            if let Some(player) = &active.player
+                && let Some(target) = active.target_hwnd
+            {
+                // The supervisor owns only a transition hint.  The worker
+                // still performs its fresh exact-HWND final admission.
+                let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
+                player.set_focus_hint(focused);
+            }
             let (elapsed, pre_roll_remaining, paused, finished, status) =
                 if let Some(player) = &active.player {
-                    let _ = player.heartbeat();
+                    if last_heartbeat.elapsed() >= Duration::from_millis(200) {
+                        let _ = player.heartbeat();
+                        last_heartbeat = Instant::now();
+                    }
                     let state = player.poll_state();
                     (
                         state.elapsed_us,
@@ -1500,7 +1692,7 @@ impl NativePlaybackService {
 
     fn invalidate_catalog(&self, generation: u64) {
         if let Ok(mut prepared) = self.prepared.lock() {
-            prepared.retain(|_, record| record.generation == generation);
+            prepared.retain(|(_, record)| record.generation == generation);
         }
     }
 
@@ -1558,16 +1750,18 @@ struct NativePlaybackServiceHandle {
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
     diagnostics_enabled: Arc<AtomicBool>,
     diagnostics_sequence: Arc<AtomicU64>,
+    activity: ActivityCoordinator,
 }
 
 impl NativePlaybackServiceHandle {
     fn monitor(&self, active: Arc<NativeActivePlayback>, events: Arc<Mutex<NativeEventHub>>) {
         let service = NativePlaybackService {
-            prepared: Mutex::new(HashMap::new()),
+            prepared: Mutex::new(VecDeque::new()),
             active: self.active.clone(),
             last_terminal: self.last_terminal.clone(),
             diagnostics_enabled: self.diagnostics_enabled.clone(),
             diagnostics_sequence: self.diagnostics_sequence.clone(),
+            activity: self.activity.clone(),
         };
         service.monitor(active, events);
     }
@@ -1593,14 +1787,18 @@ fn publish_diagnostics_snapshot_for_active(
         late_5ms: snapshot.late_5ms,
         late_10ms: snapshot.late_10ms,
         active_keys: snapshot.active_count as u64,
-        stuck_keys: snapshot.possibly_active_count as u64,
+        stuck_keys: snapshot.failed_release_count as u64,
         keys_dropped: snapshot.keys_dropped,
         chord_split_events: snapshot.chord_split_events,
-        backend_status: if snapshot.has_terminal_error {
-            crate::ui_events::DiagnosticsBackendStatus::Error
-        } else {
-            crate::ui_events::DiagnosticsBackendStatus::Healthy
-        },
+        backend_status: diagnostics_backend_status(
+            snapshot.has_terminal_error,
+            snapshot.last_error.is_some(),
+            snapshot.failed_release_count,
+            snapshot.keys_dropped,
+            snapshot.chord_split_events,
+            snapshot.possibly_active_count,
+            snapshot.active_count,
+        ),
         release_max_us: (snapshot.release_max_us > 0).then_some(snapshot.release_max_us),
         release_late_2ms: (snapshot.release_late_2ms > 0).then_some(snapshot.release_late_2ms),
         session_id: Some(active.session_id.clone()),
@@ -1612,6 +1810,24 @@ fn publish_diagnostics_snapshot_for_active(
             v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
             payload,
         })
+}
+
+fn diagnostics_backend_status(
+    has_terminal_error: bool,
+    has_last_error: bool,
+    failed_release_count: usize,
+    keys_dropped: u64,
+    chord_split_events: u64,
+    possibly_active_count: usize,
+    active_count: usize,
+) -> crate::ui_events::DiagnosticsBackendStatus {
+    if has_terminal_error || has_last_error || failed_release_count > 0 {
+        crate::ui_events::DiagnosticsBackendStatus::Error
+    } else if keys_dropped > 0 || chord_split_events > 0 || possibly_active_count > active_count {
+        crate::ui_events::DiagnosticsBackendStatus::Degraded
+    } else {
+        crate::ui_events::DiagnosticsBackendStatus::Healthy
+    }
 }
 
 fn publish_empty_diagnostics_snapshot(
@@ -1718,6 +1934,60 @@ fn publish_playback_snapshot(
     pre_roll_remaining_us: u64,
     paused: bool,
 ) -> Result<(), String> {
+    let (focus_state, health, input_path_degraded, message) = if let Some(player) = &active.player {
+        let snapshot = player.snapshot_lite();
+        let focused = active
+            .target_hwnd
+            .is_some_and(sky_dispatch_win32::focus::foreground_window_matches);
+        let focus_state = if focused {
+            PlaybackFocusState::Focused
+        } else if matches!(
+            active.state.lock().ok().as_deref(),
+            Some(PlaybackSessionState::Starting)
+        ) {
+            PlaybackFocusState::Waiting
+        } else {
+            PlaybackFocusState::Unfocused
+        };
+        let health = if snapshot.has_terminal_error
+            || snapshot.last_error.is_some()
+            || snapshot.failed_release_count > 0
+        {
+            PlaybackHealthState::Error
+        } else if snapshot.input_path_degraded
+            || snapshot.keys_dropped > 0
+            || snapshot.chord_split_events > 0
+            || snapshot.possibly_active_count > snapshot.active_count
+        {
+            PlaybackHealthState::Degraded
+        } else {
+            PlaybackHealthState::Healthy
+        };
+        (
+            focus_state,
+            health,
+            snapshot.input_path_degraded,
+            snapshot.last_error,
+        )
+    } else {
+        (
+            // Dry-run has no HWND or physical backend.  Keep the delivery
+            // state honest instead of claiming a focus admission that was
+            // never performed; once the preview leaves Starting, the
+            // non-physical path is considered focus-neutral.
+            if matches!(
+                active.state.lock().ok().as_deref(),
+                Some(PlaybackSessionState::Starting)
+            ) {
+                PlaybackFocusState::Waiting
+            } else {
+                PlaybackFocusState::Focused
+            },
+            PlaybackHealthState::Healthy,
+            false,
+            None,
+        )
+    };
     let event = UiEvent::PlaybackSnapshot {
         v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
         payload: PlaybackSnapshotPayload {
@@ -1735,10 +2005,10 @@ fn publish_playback_snapshot(
             current_us: elapsed_us,
             total_us: active.total_us,
             pre_roll_remaining_us,
-            focus_state: PlaybackFocusState::Focused,
-            health: PlaybackHealthState::Healthy,
-            input_path_degraded: false,
-            message: None,
+            focus_state,
+            health,
+            input_path_degraded,
+            message,
         },
     };
     events
@@ -2105,14 +2375,18 @@ fn remove_oldest_snapshot(buffered: &mut VecDeque<UiEvent>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_NATIVE_EVENTS, NativeDesktopRuntime, NativeEventHub, percentile_ms,
-        population_sigma_ms, resolve_install_root,
+        MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy, NativeDesktopRuntime,
+        NativeEventHub, diagnostics_backend_status, opaque_native_id, percentile_ms,
+        plan_fingerprint, population_sigma_ms, remove_oldest_snapshot, resolve_install_root,
+        retain_prepared_capacity, settings_fingerprint,
     };
+    use crate::commands::PlaybackConfigDto;
     use crate::ui_events::{
         PlaybackEventState, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
         UiEvent,
     };
     use serde_json::Value;
+    use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2145,6 +2419,18 @@ mod tests {
             runtime
                 .dispatch("settings.get", Value::Object(Default::default()))
                 .is_err()
+        );
+        assert_eq!(
+            runtime
+                .dispatch("app.shutdown", Value::Object(Default::default()))
+                .expect("first shutdown"),
+            Value::Object(Default::default())
+        );
+        assert_eq!(
+            runtime
+                .dispatch("app.shutdown", Value::Object(Default::default()))
+                .expect("idempotent shutdown"),
+            Value::Object(Default::default())
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -2212,6 +2498,280 @@ mod tests {
         );
         assert_eq!(percentile_ms(&[], 0.50), 0.0);
         assert_eq!(population_sigma_ms(&[]), 0.0);
+    }
+
+    #[test]
+    fn diagnostics_status_matches_native_observer_contract() {
+        use crate::ui_events::DiagnosticsBackendStatus;
+
+        assert_eq!(
+            diagnostics_backend_status(false, false, 0, 0, 0, 1, 1),
+            DiagnosticsBackendStatus::Healthy
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, false, 0, 1, 0, 1, 1),
+            DiagnosticsBackendStatus::Degraded
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, false, 0, 0, 1, 2, 1),
+            DiagnosticsBackendStatus::Degraded
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, false, 0, 0, 0, 2, 1),
+            DiagnosticsBackendStatus::Degraded
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, true, 0, 0, 0, 1, 1),
+            DiagnosticsBackendStatus::Error
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, false, 1, 0, 0, 1, 1),
+            DiagnosticsBackendStatus::Error
+        );
+    }
+
+    #[test]
+    fn direct_native_player_keeps_the_qualified_supervisor_lease() {
+        assert_eq!(
+            sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            3_000_000
+        );
+    }
+
+    #[test]
+    fn native_prepared_ids_are_random_lowercase_hex_and_eviction_is_fifo() {
+        let mut ids = std::collections::BTreeSet::new();
+        for _ in 0..128 {
+            let id = opaque_native_id().expect("native ID");
+            assert_eq!(id.len(), 32);
+            assert!(
+                id.bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            );
+            assert!(ids.insert(id));
+        }
+
+        let mut prepared = std::collections::VecDeque::new();
+        for value in 0..(MAX_PREPARED_PLANS + 3) {
+            prepared.push_back(value);
+            retain_prepared_capacity(&mut prepared);
+        }
+        assert_eq!(prepared.len(), MAX_PREPARED_PLANS);
+        assert_eq!(prepared.front(), Some(&3));
+        assert_eq!(prepared.back(), Some(&(MAX_PREPARED_PLANS + 2)));
+    }
+
+    #[test]
+    fn calibrated_policy_reaches_schedule_and_plan_fingerprint() {
+        let song = parse_song_json(
+            br#"{"name":"Policy","songNotes":[{"time":0,"key":"Key0"},{"time":100,"key":"Key1"}]}"#,
+            "policy",
+        )
+        .expect("song");
+        let default_policy =
+            MaterializedTimingPolicy::from_calibration(60, 1.0, 300, "default_transport_300")
+                .expect("default policy");
+        let calibrated_policy =
+            MaterializedTimingPolicy::from_calibration(60, 1.0, 777, "device_cache")
+                .expect("calibrated policy");
+        let default_schedule =
+            build_schedule_with_policy(&song, 1.0, &default_policy).expect("default schedule");
+        let calibrated_schedule = build_schedule_with_policy(&song, 1.0, &calibrated_policy)
+            .expect("calibrated schedule");
+        assert!(calibrated_schedule.actions[1].at_us > default_schedule.actions[1].at_us);
+        assert_eq!(calibrated_schedule.actions[1].at_us, 17_944);
+        let config = PlaybackConfigDto {
+            hold_frames: 1.0,
+            tempo_scale: 1.0,
+            fps: 60,
+            dry_run: true,
+        };
+        let default_fingerprint =
+            plan_fingerprint("policy", &config, &default_schedule, &default_policy)
+                .expect("default fingerprint");
+        let calibrated_fingerprint =
+            plan_fingerprint("policy", &config, &calibrated_schedule, &calibrated_policy)
+                .expect("calibrated fingerprint");
+        assert_ne!(default_fingerprint, calibrated_fingerprint);
+    }
+
+    #[test]
+    fn fingerprint_serialization_matches_python_canonicalization() {
+        let mut settings = sky_app_core::settings::ApplicationSettings::default();
+        settings.playback_defaults.hold_frames = 1.25;
+        settings.playback_defaults.tempo_scale = 0.95;
+        settings.playback_defaults.fps = 120;
+        settings.telemetry_enabled = true;
+        assert_eq!(
+            settings_fingerprint(&settings).expect("settings fingerprint"),
+            "08ee5d237d7fa694e691f587a0f0dd74fbbd3dbcb01a1dd7da31f1bb681fb0ec"
+        );
+
+        let song = parse_song_json(
+            br#"{"name":"Fingerprint","songNotes":[{"time":0,"key":"Key0"}]}"#,
+            "fingerprint",
+        )
+        .expect("song");
+        let policy =
+            MaterializedTimingPolicy::from_calibration(60, 1.0, 300, "default_transport_300")
+                .expect("policy");
+        let schedule = build_schedule_with_policy(&song, 0.95, &policy).expect("schedule");
+        let config = PlaybackConfigDto {
+            hold_frames: 1.0,
+            tempo_scale: 0.95,
+            fps: 60,
+            dry_run: true,
+        };
+        assert_eq!(
+            plan_fingerprint(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                &config,
+                &schedule,
+                &policy,
+            )
+            .expect("plan fingerprint"),
+            "72c0ea87e7b2df847bc5e568777af5c80c93c79b8b0c0081a36596a3d11c352e"
+        );
+    }
+
+    #[test]
+    fn native_detail_uses_persisted_tempo_scale_for_schedule_and_risk() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-tempo-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(
+            root.join("config.json"),
+            r#"{"schema_version":3,"default_tempo_scale":0.95}"#,
+        )
+        .expect("config");
+        fs::write(
+            root.join("songs/demo.json"),
+            r#"{"name":"Demo","songNotes":[{"time":1000,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let bootstrap = runtime.bootstrap().expect("bootstrap");
+        let search = runtime
+            .search(crate::commands::CatalogSearchRequest {
+                query: "demo".into(),
+                offset: 0,
+                limit: 10,
+                generation: Some(bootstrap.catalog_generation),
+            })
+            .expect("search");
+        let song_id = search.items[0].song_id.clone();
+        let settings = runtime.settings_snapshot().expect("settings");
+        let policy = runtime
+            .timing_policy(
+                settings.playback_defaults.fps,
+                settings.playback_defaults.hold_frames,
+            )
+            .expect("policy");
+        let song = parse_song_json(
+            br#"{"name":"Demo","songNotes":[{"time":1000,"key":"Key0"}]}"#,
+            "demo",
+        )
+        .expect("song");
+        let expected =
+            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, &policy)
+                .expect("schedule")
+                .source_duration_us;
+        let detail = runtime
+            .detail(crate::commands::CatalogDetailRequest {
+                song_id,
+                generation: Some(bootstrap.catalog_generation),
+            })
+            .expect("detail");
+        assert_eq!(detail.duration_us, expected);
+        assert_ne!(detail.duration_us, 1_000_000 + policy.min_hold_us);
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_prepare_preserves_python_validation_failed_contract() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-prepare-contract-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/repeat.json"),
+            r#"{"name":"Repeat","songNotes":[{"time":0,"key":"Key0"},{"time":1,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let bootstrap = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        let generation = bootstrap["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": "repeat",
+                    "offset": 0,
+                    "limit": 10,
+                    "generation": generation
+                }),
+            )
+            .expect("search");
+        let song_id = search["items"][0]["song_id"].as_str().expect("song ID");
+        let prepared = runtime
+            .dispatch(
+                "playback.prepare",
+                serde_json::json!({
+                    "song_id": song_id,
+                    "generation": generation,
+                    "config": {
+                        "hold_frames": 1.0,
+                        "tempo_scale": 1.0,
+                        "fps": 60,
+                        "dry_run": false
+                    }
+                }),
+            )
+            .expect("blocked preparation is a typed DTO");
+        assert_eq!(prepared["admission"], "blocked");
+        assert_eq!(prepared["error_code"], "validation_failed");
+        assert_eq!(
+            prepared["error_message"],
+            "Detected 1 infeasible same-key repeat(s): the authored interval is shorter than the configured hold."
+        );
+        assert_eq!(prepared["prepared_id"], Value::Null);
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn event_hub_evicts_snapshots_before_lifecycle_events() {
+        let mut hub = NativeEventHub::default();
+        hub.publish(snapshot("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1))
+            .expect("snapshot");
+        for index in 0..MAX_NATIVE_EVENTS {
+            hub.publish(crate::ui_events::UiEvent::CatalogChanged {
+                v: 1,
+                payload: crate::ui_events::CatalogChangedPayload {
+                    generation: index as u64 + 1,
+                    total: 0,
+                },
+            })
+            .expect("snapshot is evictable");
+        }
+        assert_eq!(hub.buffered.len(), MAX_NATIVE_EVENTS);
+        assert!(
+            !hub.buffered
+                .iter()
+                .any(|event| matches!(event, UiEvent::PlaybackSnapshot { .. }))
+        );
+        assert!(!remove_oldest_snapshot(&mut hub.buffered));
     }
 
     #[test]

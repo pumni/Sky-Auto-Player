@@ -98,6 +98,24 @@ def command_result(item: dict[str, Any]) -> Any:
         }
     if method == "update.preferences.get":
         return {"auto_check": True, "channel": "stable", "skip_version": ""}
+    if method in {"settings.get", "settings.patch"}:
+        return {
+            "theme": "slate" if method == "settings.patch" else "aurora",
+            "ui_background_mode": "transparent",
+            "playback_defaults": {
+                "hold_frames": 1.0,
+                "tempo_scale": 0.95 if method == "settings.patch" else 1.0,
+                "fps": 60,
+                "dry_run": False,
+            },
+            "telemetry_enabled": False,
+            "verbose_hud": False,
+            "update_preferences": {
+                "auto_check": True,
+                "channel": "stable",
+                "skip_version": "",
+            },
+        }
     if method == "update.preferences.patch":
         params = item.get("params", {})
         return {

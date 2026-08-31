@@ -35,6 +35,7 @@ def test_sky_app_core_is_pure_and_does_not_depend_on_player_or_delivery() -> Non
         "lib.rs",
         "settings.rs",
         "song.rs",
+        "timing.rs",
         "update.rs",
     ]
 

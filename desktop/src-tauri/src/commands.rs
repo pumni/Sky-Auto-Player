@@ -568,7 +568,13 @@ where
 {
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match crate::command_ownership::owner_for(method) {
+        let _coherence_guard = (method == "playback.start").then(|| app_state.lock_coherence());
+        let calibration_reservation = if method == "calibration.start" {
+            Some(app_state.activity().reserve_calibration()?)
+        } else {
+            None
+        };
+        let result = match crate::command_ownership::owner_for(method) {
             Some(crate::command_ownership::CommandOwner::Native) => {
                 let runtime = app_state.ensure_native_blocking()?;
                 let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
@@ -581,7 +587,13 @@ where
                 request_with_supervisor(&supervisor, method, params)
             }
             None => Err(format!("unowned desktop command: {method}")),
+        };
+        if result.is_ok()
+            && let Some(reservation) = calibration_reservation
+        {
+            reservation.commit();
         }
+        result
     })
     .await
     .map_err(|error| format!("Core worker failed: {error}"))?
@@ -603,6 +615,7 @@ where
         // frontend queue. The frontend Promise tail owns user-intent order;
         // this guard only prevents overlapping persistence operations.
         let _write_guard = app_state.lock_settings_writes();
+        let _coherence_guard = (method == "settings.patch").then(|| app_state.lock_coherence());
         match crate::command_ownership::owner_for(method) {
             Some(crate::command_ownership::CommandOwner::Native) => {
                 let runtime = app_state.ensure_native_blocking()?;
@@ -613,7 +626,20 @@ where
             }
             Some(crate::command_ownership::CommandOwner::Python) => {
                 let supervisor = app_state.ensure_core_blocking()?;
-                request_with_supervisor(&supervisor, method, params)
+                if method == "settings.patch" {
+                    // Invalidate after the Python RPC itself succeeds, before
+                    // decoding its response.  A malformed response must not
+                    // leave a successfully persisted mutation with a live
+                    // Native prepared plan.
+                    let value = supervisor
+                        .request(method, params)
+                        .map_err(|error| error.to_string())?;
+                    app_state.invalidate_native_after_python_settings_patch();
+                    serde_json::from_value(value)
+                        .map_err(|error| format!("invalid {method} response: {error}"))
+                } else {
+                    request_with_supervisor(&supervisor, method, params)
+                }
             }
             None => Err(format!("unowned desktop command: {method}")),
         }
@@ -895,13 +921,23 @@ pub async fn subscribe_ui_events(
         // lifecycle/snapshot events and Core preserves the eight remaining
         // Python-owned update/calibration streams. Each producer retains its
         // own ordering; no command failure is hidden by cross-owner fallback.
-        app_state
-            .ensure_native_blocking()?
-            .subscribe(channel.clone())?;
-        app_state
-            .ensure_core_blocking()?
-            .subscribe(channel)
-            .map_err(|error| error.to_string())
+        let supervisor = app_state.ensure_core_blocking()?;
+        let native = app_state.ensure_native_blocking()?;
+        // Drain pre-observer Core history into the Native hub before attaching
+        // the Channel.  This preserves the relative order of a buffered Core
+        // lifecycle event and a live event produced while subscription is
+        // being installed; both are then replayed by one Channel owner.
+        for event in supervisor
+            .take_buffered_events()
+            .map_err(|error| error.to_string())?
+        {
+            native.relay_core_event(event)?;
+        }
+        for event in app_state.take_pending_core_events()? {
+            native.relay_core_event(event)?;
+        }
+        native.subscribe(channel)?;
+        Ok(())
     })
     .await
     .map_err(|error| format!("Core event worker failed: {error}"))?

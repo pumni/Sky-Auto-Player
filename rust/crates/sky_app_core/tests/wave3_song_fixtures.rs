@@ -1,7 +1,8 @@
 use serde_json::Value;
 use sky_app_core::song::{
-    ActionKind, analyze_schedule_with_context, build_schedule, parse_song_json,
+    ActionKind, analyze_schedule_with_context, build_schedule_with_policy, parse_song_json,
 };
+use sky_app_core::timing::MaterializedTimingPolicy;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
@@ -47,13 +48,16 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
     for case in cases {
         let bytes = serde_json::to_vec(&case["raw"]).unwrap();
         let song = parse_song_json(&bytes, "fixture").expect("valid schedule fixture");
-        let schedule = build_schedule(
-            &song,
-            case["hold_frames"].as_f64().unwrap(),
-            case["tempo_scale"].as_f64().unwrap(),
+        let policy = MaterializedTimingPolicy::from_calibration(
             case["fps"].as_u64().unwrap() as u16,
+            case["hold_frames"].as_f64().unwrap(),
+            case["transport_margin_us"].as_u64().unwrap(),
+            case["transport_margin_source"].as_str().unwrap(),
         )
-        .expect("schedule oracle case");
+        .expect("timing policy oracle case");
+        let schedule =
+            build_schedule_with_policy(&song, case["tempo_scale"].as_f64().unwrap(), &policy)
+                .expect("schedule oracle case");
         let expected = &case["schedule"];
         let actual = serde_json::to_value(&schedule).unwrap();
         for field in [
@@ -70,6 +74,8 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
             "max_polyphony",
             "shortest_same_key_interval_us",
             "min_same_key_up_gap_us",
+            "recommended_hold_frames",
+            "recommended_tempo_scale",
         ] {
             assert_eq!(
                 actual[field], expected[field],
@@ -111,4 +117,57 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
 fn action_kind_wire_names_remain_stable() {
     assert_eq!(serde_json::to_value(ActionKind::Down).unwrap(), "down");
     assert_eq!(serde_json::to_value(ActionKind::Up).unwrap(), "up");
+}
+
+#[test]
+fn calibrated_policy_cases_match_the_python_production_resolver() {
+    let raw = fixture();
+    let cases = raw["timing_policy_cases"]
+        .as_array()
+        .expect("timing policy oracle cases");
+    assert!(cases.len() >= 4);
+    for case in cases {
+        let policy = MaterializedTimingPolicy::from_calibration(
+            case["fps"].as_u64().unwrap() as u16,
+            case["hold_frames"].as_f64().unwrap(),
+            case["transport_margin_us"].as_u64().unwrap(),
+            case["transport_margin_source"].as_str().unwrap(),
+        )
+        .expect("materialized policy oracle case");
+        assert_eq!(
+            policy.frame_us,
+            case["frame_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.frame_base_hold_us,
+            case["frame_base_hold_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.down_late_grace_us,
+            case["down_late_grace_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.min_hold_us,
+            case["min_hold_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.min_release_gap_us,
+            case["min_release_gap_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.focus_restore_grace_us,
+            case["focus_restore_grace_us"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            policy.transport_margin_source,
+            case["transport_margin_source"].as_str().unwrap(),
+            "{case}"
+        );
+    }
 }

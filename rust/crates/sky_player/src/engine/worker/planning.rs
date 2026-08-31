@@ -214,7 +214,7 @@ pub(crate) fn plan_next_dispatch_projected(
         preparation_probe,
     } = input;
     let authored_packet = coordinator.prepare_current_authored_packet()?;
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(prepared) = authored_packet.as_ref() {
         preparation_probe.record_authored_preparation(prepared.preparation_evidence);
     }

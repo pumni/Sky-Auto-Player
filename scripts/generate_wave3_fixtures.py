@@ -12,11 +12,23 @@ import json
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import patch
 
+from sky_music.config import AppConfig
 from sky_music.domain.analyzer import analyze_schedule
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import FrameTimingPolicy
+from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.infrastructure.calibration_loader import (
+    SOURCE_DEFAULT_TRANSPORT_300,
+    SOURCE_DEVICE_CACHE,
+    SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300,
+    SOURCE_INVALID_CACHE_TRANSPORT_300,
+    CalibrationLoadResult,
+    CalibrationStatus,
+)
+from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tests" / "fixtures" / "wave3" / "song_planning.json"
@@ -135,12 +147,54 @@ def _capture_parse(raw: object, suffix: str) -> dict[str, object]:
         }
 
 
-def _schedule_case(name: str, raw: object, suffix: str, *, hold: float, tempo: float, fps: int) -> dict[str, object]:
+def _resolved_policy(*, hold: float, fps: int, margin: int, source: str) -> FrameTimingPolicy:
+    """Resolve through the production calibration-aware entry point.
+
+    The loader result is patched only to make each committed case deterministic;
+    the resolver and domain materialization are the same production functions
+    used by the desktop player.
+    """
+    result = CalibrationLoadResult(
+        status=(
+            CalibrationStatus.VALID
+            if source == SOURCE_DEVICE_CACHE
+            else CalibrationStatus.UNCALIBRATED
+        ),
+        resolved_margin_us=margin,
+        margin_source=source,
+        summary=None,
+    )
+    with patch(
+        "sky_music.orchestration.calibrated_policy.load_calibration_resolution",
+        return_value=result,
+    ):
+        return resolve_calibrated_policy(
+            PlaybackSessionContext.default(hold_frames=hold, fps=fps),
+            AppConfig(),
+        )
+
+
+def _schedule_case(
+    name: str,
+    raw: object,
+    suffix: str,
+    *,
+    hold: float,
+    tempo: float,
+    fps: int,
+    margin: int = 300,
+    margin_source: str = SOURCE_DEFAULT_TRANSPORT_300,
+) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="sky-wave3-schedule-") as directory:
         path = Path(directory) / f"fixture{suffix}"
         path.write_text(json.dumps(raw), encoding="utf-8")
         song = parse_song_file(path)
-    policy = FrameTimingPolicy.from_hold_frames(hold, fps)
+    policy = _resolved_policy(
+        hold=hold,
+        fps=fps,
+        margin=margin,
+        source=margin_source,
+    )
     schedule = build_key_actions(song, policy=policy, tempo_scale=tempo)
     risk = analyze_schedule(
         schedule,
@@ -154,6 +208,8 @@ def _schedule_case(name: str, raw: object, suffix: str, *, hold: float, tempo: f
         "hold_frames": hold,
         "tempo_scale": tempo,
         "fps": fps,
+        "transport_margin_us": int(policy.transport_margin_us or 0),
+        "transport_margin_source": policy.min_hold_margin_source,
         "schedule": {
             "actions": [
                 {
@@ -176,8 +232,27 @@ def _schedule_case(name: str, raw: object, suffix: str, *, hold: float, tempo: f
             "max_polyphony": schedule.max_polyphony,
             "shortest_same_key_interval_us": schedule.shortest_same_key_interval_us,
             "min_same_key_up_gap_us": schedule.min_same_key_up_gap_us,
+            "recommended_hold_frames": schedule.recommended_hold_frames,
+            "recommended_tempo_scale": schedule.recommended_tempo_scale,
         },
         "risk": asdict(risk),
+    }
+
+
+def _policy_case(name: str, *, margin: int, source: str) -> dict[str, object]:
+    policy = _resolved_policy(hold=1.25, fps=120, margin=margin, source=source)
+    return {
+        "name": name,
+        "hold_frames": 1.25,
+        "fps": 120,
+        "transport_margin_us": int(policy.transport_margin_us or 0),
+        "transport_margin_source": policy.min_hold_margin_source,
+        "frame_us": int(policy.frame_us),
+        "frame_base_hold_us": int(policy.frame_base_hold_us or 0),
+        "down_late_grace_us": int(policy.down_late_grace_us),
+        "min_hold_us": int(policy.min_hold_us),
+        "min_release_gap_us": int(policy.min_release_gap_us or 0),
+        "focus_restore_grace_us": int(policy.focus_restore_grace_us),
     }
 
 
@@ -189,13 +264,46 @@ def main() -> None:
     schedule_cases = [
         _schedule_case("basic_schedule", VALID_CASES[0][1], ".json", hold=1.0, tempo=1.0, fps=60),
         _schedule_case("tempo_rounding", VALID_CASES[3][1], ".json", hold=1.25, tempo=0.95, fps=120),
+        _schedule_case(
+            "calibrated_margin",
+            VALID_CASES[0][1],
+            ".json",
+            hold=1.0,
+            tempo=1.0,
+            fps=60,
+            margin=777,
+            margin_source=SOURCE_DEVICE_CACHE,
+        ),
         _schedule_case("empty_schedule", VALID_CASES[2][1], ".txt", hold=1.0, tempo=1.0, fps=60),
         _schedule_case("dense_risk", VALID_CASES[5][1], ".json", hold=1.0, tempo=1.0, fps=60),
+    ]
+    timing_policy_cases = [
+        _policy_case(
+            "no_cache_fallback",
+            margin=300,
+            source=SOURCE_DEFAULT_TRANSPORT_300,
+        ),
+        _policy_case("valid_device_cache", margin=777, source=SOURCE_DEVICE_CACHE),
+        _policy_case(
+            "unhealthy_cache_fallback",
+            margin=300,
+            source=SOURCE_INVALID_CACHE_TRANSPORT_300,
+        ),
+        _policy_case(
+            "stale_cache_fallback",
+            margin=300,
+            source=SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300,
+        ),
     ]
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(
         json.dumps(
-            {"schema": 1, "parser_cases": parser_cases, "schedule_cases": schedule_cases},
+            {
+                "schema": 1,
+                "parser_cases": parser_cases,
+                "schedule_cases": schedule_cases,
+                "timing_policy_cases": timing_policy_cases,
+            },
             ensure_ascii=False,
             indent=2,
         )

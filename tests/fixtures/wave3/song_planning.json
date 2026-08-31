@@ -303,6 +303,8 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
+      "transport_margin_us": 300,
+      "transport_margin_source": "default_transport_300",
       "schedule": {
         "actions": [
           {
@@ -349,7 +351,9 @@
         "risky_same_key_repeats": 0,
         "max_polyphony": 1,
         "shortest_same_key_interval_us": null,
-        "min_same_key_up_gap_us": null
+        "min_same_key_up_gap_us": null,
+        "recommended_hold_frames": null,
+        "recommended_tempo_scale": null
       },
       "risk": {
         "severity": "low",
@@ -395,6 +399,8 @@
       "hold_frames": 1.25,
       "tempo_scale": 0.95,
       "fps": 120,
+      "transport_margin_us": 300,
+      "transport_margin_source": "default_transport_300",
       "schedule": {
         "actions": [
           {
@@ -443,7 +449,9 @@
         "risky_same_key_repeats": 0,
         "max_polyphony": 2,
         "shortest_same_key_interval_us": 15790,
-        "min_same_key_up_gap_us": 4572
+        "min_same_key_up_gap_us": 4572,
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.74
       },
       "risk": {
         "severity": "high",
@@ -471,6 +479,98 @@
       }
     },
     {
+      "name": "calibrated_margin",
+      "raw": {
+        "name": "Demo",
+        "songNotes": [
+          {
+            "time": 20,
+            "key": "Key1"
+          },
+          {
+            "time": 0,
+            "key": "Key0"
+          }
+        ]
+      },
+      "hold_frames": 1.0,
+      "tempo_scale": 1.0,
+      "fps": 60,
+      "transport_margin_us": 777,
+      "transport_margin_source": "device_cache",
+      "schedule": {
+        "actions": [
+          {
+            "at_us": 0,
+            "scan_codes": [
+              21
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 17944,
+            "scan_codes": [
+              21
+            ],
+            "kind": "up",
+            "reason": "release"
+          },
+          {
+            "at_us": 20000,
+            "scan_codes": [
+              22
+            ],
+            "kind": "down",
+            "reason": "onset"
+          },
+          {
+            "at_us": 37944,
+            "scan_codes": [
+              22
+            ],
+            "kind": "up",
+            "reason": "release"
+          }
+        ],
+        "source_duration_us": 37944,
+        "playback_duration_us": 37944,
+        "duration_us": 37944,
+        "note_count": 2,
+        "deduplicated_note_count": 2,
+        "duplicate_note_count": 0,
+        "compressed_holds": 0,
+        "impossible_same_key_repeats": 0,
+        "risky_same_key_repeats": 0,
+        "max_polyphony": 1,
+        "shortest_same_key_interval_us": null,
+        "min_same_key_up_gap_us": null,
+        "recommended_hold_frames": null,
+        "recommended_tempo_scale": null
+      },
+      "risk": {
+        "severity": "low",
+        "impossible_repeats": 0,
+        "impossible_same_key_repeats": 0,
+        "compressed_holds": 0,
+        "max_polyphony": 1,
+        "min_any_note_gap_us": 20000,
+        "min_same_key_gap_us": null,
+        "dense_clusters": [],
+        "recommendations": [
+          "No timing conflicts detected. Keep the selected hold."
+        ],
+        "average_notes_per_second": 52.70925574530888,
+        "peak_notes_per_second_1s": 2.0,
+        "suggested_hold_frames": 1.0,
+        "suggested_tempo_scale": 1.0,
+        "reason": "No timing conflicts detected.",
+        "max_chord_size": 1,
+        "chords_count": 0,
+        "timing_stress_rate": 0.0
+      }
+    },
+    {
       "name": "empty_schedule",
       "raw": {
         "name": "Empty",
@@ -479,6 +579,8 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
+      "transport_margin_us": 300,
+      "transport_margin_source": "default_transport_300",
       "schedule": {
         "actions": [],
         "source_duration_us": 17467,
@@ -492,7 +594,9 @@
         "risky_same_key_repeats": 0,
         "max_polyphony": 0,
         "shortest_same_key_interval_us": null,
-        "min_same_key_up_gap_us": null
+        "min_same_key_up_gap_us": null,
+        "recommended_hold_frames": null,
+        "recommended_tempo_scale": null
       },
       "risk": {
         "severity": "low",
@@ -554,6 +658,8 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
+      "transport_margin_us": 300,
+      "transport_margin_source": "default_transport_300",
       "schedule": {
         "actions": [
           {
@@ -680,7 +786,9 @@
         "risky_same_key_repeats": 0,
         "max_polyphony": 7,
         "shortest_same_key_interval_us": null,
-        "min_same_key_up_gap_us": null
+        "min_same_key_up_gap_us": null,
+        "recommended_hold_frames": null,
+        "recommended_tempo_scale": null
       },
       "risk": {
         "severity": "low",
@@ -709,6 +817,60 @@
         "chords_count": 0,
         "timing_stress_rate": 0.0
       }
+    }
+  ],
+  "timing_policy_cases": [
+    {
+      "name": "no_cache_fallback",
+      "hold_frames": 1.25,
+      "fps": 120,
+      "transport_margin_us": 300,
+      "transport_margin_source": "default_transport_300",
+      "frame_us": 8334,
+      "frame_base_hold_us": 10418,
+      "down_late_grace_us": 500,
+      "min_hold_us": 11218,
+      "min_release_gap_us": 9134,
+      "focus_restore_grace_us": 100000
+    },
+    {
+      "name": "valid_device_cache",
+      "hold_frames": 1.25,
+      "fps": 120,
+      "transport_margin_us": 777,
+      "transport_margin_source": "device_cache",
+      "frame_us": 8334,
+      "frame_base_hold_us": 10418,
+      "down_late_grace_us": 500,
+      "min_hold_us": 11695,
+      "min_release_gap_us": 9611,
+      "focus_restore_grace_us": 100000
+    },
+    {
+      "name": "unhealthy_cache_fallback",
+      "hold_frames": 1.25,
+      "fps": 120,
+      "transport_margin_us": 300,
+      "transport_margin_source": "invalid_cache_transport_300",
+      "frame_us": 8334,
+      "frame_base_hold_us": 10418,
+      "down_late_grace_us": 500,
+      "min_hold_us": 11218,
+      "min_release_gap_us": 9134,
+      "focus_restore_grace_us": 100000
+    },
+    {
+      "name": "stale_cache_fallback",
+      "hold_frames": 1.25,
+      "fps": 120,
+      "transport_margin_us": 300,
+      "transport_margin_source": "incompatible_host_transport_300",
+      "frame_us": 8334,
+      "frame_base_hold_us": 10418,
+      "down_late_grace_us": 500,
+      "min_hold_us": 11218,
+      "min_release_gap_us": 9134,
+      "focus_restore_grace_us": 100000
     }
   ]
 }

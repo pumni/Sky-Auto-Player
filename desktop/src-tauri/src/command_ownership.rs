@@ -39,6 +39,25 @@ pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
     ("calibration.cancel", CommandOwner::Python),
 ];
 
+/// Native handlers are enumerated separately from policy so the matrix cannot
+/// claim a route is native merely because a lifecycle helper happens to call
+/// an internal cleanup function.
+pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
+    "app.bootstrap",
+    "app.shutdown",
+    "catalog.search",
+    "catalog.detail",
+    "catalog.reload",
+    "catalog.set_viewport",
+    "playback.prepare",
+    "playback.start",
+    "playback.stop",
+    "playback.pause",
+    "playback.resume",
+    "playback.skip",
+    "diagnostics.set_enabled",
+];
+
 const REQUIRED_COMMANDS: [&str; 21] = [
     "app.bootstrap",
     "app.shutdown",
@@ -83,6 +102,14 @@ pub(crate) fn matrix_is_complete() -> bool {
         && COMMAND_OWNERS
             .iter()
             .all(|(method, owner)| owner_for(method) == Some(*owner))
+        && NATIVE_HANDLER_METHODS.len()
+            == COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Native)
+                .count()
+        && NATIVE_HANDLER_METHODS
+            .iter()
+            .all(|method| owner_for(method) == Some(CommandOwner::Native))
 }
 
 #[cfg(test)]
@@ -116,5 +143,21 @@ mod tests {
         );
         assert_eq!(owner_for("unknown"), None);
         assert!(matrix_is_complete());
+        assert_eq!(NATIVE_HANDLER_METHODS.len(), 13);
+        for method in NATIVE_HANDLER_METHODS {
+            assert_eq!(owner_for(method), Some(CommandOwner::Native));
+            assert!(
+                include_str!("native_runtime.rs").contains(&format!("\"{method}\"")),
+                "native ownership has no dispatch branch for {method}"
+            );
+        }
+        assert_eq!(
+            COMMAND_OWNERS
+                .iter()
+                .filter(|(_, owner)| *owner == CommandOwner::Native)
+                .map(|(method, _)| *method)
+                .collect::<Vec<_>>(),
+            NATIVE_HANDLER_METHODS
+        );
     }
 }

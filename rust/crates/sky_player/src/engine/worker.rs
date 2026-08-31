@@ -87,6 +87,7 @@ pub(crate) use timing::{
     deadline_target_ticks, exact_sender_durations,
 };
 #[cfg(any(test, feature = "test-support"))]
+#[allow(unused_imports)]
 pub(crate) use timing::{calibrated_spin_threshold_us, derive_spin_threshold_us};
 pub(crate) use timing::{
     lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
@@ -99,7 +100,7 @@ pub(crate) use wait::{
 
 use super::shared::SessionShared;
 use super::*;
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::AuthoredPreparationEvidence;
 use sky_dispatch_core::model::RuntimeSchedule;
 use std::sync::Arc;
@@ -142,7 +143,7 @@ pub(crate) struct DispatchPreparationProbe {
 
 impl DispatchPreparationProbe {
     #[inline]
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_authored_preparation(&self, evidence: AuthoredPreparationEvidence) {
         self.packet_header_reads
             .fetch_add(evidence.packet_header_reads, Ordering::Relaxed);

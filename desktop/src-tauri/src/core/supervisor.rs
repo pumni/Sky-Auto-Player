@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+type CoreEventObserver = Arc<dyn Fn(&CoreEvent) -> Result<(), String> + Send + Sync>;
+type CoreFailureObserver = Arc<dyn Fn() + Send + Sync>;
+
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(15);
@@ -77,6 +80,8 @@ pub struct CoreSupervisor {
     lifecycle: Mutex<CoreLifecycle>,
     ready: Mutex<Option<Receiver<Result<(), String>>>>,
     events: Mutex<EventState>,
+    event_observer: Mutex<Option<CoreEventObserver>>,
+    failure_observer: Mutex<Option<CoreFailureObserver>>,
     shutdown_requested: AtomicBool,
     physical_session_active: AtomicBool,
     emergency_release_done: AtomicBool,
@@ -160,6 +165,8 @@ impl CoreSupervisor {
             lifecycle: Mutex::new(CoreLifecycle::Starting),
             ready: Mutex::new(Some(ready_receiver)),
             events: Mutex::new(EventState::default()),
+            event_observer: Mutex::new(None),
+            failure_observer: Mutex::new(None),
             shutdown_requested: AtomicBool::new(false),
             physical_session_active: AtomicBool::new(false),
             emergency_release_done: AtomicBool::new(false),
@@ -208,6 +215,37 @@ impl CoreSupervisor {
                     "Core exited before ready".into(),
                 ))
             }
+        }
+    }
+
+    /// Install a shell-level observer for cross-owner coordination.  The
+    /// observer is deliberately read-only from the Core transport's point of
+    /// view: it can close activity gates/invalidate native plans before the
+    /// decoded event reaches the existing UI delivery buffer.
+    pub(crate) fn set_event_observer(&self, observer: CoreEventObserver) {
+        if let Ok(mut slot) = self.event_observer.lock() {
+            *slot = Some(observer);
+        }
+    }
+
+    /// Install a side-effect-only observer for an unexpected Core termination
+    /// or delivery failure.  It deliberately carries no Core event payload:
+    /// the failure path may have no valid wire event to relay, and publishing
+    /// a synthetic event here could recurse through the delivery observer.
+    pub(crate) fn set_failure_observer(&self, observer: CoreFailureObserver) {
+        if let Ok(mut slot) = self.failure_observer.lock() {
+            *slot = Some(observer);
+        }
+    }
+
+    fn notify_failure_observer(&self) {
+        let observer = self
+            .failure_observer
+            .lock()
+            .ok()
+            .and_then(|observer| observer.clone());
+        if let Some(observer) = observer {
+            observer();
         }
     }
 
@@ -340,6 +378,7 @@ impl CoreSupervisor {
                 if status.is_err() || !supervisor.shutdown_requested.load(Ordering::Acquire) {
                     supervisor.pending.fail_all("Core process exited");
                     supervisor.emergency_release_if_needed();
+                    supervisor.notify_failure_observer();
                     let mut lifecycle = supervisor.lifecycle.lock().expect("lifecycle poisoned");
                     if *lifecycle != CoreLifecycle::Fatal {
                         *lifecycle = CoreLifecycle::Exited;
@@ -415,6 +454,17 @@ impl CoreSupervisor {
     }
 
     fn publish_event(&self, event: CoreEvent) {
+        let observer = self
+            .event_observer
+            .lock()
+            .ok()
+            .and_then(|observer| observer.clone());
+        if let Some(observer) = observer {
+            if observer(&event).is_err() {
+                self.event_delivery_fatal();
+            }
+            return;
+        }
         let ui_event = event.into_ui_event();
         let mut events = self.events.lock().expect("event buffer poisoned");
         if events.overflowed {
@@ -474,6 +524,7 @@ impl CoreSupervisor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn subscribe(&self, channel: tauri::ipc::Channel<UiEvent>) -> Result<(), SupervisorError> {
         let mut events = self.events.lock().expect("event buffer poisoned");
         if events.overflowed {
@@ -496,9 +547,23 @@ impl CoreSupervisor {
         Ok(())
     }
 
+    /// Drain only the bounded events produced before the shell installed the
+    /// unified native UI hub.  Once the observer is installed, new events do
+    /// not enter this legacy buffer.
+    pub(crate) fn take_buffered_events(&self) -> Result<Vec<UiEvent>, SupervisorError> {
+        let mut events = self.events.lock().expect("event buffer poisoned");
+        if events.overflowed {
+            return Err(SupervisorError::Unavailable(
+                "Core event history overflowed its bounded capacity".into(),
+            ));
+        }
+        Ok(std::mem::take(&mut events.buffered))
+    }
+
     fn event_delivery_fatal(&self) {
         self.set_lifecycle(CoreLifecycle::Fatal);
         self.pending.fail_all("UI event channel delivery failed");
+        self.notify_failure_observer();
         self.terminate_child_before_emergency_release();
     }
 

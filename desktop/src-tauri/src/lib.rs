@@ -694,4 +694,90 @@ mod ipc_tests {
         let shutdown_value: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
         assert!(shutdown_value.is_null());
     }
+
+    #[test]
+    fn routed_python_settings_patch_invalidates_native_prepared_plan() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::bootstrap,
+                super::commands::search_songs,
+                super::commands::prepare_playback,
+                super::commands::patch_settings,
+                super::commands::start_playback,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
+        app.state::<AppState>()
+            .inner()
+            .install_ready_for_test(supervisor.clone());
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let bootstrap =
+            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 60))
+                .expect("native bootstrap");
+        let bootstrap: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
+        let generation = bootstrap["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"blue","offset":0,"limit":1,"generation":generation}}),
+                62,
+            ),
+        )
+        .expect("native search");
+        let search: serde_json::Value = search.deserialize().expect("search JSON");
+        let song_id = search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned();
+        let prepared = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({"params":{
+                    "songId":song_id,
+                    "generation":generation,
+                    "config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                }}),
+                64,
+            ),
+        )
+        .expect("native prepare");
+        let prepared: serde_json::Value = prepared.deserialize().expect("prepare JSON");
+        let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
+
+        let patched = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"playbackDefaults":{"tempo_scale":0.95}}}),
+                66,
+            ),
+        )
+        .expect("Python-owned settings patch");
+        let _: serde_json::Value = patched.deserialize().expect("settings JSON");
+
+        let start = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_playback",
+                json!({"params":{"preparedId":prepared_id,"decisions":[]}}),
+                68,
+            ),
+        );
+        assert!(
+            start.is_err(),
+            "settings patch must stale native prepared ID"
+        );
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 70));
+        supervisor.shutdown();
+    }
 }
