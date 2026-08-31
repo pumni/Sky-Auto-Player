@@ -256,6 +256,40 @@ def _policy_case(name: str, *, margin: int, source: str) -> dict[str, object]:
     }
 
 
+def _detail_tempo_case(tempo: float) -> dict[str, object]:
+    """Capture the Python catalog-detail projection for one persisted tempo."""
+    scheduled = _schedule_case(
+        f"detail_tempo_{tempo:.2f}",
+        VALID_CASES[3][1],
+        ".json",
+        hold=1.0,
+        tempo=tempo,
+        fps=60,
+    )
+    risk = scheduled["risk"]
+    assert isinstance(risk, dict)
+    schedule = scheduled["schedule"]
+    assert isinstance(schedule, dict)
+    return {
+        "tempo_scale": tempo,
+        "raw": scheduled["raw"],
+        "duration_us": schedule["source_duration_us"],
+        "risk_level": risk["severity"],
+        "risk_recommendations": risk["recommendations"],
+        "risk_min_any_note_gap_us": risk["min_any_note_gap_us"],
+        "risk_min_same_key_gap_us": risk["min_same_key_gap_us"],
+        "recommendation": {
+            "recommended_hold_frames": risk["suggested_hold_frames"],
+            "recommended_tempo_scale": risk["suggested_tempo_scale"],
+            "summary": (
+                risk["recommendations"][0]
+                if risk["recommendations"]
+                else "Keep the selected settings."
+            ),
+        },
+    }
+
+
 def main() -> None:
     parser_cases = []
     for name, raw, suffix in VALID_CASES + INVALID_CASES:
@@ -295,6 +329,7 @@ def main() -> None:
             source=SOURCE_INCOMPATIBLE_HOST_TRANSPORT_300,
         ),
     ]
+    detail_tempo_cases = [_detail_tempo_case(tempo) for tempo in (0.90, 0.95, 1.00, 1.05, 1.10)]
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(
         json.dumps(
@@ -303,6 +338,7 @@ def main() -> None:
                 "parser_cases": parser_cases,
                 "schedule_cases": schedule_cases,
                 "timing_policy_cases": timing_policy_cases,
+                "detail_tempo_cases": detail_tempo_cases,
             },
             ensure_ascii=False,
             indent=2,

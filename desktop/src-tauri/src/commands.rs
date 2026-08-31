@@ -921,22 +921,18 @@ pub async fn subscribe_ui_events(
         // lifecycle/snapshot events and Core preserves the eight remaining
         // Python-owned update/calibration streams. Each producer retains its
         // own ordering; no command failure is hidden by cross-owner fallback.
-        let supervisor = app_state.ensure_core_blocking()?;
+        let _supervisor = app_state.ensure_core_blocking()?;
         let native = app_state.ensure_native_blocking()?;
-        // Drain pre-observer Core history into the Native hub before attaching
-        // the Channel.  This preserves the relative order of a buffered Core
-        // lifecycle event and a live event produced while subscription is
-        // being installed; both are then replayed by one Channel owner.
-        for event in supervisor
-            .take_buffered_events()
-            .map_err(|error| error.to_string())?
-        {
-            native.relay_core_event(event)?;
+        // Put AppState into a transition phase before installing the native
+        // Channel. Core events arriving during creation/subscription remain
+        // behind the same ordered route queue and cannot overtake older
+        // backlog events.
+        app_state.begin_core_event_route_transition()?;
+        if let Err(error) = native.subscribe(channel) {
+            app_state.fail_core_event_route();
+            return Err(error);
         }
-        for event in app_state.take_pending_core_events()? {
-            native.relay_core_event(event)?;
-        }
-        native.subscribe(channel)?;
+        app_state.complete_core_event_route_transition(native)?;
         Ok(())
     })
     .await

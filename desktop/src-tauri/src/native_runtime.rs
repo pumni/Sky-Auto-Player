@@ -620,9 +620,72 @@ struct NativePlaybackService {
     prepared: Mutex<VecDeque<(String, NativePreparedPlan)>>,
     active: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
-    diagnostics_enabled: Arc<AtomicBool>,
-    diagnostics_sequence: Arc<AtomicU64>,
+    diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     activity: ActivityCoordinator,
+}
+
+const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Default)]
+struct DiagnosticsPublicationState {
+    enabled: bool,
+    epoch: u64,
+    sequence: u64,
+    last_emit_at: Option<Instant>,
+}
+
+struct DiagnosticsPublicationGate {
+    state: Mutex<DiagnosticsPublicationState>,
+}
+
+impl Default for DiagnosticsPublicationGate {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(DiagnosticsPublicationState::default()),
+        }
+    }
+}
+
+impl DiagnosticsPublicationGate {
+    fn set_enabled(&self, enabled: bool) -> Result<bool, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "diagnostics publication gate poisoned".to_string())?;
+        state.enabled = enabled;
+        state.epoch = state.epoch.wrapping_add(1);
+        // This is intentionally the Python contract: re-enable starts a
+        // fresh sampling window while sequence IDs remain monotonic.
+        state.last_emit_at = None;
+        Ok(state.enabled)
+    }
+
+    fn try_publish<F>(&self, sample_time: Instant, publish: F) -> Result<bool, String>
+    where
+        F: FnOnce(u64) -> Result<(), String>,
+    {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "diagnostics publication gate poisoned".to_string())?;
+        if !state.enabled {
+            return Ok(false);
+        }
+        if state
+            .last_emit_at
+            .is_some_and(|last| sample_time.saturating_duration_since(last) < DIAGNOSTICS_INTERVAL)
+        {
+            return Ok(false);
+        }
+        state.last_emit_at = Some(sample_time);
+        state.sequence = state.sequence.wrapping_add(1);
+        let sequence = state.sequence;
+        // Keep the gate held across the bounded event publication. This is
+        // the linearization point that makes a successful disable authoritative
+        // even when a supervisor publication was already in flight.
+        publish(sequence)?;
+        Ok(true)
+    }
 }
 
 #[derive(Clone)]
@@ -917,8 +980,7 @@ impl NativePlaybackService {
             prepared: Mutex::new(VecDeque::new()),
             active: Arc::new(Mutex::new(None)),
             last_terminal: Arc::new(Mutex::new(None)),
-            diagnostics_enabled: Arc::new(AtomicBool::new(false)),
-            diagnostics_sequence: Arc::new(AtomicU64::new(0)),
+            diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             activity,
         }
     }
@@ -926,12 +988,9 @@ impl NativePlaybackService {
     fn set_diagnostics_enabled(
         &self,
         enabled: bool,
-        events: Arc<Mutex<NativeEventHub>>,
+        _events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<(), String> {
-        self.diagnostics_enabled.store(enabled, Ordering::Release);
-        if enabled {
-            self.publish_diagnostics_snapshot(&events, None)?;
-        }
+        self.diagnostics_gate.set_enabled(enabled)?;
         Ok(())
     }
 
@@ -1251,8 +1310,7 @@ impl NativePlaybackService {
         NativePlaybackServiceHandle {
             active: self.active.clone(),
             last_terminal: self.last_terminal.clone(),
-            diagnostics_enabled: self.diagnostics_enabled.clone(),
-            diagnostics_sequence: self.diagnostics_sequence.clone(),
+            diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
         }
     }
@@ -1437,12 +1495,7 @@ impl NativePlaybackService {
                     cleanup_failed_event_delivery(&active);
                     break;
                 }
-                if self.diagnostics_enabled.load(Ordering::Acquire)
-                    && publish_diagnostics_snapshot_for_active(
-                        &events,
-                        &active,
-                        &self.diagnostics_sequence,
-                    )
+                if publish_diagnostics_snapshot_for_active(&events, &active, &self.diagnostics_gate)
                     .is_err()
                 {
                     cleanup_failed_event_delivery(&active);
@@ -1512,18 +1565,21 @@ impl NativePlaybackService {
             .map_err(|_| "native active-playback lock poisoned".to_string())?
             .clone();
         let Some(active) = active else {
+            let terminal = self
+                .last_terminal
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
             if method == "playback.stop"
-                && self
-                    .last_terminal
-                    .lock()
-                    .ok()
-                    .and_then(|value| value.clone())
-                    .is_some_and(|(id, _)| id == session_id)
+                && terminal.as_ref().is_some_and(|(id, _)| id == &session_id)
             {
+                let terminal_state = terminal
+                    .map(|(_, state)| state)
+                    .unwrap_or(PlaybackSessionState::Failed);
                 return Ok(PlaybackCommandAckDto {
                     accepted: true,
                     session_id,
-                    state: PlaybackSessionState::Finished,
+                    state: terminal_state,
                     pending_command: None,
                     reason: None,
                 });
@@ -1666,6 +1722,18 @@ impl NativePlaybackService {
                 }
             }
             "playback.skip" => {
+                if !matches!(
+                    current,
+                    PlaybackSessionState::Starting
+                        | PlaybackSessionState::Playing
+                        | PlaybackSessionState::Paused
+                ) {
+                    return Err("skip requires a live playback session".into());
+                }
+                *active
+                    .pending
+                    .lock()
+                    .map_err(|_| "native playback control lock poisoned".to_string())? = None;
                 active.skip_requested.store(true, Ordering::Release);
                 if let Some(player) = &active.player {
                     player.skip()?;
@@ -1702,24 +1770,6 @@ impl NativePlaybackService {
         }
     }
 
-    fn publish_diagnostics_snapshot(
-        &self,
-        events: &Arc<Mutex<NativeEventHub>>,
-        active: Option<Arc<NativeActivePlayback>>,
-    ) -> Result<(), String> {
-        if let Some(active) =
-            active.or_else(|| self.active.lock().ok().and_then(|slot| slot.clone()))
-            && active.player.is_some()
-        {
-            return publish_diagnostics_snapshot_for_active(
-                events,
-                &active,
-                &self.diagnostics_sequence,
-            );
-        }
-        publish_empty_diagnostics_snapshot(events, &self.diagnostics_sequence)
-    }
-
     fn shutdown(&self, events: Arc<Mutex<NativeEventHub>>) {
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
         if let Some(active) = active {
@@ -1748,8 +1798,7 @@ impl NativePlaybackService {
 struct NativePlaybackServiceHandle {
     active: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
-    diagnostics_enabled: Arc<AtomicBool>,
-    diagnostics_sequence: Arc<AtomicU64>,
+    diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     activity: ActivityCoordinator,
 }
 
@@ -1759,8 +1808,7 @@ impl NativePlaybackServiceHandle {
             prepared: Mutex::new(VecDeque::new()),
             active: self.active.clone(),
             last_terminal: self.last_terminal.clone(),
-            diagnostics_enabled: self.diagnostics_enabled.clone(),
-            diagnostics_sequence: self.diagnostics_sequence.clone(),
+            diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
         };
         service.monitor(active, events);
@@ -1770,46 +1818,50 @@ impl NativePlaybackServiceHandle {
 fn publish_diagnostics_snapshot_for_active(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
-    sequence: &AtomicU64,
+    gate: &DiagnosticsPublicationGate,
 ) -> Result<(), String> {
     let Some(player) = &active.player else {
         return Ok(());
     };
     let snapshot = player.snapshot_lite();
     let recent = snapshot.recent_latencies_us.as_slice();
-    let payload = crate::ui_events::DiagnosticsSnapshotDto {
-        seq: sequence.fetch_add(1, Ordering::Relaxed) + 1,
-        max_lateness_us: snapshot.max_lateness_us,
-        p50_ms: percentile_ms(recent, 0.50),
-        p95_ms: percentile_ms(recent, 0.95),
-        sigma_onset_ms: population_sigma_ms(recent),
-        late_2ms: snapshot.late_2ms,
-        late_5ms: snapshot.late_5ms,
-        late_10ms: snapshot.late_10ms,
-        active_keys: snapshot.active_count as u64,
-        stuck_keys: snapshot.failed_release_count as u64,
-        keys_dropped: snapshot.keys_dropped,
-        chord_split_events: snapshot.chord_split_events,
-        backend_status: diagnostics_backend_status(
-            snapshot.has_terminal_error,
-            snapshot.last_error.is_some(),
-            snapshot.failed_release_count,
-            snapshot.keys_dropped,
-            snapshot.chord_split_events,
-            snapshot.possibly_active_count,
-            snapshot.active_count,
-        ),
-        release_max_us: (snapshot.release_max_us > 0).then_some(snapshot.release_max_us),
-        release_late_2ms: (snapshot.release_late_2ms > 0).then_some(snapshot.release_late_2ms),
-        session_id: Some(active.session_id.clone()),
-    };
-    events
-        .lock()
-        .map_err(|_| "native event hub lock poisoned".to_string())?
-        .publish(UiEvent::DiagnosticsSnapshot {
-            v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
-            payload,
-        })
+    let session_id = active.session_id.clone();
+    let _published = gate.try_publish(Instant::now(), |sequence| {
+        let payload = crate::ui_events::DiagnosticsSnapshotDto {
+            seq: sequence,
+            max_lateness_us: snapshot.max_lateness_us,
+            p50_ms: percentile_ms(recent, 0.50),
+            p95_ms: percentile_ms(recent, 0.95),
+            sigma_onset_ms: population_sigma_ms(recent),
+            late_2ms: snapshot.late_2ms,
+            late_5ms: snapshot.late_5ms,
+            late_10ms: snapshot.late_10ms,
+            active_keys: snapshot.active_count as u64,
+            stuck_keys: snapshot.failed_release_count as u64,
+            keys_dropped: snapshot.keys_dropped,
+            chord_split_events: snapshot.chord_split_events,
+            backend_status: diagnostics_backend_status(
+                snapshot.has_terminal_error,
+                snapshot.last_error.is_some(),
+                snapshot.failed_release_count,
+                snapshot.keys_dropped,
+                snapshot.chord_split_events,
+                snapshot.possibly_active_count,
+                snapshot.active_count,
+            ),
+            release_max_us: (snapshot.release_max_us > 0).then_some(snapshot.release_max_us),
+            release_late_2ms: (snapshot.release_late_2ms > 0).then_some(snapshot.release_late_2ms),
+            session_id: Some(session_id),
+        };
+        events
+            .lock()
+            .map_err(|_| "native event hub lock poisoned".to_string())?
+            .publish(UiEvent::DiagnosticsSnapshot {
+                v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+                payload,
+            })
+    })?;
+    Ok(())
 }
 
 fn diagnostics_backend_status(
@@ -1828,36 +1880,6 @@ fn diagnostics_backend_status(
     } else {
         crate::ui_events::DiagnosticsBackendStatus::Healthy
     }
-}
-
-fn publish_empty_diagnostics_snapshot(
-    events: &Arc<Mutex<NativeEventHub>>,
-    sequence: &AtomicU64,
-) -> Result<(), String> {
-    events
-        .lock()
-        .map_err(|_| "native event hub lock poisoned".to_string())?
-        .publish(UiEvent::DiagnosticsSnapshot {
-            v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
-            payload: crate::ui_events::DiagnosticsSnapshotDto {
-                seq: sequence.fetch_add(1, Ordering::Relaxed) + 1,
-                max_lateness_us: 0,
-                p50_ms: 0.0,
-                p95_ms: 0.0,
-                sigma_onset_ms: 0.0,
-                late_2ms: 0,
-                late_5ms: 0,
-                late_10ms: 0,
-                active_keys: 0,
-                stuck_keys: 0,
-                keys_dropped: 0,
-                chord_split_events: 0,
-                backend_status: crate::ui_events::DiagnosticsBackendStatus::Unavailable,
-                release_max_us: None,
-                release_late_2ms: None,
-                session_id: None,
-            },
-        })
 }
 
 fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
@@ -2375,12 +2397,15 @@ fn remove_oldest_snapshot(buffered: &mut VecDeque<UiEvent>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy, NativeDesktopRuntime,
-        NativeEventHub, diagnostics_backend_status, opaque_native_id, percentile_ms,
-        plan_fingerprint, population_sigma_ms, remove_oldest_snapshot, resolve_install_root,
-        retain_prepared_capacity, settings_fingerprint,
+        DiagnosticsPublicationGate, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
+        MaterializedTimingPolicy, NativeActivePlayback, NativeDesktopRuntime, NativeEventHub,
+        NativePlaybackService, PlaybackPendingControl, diagnostics_backend_status,
+        opaque_native_id, percentile_ms, plan_fingerprint, population_sigma_ms,
+        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
+        settings_fingerprint,
     };
-    use crate::commands::PlaybackConfigDto;
+    use crate::app_state::ActivityCoordinator;
+    use crate::commands::{PlaybackConfigDto, PlaybackSessionState};
     use crate::ui_events::{
         PlaybackEventState, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
         UiEvent,
@@ -2388,7 +2413,42 @@ mod tests {
     use serde_json::Value;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn active_for_control(
+        state: PlaybackSessionState,
+        pending: Option<PlaybackPendingControl>,
+    ) -> Arc<NativeActivePlayback> {
+        Arc::new(NativeActivePlayback {
+            session_id: "a".repeat(32),
+            prepared_id: "b".repeat(32),
+            song_id: "c".repeat(32),
+            title: "Fixture".into(),
+            total_us: 1_000_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: true,
+            },
+            plan_fingerprint: "d".repeat(64),
+            physical: false,
+            activity_lease: None,
+            target_hwnd: None,
+            state: Mutex::new(state),
+            pending: Mutex::new(pending),
+            player: None,
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: std::sync::atomic::AtomicBool::new(false),
+            skip_requested: std::sync::atomic::AtomicBool::new(false),
+            done: std::sync::atomic::AtomicBool::new(false),
+            sequence: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
 
     #[test]
     fn debug_install_root_is_repository_root_not_cwd() {
@@ -2531,6 +2591,201 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_gate_matches_python_rate_reset_and_sequence_contract() {
+        let gate = DiagnosticsPublicationGate::default();
+        gate.set_enabled(true).expect("enable");
+        let start = Instant::now();
+        let mut sequences = Vec::new();
+        assert!(
+            gate.try_publish(start, |sequence| {
+                sequences.push(sequence);
+                Ok(())
+            })
+            .expect("first publication")
+        );
+        assert!(
+            !gate
+                .try_publish(start + Duration::from_millis(99), |_| Ok(()))
+                .expect("throttled publication")
+        );
+        assert!(
+            gate.try_publish(start + Duration::from_millis(100), |sequence| {
+                sequences.push(sequence);
+                Ok(())
+            })
+            .expect("second publication")
+        );
+        gate.set_enabled(false).expect("disable");
+        assert!(
+            !gate
+                .try_publish(start + Duration::from_millis(200), |_| Ok(()))
+                .expect("disabled publication")
+        );
+        gate.set_enabled(true).expect("re-enable");
+        assert!(
+            gate.try_publish(start + Duration::from_millis(200), |sequence| {
+                sequences.push(sequence);
+                Ok(())
+            })
+            .expect("fresh sampling window")
+        );
+        assert_eq!(sequences, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn diagnostics_disable_waits_for_in_flight_publication() {
+        let gate = Arc::new(DiagnosticsPublicationGate::default());
+        gate.set_enabled(true).expect("enable");
+        let start = Instant::now();
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let disabled_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_gate = Arc::clone(&gate);
+        let worker_emitted = Arc::clone(&emitted);
+        let worker_disabled_returned = Arc::clone(&disabled_returned);
+        let worker = std::thread::spawn(move || {
+            worker_gate
+                .try_publish(start, |sequence| {
+                    entered_sender.send(()).expect("entered receiver");
+                    release_receiver.recv().expect("release sender");
+                    assert!(!worker_disabled_returned.load(Ordering::Acquire));
+                    worker_emitted.lock().expect("emitted").push(sequence);
+                    Ok(())
+                })
+                .expect("publication")
+        });
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("publisher entered");
+        let disable_gate = Arc::clone(&gate);
+        let disable_returned = Arc::clone(&disabled_returned);
+        let disable = std::thread::spawn(move || {
+            disable_gate.set_enabled(false).expect("disable");
+            disable_returned.store(true, Ordering::Release);
+        });
+        release_sender.send(()).expect("release publisher");
+        assert!(worker.join().expect("publisher thread"));
+        disable.join().expect("disable thread");
+        assert_eq!(*emitted.lock().expect("emitted"), vec![1]);
+        assert!(
+            !gate
+                .try_publish(start + Duration::from_millis(100), |_| Ok(()))
+                .expect("post-disable publication")
+        );
+    }
+
+    #[test]
+    fn terminal_stop_returns_the_stored_terminal_state() {
+        for terminal_state in [PlaybackSessionState::Finished, PlaybackSessionState::Failed] {
+            let service = NativePlaybackService::new(ActivityCoordinator::default());
+            *service.last_terminal.lock().expect("terminal state") =
+                Some(("a".repeat(32), terminal_state));
+            let acknowledgement = service
+                .command(
+                    "playback.stop",
+                    "a".repeat(32),
+                    Arc::new(Mutex::new(NativeEventHub::default())),
+                )
+                .expect("terminal stop is idempotent");
+            assert_eq!(acknowledgement.state, terminal_state);
+            assert!(acknowledgement.accepted);
+        }
+    }
+
+    #[test]
+    fn skip_is_live_only_and_clears_pending_pause_or_resume() {
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        for (state, pending) in [
+            (PlaybackSessionState::Starting, None),
+            (
+                PlaybackSessionState::Playing,
+                Some(PlaybackPendingControl::Pause),
+            ),
+            (
+                PlaybackSessionState::Paused,
+                Some(PlaybackPendingControl::Resume),
+            ),
+        ] {
+            let service = NativePlaybackService::new(ActivityCoordinator::default());
+            let active = active_for_control(state, pending);
+            *service.active.lock().expect("active") = Some(active.clone());
+            let acknowledgement = service
+                .command("playback.skip", active.session_id.clone(), events.clone())
+                .expect("skip in live state");
+            assert!(acknowledgement.accepted);
+            assert_eq!(acknowledgement.pending_command, None);
+            assert!(active.skip_requested.load(Ordering::Acquire));
+        }
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(PlaybackSessionState::Stopping, None);
+        *service.active.lock().expect("active") = Some(active.clone());
+        let error = service
+            .command("playback.skip", active.session_id.clone(), events)
+            .expect_err("skip after stopping must be rejected");
+        assert!(error.contains("live playback session"));
+    }
+
+    #[test]
+    fn repeated_pending_controls_and_invalid_transitions_match_command_contract() {
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(
+            PlaybackSessionState::Playing,
+            Some(PlaybackPendingControl::Pause),
+        );
+        *service.active.lock().expect("active") = Some(active.clone());
+        let repeated = service
+            .command("playback.pause", active.session_id.clone(), events.clone())
+            .expect("repeated pause");
+        assert_eq!(repeated.reason.as_deref(), Some("already_pending"));
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(
+            PlaybackSessionState::Paused,
+            Some(PlaybackPendingControl::Pause),
+        );
+        *service.active.lock().expect("active") = Some(active.clone());
+        let conflict = service
+            .command("playback.resume", active.session_id.clone(), events.clone())
+            .expect_err("resume conflicts with pending pause");
+        assert!(conflict.contains("another playback control is awaiting acknowledgement"));
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(
+            PlaybackSessionState::Paused,
+            Some(PlaybackPendingControl::Resume),
+        );
+        *service.active.lock().expect("active") = Some(active.clone());
+        let repeated = service
+            .command("playback.resume", active.session_id.clone(), events.clone())
+            .expect("repeated resume");
+        assert_eq!(repeated.reason.as_deref(), Some("already_pending"));
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(PlaybackSessionState::Starting, None);
+        *service.active.lock().expect("active") = Some(active.clone());
+        let pause_error = service
+            .command("playback.pause", active.session_id.clone(), events.clone())
+            .expect_err("pause before playing");
+        assert!(pause_error.contains("pause requires a playing session"));
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(PlaybackSessionState::Playing, None);
+        *service.active.lock().expect("active") = Some(active.clone());
+        let resume_error = service
+            .command("playback.resume", active.session_id.clone(), events.clone())
+            .expect_err("resume before pause");
+        assert!(resume_error.contains("resume requires a paused session"));
+
+        let foreign_error = service
+            .command("playback.stop", "f".repeat(32), events)
+            .expect_err("foreign session");
+        assert!(foreign_error.contains("stale or foreign"));
+    }
+
+    #[test]
     fn direct_native_player_keeps_the_qualified_supervisor_lease() {
         assert_eq!(
             sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
@@ -2635,60 +2890,69 @@ mod tests {
     }
 
     #[test]
-    fn native_detail_uses_persisted_tempo_scale_for_schedule_and_risk() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sky-native-tempo-{suffix}"));
-        fs::create_dir_all(root.join("songs")).expect("songs root");
-        fs::write(
-            root.join("config.json"),
-            r#"{"schema_version":3,"default_tempo_scale":0.95}"#,
-        )
-        .expect("config");
-        fs::write(
-            root.join("songs/demo.json"),
-            r#"{"name":"Demo","songNotes":[{"time":1000,"key":"Key0"}]}"#,
-        )
-        .expect("song");
-        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime.bootstrap().expect("bootstrap");
-        let search = runtime
-            .search(crate::commands::CatalogSearchRequest {
-                query: "demo".into(),
-                offset: 0,
-                limit: 10,
-                generation: Some(bootstrap.catalog_generation),
-            })
-            .expect("search");
-        let song_id = search.items[0].song_id.clone();
-        let settings = runtime.settings_snapshot().expect("settings");
-        let policy = runtime
-            .timing_policy(
-                settings.playback_defaults.fps,
-                settings.playback_defaults.hold_frames,
+    fn native_detail_matches_python_tempo_oracle_corpus() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/wave3/song_planning.json"
+        ))
+        .expect("tempo fixture");
+        let cases = fixture["detail_tempo_cases"]
+            .as_array()
+            .expect("detail tempo cases");
+        assert_eq!(cases.len(), 5);
+        for case in cases {
+            let tempo = case["tempo_scale"].as_f64().expect("tempo");
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("sky-native-tempo-{suffix}"));
+            fs::create_dir_all(root.join("songs")).expect("songs root");
+            fs::write(
+                root.join("config.json"),
+                format!(r#"{{"schema_version":3,"default_tempo_scale":{tempo}}}"#),
             )
-            .expect("policy");
-        let song = parse_song_json(
-            br#"{"name":"Demo","songNotes":[{"time":1000,"key":"Key0"}]}"#,
-            "demo",
-        )
-        .expect("song");
-        let expected =
-            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, &policy)
-                .expect("schedule")
-                .source_duration_us;
-        let detail = runtime
-            .detail(crate::commands::CatalogDetailRequest {
-                song_id,
-                generation: Some(bootstrap.catalog_generation),
-            })
-            .expect("detail");
-        assert_eq!(detail.duration_us, expected);
-        assert_ne!(detail.duration_us, 1_000_000 + policy.min_hold_us);
-        runtime.shutdown();
-        let _ = fs::remove_dir_all(root);
+            .expect("config");
+            fs::write(
+                root.join("songs/tempo.json"),
+                serde_json::to_vec(&case["raw"]).expect("raw song"),
+            )
+            .expect("song");
+            let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+            let bootstrap = runtime.bootstrap().expect("bootstrap");
+            let search = runtime
+                .search(crate::commands::CatalogSearchRequest {
+                    query: String::new(),
+                    offset: 0,
+                    limit: 10,
+                    generation: Some(bootstrap.catalog_generation),
+                })
+                .expect("search");
+            let detail = runtime
+                .detail(crate::commands::CatalogDetailRequest {
+                    song_id: search.items[0].song_id.clone(),
+                    generation: Some(bootstrap.catalog_generation),
+                })
+                .expect("detail");
+            let actual = serde_json::to_value(&detail).expect("detail JSON");
+            assert_eq!(actual["duration_us"], case["duration_us"], "tempo {tempo}");
+            assert_eq!(actual["risk"]["level"], case["risk_level"], "tempo {tempo}");
+            assert_eq!(
+                actual["risk"]["recommendations"], case["risk_recommendations"],
+                "tempo {tempo}"
+            );
+            assert_eq!(
+                actual["recommendation"]["recommended_hold_frames"],
+                case["recommendation"]["recommended_hold_frames"],
+                "tempo {tempo}"
+            );
+            assert_eq!(
+                actual["recommendation"]["recommended_tempo_scale"],
+                case["recommendation"]["recommended_tempo_scale"],
+                "tempo {tempo}"
+            );
+            runtime.shutdown();
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]

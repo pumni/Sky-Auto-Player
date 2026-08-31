@@ -90,8 +90,10 @@ The labels below are intentionally conservative:
 * `UiEventHub` is bounded, coalesces latest-wins snapshot traffic, preserves
   lifecycle events, validates payload bounds, and fails closed on lifecycle
   overflow. Native events and decoded Core events use the same Tauri delivery
-  channel; per-source order is preserved, while no unproven global
-  cross-source order is promised.
+  channel. CoreSupervisor backlog, observer installation, AppState transition,
+  and live Core delivery share ordered queues, so per-Core-producer order is
+  preserved across the transition; no global Native/Core cross-source order is
+  promised.
 * Native playback uses the direct Rust player boundary. Ordinary tests use
   dry-run or safe seams; the direct supervisor retains the qualified
   3,000,000 µs lease, 20/200/100 ms control/focus/heartbeat/snapshot cadence,

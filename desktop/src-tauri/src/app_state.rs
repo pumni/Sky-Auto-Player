@@ -1,5 +1,6 @@
 use crate::core::CoreSupervisor;
 use crate::core::protocol::CoreEvent;
+use crate::core::supervisor::CoreEventObserver;
 use crate::native_runtime::NativeDesktopRuntime;
 use crate::ui_events::CalibrationOutcome;
 use std::collections::VecDeque;
@@ -156,11 +157,27 @@ struct AppStateInner {
     native: Mutex<Option<Arc<NativeDesktopRuntime>>>,
     settings_writes: Mutex<()>,
     coherence: Mutex<()>,
-    pending_core_events: Mutex<VecDeque<crate::ui_events::UiEvent>>,
+    core_event_route: Mutex<CoreEventRoute>,
     activity: ActivityCoordinator,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
     gui_smoke_failed: AtomicBool,
+}
+
+#[derive(Default)]
+struct CoreEventRoute {
+    phase: CoreEventRoutePhase,
+    queue: VecDeque<crate::ui_events::UiEvent>,
+    draining: bool,
+}
+
+#[derive(Default)]
+enum CoreEventRoutePhase {
+    #[default]
+    Pending,
+    Transitioning,
+    Live(Arc<NativeDesktopRuntime>),
+    Failed,
 }
 
 enum CoreState {
@@ -178,7 +195,7 @@ impl Default for AppState {
                 native: Mutex::new(None),
                 settings_writes: Mutex::new(()),
                 coherence: Mutex::new(()),
-                pending_core_events: Mutex::new(VecDeque::new()),
+                core_event_route: Mutex::new(CoreEventRoute::default()),
                 activity: ActivityCoordinator {
                     state: Arc::new(Mutex::new(ActivityState::default())),
                 },
@@ -271,34 +288,65 @@ impl AppState {
             runtime.invalidate_prepared_for_calibration();
         }
         self.inner.activity.observe_core_event(event);
-        let ui_event = event.clone().into_ui_event();
-        if let Some(runtime) = self.native_if_present() {
-            if runtime.relay_core_event(ui_event).is_err() {
-                // A failed UI delivery must not leave the cross-owner
-                // calibration reservation held forever.  The native hub has
-                // already entered its fail-closed state.
-                self.inner.activity.release_calibration();
-                return Err("unified UI event delivery failed".into());
+        self.queue_core_event(event.clone().into_ui_event())
+    }
+
+    pub(crate) fn begin_core_event_route_transition(&self) -> Result<(), String> {
+        let mut route = self
+            .inner
+            .core_event_route
+            .lock()
+            .map_err(|_| "Core event route poisoned".to_string())?;
+        match &route.phase {
+            CoreEventRoutePhase::Pending => {
+                route.phase = CoreEventRoutePhase::Transitioning;
+                Ok(())
             }
-        } else {
-            self.queue_core_event(ui_event)?;
+            CoreEventRoutePhase::Transitioning => {
+                Err("Core event route transition already in progress".into())
+            }
+            CoreEventRoutePhase::Live(_) => Err("Core event route is already live".into()),
+            CoreEventRoutePhase::Failed => Err("Core event route is failed closed".into()),
+        }
+    }
+
+    pub(crate) fn complete_core_event_route_transition(
+        &self,
+        native: Arc<NativeDesktopRuntime>,
+    ) -> Result<(), String> {
+        let should_drain = {
+            let mut route = self
+                .inner
+                .core_event_route
+                .lock()
+                .map_err(|_| "Core event route poisoned".to_string())?;
+            if !matches!(&route.phase, CoreEventRoutePhase::Transitioning) {
+                return Err("Core event route was not transitioning".into());
+            }
+            route.phase = CoreEventRoutePhase::Live(native);
+            if route.queue.is_empty() || route.draining {
+                false
+            } else {
+                route.draining = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain_core_event_route()?;
         }
         Ok(())
     }
 
-    pub(crate) fn take_pending_core_events(
-        &self,
-    ) -> Result<Vec<crate::ui_events::UiEvent>, String> {
-        let mut pending = self
-            .inner
-            .pending_core_events
-            .lock()
-            .map_err(|_| "pending Core event queue poisoned".to_string())?;
-        Ok(pending.drain(..).collect())
+    pub(crate) fn fail_core_event_route(&self) {
+        if let Ok(mut route) = self.inner.core_event_route.lock() {
+            route.phase = CoreEventRoutePhase::Failed;
+            route.queue.clear();
+            route.draining = false;
+        }
     }
 
     fn queue_core_event(&self, event: crate::ui_events::UiEvent) -> Result<(), String> {
-        const MAX_PENDING_CORE_EVENTS: usize = 128;
+        const MAX_CORE_ROUTE_EVENTS: usize = 128;
         let snapshot_key = match &event {
             crate::ui_events::UiEvent::PlaybackSnapshot { payload, .. } => {
                 Some((1_u8, payload.session_id.clone()))
@@ -311,48 +359,115 @@ impl AppState {
             }
             _ => None,
         };
-        let mut pending = self
-            .inner
-            .pending_core_events
-            .lock()
-            .map_err(|_| "pending Core event queue poisoned".to_string())?;
-        if let Some(key) = snapshot_key {
-            if let Some(index) = pending.iter().position(|candidate| {
-                let candidate_key = match candidate {
-                    crate::ui_events::UiEvent::PlaybackSnapshot { payload, .. } => {
-                        Some((1_u8, payload.session_id.clone()))
-                    }
-                    crate::ui_events::UiEvent::DiagnosticsSnapshot { payload, .. } => {
-                        Some((2_u8, payload.session_id.clone().unwrap_or_default()))
-                    }
-                    crate::ui_events::UiEvent::CalibrationProgress { payload, .. } => {
-                        Some((3_u8, payload.operation_id.clone()))
-                    }
-                    _ => None,
-                };
-                candidate_key == Some(key.clone())
-            }) {
-                pending[index] = event;
-                return Ok(());
+        let should_drain = {
+            let mut route = self
+                .inner
+                .core_event_route
+                .lock()
+                .map_err(|_| "Core event route poisoned".to_string())?;
+            if matches!(&route.phase, CoreEventRoutePhase::Failed) {
+                return Err("unified UI event delivery failed".into());
             }
-            if pending.len() >= MAX_PENDING_CORE_EVENTS
-                && let Some(index) = pending.iter().position(|candidate| {
-                    matches!(
-                        candidate,
-                        crate::ui_events::UiEvent::PlaybackSnapshot { .. }
-                            | crate::ui_events::UiEvent::DiagnosticsSnapshot { .. }
-                            | crate::ui_events::UiEvent::CalibrationProgress { .. }
-                    )
-                })
-            {
-                pending.remove(index);
+            if let Some(key) = snapshot_key {
+                if let Some(index) = route.queue.iter().position(|candidate| {
+                    let candidate_key = match candidate {
+                        crate::ui_events::UiEvent::PlaybackSnapshot { payload, .. } => {
+                            Some((1_u8, payload.session_id.clone()))
+                        }
+                        crate::ui_events::UiEvent::DiagnosticsSnapshot { payload, .. } => {
+                            Some((2_u8, payload.session_id.clone().unwrap_or_default()))
+                        }
+                        crate::ui_events::UiEvent::CalibrationProgress { payload, .. } => {
+                            Some((3_u8, payload.operation_id.clone()))
+                        }
+                        _ => None,
+                    };
+                    candidate_key == Some(key.clone())
+                }) {
+                    route.queue[index] = event;
+                    false
+                } else {
+                    if route.queue.len() >= MAX_CORE_ROUTE_EVENTS
+                        && let Some(index) = route.queue.iter().position(|candidate| {
+                            matches!(
+                                candidate,
+                                crate::ui_events::UiEvent::PlaybackSnapshot { .. }
+                                    | crate::ui_events::UiEvent::DiagnosticsSnapshot { .. }
+                                    | crate::ui_events::UiEvent::CalibrationProgress { .. }
+                            )
+                        })
+                    {
+                        route.queue.remove(index);
+                    }
+                    if route.queue.len() >= MAX_CORE_ROUTE_EVENTS {
+                        route.phase = CoreEventRoutePhase::Failed;
+                        return Err("Core lifecycle event buffer overflow".into());
+                    }
+                    route.queue.push_back(event);
+                    if matches!(&route.phase, CoreEventRoutePhase::Live(_)) && !route.draining {
+                        route.draining = true;
+                        true
+                    } else {
+                        false
+                    }
+                }
+            } else {
+                if route.queue.len() >= MAX_CORE_ROUTE_EVENTS
+                    && let Some(index) = route.queue.iter().position(|candidate| {
+                        matches!(
+                            candidate,
+                            crate::ui_events::UiEvent::PlaybackSnapshot { .. }
+                                | crate::ui_events::UiEvent::DiagnosticsSnapshot { .. }
+                                | crate::ui_events::UiEvent::CalibrationProgress { .. }
+                        )
+                    })
+                {
+                    route.queue.remove(index);
+                }
+                if route.queue.len() >= MAX_CORE_ROUTE_EVENTS {
+                    route.phase = CoreEventRoutePhase::Failed;
+                    return Err("Core lifecycle event buffer overflow".into());
+                }
+                route.queue.push_back(event);
+                if matches!(&route.phase, CoreEventRoutePhase::Live(_)) && !route.draining {
+                    route.draining = true;
+                    true
+                } else {
+                    false
+                }
             }
+        };
+        if should_drain {
+            self.drain_core_event_route()?;
         }
-        if pending.len() >= MAX_PENDING_CORE_EVENTS {
-            return Err("pending Core lifecycle event buffer overflow".into());
-        }
-        pending.push_back(event);
         Ok(())
+    }
+
+    fn drain_core_event_route(&self) -> Result<(), String> {
+        loop {
+            let next = {
+                let mut route = self
+                    .inner
+                    .core_event_route
+                    .lock()
+                    .map_err(|_| "Core event route poisoned".to_string())?;
+                let CoreEventRoutePhase::Live(native) = &route.phase else {
+                    route.draining = false;
+                    return Ok(());
+                };
+                let native = Arc::clone(native);
+                let Some(event) = route.queue.pop_front() else {
+                    route.draining = false;
+                    return Ok(());
+                };
+                (native, event)
+            };
+            if next.0.relay_core_event(next.1).is_err() {
+                self.fail_core_event_route();
+                self.inner.activity.release_calibration();
+                return Err("unified UI event delivery failed".into());
+            }
+        }
     }
 
     /// Start the Core at most once and let concurrent callers share its result.
@@ -403,14 +518,18 @@ impl AppState {
             }
             Ok(supervisor) => {
                 let weak_inner = Arc::downgrade(&self.inner);
-                supervisor.set_event_observer(Arc::new(move |event| {
+                let observer: CoreEventObserver = Arc::new(move |event: &CoreEvent| {
                     if let Some(inner) = weak_inner.upgrade() {
                         let state = AppState { inner };
                         state.observe_core_event(event)
                     } else {
                         Err("desktop state was dropped".into())
                     }
-                }));
+                });
+                if let Err(error) = supervisor.install_event_observer_and_drain(observer) {
+                    supervisor.shutdown();
+                    return Err(error);
+                }
                 let weak_inner = Arc::downgrade(&self.inner);
                 supervisor.set_failure_observer(Arc::new(move || {
                     if let Some(inner) = weak_inner.upgrade() {
@@ -505,6 +624,13 @@ impl AppState {
 mod tests {
     use super::{ActivityCoordinator, AppState};
     use crate::core::protocol::CoreEvent;
+    use crate::native_runtime::NativeDesktopRuntime;
+    use crate::ui_events::{CalibrationFinishedPayload, CalibrationOutcome, CatalogChangedPayload};
+    use serde_json::Value;
+    use std::fs;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn close_transition_is_idempotent() {
@@ -631,5 +757,277 @@ mod tests {
             let calibration_won = calibration_result.is_ok();
             assert_ne!(playback_won, calibration_won);
         }
+    }
+
+    #[test]
+    fn core_route_replays_backlog_before_transition_and_live_events() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-core-route-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let native =
+            Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("native"));
+        let state = AppState::default();
+
+        let catalog_event = |generation| {
+            CoreEvent::CatalogChanged(CatalogChangedPayload {
+                generation,
+                total: generation,
+            })
+        };
+        // Event one is the pre-observer/backlog equivalent. Event two arrives
+        // after the route enters Transitioning, and event three is live.
+        state
+            .observe_core_event(&catalog_event(1))
+            .expect("backlog event");
+        state
+            .begin_core_event_route_transition()
+            .expect("begin route transition");
+        state
+            .observe_core_event(&catalog_event(2))
+            .expect("transition event");
+
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let channel = tauri::ipc::Channel::<crate::ui_events::UiEvent>::new(move |body| {
+            let raw = match body {
+                tauri::ipc::InvokeResponseBody::Json(raw) => raw,
+                tauri::ipc::InvokeResponseBody::Raw(raw) => {
+                    String::from_utf8(raw).map_err(|error| tauri::Error::Anyhow(error.into()))?
+                }
+            };
+            let value: Value =
+                serde_json::from_str(&raw).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+            delivered_for_channel
+                .lock()
+                .expect("delivered events")
+                .push(value["payload"]["generation"].as_u64().expect("generation"));
+            Ok(())
+        });
+        native.subscribe(channel).expect("native subscription");
+
+        let complete_state = state.clone();
+        let complete_native = Arc::clone(&native);
+        let complete = thread::spawn(move || {
+            complete_state.complete_core_event_route_transition(complete_native)
+        });
+        complete
+            .join()
+            .expect("route transition thread")
+            .expect("route complete");
+        state
+            .observe_core_event(&catalog_event(3))
+            .expect("live event");
+
+        assert_eq!(*delivered.lock().expect("delivered events"), vec![1, 2, 3]);
+        native.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn core_route_serializes_live_delivery_while_backlog_drain_is_in_flight() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-core-route-drain-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let native =
+            Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("native"));
+        let state = AppState::default();
+        let catalog_event = |generation| {
+            CoreEvent::CatalogChanged(CatalogChangedPayload {
+                generation,
+                total: generation,
+            })
+        };
+        state
+            .observe_core_event(&catalog_event(1))
+            .expect("backlog event");
+        state
+            .begin_core_event_route_transition()
+            .expect("begin route transition");
+
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let delivered_for_channel = Arc::clone(&delivered);
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let release_receiver = Arc::new(Mutex::new(release_receiver));
+        let release_receiver_for_channel = Arc::clone(&release_receiver);
+        let channel = tauri::ipc::Channel::<crate::ui_events::UiEvent>::new(move |body| {
+            let raw = match body {
+                tauri::ipc::InvokeResponseBody::Json(raw) => raw,
+                tauri::ipc::InvokeResponseBody::Raw(raw) => {
+                    String::from_utf8(raw).map_err(|error| tauri::Error::Anyhow(error.into()))?
+                }
+            };
+            let value: Value =
+                serde_json::from_str(&raw).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+            delivered_for_channel
+                .lock()
+                .expect("delivered events")
+                .push(value["payload"]["generation"].as_u64().expect("generation"));
+            if value["payload"]["generation"] == 1 {
+                entered_sender.send(()).expect("entered receiver");
+                release_receiver_for_channel
+                    .lock()
+                    .expect("release receiver")
+                    .recv()
+                    .expect("release sender");
+            }
+            Ok(())
+        });
+        native.subscribe(channel).expect("native subscription");
+
+        let complete_state = state.clone();
+        let complete_native = Arc::clone(&native);
+        let complete = thread::spawn(move || {
+            complete_state.complete_core_event_route_transition(complete_native)
+        });
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("backlog drain entered");
+
+        let live_state = state.clone();
+        let live = thread::spawn(move || live_state.observe_core_event(&catalog_event(2)));
+        // The route drain owns delivery of event one, but the route lock is
+        // released before invoking the Channel. Event two can therefore join
+        // the ordered queue without overtaking event one.
+        live.join().expect("live event thread").expect("live event");
+        release_sender.send(()).expect("release drain");
+        complete
+            .join()
+            .expect("route transition thread")
+            .expect("route complete");
+        assert_eq!(*delivered.lock().expect("delivered events"), vec![1, 2]);
+        native.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_patch_and_native_start_share_one_linearization_gate() {
+        let state = Arc::new(AppState::default());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (patch_entered_sender, patch_entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let patch_state = Arc::clone(&state);
+        let patch_order = Arc::clone(&order);
+        let patch = thread::spawn(move || {
+            let _guard = patch_state.lock_coherence();
+            patch_entered_sender.send(()).expect("patch entered");
+            release_receiver.recv().expect("release patch");
+            patch_order.lock().expect("order").push("settings.patch");
+        });
+        patch_entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("patch gate entered");
+
+        let (start_entered_sender, start_entered_receiver) = mpsc::channel();
+        let start_state = Arc::clone(&state);
+        let start_order = Arc::clone(&order);
+        let start = thread::spawn(move || {
+            let _guard = start_state.lock_coherence();
+            start_entered_sender.send(()).expect("start entered");
+            start_order.lock().expect("order").push("playback.start");
+        });
+        assert!(
+            start_entered_receiver
+                .recv_timeout(Duration::from_millis(50))
+                .is_err()
+        );
+        release_sender.send(()).expect("release patch");
+        start_entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("start gate entered");
+        patch.join().expect("patch thread");
+        start.join().expect("start thread");
+        assert_eq!(
+            *order.lock().expect("order"),
+            vec!["settings.patch", "playback.start"]
+        );
+    }
+
+    #[test]
+    fn calibration_success_invalidates_native_prepared_plan_before_release() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-calibration-invalidation-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/demo.json"),
+            r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let native =
+            Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("native"));
+        let state = AppState::default();
+        *state.inner.native.lock().expect("native state") = Some(Arc::clone(&native));
+        let bootstrap = native.bootstrap().expect("bootstrap");
+        let search: crate::commands::CatalogSearchDto = serde_json::from_value(
+            native
+                .dispatch(
+                    "catalog.search",
+                    serde_json::json!({
+                        "query": "",
+                        "offset": 0,
+                        "limit": 10,
+                        "generation": bootstrap.catalog_generation
+                    }),
+                )
+                .expect("search"),
+        )
+        .expect("search DTO");
+        let prepared = native
+            .dispatch(
+                "playback.prepare",
+                serde_json::json!({
+                    "song_id": search.items[0].song_id,
+                    "generation": bootstrap.catalog_generation,
+                    "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                }),
+            )
+            .expect("prepare");
+        let prepared_id = prepared["prepared_id"]
+            .as_str()
+            .expect("prepared ID")
+            .to_owned();
+        let reservation = state
+            .activity()
+            .reserve_calibration()
+            .expect("calibration slot");
+        reservation.commit();
+
+        state
+            .observe_core_event(&CoreEvent::CalibrationFinished(
+                CalibrationFinishedPayload {
+                    operation_id: "a".repeat(32),
+                    outcome: CalibrationOutcome::Succeeded,
+                    status: "succeeded".into(),
+                    margin_us: Some(777),
+                    sample_count: 10,
+                    source: "fixture".into(),
+                    message: "published".into(),
+                    applied: true,
+                },
+            ))
+            .expect("calibration event");
+        assert!(!state.activity().is_calibration_active());
+        assert!(
+            native
+                .dispatch(
+                    "playback.start",
+                    serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+                )
+                .is_err()
+        );
+        native.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -872,5 +872,182 @@
       "min_release_gap_us": 9134,
       "focus_restore_grace_us": 100000
     }
+  ],
+  "detail_tempo_cases": [
+    {
+      "tempo_scale": 0.9,
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "duration_us": 45245,
+      "risk_level": "high",
+      "risk_recommendations": [
+        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+        "Shortest same-key repeat interval: 16.7ms.",
+        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+      ],
+      "risk_min_any_note_gap_us": 15000,
+      "risk_min_same_key_gap_us": 15000,
+      "recommendation": {
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.9,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+      }
+    },
+    {
+      "tempo_scale": 0.95,
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "duration_us": 43783,
+      "risk_level": "high",
+      "risk_recommendations": [
+        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+        "Shortest same-key repeat interval: 15.8ms.",
+        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+      ],
+      "risk_min_any_note_gap_us": 15000,
+      "risk_min_same_key_gap_us": 15000,
+      "recommendation": {
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.92,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+      }
+    },
+    {
+      "tempo_scale": 1.0,
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "duration_us": 42467,
+      "risk_level": "high",
+      "risk_recommendations": [
+        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+        "Shortest same-key repeat interval: 15.0ms.",
+        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+      ],
+      "risk_min_any_note_gap_us": 15000,
+      "risk_min_same_key_gap_us": 15000,
+      "recommendation": {
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.92,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+      }
+    },
+    {
+      "tempo_scale": 1.05,
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "duration_us": 41277,
+      "risk_level": "high",
+      "risk_recommendations": [
+        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+        "Shortest same-key repeat interval: 14.3ms.",
+        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+      ],
+      "risk_min_any_note_gap_us": 15000,
+      "risk_min_same_key_gap_us": 15000,
+      "recommendation": {
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.92,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+      }
+    },
+    {
+      "tempo_scale": 1.1,
+      "raw": {
+        "name": "Unicode Élan",
+        "songNotes": [
+          {
+            "time": "10",
+            "key": "Key3"
+          },
+          {
+            "time": 10,
+            "key": "Key4"
+          },
+          {
+            "time": 25,
+            "key": "Key3"
+          }
+        ]
+      },
+      "duration_us": 40194,
+      "risk_level": "high",
+      "risk_recommendations": [
+        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "Reduce tempo or edit the arrangement so the same key has more time between downs.",
+        "Shortest same-key repeat interval: 13.6ms.",
+        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+      ],
+      "risk_min_any_note_gap_us": 15000,
+      "risk_min_same_key_gap_us": 15000,
+      "recommendation": {
+        "recommended_hold_frames": 1.0,
+        "recommended_tempo_scale": 0.92,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+      }
+    }
   ]
 }
