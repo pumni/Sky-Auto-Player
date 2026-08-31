@@ -87,6 +87,8 @@ fn run_inner(gui_smoke: bool) {
     }
     let app_state = app_state::AppState::default();
     app_state.set_gui_smoke_exit(gui_smoke);
+    let smoke_state = app_state.clone();
+    let setup_state = smoke_state.clone();
     if gui_smoke {
         record_gui_smoke_phase("app_state.ready");
         record_gui_smoke_phase("tauri.builder.create");
@@ -97,9 +99,12 @@ fn run_inner(gui_smoke: bool) {
             if gui_smoke {
                 record_gui_smoke_phase("tauri.setup.enter");
                 let app_handle = app.handle().clone();
+                let watchdog_state = setup_state.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(45));
                     record_gui_smoke_phase("watchdog.expired");
+                    watchdog_state.set_gui_smoke_failed();
+                    record_gui_smoke_phase("watchdog.failure_recorded");
                     eprintln!("packaged GUI smoke watchdog expired");
                     app_handle.exit(1);
                 });
@@ -157,6 +162,14 @@ fn run_inner(gui_smoke: bool) {
         .run(tauri::generate_context!());
     if gui_smoke {
         record_gui_smoke_phase("tauri.run.return");
+    }
+    if gui_smoke && smoke_state.gui_smoke_exit_code() != 0 {
+        record_gui_smoke_phase("tauri.run.return.failed");
+        // Tauri's graceful AppHandle::exit request can return the event loop
+        // without propagating its code through this library entrypoint. Make
+        // watchdog and frontend-failure paths fail closed at the process
+        // boundary so the Python harness cannot accept a false green smoke.
+        std::process::exit(smoke_state.gui_smoke_exit_code());
     }
     result.expect("error while running Sky Auto Player desktop shell");
 }
