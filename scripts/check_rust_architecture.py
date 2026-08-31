@@ -53,6 +53,13 @@ PLAYER_ADAPTER_FORBIDDEN_DIRECT_DEPENDENCIES = {
     "sky_dispatch_core",
     "sky_dispatch_win32",
 }
+APP_CORE_FORBIDDEN_DEPENDENCIES = {
+    "tauri",
+    "pyo3",
+    "windows-sys",
+    "sky_desktop_shell",
+    "sky_player",
+}
 
 ALLOWED_UNSAFE_MODULES = {
     "rust/crates/sky_dispatch_win32/src/calibration.rs",
@@ -329,6 +336,41 @@ def _player_adapter_violations(repository_root: Path) -> list[Violation]:
     ]
 
 
+def _app_core_violations(repository_root: Path) -> list[Violation]:
+    """Reject delivery/platform/player dependencies in the pure app crate."""
+
+    crate_root = repository_root / "rust/crates/sky_app_core"
+    manifest = crate_root / "Cargo.toml"
+    if not manifest.exists():
+        return []
+
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    dependencies = data.get("dependencies", {})
+    violations = [
+        Violation(
+            "app_core_dependency",
+            "rust/crates/sky_app_core/Cargo.toml",
+            f"sky_app_core must not depend directly on {name}",
+        )
+        for name in sorted(APP_CORE_FORBIDDEN_DEPENDENCIES.intersection(dependencies))
+    ]
+    source_markers = re.compile(
+        r"\b(?:tauri|pyo3|windows-sys|windows_sys|sky_desktop_shell|sky_player)\b"
+    )
+    for filepath in sorted((crate_root / "src").rglob("*.rs")):
+        relative = filepath.relative_to(repository_root).as_posix()
+        joined = "".join(_without_comments(filepath.read_text(encoding="utf-8").splitlines(keepends=True)))
+        if source_markers.search(joined):
+            violations.append(
+                Violation(
+                    "app_core_dependency",
+                    relative,
+                    "sky_app_core source references a forbidden delivery/platform/player dependency",
+                )
+            )
+    return violations
+
+
 def check_repository(repository_root: Path) -> CheckReport:
     report = CheckReport()
     allowlist = _load_allowlist(repository_root)
@@ -338,6 +380,9 @@ def check_repository(repository_root: Path) -> CheckReport:
         return report
 
     for violation in _player_adapter_violations(repository_root):
+        _record(report, violation, allowlist)
+
+    for violation in _app_core_violations(repository_root):
         _record(report, violation, allowlist)
 
     dispatch_dir = repository_root / "rust/crates/sky_player/src/engine/worker/dispatch"
@@ -366,7 +411,7 @@ def check_repository(repository_root: Path) -> CheckReport:
                 )
             )
 
-    for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_player", "sky_player_rs"):
+    for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_app_core", "sky_player", "sky_player_rs"):
         crate_path = workspace_root / crate / "src"
         if not crate_path.exists():
             continue

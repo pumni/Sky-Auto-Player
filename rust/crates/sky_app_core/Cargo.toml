@@ -1,0 +1,8 @@
+[package]
+name = "sky_app_core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sky_app_core"
