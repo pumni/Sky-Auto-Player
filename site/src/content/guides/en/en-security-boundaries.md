@@ -28,7 +28,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/scripts/audit_security_mandates.py
   - category: implementation
     label: Windows platform layer — only place SendInput lives
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
   - category: distribution
     label: Distribution contract — unsigned portable native updates
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
@@ -56,7 +56,7 @@ These restrictions apply to all code in the repository — not just code that ta
 
 The only mechanism for simulating keyboard input is `user32.SendInput`. Legacy
 `keybd_event` / `mouse_event` calls and any third-party input library (`python-keyboard`,
-`pynput`, etc.) are forbidden. The Windows platform layer (`src/sky_music/platform/`) is
+`pynput`, etc.) are forbidden. The Windows platform layer (`rust/crates/sky_dispatch_win32/`) is
 the only place in the codebase where `SendInput` and Win32 types may live.
 
 ### 3. Strict input validation

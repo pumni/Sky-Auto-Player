@@ -60,7 +60,7 @@ def verify(release_dir: Path, version: str) -> None:
         if path.casefold() == CORE_EXE.casefold()
         or path.casefold().startswith("_internal/")
         or Path(path).name.casefold().startswith("python")
-        or Path(path).suffix.casefold() in {".pyd", ".pyc"}
+        or Path(path).suffix.casefold() in {".pyd", ".py", ".pyc"}
         or Path(path).name.casefold() in {"base_library.zip"}
     )
     if runtime_forbidden:

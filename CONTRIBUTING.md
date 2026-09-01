@@ -69,9 +69,8 @@ outcome and the tests make the behavior change explicit. Avoid unrelated cleanup
 
 ## Dependency management
 
-Use `uv sync`, `uv add`, or `uv add --dev`; do not use ad-hoc `pip install` for project dependency
-changes. The repository's pinned free-threaded Python/toolchain configuration remains the executable
-source of truth for supported development versions.
+Use `uv sync`, `uv add`, or `uv add --dev`; do not use ad-hoc `pip install` for repository-tooling
+dependency changes. Python is temporary repository tooling, not a supported product runtime.
 
 ## Commit messages
 

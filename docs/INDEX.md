@@ -18,14 +18,14 @@ sources.
 
 ## Active architecture and behavior
 
-- [architecture.md](architecture.md) — Python/Rust layering, dependency direction, and component
-  ownership.
-- [architecture-target.md](architecture-target.md) — Rust-first migration target and dependency
-  invariants; current runtime remains in `architecture.md` until each phase passes.
-- [wave2-native-application-services.md](wave2-native-application-services.md) — current Wave 2
-  application-core, adapter, ownership, event, and deliberate cutover boundaries.
-- [wave3-native-desktop-ownership.md](wave3-native-desktop-ownership.md) — current Wave 3 native
-  command ownership, composition, parity evidence, and remaining Python boundaries.
+- [architecture.md](architecture.md) — Native Tauri/Rust layering, dependency direction, and
+  component ownership.
+- [architecture-target.md](architecture-target.md) — superseded Rust-first migration target and
+  dependency invariants; use `architecture.md` for the current runtime.
+- [wave2-native-application-services.md](wave2-native-application-services.md) — historical Wave 2
+  application-core, adapter, ownership, event, and deliberate cutover evidence.
+- [wave3-native-desktop-ownership.md](wave3-native-desktop-ownership.md) — historical Wave 3 native
+  command ownership and composition evidence; superseded by the current native boundary.
 - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — current native real-time dispatch
   contract and runtime boundary.
 - [timing-principles.md](timing-principles.md) — timing semantics, targets, measurement domains, and
@@ -41,10 +41,12 @@ not open every architecture page by default.
 - [distribution-and-update.md](distribution-and-update.md) — public package, native updater,
   integrity/provenance, rollback, and release contract.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
+- [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — Product/runtime Python
+  retirement boundary and temporarily retained repository tooling.
 
-Build and release implementation details also live in `src/build_app.py`, `Sky-Auto-Player.spec`,
-`.github/workflows/`, and their direct tests. Those executable surfaces are current-state evidence;
-do not duplicate their command matrices into agent instructions.
+Build and release implementation details live in `scripts/build_portable_release.py`,
+`scripts/release_common.py`, `desktop/`, `.github/workflows/`, and their direct tests. The release
+assembler is temporary repository tooling; it does not build a Python product or extension.
 
 ## Development and verification
 

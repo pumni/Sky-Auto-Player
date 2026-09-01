@@ -97,10 +97,8 @@ reports the measured sender-side result, not a universal timing guarantee.
 
 A Rust worker owns the dispatch loop: compilation of the note schedule, the
 high-resolution timing wait, focus tracking, `SendInput` calls, cleanup, and native
-telemetry. The Tauri/React shell renders the canonical desktop UI; the Python Core owns
-shared application policy, while the Textual interface remains a supported fallback. They
-run on separate threads; the free-threaded Python 3.14 build ensures the dispatch loop does
-not contend with either presentation path on the GIL.
+telemetry. The Tauri/React shell renders the canonical desktop UI and native Rust services own
+the application policy. The production path has no Python Core or Textual dependency.
 
 ## Known limitations
 

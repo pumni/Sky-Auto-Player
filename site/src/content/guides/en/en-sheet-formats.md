@@ -24,7 +24,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
     label: Domain models — schedule and timing frames
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/domain/
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_app_core/src/song.rs
 ---
 
 ## Overview
@@ -57,7 +57,7 @@ Sky-Auto-Player/
 ```
 
 After adding files, press **Reload songs** in the desktop Library without restarting the
-application. The Textual fallback uses `Ctrl+R` for the same action.
+application.
 
 ## Getting a sheet file
 
@@ -69,7 +69,7 @@ application. The Textual fallback uses `Ctrl+R` for the same action.
 ## Common issues
 
 **File not appearing in the Library**
-: Use **Reload songs** in the desktop GUI. In the Textual fallback, reload with `Ctrl+R`.
+: Use **Reload songs** in the desktop GUI.
 If the file still does not appear, verify the file extension is `.json`, `.skysheet`, or `.txt`.
 Other extensions are not recognised.
 

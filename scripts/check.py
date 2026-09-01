@@ -45,6 +45,10 @@ GROUPS: dict[str, tuple[Check, ...]] = {
             "Rust architecture",
             (sys.executable, "scripts/check_rust_architecture.py", "--enforce"),
         ),
+        Check(
+            "Wave 5 product retirement",
+            (sys.executable, "scripts/check_wave5_retirement.py"),
+        ),
     ),
     "tests": (
         Check(

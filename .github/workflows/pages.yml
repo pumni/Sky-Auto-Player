@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'site/**'
-      - 'pyproject.toml'
+      - 'desktop/src-tauri/Cargo.toml'
       - '.github/workflows/pages.yml'
       - '.github/actions/site-validate/**'
   workflow_dispatch:

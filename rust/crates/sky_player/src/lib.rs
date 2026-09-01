@@ -1,15 +1,13 @@
 //! Pure Rust playback engine.
 //!
 //! This crate contains the authoritative scheduler/session implementation.
-//! Delivery adapters such as the temporary `sky_player_rs` wheel depend on
-//! it, while the engine itself remains independent of Python and UI stacks.
+//! Native delivery uses this crate directly; the engine itself remains
+//! independent of Python and UI stacks.
 
 /// Narrow, typed native surface for delivery adapters.
 ///
-/// The Python wheel is a temporary adapter, not a second owner of dispatch
-/// policy.  Keep the small set of compilation, timing, calibration, and
-/// schedule types it needs behind this facade so the adapter does not depend
-/// directly on either dispatch crate.
+/// Keep the small set of compilation, timing, calibration, and schedule types
+/// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
     pub use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS, RuntimeSchedule};

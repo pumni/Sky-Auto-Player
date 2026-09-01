@@ -1,55 +1,32 @@
 [project]
-name = "sky-auto-player"
-version = "3.5.0"
-description = "Sky Auto Player - Auto Music Sheet Player"
-readme = "README.md"
-# Production scheduling and SendInput dispatch live in the Rust native extension. Python remains
-# responsible for the Textual UI, orchestration, telemetry, and support timing helpers, which run
-# alongside the native worker. Releases therefore use CPython 3.14 free-threaded builds to avoid
-# GIL contention between Python-side threads; this is a runtime/packaging invariant, not a claim
-# that Python's `time.perf_counter_ns` loop is on the production dispatch path. The exact
-# interpreter is pinned by `.python-version`; keep these two in sync.
+name = "sky-auto-player-repository-tools"
+version = "0.0.0"
+description = "Repository-only verification and release tooling for the native application"
 requires-python = ">=3.14,<3.15"
-dependencies = [
-    "packaging>=26.3",
-    "rapidfuzz>=3.14.5",
-    "textual>=8.2.8",
-]
+dependencies = []
 
-[build-system]
-requires = ["setuptools>=83.0.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["sky_music*"]
-
-[tool.setuptools]
-py-modules = ["main", "build_app"]
+[tool.uv]
+package = false
+default-groups = ["dev"]
 
 [dependency-groups]
 dev = [
-    "maturin>=1.15.0,<2",
-    "pyinstaller==6.22.2",
+    "packaging>=26.3",
     "pyrefly>=1.2.0",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-benchmark>=5.3.0",
     "ruff>=0.16.5",
-    "soundcard>=0.4.6",
 ]
-
-[project.scripts]
-play = "main:main"
-build-app = "build_app:main"
 
 [tool.pyright]
 # ── Analysis scope ──────────────────────────────────────────────────────
-# Standard mode throughout — strict-mode reportUnknown* diagnostics are
-# library‑boundary noise (Textual, Win32 ctypes) and not actionable.
+# Standard mode keeps repository-tooling diagnostics useful without making
+# third-party library stubs a product build dependency.
 typeCheckingMode = "standard"
 
-include = ["src", "tests"]
+include = ["tests"]
+extraPaths = ["scripts"]
 
 exclude = [
     "dist",
@@ -107,7 +84,7 @@ ignore = [
     "RUF002", # ambiguous‑unicode in docstrings
     "RUF003", # ambiguous‑unicode in comments
     "RUF009", # function call in dataclass default — Microseconds(n) is a NewType, fine
-    "RUF012", # mutable class default — Textual BINDINGS lists are standard idiom
+    "RUF012", # mutable class default is intentional in the tooling configuration
 ]
 
 [tool.ruff.lint.per-file-ignores]

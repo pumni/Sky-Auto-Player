@@ -38,8 +38,7 @@ evidence:
 **Fix**:
 
 1. Confirm the file extension is `.json`, `.skysheet`, or `.txt`.
-2. Press **Reload songs** in the desktop GUI without restarting. In the Textual fallback, press
-   `Ctrl+R`.
+2. Press **Reload songs** in the desktop GUI without restarting.
 3. If still missing, check that the file is directly inside the `songs/` folder, not in a subfolder.
 
 ## "Failed to parse" or parse error on launch

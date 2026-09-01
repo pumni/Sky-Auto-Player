@@ -1941,16 +1941,6 @@ impl NativeDesktopRuntime {
             .subscribe(channel)
     }
 
-    #[cfg(test)]
-    pub(crate) fn invalidate_prepared_for_calibration(&self) {
-        self.playback.invalidate_settings();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn relay_core_event(&self, event: UiEvent) -> Result<(), String> {
-        self.publish(event)
-    }
-
     fn publish(&self, event: UiEvent) -> Result<(), String> {
         self.events
             .lock()
@@ -3693,7 +3683,7 @@ pub(crate) fn resolve_install_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "executable has no install root".into())
 }
 
-fn native_build_dto() -> crate::commands::NativeBuildDto {
+pub(crate) fn native_build_dto() -> crate::commands::NativeBuildDto {
     crate::commands::NativeBuildDto {
         native_build_commit: option_env!("SKY_NATIVE_BUILD_COMMIT")
             .unwrap_or("unknown")

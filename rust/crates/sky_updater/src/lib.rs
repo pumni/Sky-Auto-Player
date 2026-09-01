@@ -1,6 +1,6 @@
 //! Testable native updater components.
 //!
-//! The updater is intentionally independent from `sky_player_rs`. The public
+//! The updater is intentionally independent from the playback engine. The public
 //! modules contain validation and transaction logic; platform modules only
 //! provide bounded Win32 process/network seams.
 

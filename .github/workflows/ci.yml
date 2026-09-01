@@ -105,14 +105,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
-        with:
-          run-runtime-audit: "false"
 
       - name: Python dependency audit
         run: uv audit --frozen
@@ -147,14 +145,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
-        with:
-          run-runtime-audit: "true"
 
       - name: Rust — install pinned stable toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
@@ -174,12 +170,6 @@ jobs:
         with:
           workspaces: "rust -> target"
           cache-on-failure: true
-
-      - name: Rust — build wheel
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-          SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support --profile release
 
       - name: Repository verification — Rust
         env:
@@ -223,14 +213,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
-        with:
-          run-runtime-audit: "true"
 
       - name: Rust — install pinned stable toolchain for packaged build
         env:
@@ -269,7 +257,7 @@ jobs:
 
       - name: Verify packaged release tree
         run: |
-          $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('desktop/src-tauri/Cargo.toml').read_text(encoding='utf-8'))['package']['version'])"
           uv run --env-file .env python scripts/verify_release_manifest.py `
             --release-dir (Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$version") --version $version
 

@@ -10,14 +10,13 @@ they were written; they do not define the current build contract.
 - Workspace MSRV: Rust `1.98`, declared by `rust/Cargo.toml`.
 - Edition: Rust `2024`.
 - Target: `x86_64-pc-windows-msvc`.
-- Dependency resolution: `rust/Cargo.lock` is committed and must remain
-  unchanged during a compiler-only migration. CI, release, and native wheel
+- Dependency resolution: `rust/Cargo.lock` is committed and native product
   builds use Cargo's locked mode.
-- Every root-level native build, including `build_app`, explicitly exports
-  `RUSTUP_TOOLCHAIN=1.98.0`; the shipped wheel, calibration binary, and updater
-  are each built with `--locked`.
-- Native wheel and packaged-app provenance checks require the embedded
-  `rustc_version` metadata to start with the exact pinned compiler prefix.
+- Every root-level native build explicitly exports
+  `RUSTUP_TOOLCHAIN=1.98.0`; the desktop, calibration binary, and updater are
+  each built with `--locked`.
+- Native packaged-app provenance checks require the embedded build metadata to
+  start with the exact pinned compiler prefix.
 
 The nested toolchain file is discovered reliably when commands run from
 `rust/`. Root-level commands must set `RUSTUP_TOOLCHAIN=1.98.0` explicitly,
@@ -33,8 +32,8 @@ as the CI and release workflows do.
    for the `sky_dispatch_win32` thread-local waitable timer.
 5. Raise the workspace MSRV only after the compatibility pass succeeds. Do not
    add a new stable API merely to demonstrate compiler adoption.
-6. Build and verify the exact free-threaded native wheel, including Rust
-   version, target ABI, and source commit provenance.
+6. Build and verify the exact native desktop artifact, including Rust version,
+   target, and source commit provenance.
 
 Compiler migration and dependency upgrades are separate changes. A dependency
 or lockfile change requires its own review and evidence.
@@ -50,8 +49,8 @@ compiler/MSRV change without lowering timing or security gates.
 ## Qualification policy
 
 Green CI establishes compiler/build/test compatibility only. The final native
-1.98 production binary still requires the existing Rust, Python, static,
-security, package, and updater gates, followed by the physical 10,000-boundary
+1.98 production binary still requires the existing Rust, repository-tooling,
+static, security, package, and updater gates, followed by the physical 10,000-boundary
 qualification and 100,000-boundary rare-tail soak. Those runs require the
 isolated project-owned target window and must preserve their raw JSON evidence.
 No compiler migration may claim final real-time acceptance without those

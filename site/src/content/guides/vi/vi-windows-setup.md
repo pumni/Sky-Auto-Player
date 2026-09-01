@@ -30,7 +30,7 @@ evidence:
 ## Yêu cầu hệ thống
 
 - Windows 10 hoặc 11, 64-bit
-- Không cần Python hệ thống — bản đóng gói đi kèm runtime riêng
+- Không cần Python hệ thống — bản đóng gói là native và độc lập
 - Không cần quyền quản trị viên để sử dụng bình thường
 - Không tạo registry entry, không cài đặt toàn hệ thống
 
@@ -53,8 +53,7 @@ evidence:
 
 Lần đầu khởi động, ứng dụng tạo file `config.json` trong thư mục cài đặt. Bạn không cần
 chỉnh sửa file này thủ công — mọi cài đặt được hỗ trợ đều có trong hộp thoại **Settings** của
-ứng dụng desktop. Giao diện Textual vẫn có thể dùng như fallback điều khiển bằng bàn phím qua
-`play.bat` hoặc `Sky-Auto-Player-Core.exe --tui`.
+ứng dụng desktop.
 
 Nếu Windows hiện cảnh báo SmartScreen ("Windows đã bảo vệ máy tính của bạn"), nhấn
 **Thêm thông tin → Vẫn chạy**. Tệp thực thi chưa được ký mã; SmartScreen hiển thị cảnh
@@ -64,7 +63,7 @@ báo này cho bất kỳ tệp unsigned nào tải từ internet.
 
 1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, `.skysheet`, hoặc TXT.
 2. Sao chép hoặc di chuyển file vào thư mục `songs/` cạnh `Sky-Auto-Player.exe`.
-3. Trong Library desktop, nhấn **Reload songs**. Trong fallback Textual, nhấn `Ctrl+R`.
+3. Trong Library desktop, nhấn **Reload songs**.
 
 ## Phím tắt desktop
 
@@ -74,17 +73,6 @@ báo này cho bất kỳ tệp unsigned nào tải từ internet.
 | `Ctrl+F` | Focus ô tìm kiếm bài         |
 | `Esc`    | Đóng overlay an toàn đang mở |
 | `q`      | Không thoát desktop GUI      |
-
-Fallback Textual vẫn giữ các phím tắt điều khiển bằng bàn phím:
-
-| Phím tắt    | Hành động                |
-| ----------- | ------------------------ |
-| `/`         | Mở command palette       |
-| `F8`        | Tạm dừng / tiếp tục phát |
-| `F9`        | Bỏ qua phần tiếp theo    |
-| `F10`       | Dừng phát                |
-| `q` / `Esc` | Thoát                    |
-| `Ctrl+R`    | Reload danh sách bài     |
 
 ## Cập nhật
 

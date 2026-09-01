@@ -146,7 +146,7 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
                 checked={settings.verbose_hud}
                 onChange={(event) => patch({ verboseHud: event.target.checked })}
               />{' '}
-              Verbose fallback HUD
+              Verbose playback HUD
             </label>
           </div>
           <div className="settings-section">
@@ -192,7 +192,7 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
           <div className="settings-section">
             <h3>Advanced</h3>
             <p className="settings-note">
-              Native timing, input and security policy remain owned by the local Core.
+              Native timing, input and security policy remain owned by the local Rust runtime.
             </p>
           </div>
           <div className="settings-section">
@@ -211,7 +211,9 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
               Open calibration
             </button>
           </div>
-          <p className="settings-note">Settings are validated and persisted by the local Core.</p>
+          <p className="settings-note">
+            Settings are validated and persisted by the native runtime.
+          </p>
         </Dialog>
       </Modal>
     </ModalOverlay>

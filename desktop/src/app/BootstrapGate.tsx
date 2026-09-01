@@ -18,7 +18,7 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
         </div>
         <p className="eyebrow">SKY AUTO PLAYER</p>
         <h1>Opening your library…</h1>
-        <p className="muted">Starting the local application core.</p>
+        <p className="muted">Starting the native application.</p>
       </main>
     );
   }
@@ -26,10 +26,12 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
   if (status === 'fatal') {
     return (
       <main className="fatal-screen" role="alert">
-        <p className="eyebrow">CORE UNAVAILABLE</p>
+        <p className="eyebrow">APPLICATION UNAVAILABLE</p>
         <h1>Sky Auto Player could not start.</h1>
-        <p className="fatal-message">{fatal ?? 'The local Core returned an unknown error.'}</p>
-        <p className="muted">Close and reopen the application after correcting the Core setup.</p>
+        <p className="fatal-message">
+          {fatal ?? 'The native application returned an unknown error.'}
+        </p>
+        <p className="muted">Close and reopen the application after correcting the native setup.</p>
       </main>
     );
   }

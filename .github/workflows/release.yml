@@ -38,8 +38,6 @@ jobs:
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
-        with:
-          run-runtime-audit: "true"
 
       - name: Repository verification — static
         run: uv run python scripts/check.py static
@@ -66,35 +64,26 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: uv run python scripts/check.py rust
 
-      - name: Rust — build native wheel
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run --env-file .env python scripts/build_rust_wheel.py --profile dist
-
       - name: Repository verification — full Python tests
         run: uv run python scripts/check.py tests-full
 
-      - name: Assert tag version equals pyproject.toml
+      - name: Assert tag version equals native Cargo package
         id: verlock
         run: |
           $tag = $env:GITHUB_REF_NAME
           if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
           $tagVer = $Matches[1]
-          $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
-          if ($tagVer -ne $pyVer) {
-            throw "I48 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
+          $nativeVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('desktop/src-tauri/Cargo.toml').read_text(encoding='utf-8'))['package']['version'])"
+          if ($tagVer -ne $nativeVer) {
+            throw "I48 fail: tag version '$tagVer' != native Cargo version '$nativeVer'. Bump desktop/src-tauri/Cargo.toml before tagging."
           }
           Write-Host "Version lock OK: $tagVer"
-          # Compute prerelease flag using the SAME PEP 440 parser the in-app
-          # update checker uses (sky_music.domain.update_checker imports
-          # packaging.version.Version), so the GitHub Release's prerelease
-          # bit agrees with `is_prerelease` in src/sky_music/domain/
-          # update_checker.py. The previous substring match
+          # Compute the prerelease flag with the repository tooling parser.
+          # The previous substring match
           # (`contains(github.ref_name, '-rc') || contains('-beta')`)
           # missed `-alpha` / `-dev` / `-a` / `-b` — packaging would have
           # flagged those as prerelease, so they would have been silently
-          # promoted to stable channel via /releases/latest and picked up
-          # by the bundled native updater's stable selector.
+          # could silently promote a prerelease to the stable channel.
           $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
           Write-Host "is_prerelease: $isPre"
           "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII

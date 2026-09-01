@@ -28,7 +28,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/scripts/audit_security_mandates.py
   - category: implementation
     label: Lớp platform Windows — nơi duy nhất SendInput được phép tồn tại
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/platform/
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
   - category: distribution
     label: Hợp đồng phân phối — portable unsigned/cập nhật thủ công
     url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
@@ -56,7 +56,7 @@ Các hạn chế này áp dụng cho tất cả code trong repository — không
 
 Cơ chế duy nhất để mô phỏng input bàn phím là `user32.SendInput`. Các lệnh gọi cũ
 `keybd_event` / `mouse_event` và bất kỳ thư viện input bên thứ ba nào (`python-keyboard`,
-`pynput`, v.v.) đều bị cấm. Lớp platform Windows (`src/sky_music/platform/`) là nơi duy nhất
+`pynput`, v.v.) đều bị cấm. Lớp platform Windows (`rust/crates/sky_dispatch_win32/`) là nơi duy nhất
 trong codebase nơi `SendInput` và Win32 types được phép tồn tại.
 
 ### 3. Xác thực input nghiêm ngặt

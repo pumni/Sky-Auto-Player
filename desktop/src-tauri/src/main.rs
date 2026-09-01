@@ -5,6 +5,9 @@ fn main() {
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         std::process::exit(sky_desktop_shell_lib::selftest_packaged_shell());
     }
+    if args.iter().any(|arg| arg == "--selftest-build-info") {
+        std::process::exit(sky_desktop_shell_lib::selftest_build_info());
+    }
     if args.iter().any(|arg| arg == "--selftest-desktop-parent") {
         // This is used only by the exact-package updater harness. The
         // process is still the real packaged Tauri executable, so the native

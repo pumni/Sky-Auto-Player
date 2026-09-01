@@ -1,10 +1,14 @@
-# ADR-0002: Tauri Desktop UI with Shared Python Application Services
+# ADR-0002: Tauri Desktop UI with Shared Python Application Services (historical)
 
-Status: accepted
+Status: superseded by Wave 5 native ownership retirement
 
 Date: 2026-08-29
 
 ## Context
+
+This ADR records the pre-Wave-5 migration decision. It is retained for
+historical rationale; its Python Core, Textual fallback, and compatibility
+claims are no longer active product requirements.
 
 The v4 desktop UI needs to share application behavior with the existing Textual
 picker without duplicating song discovery, metadata analysis, settings policy,

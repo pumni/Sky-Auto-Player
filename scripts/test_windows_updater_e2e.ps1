@@ -1060,31 +1060,14 @@ try {
         Write-EvidenceJson "happy-github-result.json" $script:Results.happy_github
     }
 
-    $scenario = New-Scenario "one-click-launcher" $fromRoot
-    Copy-Item -LiteralPath $e2eCandidate `
-        -Destination (Join-Path $scenario.Install "Sky-Auto-Player-Updater.exe") -Force
-    Save-ManifestWithCurrentHashes $scenario.Install
-    $previousHandshakeMode = $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY
-    $previousOneClickRoot = $env:SKY_ONE_CLICK_INSTALL_ROOT
-    $previousOneClickCurrent = $env:SKY_ONE_CLICK_CURRENT_VERSION
-    $previousOneClickTarget = $env:SKY_ONE_CLICK_TARGET_VERSION
-    try {
-        $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY = "1"
-        $env:SKY_ONE_CLICK_INSTALL_ROOT = $scenario.Install
-        $env:SKY_ONE_CLICK_CURRENT_VERSION = $fromManifest.version
-        $env:SKY_ONE_CLICK_TARGET_VERSION = $syntheticManifest.version
-        & uv run --env-file .env python -m pytest tests/test_windows_one_click_launcher.py -q
-        if ($LASTEXITCODE -ne 0) { throw "real Python one-click launcher acceptance failed" }
-    } finally {
-        $env:SKY_AUTO_PLAYER_E2E_HANDSHAKE_ONLY = $previousHandshakeMode
-        $env:SKY_ONE_CLICK_INSTALL_ROOT = $previousOneClickRoot
-        $env:SKY_ONE_CLICK_CURRENT_VERSION = $previousOneClickCurrent
-        $env:SKY_ONE_CLICK_TARGET_VERSION = $previousOneClickTarget
-    }
+    $rustManifest = Join-Path $PSScriptRoot "..\rust\Cargo.toml"
+    & cargo test --manifest-path $rustManifest -p sky_updater --test portable_exact_artifact `
+        --locked -- --test-threads=1
+    if ($LASTEXITCODE -ne 0) { throw "native updater exact-artifact acceptance failed" }
     Write-EvidenceJson "one-click-launcher-result.json" ([ordered]@{
         status = "PASS"
-        boundary = "python launch_update -> native ready handoff"
-        app_exit_unit_test = "tests/test_textual_update_modals.py::test_ready_update_exits_exactly_once"
+        boundary = "native updater launch and exact-artifact handoff"
+        app_exit_unit_test = "rust/crates/sky_updater/tests/portable_exact_artifact.rs"
     })
     $script:Results.one_click_launcher = $true
 

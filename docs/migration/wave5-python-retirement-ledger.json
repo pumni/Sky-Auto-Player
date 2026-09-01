@@ -1,0 +1,1918 @@
+{
+  "schema_version": 3,
+  "baseline": "1634729acbdc236e0e0964a3fc9f74283a68c1c6",
+  "inventory_scope": "Every Python file under scripts/, src/, and tests/ at the Wave 4 baseline.",
+  "exact_once": true,
+  "classification_rules": {
+    "MIGRATED": "Native/TypeScript tests now prove the product invariant.",
+    "OBSOLETE": "Retired presentation, manual experiment, or unsupported product surface.",
+    "TRANSPORT_ONLY": "Python Core/desktop IPC transport or its startup guard.",
+    "DUPLICATE": "Stronger direct native/build evidence replaces the old bridge check.",
+    "FIXTURE_FROZEN": "Committed fixture data is retained; Python execution is not required.",
+    "TOOLING_RETAINED": "Repository-only tooling/guard test intentionally waits for Wave 6."
+  },
+  "summary": {
+    "TOOLING_RETAINED": 26,
+    "DUPLICATE": 26,
+    "MIGRATED": 98,
+    "FIXTURE_FROZEN": 2,
+    "OBSOLETE": 58,
+    "TRANSPORT_ONLY": 11
+  },
+  "wave5_additions_summary": {
+    "TOOLING_RETAINED": 4
+  },
+  "entries": [
+    {
+      "path": "scripts/audit_agent_context.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/audit_durable_phase_names.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/audit_free_threaded_wheels.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "scripts/audit_repeat_gap.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "scripts/audit_security_mandates.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/bench_mmcss.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/bench_native_ab.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "scripts/bench_native_acceptance.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "scripts/bench_native_reference_bridge.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "scripts/bench_phase6_diagnostics.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "scripts/bench_phase6_native_diagnostics.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "scripts/bench_picker_startup.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::catalog_fixture_preserves_ids_order_normalization_and_generation",
+        "desktop/src-tauri/src/native_runtime.rs::search"
+      ],
+      "invariants": [
+        "catalog normalization, generation, ordering, and detail semantics"
+      ]
+    },
+    {
+      "path": "scripts/build_portable_release.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/build_rust_wheel.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "scripts/check_rust_architecture.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/check.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/classify_ci_changes.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/dev_desktop.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "scripts/finalize_native_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "scripts/generate_desktop_bindings.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/generate_wave2_fixtures.py",
+      "classification": "FIXTURE_FROZEN",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::settings_fixture_preserves_python_patch_and_atomic_failure_semantics",
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::catalog_fixture_preserves_ids_order_normalization_and_generation",
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy"
+      ],
+      "invariants": [
+        "committed settings, catalog, and update parity fixture corpus"
+      ]
+    },
+    {
+      "path": "scripts/generate_wave3_fixtures.py",
+      "classification": "FIXTURE_FROZEN",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::parser_cases_are_generated_by_the_current_python_oracle",
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields",
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::calibrated_policy_cases_match_the_python_production_resolver"
+      ],
+      "invariants": [
+        "committed parser, schedule, risk, and calibrated-policy fixture corpus"
+      ]
+    },
+    {
+      "path": "scripts/native_acceptance_sink.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/report_native_diagnostic.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "scripts/report_production_python_boundary.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "scripts/run_native_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "scripts/verify_release_manifest.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "src/build_app.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/core_main.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/main.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/cli/calibration_command.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/cli/console_playback.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/cli/desktop_core_selftest.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/sky_music/cli/desktop_core.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/sky_music/cli/doctor_command.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/config.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::settings_fixture_preserves_python_patch_and_atomic_failure_semantics"
+      ],
+      "invariants": [
+        "persisted settings migration, normalization, and atomic patch semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/analyzer.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/domain.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/hold_timing.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/parser.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::parser_cases_are_generated_by_the_current_python_oracle"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/scheduler_types.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/scheduler.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/session_context.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/song_repository.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::parser_cases_are_generated_by_the_current_python_oracle"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/update_checker.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/update_policy.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/domain/validation.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/background.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/calibration_loader.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/desktop_ipc/__init__.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/sky_music/infrastructure/desktop_ipc/protocol.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/sky_music/infrastructure/desktop_ipc/server.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Wave 4 retired the Python Core/desktop IPC production transport"
+    },
+    {
+      "path": "src/sky_music/infrastructure/doctor.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/focus.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/hotkeys.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/realtime.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/timing.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/update_launcher.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/update_notice_cache.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/infrastructure/update_runtime.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/layouts.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/orchestration/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/calibrated_policy.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/catalog_service.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::catalog_fixture_preserves_ids_order_normalization_and_generation",
+        "desktop/src-tauri/src/native_runtime.rs::search"
+      ],
+      "invariants": [
+        "catalog normalization, generation, ordering, and detail semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/desktop_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/desktop_diagnostics.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/desktop_models.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/desktop_playback.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/engine.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/native_admission.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/native_diagnostics.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/native_dispatch.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/native_models.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/native_provenance.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/playback_controller.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/runtime_session.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/settings_service.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::settings_fixture_preserves_python_patch_and_atomic_failure_semantics"
+      ],
+      "invariants": [
+        "persisted settings migration, normalization, and atomic patch semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/song_metadata_service.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::parser_cases_are_generated_by_the_current_python_oracle"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/telemetry.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/orchestration/update_service.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/__init__.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/console.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/diagnostics.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/global_hotkeys.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/native_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/process_state.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/platform/win32/window_target.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "src/sky_music/ui/__init__.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/hud.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/picker_helpers.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/picker_metadata.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/picker_theme.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/picker.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/playback_notices.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/playback_view_model.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/text_render.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/__init__.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/app_state.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/app.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/components/__init__.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/components/command_palette.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/components/footers.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/display_widgets.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/keymap.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/messages.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/modals.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/playback_app.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/playback_controller.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/renderers.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/screens/picker.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/theme_css.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/widgets.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/textual_app/workers.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "src/sky_music/ui/timing_guidance.py",
+      "classification": "OBSOLETE",
+      "evidence": "Tauri/Rust is the sole supported product UI; retired presentation has no product owner"
+    },
+    {
+      "path": "tests/analyze_onsets.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/analyze_send_warmup.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/audio_loopback.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/conftest.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/fixtures/phase8_core_selftest_child.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Core process/IPC/free-threaded startup checks no longer describe the product"
+    },
+    {
+      "path": "tests/generate_snapshots.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/make_test_song.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/measure_stutter_live.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/measure_stutter_original.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/measure_stutter.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/repro_roundtrip.py",
+      "classification": "OBSOLETE",
+      "evidence": "manual legacy Python measurement or fixture-generation helper is not a supported product path"
+    },
+    {
+      "path": "tests/rust_contract_helpers.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_abort_telemetry.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "tests/test_acceptance_flow.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "tests/test_active_update_guard.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_background_lifecycle.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_background_worker_static_guard.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_branding_assets.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_build_rust_wheel.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "tests/test_calibration_regression_fix.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "tests/test_ci_change_classifier.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_ci_phase0_contract.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_command_ownership.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_command_palette_responsive.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_command_palette_scroll.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_config_hold_migration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::settings_fixture_preserves_python_patch_and_atomic_failure_semantics"
+      ],
+      "invariants": [
+        "persisted settings migration, normalization, and atomic patch semantics"
+      ]
+    },
+    {
+      "path": "tests/test_console_focus_preflight.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "tests/test_desktop_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "tests/test_desktop_diagnostics.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "tests/test_desktop_ipc.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Core process/IPC/free-threaded startup checks no longer describe the product"
+    },
+    {
+      "path": "tests/test_dispatch_runtime_efficiency.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_dist_profile_contract.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_durable_phase_names.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_empirical_floors.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_gil_startup_guard.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Core process/IPC/free-threaded startup checks no longer describe the product"
+    },
+    {
+      "path": "tests/test_golden_regression.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_hold_recommendations.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "tests/test_hold_timing.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "tests/test_hotkey_snapshot.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "tests/test_hud_ui.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_immediate_exit.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_layouts.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_measure_stutter.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_metadata_coordinator_real.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::catalog_fixture_preserves_ids_order_normalization_and_generation",
+        "desktop/src-tauri/src/native_runtime.rs::search"
+      ],
+      "invariants": [
+        "catalog normalization, generation, ordering, and detail semantics"
+      ]
+    },
+    {
+      "path": "tests/test_min_hold_margin.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_acceptance.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_admission.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_benchmark_provenance.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_benchmark_reference_bridge.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_calibration.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::calibration_budget_keeps_one_second_for_measurement",
+        "desktop/src-tauri/src/native_runtime.rs::validate_calibration_request"
+      ],
+      "invariants": [
+        "calibration request, timing-budget, evidence, and cache semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_diagnostic_report.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_diagnostics.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_dispatch_runtime.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_doctor.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_production_wait_contract.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_scheduling_qualification_contract.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_session_contract.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_native_telemetry_ingest.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::publish_diagnostics_snapshot_for_active"
+      ],
+      "invariants": [
+        "bounded native diagnostics and failure telemetry semantics"
+      ]
+    },
+    {
+      "path": "tests/test_parser.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::parser_cases_are_generated_by_the_current_python_oracle"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "tests/test_pep440_corpus.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_phase1_services.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_phase8_core_selftest.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Core process/IPC/free-threaded startup checks no longer describe the product"
+    },
+    {
+      "path": "tests/test_phase8_packaging.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_phase9_gui_canonical.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_picker_metadata_optimizations.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_playback_controller.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_playback_notices.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_playback_view_model.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_priority_ranking.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_production_python_boundary.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_pyinstaller_spec.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "tests/test_rust_architecture.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_scheduler_new.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave3_song_fixtures.rs::schedule_and_risk_cases_match_python_oracle_fields"
+      ],
+      "invariants": [
+        "deterministic song parsing and playback-planning semantics"
+      ]
+    },
+    {
+      "path": "tests/test_security_audit.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_selftest_optimize.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "tests/test_selftest_rust.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check_wave5_retirement.py::_active_hits"
+      ],
+      "invariants": [
+        "native product build, package, and qualification boundary"
+      ]
+    },
+    {
+      "path": "tests/test_session_context.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "desktop/src-tauri/src/native_runtime.rs::prepare_playback",
+        "rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs::production_down_only_hard_path_no_alloc"
+      ],
+      "invariants": [
+        "native playback planning, admission, lifecycle, and realtime safety semantics"
+      ]
+    },
+    {
+      "path": "tests/test_sky_app_core_contract.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_sky_player_extraction.py",
+      "classification": "DUPLICATE",
+      "evidence": [
+        "desktop/src-tauri/src/lib.rs::selftest_packaged_shell",
+        "scripts/check.py::main"
+      ],
+      "invariants": [
+        "native application ownership and executable product qualification"
+      ]
+    },
+    {
+      "path": "tests/test_startup_import_hygiene.py",
+      "classification": "TRANSPORT_ONLY",
+      "evidence": "Core process/IPC/free-threaded startup checks no longer describe the product"
+    },
+    {
+      "path": "tests/test_text_render.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_textual_picker.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_textual_playback.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_textual_update_modals.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_timing_guidance.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_unified_real_path_smoke.py",
+      "classification": "OBSOLETE",
+      "evidence": "retired Textual/CLI/Python startup presentation has no supported product owner"
+    },
+    {
+      "path": "tests/test_unsigned_release_contract.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_update_checker.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_update_config.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::settings_fixture_preserves_python_patch_and_atomic_failure_semantics"
+      ],
+      "invariants": [
+        "persisted settings migration, normalization, and atomic patch semantics"
+      ]
+    },
+    {
+      "path": "tests/test_update_launcher.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_update_notice_cache.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_update_runtime.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_update_service.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_updater_lifecycle_contract.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_version_cli.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_version_consistency.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    },
+    {
+      "path": "tests/test_window_target_bindings.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "tests/test_window_target_focus.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "tests/test_windows_one_click_launcher.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_dispatch_win32/src/calibration.rs::foreground_loss_still_runs_emergency_cleanup"
+      ],
+      "invariants": [
+        "native target admission, focus-loss handling, and cleanup semantics"
+      ]
+    },
+    {
+      "path": "tests/test_windows_updater_harness.py",
+      "classification": "MIGRATED",
+      "evidence": [
+        "rust/crates/sky_app_core/tests/wave2_fixtures.rs::update_fixture_preserves_channel_and_throttle_policy",
+        "rust/crates/sky_updater/src/version.rs::compares_dev_prerelease_and_final_ordering",
+        "rust/crates/sky_updater/tests/portable_exact_artifact.rs::exact_portable_artifact_updates_previous_stable_and_preserves_user_state"
+      ],
+      "invariants": [
+        "update channel, version ordering, preference, and transaction semantics"
+      ]
+    },
+    {
+      "path": "tests/test_write_release_manifest.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "current repository verification/release or guard test"
+    }
+  ],
+  "evidence_roots": [
+    "rust/crates/sky_app_core",
+    "rust/crates/sky_native_adapters",
+    "rust/crates/sky_player",
+    "rust/crates/sky_dispatch_core",
+    "rust/crates/sky_dispatch_win32",
+    "rust/crates/sky_updater",
+    "desktop/src-tauri",
+    "desktop/src",
+    "scripts/release_common.py",
+    "tests/fixtures/wave2",
+    "tests/fixtures/wave3",
+    "tests/golden_schedules"
+  ],
+  "phase_status": {
+    "phase_9": "closed by Wave 5",
+    "phase_10_product_runtime_binding": "closed by Wave 5",
+    "phase_10_tooling": "pending Wave 6",
+    "phase_11": "pending Wave 6"
+  },
+  "wave5_additions": [
+    {
+      "path": "scripts/check_wave5_retirement.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "Wave 5 read-only product/runtime boundary guard; pending replacement by Wave 6 verification."
+    },
+    {
+      "path": "scripts/release_common.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "Temporary repository release helper; pending replacement by Wave 6 xtask."
+    },
+    {
+      "path": "tests/test_wave5_retirement_guard.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "Direct test for the Wave 5 retirement guard; repository-only evidence."
+    },
+    {
+      "path": "tests/test_native_build_provenance.py",
+      "classification": "TOOLING_RETAINED",
+      "evidence": "Direct tests for observed desktop/calibration build metadata qualification; repository-only evidence."
+    }
+  ],
+  "current_tooling_count": 29,
+  "evidence_schema": {
+    "required_for": [
+      "MIGRATED",
+      "DUPLICATE",
+      "FIXTURE_FROZEN"
+    ],
+    "format": "repository/path::symbol",
+    "symbols_are_verified_by": "scripts/check_wave5_retirement.py"
+  }
+}

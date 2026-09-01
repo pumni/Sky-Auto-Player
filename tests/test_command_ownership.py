@@ -15,7 +15,7 @@ def _methods_used_by_tauri_commands() -> set[str]:
         path.read_text(encoding="utf-8")
         for path in (
             ROOT / "desktop" / "src-tauri" / "src" / "commands.rs",
-            ROOT / "desktop" / "src-tauri" / "src" / "core" / "supervisor.rs",
+            ROOT / "desktop" / "src-tauri" / "src" / "native_runtime.rs",
         )
     )
     return set(METHOD_PATTERN.findall(source))

@@ -61,7 +61,7 @@ next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
 The static margin is applied once while materializing the authored schedule.
-PyO3 receives that materialized value verbatim; the native admission validator
+The native desktop adapter receives that materialized value verbatim; the native admission validator
 checks this relationship before worker start in
 the same QPC tick domain used by dispatch. If the interval is invalid, native
 admission fails before any musical packet can be sent; the worker never

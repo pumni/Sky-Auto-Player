@@ -205,7 +205,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         pendingStart.songId === songId &&
         (current.state === 'idle' || current.state === 'finished' || current.state === 'failed')
       ) {
-        // The Core may publish the first state/terminal event before the
+        // The native runtime may publish the first state/terminal event before the
         // start promise continuation runs. Bind that event to the pending
         // start, while still rejecting events from an unrelated song/session.
         return true;
@@ -679,7 +679,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (library.generation === 0 || first > last) return;
         void ensureRange(first, last, library.searchRequestGeneration);
 
-        // The Core viewport contract is expressed in full-catalog indices. A
+        // The native viewport contract is expressed in full-catalog indices. A
         // filtered result has its own index space, so sending those indices as
         // metadata-priority hints would select unrelated songs. Paging still
         // loads the filtered window above; only an unfiltered view sends the
@@ -780,7 +780,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: null,
             },
           });
-          // The Core has completed its authoritative handoff. Shutdown keeps
+          // The native runtime has completed its authoritative handoff. Shutdown keeps
           // the existing cleanup lifecycle in charge before the shell exits.
           await bridge.shutdown();
         } catch (error) {

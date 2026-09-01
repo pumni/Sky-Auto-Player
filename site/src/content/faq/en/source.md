@@ -6,7 +6,7 @@ category: 'General'
 question: 'Can I build Sky Auto Player from source?'
 ---
 
-Yes. Clone the [repository](https://github.com/pumni/Sky-Auto-Player), run `uv sync`, then use
-`uv run python src/main.py` to launch the supported source Textual/CLI fallback. The packaged
-GUI is built from the `desktop/` Tauri workspace; the repository documents the Python 3.14
-free-threaded environment and doctor checks.
+Yes. Clone the [repository](https://github.com/pumni/Sky-Auto-Player), install the pinned Rust
+toolchain and Bun, then build the native Tauri workspace under `desktop/`. The temporary
+repository release scripts may use Python tooling during Wave 5, but the supported application
+and packaged GUI do not require Python.
