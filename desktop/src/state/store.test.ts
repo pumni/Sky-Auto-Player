@@ -51,7 +51,7 @@ describe('desktop store', () => {
     expect(store.getState().library.rows[0]?.title).toBe('Aurora Landing');
   });
 
-  it('loads and selects a song beyond the Core page limit', async () => {
+  it('loads and selects a song beyond the native page limit', async () => {
     const bridge = createMockBridge();
     const requestedOffsets: number[] = [];
     const originalSearch = bridge.searchSongs;

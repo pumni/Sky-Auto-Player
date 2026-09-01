@@ -68,13 +68,13 @@ describe('desktop application shell', () => {
     );
   });
 
-  it('keeps the window available when Core startup fails', async () => {
+  it('keeps the window available when native startup fails', async () => {
     const bridge = createMockBridge();
     bridge.subscribeUiEvents = async () => {
-      throw new Error('Core executable is missing');
+      throw new Error('Native application is unavailable');
     };
     render(<App bridge={bridge} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Core executable is missing');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
   });
 

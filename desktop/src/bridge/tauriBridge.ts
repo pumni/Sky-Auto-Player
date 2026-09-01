@@ -30,9 +30,9 @@ import type {
   UpdatePreferences,
 } from './DesktopBridge';
 
-type CoreChannelEvent = UiEvent;
+type UiChannelEvent = UiEvent;
 
-function normalizeEvent(event: CoreChannelEvent): UiEvent {
+function normalizeEvent(event: UiChannelEvent): UiEvent {
   return event;
 }
 
@@ -78,7 +78,7 @@ export function createTauriBridge(): DesktopBridge {
     cancelCalibration: (request: CalibrationCancel) =>
       call<CalibrationCancelAck>('cancel_calibration', request),
     subscribeUiEvents: async (listener): Promise<Unsubscribe> => {
-      const channel = new Channel<CoreChannelEvent>();
+      const channel = new Channel<UiChannelEvent>();
       channel.onmessage = (event) => listener(normalizeEvent(event));
       await invoke('subscribe_ui_events', { channel });
       return () => {

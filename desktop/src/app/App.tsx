@@ -191,7 +191,7 @@ export function App({ bridge }: AppProps) {
         throw new Error('packaged GUI calibration terminal postcondition failed');
       }
       // The controlled-close command destroys this WebView after starting
-      // bounded Core cleanup. Do not wait for an invoke response from a
+      // bounded native cleanup. Do not wait for an invoke response from a
       // window that is intentionally being destroyed.
       void bridge.shutdown();
     };
