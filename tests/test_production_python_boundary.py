@@ -61,7 +61,7 @@ def test_current_report_captures_known_transitional_boundaries() -> None:
     )
 
 
-def test_payload_reports_explicit_command_ownership_and_cutover_blockers() -> None:
+def test_payload_reports_runtime_zero_boundary_and_retained_legacy_material() -> None:
     module = _load()
     references = module.collect(ROOT)
     payload = module._payload(ROOT, references)
@@ -70,14 +70,14 @@ def test_payload_reports_explicit_command_ownership_and_cutover_blockers() -> No
     accounting = payload["python_boundary"]
     ownership = accounting["command_ownership"]
     assert ownership["status"] == "ok"
-    assert ownership["before"]["python_count"] == 21
-    assert ownership["before"]["native_count"] == 0
-    assert ownership["after"]["python_count"] == 8
-    assert ownership["after"]["native_count"] == 13
-    assert accounting["native_command_count"] == 13
-    assert accounting["python_command_count"] == 8
-    assert accounting["python_core_process_required"] is True
-    assert accounting["python_runtime_shipped"] is True
+    assert ownership["before"]["python_count"] == 8
+    assert ownership["before"]["native_count"] == 13
+    assert ownership["after"]["python_count"] == 0
+    assert ownership["after"]["native_count"] == 21
+    assert accounting["native_command_count"] == 21
+    assert accounting["python_command_count"] == 0
+    assert accounting["python_core_process_required"] is False
+    assert accounting["python_runtime_shipped"] is False
+    assert accounting["production_runtime_python_boundary"] == "zero"
     assert accounting["pyo3_required_for_production_tauri_playback"] is False
-    assert "update.check" in accounting["remaining_blockers"]
-    assert "calibration.*" in accounting["remaining_blockers"]
+    assert accounting["remaining_production_blockers"] == {}

@@ -227,6 +227,33 @@ impl<S: SettingsStore> SettingsService<S> {
         }
         Ok(&self.current)
     }
+
+    /// Record an update check outcome in the same durable settings document
+    /// used by the rest of the desktop.  Keeping these mutations here makes
+    /// the update service unable to accidentally introduce a second
+    /// preference store.
+    pub fn record_update_success(
+        &mut self,
+        timestamp: i64,
+    ) -> Result<&ApplicationSettings, SettingsError> {
+        let mut next = self.current.clone();
+        next.update.last_check_ts = timestamp;
+        next.update.last_error_ts = 0;
+        self.store.save(&next)?;
+        self.current = next;
+        Ok(&self.current)
+    }
+
+    pub fn record_update_error(
+        &mut self,
+        timestamp: i64,
+    ) -> Result<&ApplicationSettings, SettingsError> {
+        let mut next = self.current.clone();
+        next.update.last_error_ts = timestamp;
+        self.store.save(&next)?;
+        self.current = next;
+        Ok(&self.current)
+    }
 }
 
 pub fn normalize_settings(mut settings: ApplicationSettings) -> ApplicationSettings {

@@ -12,7 +12,6 @@ PRIMARY_EXE = f"{APP_NAME}.exe"
 CORE_EXE = f"{APP_NAME}-Core.exe"
 REQUIRED = {
     PRIMARY_EXE,
-    CORE_EXE,
     "native_calibration.exe",
     "Sky-Auto-Player-Updater.exe",
     "MANIFEST.json",
@@ -55,13 +54,17 @@ def verify(release_dir: Path, version: str) -> None:
     missing = REQUIRED - actual
     if missing:
         raise RuntimeError(f"release is missing required files: {sorted(missing)}")
-    if not any(
-        path.startswith("_internal/")
-        and Path(path).suffix.casefold() == ".pyd"
-        and Path(path).name.casefold().startswith("sky_player_rs")
+    runtime_forbidden = sorted(
+        path
         for path in actual
-    ):
-        raise RuntimeError("release is missing the bundled sky_player_rs native extension")
+        if path.casefold() == CORE_EXE.casefold()
+        or path.casefold().startswith("_internal/")
+        or Path(path).name.casefold().startswith("python")
+        or Path(path).suffix.casefold() in {".pyd", ".pyc"}
+        or Path(path).name.casefold() in {"base_library.zip"}
+    )
+    if runtime_forbidden:
+        raise RuntimeError(f"release contains bundled Python runtime artifacts: {runtime_forbidden}")
     forbidden = sorted(
         path
         for path in actual

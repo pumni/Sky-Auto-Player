@@ -1,5 +1,4 @@
 use crate::app_state::AppState;
-use crate::core::CoreSupervisor;
 use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -177,107 +176,12 @@ pub struct PlaybackSessionCommandRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Serialize)]
-struct CoreDetailParams {
-    song_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    generation: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreViewportParams {
-    generation: u64,
-    first_index: u64,
-    last_index: i64,
-    selected_song_id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct CorePlaybackPatch {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hold_frames: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tempo_scale: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fps: Option<u16>,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreSettingsPatch {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    theme: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    telemetry_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    verbose_hud: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    playback_defaults: Option<CorePlaybackPatch>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    update_preferences: Option<CoreUpdatePreferencesPatch>,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreUpdatePreferencesPatch {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    auto_check: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    channel: Option<UpdateChannel>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    skip_version: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreUpdateBeginHandoffParams {
-    target_version: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct UpdateBeginHandoffRequest {
     pub target_version: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CorePlaybackPrepareParams {
-    song_id: String,
-    generation: u64,
-    config: PlaybackConfigDto,
-}
-
-#[derive(Debug, Serialize)]
-struct CorePlaybackStartParams {
-    prepared_id: String,
-    decisions: Vec<PlaybackDecisionAcceptanceDto>,
-}
-
-#[derive(Debug, Serialize)]
-struct CorePlaybackSessionParams {
-    session_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreDiagnosticsSetEnabledParams {
-    enabled: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreCalibrationStartParams {
-    mode: CalibrationMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    class_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    polyphony: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    samples: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeout_seconds: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-struct CoreCalibrationCancelParams {
-    operation_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -537,26 +441,6 @@ pub struct CalibrationCancelAckDto {
     pub accepted: bool,
 }
 
-fn request_with_supervisor<P, R>(
-    supervisor: &CoreSupervisor,
-    method: &'static str,
-    params: P,
-) -> Result<R, String>
-where
-    P: Serialize,
-    R: DeserializeOwned,
-{
-    if crate::command_ownership::owner_for(method)
-        != Some(crate::command_ownership::CommandOwner::Python)
-    {
-        return Err(format!("unowned or non-Python desktop command: {method}"));
-    }
-    let value = supervisor
-        .request(method, params)
-        .map_err(|error| error.to_string())?;
-    serde_json::from_value(value).map_err(|error| format!("invalid {method} response: {error}"))
-}
-
 async fn blocking_request<P, R>(
     state: State<'_, AppState>,
     method: &'static str,
@@ -569,34 +453,19 @@ where
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _coherence_guard = (method == "playback.start").then(|| app_state.lock_coherence());
-        let calibration_reservation = if method == "calibration.start" {
-            Some(app_state.activity().reserve_calibration()?)
-        } else {
-            None
-        };
-        let result = match crate::command_ownership::owner_for(method) {
-            Some(crate::command_ownership::CommandOwner::Native) => {
-                let runtime = app_state.ensure_native_blocking()?;
-                let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
-                let value = runtime.dispatch(method, params)?;
-                serde_json::from_value(value)
-                    .map_err(|error| format!("invalid native {method} response: {error}"))
-            }
-            Some(crate::command_ownership::CommandOwner::Python) => {
-                let supervisor = app_state.ensure_core_blocking()?;
-                request_with_supervisor(&supervisor, method, params)
-            }
-            None => Err(format!("unowned desktop command: {method}")),
-        };
-        if result.is_ok()
-            && let Some(reservation) = calibration_reservation
+        if crate::command_ownership::owner_for(method)
+            != Some(crate::command_ownership::CommandOwner::Native)
         {
-            reservation.commit();
+            return Err(format!("unowned non-Native desktop command: {method}"));
         }
-        result
+        let runtime = app_state.ensure_native_blocking()?;
+        let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
+        let value = runtime.dispatch(method, params)?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("invalid native {method} response: {error}"))
     })
     .await
-    .map_err(|error| format!("Core worker failed: {error}"))?
+    .map_err(|error| format!("Native command worker failed: {error}"))?
 }
 
 async fn blocking_settings_request<P, R>(
@@ -616,36 +485,19 @@ where
         // this guard only prevents overlapping persistence operations.
         let _write_guard = app_state.lock_settings_writes();
         let _coherence_guard = (method == "settings.patch").then(|| app_state.lock_coherence());
-        match crate::command_ownership::owner_for(method) {
-            Some(crate::command_ownership::CommandOwner::Native) => {
-                let runtime = app_state.ensure_native_blocking()?;
-                let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
-                let value = runtime.dispatch(method, params)?;
-                serde_json::from_value(value)
-                    .map_err(|error| format!("invalid native {method} response: {error}"))
-            }
-            Some(crate::command_ownership::CommandOwner::Python) => {
-                let supervisor = app_state.ensure_core_blocking()?;
-                if method == "settings.patch" {
-                    // Invalidate after the Python RPC itself succeeds, before
-                    // decoding its response.  A malformed response must not
-                    // leave a successfully persisted mutation with a live
-                    // Native prepared plan.
-                    let value = supervisor
-                        .request(method, params)
-                        .map_err(|error| error.to_string())?;
-                    app_state.invalidate_native_after_python_settings_patch();
-                    serde_json::from_value(value)
-                        .map_err(|error| format!("invalid {method} response: {error}"))
-                } else {
-                    request_with_supervisor(&supervisor, method, params)
-                }
-            }
-            None => Err(format!("unowned desktop command: {method}")),
+        if crate::command_ownership::owner_for(method)
+            != Some(crate::command_ownership::CommandOwner::Native)
+        {
+            return Err(format!("unowned non-Native desktop command: {method}"));
         }
+        let runtime = app_state.ensure_native_blocking()?;
+        let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
+        let value = runtime.dispatch(method, params)?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("invalid native {method} response: {error}"))
     })
     .await
-    .map_err(|error| format!("Core settings worker failed: {error}"))?
+    .map_err(|error| format!("Native settings worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -666,15 +518,7 @@ pub async fn get_song_detail(
     state: State<'_, AppState>,
     params: CatalogDetailRequest,
 ) -> Result<SongDetailDto, String> {
-    blocking_request(
-        state,
-        "catalog.detail",
-        CoreDetailParams {
-            song_id: params.song_id,
-            generation: params.generation,
-        },
-    )
-    .await
+    blocking_request(state, "catalog.detail", params).await
 }
 
 #[tauri::command]
@@ -687,17 +531,7 @@ pub async fn set_library_viewport(
     state: State<'_, AppState>,
     params: CatalogViewportRequest,
 ) -> Result<CatalogViewportDto, String> {
-    blocking_request(
-        state,
-        "catalog.set_viewport",
-        CoreViewportParams {
-            generation: params.generation,
-            first_index: params.first_index,
-            last_index: params.last_index,
-            selected_song_id: params.selected_song_id,
-        },
-    )
-    .await
+    blocking_request(state, "catalog.set_viewport", params).await
 }
 
 #[tauri::command]
@@ -710,29 +544,7 @@ pub async fn patch_settings(
     state: State<'_, AppState>,
     params: SettingsPatch,
 ) -> Result<SettingsDto, String> {
-    let playback_defaults = params.playback_defaults.map(|playback| CorePlaybackPatch {
-        hold_frames: playback.hold_frames,
-        tempo_scale: playback.tempo_scale,
-        fps: playback.fps,
-    });
-    blocking_settings_request(
-        state,
-        "settings.patch",
-        CoreSettingsPatch {
-            theme: params.theme,
-            telemetry_enabled: params.telemetry_enabled,
-            verbose_hud: params.verbose_hud,
-            playback_defaults,
-            update_preferences: params
-                .update_preferences
-                .map(|value| CoreUpdatePreferencesPatch {
-                    auto_check: value.auto_check,
-                    channel: value.channel,
-                    skip_version: value.skip_version,
-                }),
-        },
-    )
-    .await
+    blocking_settings_request(state, "settings.patch", params).await
 }
 
 #[tauri::command]
@@ -752,16 +564,7 @@ pub async fn patch_update_preferences(
     state: State<'_, AppState>,
     params: UpdatePreferencesPatch,
 ) -> Result<UpdatePreferencesDto, String> {
-    blocking_settings_request(
-        state,
-        "update.preferences.patch",
-        CoreUpdatePreferencesPatch {
-            auto_check: params.auto_check,
-            channel: params.channel,
-            skip_version: params.skip_version,
-        },
-    )
-    .await
+    blocking_settings_request(state, "update.preferences.patch", params).await
 }
 
 #[tauri::command]
@@ -769,14 +572,7 @@ pub async fn begin_update_handoff(
     state: State<'_, AppState>,
     params: UpdateBeginHandoffRequest,
 ) -> Result<UpdateHandoffDto, String> {
-    blocking_request(
-        state,
-        "update.begin_handoff",
-        CoreUpdateBeginHandoffParams {
-            target_version: params.target_version,
-        },
-    )
-    .await
+    blocking_request(state, "update.begin_handoff", params).await
 }
 
 #[tauri::command]
@@ -784,14 +580,7 @@ pub async fn set_diagnostics_enabled(
     state: State<'_, AppState>,
     params: DiagnosticsSetEnabledRequest,
 ) -> Result<DiagnosticsEnabledDto, String> {
-    blocking_request(
-        state,
-        "diagnostics.set_enabled",
-        CoreDiagnosticsSetEnabledParams {
-            enabled: params.enabled,
-        },
-    )
-    .await
+    blocking_request(state, "diagnostics.set_enabled", params).await
 }
 
 #[tauri::command]
@@ -799,18 +588,7 @@ pub async fn start_calibration(
     state: State<'_, AppState>,
     params: CalibrationStartRequest,
 ) -> Result<CalibrationStartAckDto, String> {
-    blocking_request(
-        state,
-        "calibration.start",
-        CoreCalibrationStartParams {
-            mode: params.mode,
-            class_name: params.class_name,
-            polyphony: params.polyphony,
-            samples: params.samples,
-            timeout_seconds: params.timeout_seconds,
-        },
-    )
-    .await
+    blocking_request(state, "calibration.start", params).await
 }
 
 #[tauri::command]
@@ -818,14 +596,7 @@ pub async fn cancel_calibration(
     state: State<'_, AppState>,
     params: CalibrationCancelRequest,
 ) -> Result<CalibrationCancelAckDto, String> {
-    blocking_request(
-        state,
-        "calibration.cancel",
-        CoreCalibrationCancelParams {
-            operation_id: params.operation_id,
-        },
-    )
-    .await
+    blocking_request(state, "calibration.cancel", params).await
 }
 
 #[tauri::command]
@@ -833,16 +604,7 @@ pub async fn prepare_playback(
     state: State<'_, AppState>,
     params: PlaybackPrepareRequest,
 ) -> Result<PreparedPlaybackDto, String> {
-    blocking_request(
-        state,
-        "playback.prepare",
-        CorePlaybackPrepareParams {
-            song_id: params.song_id,
-            generation: params.generation,
-            config: params.config,
-        },
-    )
-    .await
+    blocking_request(state, "playback.prepare", params).await
 }
 
 #[tauri::command]
@@ -850,15 +612,7 @@ pub async fn start_playback(
     state: State<'_, AppState>,
     params: PlaybackStartRequest,
 ) -> Result<PlaybackSessionDto, String> {
-    blocking_request(
-        state,
-        "playback.start",
-        CorePlaybackStartParams {
-            prepared_id: params.prepared_id,
-            decisions: params.decisions,
-        },
-    )
-    .await
+    blocking_request(state, "playback.start", params).await
 }
 
 async fn playback_session_command(
@@ -866,14 +620,7 @@ async fn playback_session_command(
     control: PlaybackControl,
     params: PlaybackSessionCommandRequest,
 ) -> Result<PlaybackCommandAckDto, String> {
-    blocking_request(
-        state,
-        control.method(),
-        CorePlaybackSessionParams {
-            session_id: params.session_id,
-        },
-    )
-    .await
+    blocking_request(state, control.method(), params).await
 }
 
 #[tauri::command]
@@ -915,28 +662,11 @@ pub async fn subscribe_ui_events(
 ) -> Result<(), String> {
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Event subscriptions are delivery infrastructure rather than one of
-        // the 21 request methods. During the strangler transition both live
-        // producers use the same delivery channel: Native publishes native
-        // lifecycle/snapshot events and Core preserves the eight remaining
-        // Python-owned update/calibration streams. Each producer retains its
-        // own ordering; no command failure is hidden by cross-owner fallback.
-        let _supervisor = app_state.ensure_core_blocking()?;
         let native = app_state.ensure_native_blocking()?;
-        // Put AppState into a transition phase before installing the native
-        // Channel. Core events arriving during creation/subscription remain
-        // behind the same ordered route queue and cannot overtake older
-        // backlog events.
-        app_state.begin_core_event_route_transition()?;
-        if let Err(error) = native.subscribe(channel) {
-            app_state.fail_core_event_route();
-            return Err(error);
-        }
-        app_state.complete_core_event_route_transition(native)?;
-        Ok(())
+        native.subscribe(channel)
     })
     .await
-    .map_err(|error| format!("Core event worker failed: {error}"))?
+    .map_err(|error| format!("Native event worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -946,7 +676,7 @@ pub async fn shutdown(
     params: Option<ShutdownRequest>,
 ) -> Result<(), String> {
     // This command is used only after an authoritative update handoff. Keep
-    // shell exit under the same prevent-close -> bounded Core cleanup ->
+    // shell exit under the same prevent-close -> bounded Native cleanup ->
     // destroy lifecycle as a user-initiated close; React never destroys the
     // native window directly.
     if params.is_some_and(|request| request.failed) {

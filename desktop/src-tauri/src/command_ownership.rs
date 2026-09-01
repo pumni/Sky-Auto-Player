@@ -1,6 +1,6 @@
 //! Explicit ownership matrix for the strangler boundary.
 //!
-//! Explicit command ownership for the Wave 3 native strangler boundary.
+//! Explicit command ownership for the final Native desktop boundary.
 //!
 //! The matrix is executable policy: the selected handler is authoritative and
 //! a failure is returned to the caller.  There is no implicit native/Python
@@ -8,7 +8,6 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandOwner {
-    Python,
     Native,
 }
 
@@ -19,15 +18,12 @@ pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
     ("catalog.detail", CommandOwner::Native),
     ("catalog.reload", CommandOwner::Native),
     ("catalog.set_viewport", CommandOwner::Native),
-    // Keep the complete settings family with Core while its process-local
-    // AppConfig cache is still live. Native services only read the same
-    // atomically persisted file as a shadow during this transition.
-    ("settings.get", CommandOwner::Python),
-    ("settings.patch", CommandOwner::Python),
-    ("update.check", CommandOwner::Python),
-    ("update.preferences.get", CommandOwner::Python),
-    ("update.preferences.patch", CommandOwner::Python),
-    ("update.begin_handoff", CommandOwner::Python),
+    ("settings.get", CommandOwner::Native),
+    ("settings.patch", CommandOwner::Native),
+    ("update.check", CommandOwner::Native),
+    ("update.preferences.get", CommandOwner::Native),
+    ("update.preferences.patch", CommandOwner::Native),
+    ("update.begin_handoff", CommandOwner::Native),
     ("playback.prepare", CommandOwner::Native),
     ("playback.start", CommandOwner::Native),
     ("playback.stop", CommandOwner::Native),
@@ -35,8 +31,8 @@ pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
     ("playback.resume", CommandOwner::Native),
     ("playback.skip", CommandOwner::Native),
     ("diagnostics.set_enabled", CommandOwner::Native),
-    ("calibration.start", CommandOwner::Python),
-    ("calibration.cancel", CommandOwner::Python),
+    ("calibration.start", CommandOwner::Native),
+    ("calibration.cancel", CommandOwner::Native),
 ];
 
 /// Native handlers are enumerated separately from policy so the matrix cannot
@@ -49,6 +45,12 @@ pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
     "catalog.detail",
     "catalog.reload",
     "catalog.set_viewport",
+    "settings.get",
+    "settings.patch",
+    "update.check",
+    "update.preferences.get",
+    "update.preferences.patch",
+    "update.begin_handoff",
     "playback.prepare",
     "playback.start",
     "playback.stop",
@@ -56,6 +58,8 @@ pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
     "playback.resume",
     "playback.skip",
     "diagnostics.set_enabled",
+    "calibration.start",
+    "calibration.cancel",
 ];
 
 const REQUIRED_COMMANDS: [&str; 21] = [
@@ -89,8 +93,8 @@ pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
 }
 
 pub(crate) fn matrix_is_complete() -> bool {
-    // Keep both ownership states represented in the delivery contract while
-    // the remaining update-handoff and calibration routes stay Python-owned.
+    // This list is executable evidence that every Native policy entry has a
+    // corresponding runtime dispatch branch.
     COMMAND_OWNERS.len() == REQUIRED_COMMANDS.len()
         && REQUIRED_COMMANDS.iter().all(|method| {
             COMMAND_OWNERS
@@ -102,11 +106,7 @@ pub(crate) fn matrix_is_complete() -> bool {
         && COMMAND_OWNERS
             .iter()
             .all(|(method, owner)| owner_for(method) == Some(*owner))
-        && NATIVE_HANDLER_METHODS.len()
-            == COMMAND_OWNERS
-                .iter()
-                .filter(|(_, owner)| *owner == CommandOwner::Native)
-                .count()
+        && NATIVE_HANDLER_METHODS.len() == COMMAND_OWNERS.len()
         && NATIVE_HANDLER_METHODS
             .iter()
             .all(|method| owner_for(method) == Some(CommandOwner::Native))
@@ -117,33 +117,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_current_core_method_has_exactly_one_explicit_owner() {
+    fn every_current_desktop_method_has_exactly_one_native_owner() {
         assert_eq!(COMMAND_OWNERS.len(), 21);
         assert_eq!(
             COMMAND_OWNERS
                 .iter()
                 .filter(|(_, owner)| *owner == CommandOwner::Native)
                 .count(),
-            13
-        );
-        assert_eq!(
-            COMMAND_OWNERS
-                .iter()
-                .filter(|(_, owner)| *owner == CommandOwner::Python)
-                .count(),
-            8
+            21
         );
         for (method, owner) in COMMAND_OWNERS {
             assert_eq!(owner_for(method), Some(*owner));
         }
-        assert_eq!(owner_for("settings.patch"), Some(CommandOwner::Python));
+        assert_eq!(owner_for("settings.patch"), Some(CommandOwner::Native));
         assert_eq!(
             owner_for("update.preferences.patch"),
-            Some(CommandOwner::Python)
+            Some(CommandOwner::Native)
         );
         assert_eq!(owner_for("unknown"), None);
         assert!(matrix_is_complete());
-        assert_eq!(NATIVE_HANDLER_METHODS.len(), 13);
+        assert_eq!(NATIVE_HANDLER_METHODS.len(), 21);
         for method in NATIVE_HANDLER_METHODS {
             assert_eq!(owner_for(method), Some(CommandOwner::Native));
             assert!(

@@ -1,11 +1,18 @@
+#[cfg(test)]
 use crate::core::CoreSupervisor;
+#[cfg(test)]
 use crate::core::protocol::CoreEvent;
+#[cfg(test)]
 use crate::core::supervisor::CoreEventObserver;
-use crate::native_runtime::NativeDesktopRuntime;
+use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
+#[cfg(test)]
 use crate::ui_events::CalibrationOutcome;
+#[cfg(test)]
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+#[cfg(test)]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Single non-realtime admission authority for operations that can own the
 /// physical input/calibration boundary.  The Python Core and native runtime
@@ -31,6 +38,24 @@ struct ActivityState {
     closing: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActivityReservationError {
+    Closing,
+    CalibrationAlreadyActive,
+    PhysicalPlaybackActive,
+}
+
+impl std::fmt::Display for ActivityReservationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::Closing => "desktop application is closing",
+            Self::CalibrationAlreadyActive => "a calibration operation is already active",
+            Self::PhysicalPlaybackActive => "physical playback is active",
+        };
+        formatter.write_str(message)
+    }
+}
+
 pub(crate) struct PhysicalActivityLease {
     coordinator: ActivityCoordinator,
     session_id: String,
@@ -46,20 +71,20 @@ impl ActivityCoordinator {
     pub(crate) fn reserve_playback(
         &self,
         session_id: impl Into<String>,
-    ) -> Result<PhysicalActivityLease, String> {
+    ) -> Result<PhysicalActivityLease, ActivityReservationError> {
         let session_id = session_id.into();
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "activity gate poisoned".to_string())?;
+            .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
-            return Err("desktop application is closing".into());
+            return Err(ActivityReservationError::Closing);
         }
         if state.calibration_active {
-            return Err("calibration is active".into());
+            return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
         if state.physical_playback.is_some() {
-            return Err("another physical playback session is active".into());
+            return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
         state.physical_playback = Some(session_id.clone());
         Ok(PhysicalActivityLease {
@@ -68,24 +93,25 @@ impl ActivityCoordinator {
         })
     }
 
-    pub(crate) fn reserve_calibration(&self) -> Result<CalibrationReservation, String> {
+    pub(crate) fn reserve_calibration(
+        &self,
+    ) -> Result<CalibrationReservation, ActivityReservationError> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "activity gate poisoned".to_string())?;
+            .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
-            return Err("desktop application is closing".into());
+            return Err(ActivityReservationError::Closing);
         }
         if state.calibration_active {
-            return Err("a calibration operation is already active".into());
+            return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
         if state.physical_playback.is_some() {
-            return Err("calibration cannot run during physical playback".into());
+            return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
         state.calibration_active = true;
         Ok(CalibrationReservation {
             coordinator: self.clone(),
-            committed: false,
         })
     }
 
@@ -103,6 +129,7 @@ impl ActivityCoordinator {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_core_event(&self, event: &CoreEvent) {
         match event {
             CoreEvent::CalibrationFinished(_) => self.release_calibration(),
@@ -130,20 +157,11 @@ impl ActivityCoordinator {
 
 pub(crate) struct CalibrationReservation {
     coordinator: ActivityCoordinator,
-    committed: bool,
-}
-
-impl CalibrationReservation {
-    pub(crate) fn commit(mut self) {
-        self.committed = true;
-    }
 }
 
 impl Drop for CalibrationReservation {
     fn drop(&mut self) {
-        if !self.committed {
-            self.coordinator.release_calibration();
-        }
+        self.coordinator.release_calibration();
     }
 }
 
@@ -153,18 +171,22 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    #[cfg(test)]
     core: Mutex<CoreState>,
     native: Mutex<Option<Arc<NativeDesktopRuntime>>>,
     settings_writes: Mutex<()>,
     coherence: Mutex<()>,
+    #[cfg(test)]
     core_event_route: Mutex<CoreEventRoute>,
     activity: ActivityCoordinator,
+    test_seams: Mutex<TestSeams>,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
     gui_smoke_failed: AtomicBool,
 }
 
 #[derive(Default)]
+#[cfg(test)]
 struct CoreEventRoute {
     phase: CoreEventRoutePhase,
     queue: VecDeque<crate::ui_events::UiEvent>,
@@ -172,6 +194,7 @@ struct CoreEventRoute {
 }
 
 #[derive(Default)]
+#[cfg(test)]
 enum CoreEventRoutePhase {
     #[default]
     Pending,
@@ -180,6 +203,7 @@ enum CoreEventRoutePhase {
     Failed,
 }
 
+#[cfg(test)]
 enum CoreState {
     Idle,
     Starting(Vec<mpsc::Sender<Result<Arc<CoreSupervisor>, String>>>),
@@ -191,14 +215,17 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             inner: Arc::new(AppStateInner {
+                #[cfg(test)]
                 core: Mutex::new(CoreState::Idle),
                 native: Mutex::new(None),
                 settings_writes: Mutex::new(()),
                 coherence: Mutex::new(()),
+                #[cfg(test)]
                 core_event_route: Mutex::new(CoreEventRoute::default()),
                 activity: ActivityCoordinator {
                     state: Arc::new(Mutex::new(ActivityState::default())),
                 },
+                test_seams: Mutex::new(TestSeams::Disabled),
                 closing: AtomicBool::new(false),
                 gui_smoke_exit: AtomicBool::new(false),
                 gui_smoke_failed: AtomicBool::new(false),
@@ -219,9 +246,18 @@ impl AppState {
         if let Some(runtime) = &*native {
             return Ok(Arc::clone(runtime));
         }
-        let runtime = Arc::new(NativeDesktopRuntime::for_current_install_with_activity(
-            self.activity(),
-        )?);
+        let test_seams = *self
+            .inner
+            .test_seams
+            .lock()
+            .map_err(|_| "native test-seam state poisoned".to_string())?;
+        let runtime = Arc::new(
+            NativeDesktopRuntime::from_install_root_with_activity_and_seams(
+                crate::native_runtime::resolve_install_root()?,
+                self.activity(),
+                test_seams,
+            )?,
+        );
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
@@ -238,24 +274,9 @@ impl AppState {
         self.inner.activity.clone()
     }
 
-    pub(crate) fn native_if_present(&self) -> Option<Arc<NativeDesktopRuntime>> {
-        self.inner
-            .native
-            .lock()
-            .ok()
-            .and_then(|runtime| runtime.as_ref().cloned())
-    }
-
-    /// Complete the cross-process settings mutation barrier after the Python
-    /// owner has committed its atomic config write.  The caller holds the
-    /// shared coherence lock, so a Native start cannot observe the write
-    /// between the Python response and this invalidation.
-    pub(crate) fn invalidate_native_after_python_settings_patch(&self) {
-        if let Some(native) = self.native_if_present() {
-            native.invalidate_prepared_for_external_mutation();
-        }
-    }
-
+    /// Serialize settings writes and playback starts at the application
+    /// coherence boundary.  The same guard is used by both production Native
+    /// command routes, so a start cannot consume a stale prepared plan.
     pub(crate) fn lock_coherence(&self) -> MutexGuard<'_, ()> {
         self.inner
             .coherence
@@ -263,6 +284,7 @@ impl AppState {
             .expect("coherence gate poisoned")
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_core_event(&self, event: &CoreEvent) -> Result<(), String> {
         // Terminal calibration events are the linearization point between the
         // Python-owned calibration operation and a Native playback start.  Do
@@ -291,6 +313,7 @@ impl AppState {
         self.queue_core_event(event.clone().into_ui_event())
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_core_event_route_transition(&self) -> Result<(), String> {
         let mut route = self
             .inner
@@ -310,6 +333,7 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_core_event_route_transition(
         &self,
         native: Arc<NativeDesktopRuntime>,
@@ -337,6 +361,7 @@ impl AppState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_core_event_route(&self) {
         if let Ok(mut route) = self.inner.core_event_route.lock() {
             route.phase = CoreEventRoutePhase::Failed;
@@ -345,6 +370,7 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     fn queue_core_event(&self, event: crate::ui_events::UiEvent) -> Result<(), String> {
         const MAX_CORE_ROUTE_EVENTS: usize = 128;
         let snapshot_key = match &event {
@@ -443,6 +469,7 @@ impl AppState {
         Ok(())
     }
 
+    #[cfg(test)]
     fn drain_core_event_route(&self) -> Result<(), String> {
         loop {
             let next = {
@@ -470,15 +497,7 @@ impl AppState {
         }
     }
 
-    /// Start the Core at most once and let concurrent callers share its result.
-    /// The caller must invoke this from a blocking worker because Core startup
-    /// waits for the child process readiness event.
-    pub fn ensure_core_blocking(&self) -> Result<Arc<CoreSupervisor>, String> {
-        self.ensure_core_blocking_with(|| {
-            CoreSupervisor::spawn().map_err(|error| error.to_string())
-        })
-    }
-
+    #[cfg(test)]
     fn ensure_core_blocking_with<F>(&self, starter: F) -> Result<Arc<CoreSupervisor>, String>
     where
         F: FnOnce() -> Result<Arc<CoreSupervisor>, String>,
@@ -561,15 +580,6 @@ impl AppState {
         result
     }
 
-    pub fn supervisor(&self) -> Result<Arc<CoreSupervisor>, String> {
-        match &*self.inner.core.lock().expect("desktop state poisoned") {
-            CoreState::Ready(supervisor) => Ok(Arc::clone(supervisor)),
-            CoreState::Starting(_) => Err("Desktop Core is still starting".into()),
-            CoreState::Idle => Err("Desktop Core has not started".into()),
-            CoreState::Failed(error) => Err(error.clone()),
-        }
-    }
-
     pub fn lock_settings_writes(&self) -> MutexGuard<'_, ()> {
         self.inner
             .settings_writes
@@ -587,6 +597,16 @@ impl AppState {
 
     pub fn set_gui_smoke_exit(&self, enabled: bool) {
         self.inner.gui_smoke_exit.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn with_test_seams(test_seams: TestSeams) -> Self {
+        let state = Self::default();
+        *state
+            .inner
+            .test_seams
+            .lock()
+            .expect("test-seam state poisoned") = test_seams;
+        state
     }
 
     pub fn should_exit_after_close(&self) -> bool {
@@ -622,7 +642,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityCoordinator, AppState};
+    use super::{ActivityCoordinator, ActivityReservationError, AppState};
     use crate::core::protocol::CoreEvent;
     use crate::native_runtime::NativeDesktopRuntime;
     use crate::ui_events::{CalibrationFinishedPayload, CalibrationOutcome, CatalogChangedPayload};
@@ -692,11 +712,16 @@ mod tests {
         let playback = activity
             .reserve_playback("session")
             .expect("playback lease");
-        assert!(activity.reserve_calibration().is_err());
+        assert!(matches!(
+            activity.reserve_calibration(),
+            Err(ActivityReservationError::PhysicalPlaybackActive)
+        ));
         drop(playback);
-        let calibration = activity.reserve_calibration().expect("calibration slot");
-        assert!(activity.reserve_playback("other").is_err());
-        calibration.commit();
+        let _calibration = activity.reserve_calibration().expect("calibration slot");
+        assert!(matches!(
+            activity.reserve_playback("other"),
+            Err(ActivityReservationError::CalibrationAlreadyActive)
+        ));
         activity.release_calibration();
         let playback = activity.reserve_playback("other").expect("released slot");
         drop(playback);
@@ -706,8 +731,7 @@ mod tests {
     #[test]
     fn terminal_core_calibration_event_releases_the_shared_activity_slot() {
         let state = AppState::default();
-        let reservation = state.activity().reserve_calibration().expect("slot");
-        reservation.commit();
+        let _reservation = state.activity().reserve_calibration().expect("slot");
         assert!(state.activity().is_calibration_active());
 
         state
@@ -988,7 +1012,7 @@ mod tests {
             .dispatch(
                 "playback.prepare",
                 serde_json::json!({
-                    "song_id": search.items[0].song_id,
+                    "songId": search.items[0].song_id,
                     "generation": bootstrap.catalog_generation,
                     "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
@@ -998,12 +1022,10 @@ mod tests {
             .as_str()
             .expect("prepared ID")
             .to_owned();
-        let reservation = state
+        let _reservation = state
             .activity()
             .reserve_calibration()
             .expect("calibration slot");
-        reservation.commit();
-
         state
             .observe_core_event(&CoreEvent::CalibrationFinished(
                 CalibrationFinishedPayload {
@@ -1023,7 +1045,7 @@ mod tests {
             native
                 .dispatch(
                     "playback.start",
-                    serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+                    serde_json::json!({"preparedId":prepared_id,"decisions":[]}),
                 )
                 .is_err()
         );

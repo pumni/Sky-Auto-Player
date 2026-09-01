@@ -32,13 +32,10 @@ def _load_verifier():
 
 def _seed_release(tmp_path: Path) -> Path:
     release = tmp_path / "release"
-    (release / "_internal" / "sky_player_rs").mkdir(parents=True)
     for name, payload in (
         ("Sky-Auto-Player.exe", b"tauri"),
-        ("Sky-Auto-Player-Core.exe", b"core"),
         ("Sky-Auto-Player-Updater.exe", b"updater"),
         ("native_calibration.exe", b"calibration"),
-        ("_internal/sky_player_rs/sky_player_rs.pyd", b"native"),
         ("songs/example.json", b"{}"),
     ):
         path = release / name
@@ -50,13 +47,13 @@ def _seed_release(tmp_path: Path) -> Path:
     return release
 
 
-def test_phase8_manifest_requires_core_and_native_extension(tmp_path: Path) -> None:
+def test_phase8_manifest_rejects_runtime_python_artifacts(tmp_path: Path) -> None:
     verifier = _load_verifier()
     release = _seed_release(tmp_path)
     verifier.verify(release, "3.5.0")
 
-    (release / "Sky-Auto-Player-Core.exe").unlink()
-    with pytest.raises(RuntimeError, match="missing required files"):
+    (release / "Sky-Auto-Player-Core.exe").write_bytes(b"retired core")
+    with pytest.raises(RuntimeError, match="bundled Python runtime artifacts"):
         verifier.verify(release, "3.5.0")
 
 
@@ -87,7 +84,7 @@ def test_phase8_provenance_has_public_head_and_exact_artifact_hash(tmp_path: Pat
     )
     assert data["repo_head"] == "a" * 40
     assert data["artifact"]["sha256"] == hashlib.sha256(zip_path.read_bytes()).hexdigest()
-    assert json.loads(provenance_path.read_text(encoding="utf-8"))["artifact"]["file_count"] == 7
+    assert json.loads(provenance_path.read_text(encoding="utf-8"))["artifact"]["file_count"] == 5
 
 
 def test_phase8_spec_is_the_single_core_runtime() -> None:

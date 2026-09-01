@@ -37,13 +37,13 @@ def test_release_workflow_is_unsigned_but_keeps_integrity_gates() -> None:
         "uv run python scripts/check.py static",
         "uv run python scripts/check.py rust",
         "uv run python scripts/check.py tests-full",
-        "scripts/build_pyinstaller_bootloader.ps1",
         "scripts/verify_release_manifest.py",
         "actions/attest-build-provenance@",
         "Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256",
         "MANIFEST.json",
     ):
         assert required in workflow
+    assert "scripts/build_pyinstaller_bootloader.ps1" not in workflow
 
 
 def test_native_package_paths_pin_rust_compiler_explicitly() -> None:
@@ -69,11 +69,8 @@ def test_unsigned_release_tree_is_exact_and_has_verified_native_updater(tmp_path
     release_dir = tmp_path / "release"
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
-    (release_dir / "Sky-Auto-Player-Core.exe").write_bytes(b"core")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
     (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
-    (release_dir / "_internal" / "sky_player_rs").mkdir(parents=True)
-    (release_dir / "_internal" / "sky_player_rs" / "sky_player_rs.pyd").write_bytes(b"native")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
@@ -92,16 +89,35 @@ def test_release_tree_rejects_legacy_update_artifacts(tmp_path: Path, legacy_nam
     release_dir = tmp_path / "release"
     release_dir.mkdir()
     (release_dir / "Sky-Auto-Player.exe").write_bytes(b"app")
-    (release_dir / "Sky-Auto-Player-Core.exe").write_bytes(b"core")
     (release_dir / "native_calibration.exe").write_bytes(b"calibration")
     (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"updater")
-    (release_dir / "_internal" / "sky_player_rs").mkdir(parents=True)
-    (release_dir / "_internal" / "sky_player_rs" / "sky_player_rs.pyd").write_bytes(b"native")
     from build_app import write_release_manifest
 
     write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
     (release_dir / legacy_name).write_bytes(b"legacy")
     with pytest.raises(RuntimeError, match="forbidden artifacts"):
+        verifier.verify(release_dir, "3.2.1")
+
+
+@pytest.mark.parametrize("relative", ["Sky-Auto-Player-Core.exe", "_internal/python314.dll", "native.pyd"])
+def test_release_tree_rejects_retired_python_runtime(tmp_path: Path, relative: str) -> None:
+    verifier = _load_manifest_verifier()
+    release_dir = tmp_path / "release"
+    release_dir.mkdir()
+    for name, payload in (
+        ("Sky-Auto-Player.exe", b"app"),
+        ("native_calibration.exe", b"calibration"),
+        ("Sky-Auto-Player-Updater.exe", b"updater"),
+    ):
+        path = release_dir / name
+        path.write_bytes(payload)
+    from build_app import write_release_manifest
+
+    write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
+    path = release_dir / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"retired runtime")
+    with pytest.raises(RuntimeError, match="bundled Python runtime artifacts"):
         verifier.verify(release_dir, "3.2.1")
 
 

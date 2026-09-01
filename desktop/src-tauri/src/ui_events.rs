@@ -192,6 +192,7 @@ pub enum PlaybackEventState {
     Failed,
 }
 
+#[cfg(test)]
 impl PlaybackEventState {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -280,6 +281,7 @@ pub struct PlaybackFailedPayload {
 pub enum UiEvent {
     #[serde(rename = "core.ready")]
     CoreReady { v: u64, payload: CoreReadyPayload },
+    #[allow(dead_code)]
     #[serde(rename = "core.fatal")]
     CoreFatal { v: u64, payload: CoreFatalPayload },
     #[serde(rename = "catalog.changed")]

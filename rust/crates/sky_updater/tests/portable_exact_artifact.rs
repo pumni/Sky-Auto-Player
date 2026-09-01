@@ -82,6 +82,14 @@ fn old_manifest() -> Manifest {
         (PRIMARY_EXE, b"previous Tauri replacement".as_slice()),
         (UPDATER_EXE, b"previous updater".as_slice()),
         (CALIBRATION_EXE, b"previous calibration".as_slice()),
+        (
+            "Sky-Auto-Player-Core.exe",
+            b"previous Python Core".as_slice(),
+        ),
+        (
+            "_internal/python314.dll",
+            b"previous CPython runtime".as_slice(),
+        ),
         ("Sky-Player.exe", b"obsolete v3 identity".as_slice()),
     ];
     Manifest {
@@ -109,6 +117,8 @@ fn old_file_bytes(path: &str) -> &'static [u8] {
         PRIMARY_EXE => b"previous Tauri replacement",
         UPDATER_EXE => b"previous updater",
         CALIBRATION_EXE => b"previous calibration",
+        "Sky-Auto-Player-Core.exe" => b"previous Python Core",
+        "_internal/python314.dll" => b"previous CPython runtime",
         "Sky-Player.exe" => b"obsolete v3 identity",
         _ => unreachable!("unknown previous fixture path"),
     }
@@ -135,6 +145,15 @@ fn assert_preserved_config(install: &Path, expected_config: &[u8]) {
         fs::read(install.join("logs/user.log")).expect("log"),
         b"user log"
     );
+}
+
+fn assert_preserved_config_semantics(install: &Path, expected_config: &[u8]) {
+    let actual: serde_json::Value =
+        serde_json::from_slice(&fs::read(install.join("config.json")).expect("config"))
+            .expect("actual config JSON");
+    let expected: serde_json::Value =
+        serde_json::from_slice(expected_config).expect("expected config JSON");
+    assert_eq!(actual, expected, "user configuration values changed");
 }
 
 fn stop_child(child: &mut Child) {
@@ -246,7 +265,13 @@ fn exact_portable_artifact_updates_previous_stable_and_preserves_user_state() ->
         staged
             .files
             .iter()
-            .any(|file| file.path == "Sky-Auto-Player-Core.exe")
+            .all(|file| file.path != "Sky-Auto-Player-Core.exe")
+    );
+    assert!(
+        staged
+            .files
+            .iter()
+            .all(|file| !file.path.starts_with("_internal/"))
     );
 
     let install = temp_root("install with spaces");
@@ -334,7 +359,8 @@ fn exact_portable_artifact_interrupted_transaction_recovers_and_preserves_user_s
         );
     }
     assert_preserved(&install);
-    assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
+    assert!(install.join("Sky-Auto-Player-Core.exe").is_file());
+    assert!(install.join("_internal/python314.dll").is_file());
 
     let _ = fs::remove_dir_all(&staging);
     let _ = fs::remove_dir_all(&install);
@@ -514,6 +540,11 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .arg("--restart")
         .current_dir(&install)
         .env("SKY_DESKTOP_RESTART_SELFTEST", "1")
+        // The restarted packaged shell runs the same deterministic safe
+        // seams as the portable selftest.  Propagate those seams through the
+        // updater so the child does not attempt live GitHub/calibration I/O.
+        .env("SKY_PACKAGED_SAFE_CALIBRATION", "1")
+        .env("SKY_PACKAGED_SAFE_UPDATE", "1")
         .env("SKY_DESKTOP_RESTART_MARKER", &restart_marker);
     no_window(&mut updater);
     let mut updater = ChildGuard(updater.spawn()?);
@@ -530,11 +561,16 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     }
     assert!(
         restart_marker.is_file(),
-        "canonical Tauri restart did not bootstrap the new Core"
+        "canonical Tauri restart did not bootstrap the new native desktop"
     );
     verify_installed_managed(&install, &target)?;
-    assert_preserved_config(&install, &user_config);
+    // Native bootstrap may normalize persisted JSON formatting on read; the
+    // updater contract is preservation of user state, not incidental key
+    // ordering or whitespace.
+    assert_preserved_config_semantics(&install, &user_config);
     assert!(!install.join("Sky-Player.exe").exists());
+    assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
+    assert!(!install.join("_internal").exists());
     assert!(
         !local_app_data
             .join(APP_NAME)
