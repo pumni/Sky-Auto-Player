@@ -2,7 +2,8 @@
 
 This is the canonical portable release entry point. It reuses the native build
 and manifest helpers from ``src/build_app.py`` but assembles the Tauri shell
-and the single Core runtime into the portable layout.
+into a runtime-Python-free portable layout. Python remains repository-only
+oracle/tooling material.
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ import build_app  # noqa: E402
 
 APP_NAME = "Sky-Auto-Player"
 VERSION = build_app.get_project_version()
-CORE_EXE = "Sky-Auto-Player-Core.exe"
 PRIMARY_EXE = "Sky-Auto-Player.exe"
 UPDATER_EXE = "Sky-Auto-Player-Updater.exe"
 CALIBRATION_EXE = "native_calibration.exe"
@@ -153,7 +153,6 @@ def assemble_release(
     release_dir: Path,
     *,
     tauri_exe: Path,
-    core_dist: Path,
     calibration_exe: Path,
     updater_exe: Path,
     songs_dir: Path,
@@ -165,8 +164,6 @@ def assemble_release(
         shutil.rmtree(release_dir)
     release_dir.mkdir(parents=True)
     _copy_file(tauri_exe, release_dir / PRIMARY_EXE)
-    _copy_file(core_dist / CORE_EXE, release_dir / CORE_EXE)
-    _copy_tree_contents(core_dist / "_internal", release_dir / "_internal")
     _copy_file(calibration_exe, release_dir / CALIBRATION_EXE)
     _copy_file(updater_exe, release_dir / UPDATER_EXE)
     _copy_tree_contents(songs_dir, release_dir / "songs")
@@ -177,6 +174,7 @@ def assemble_release(
     if readme.is_file():
         _copy_file(readme, release_dir / "README.md")
     _assert_no_path_escape(release_dir)
+    assert_runtime_python_free(release_dir)
     build_app.write_release_manifest(
         release_dir,
         version,
@@ -187,6 +185,30 @@ def assemble_release(
     )
     _assert_no_path_escape(release_dir)
     return release_dir
+
+
+def assert_runtime_python_free(release_dir: Path) -> None:
+    """Reject Python/sidecar files from the production portable tree."""
+    forbidden: list[str] = []
+    for path in release_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(release_dir).as_posix()
+        folded = relative.casefold()
+        name = path.name.casefold()
+        if (
+            folded == "sky-auto-player-core.exe"
+            or folded.startswith("_internal/")
+            or name.startswith("python")
+            or name == "base_library.zip"
+            or path.suffix.casefold() in {".pyd", ".pyc"}
+        ):
+            forbidden.append(relative)
+    if forbidden:
+        raise RuntimeError(
+            "production portable tree contains runtime Python artifacts: "
+            f"{sorted(forbidden)}"
+        )
 
 
 def write_deterministic_zip(release_dir: Path, destination: Path) -> tuple[Path, str]:
@@ -231,7 +253,7 @@ def write_provenance(
         "rust": {"compiler": _capture(["rustc", "--version"])},
         "bun": {"version": _capture(["bun", "--version"])},
         "tauri": {"api": "2.11.1", "cli": "2.11.4", "runtime": "2.11.5"},
-        "core": {"pyinstaller": _capture([sys.executable, "-c", "import PyInstaller; print(PyInstaller.__version__)"])},
+        "runtime_python": {"required": False, "bundled": False},
         "native_build_commit": native_build_commit,
         "artifact": {
             "filename": zip_path.name,
@@ -246,87 +268,16 @@ def write_provenance(
     return data
 
 
-def _run_core_selftest(core_exe: Path, *, cwd: Path) -> None:
-    result = subprocess.run(
-        [str(core_exe), "--selftest-desktop-core"],
-        cwd=str(cwd),
-        capture_output=True,
-        text=False,
-        timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"packaged Core selftest failed ({result.returncode}): "
-            f"{_decode_output(result.stderr)[-4000:]}"
-        )
-    print(_decode_output(result.stdout).strip())
-
-
-def _run_core_selftest_negative_matrix(core_exe: Path, *, cwd: Path) -> None:
-    """Run the packaged selftest against bounded deterministic bad children."""
-    fixture = ROOT / "desktop" / "src-tauri" / "tests" / "fixtures" / "fake_core.py"
-    if not fixture.is_file():
-        raise RuntimeError(f"Core selftest fixture is missing: {fixture}")
-    scenarios = (
-        "startup_timeout",
-        "eof_before_ready",
-        "fatal_before_ready",
-        "malformed",
-        "non_utf8",
-        "duplicate_output",
-        "oversized_output",
-        "request_timeout",
-        "unknown_id",
-        "force_shutdown",
-    )
-    for scenario in scenarios:
-        env = os.environ.copy()
-        env["SKY_DESKTOP_SELFTEST_TIMEOUT_SECONDS"] = "0.1"
-        env["SKY_DESKTOP_SELFTEST_CHILD"] = json.dumps(
-            [sys.executable, str(fixture), scenario]
-        )
-        result = subprocess.run(
-            [str(core_exe), "--selftest-desktop-core"],
-            cwd=str(cwd),
-            env=env,
-            capture_output=True,
-            text=False,
-            timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            check=False,
-        )
-        if result.returncode == 0:
-            raise RuntimeError(
-                f"packaged Core selftest accepted bad child scenario {scenario}: "
-                f"{_decode_output(result.stdout)}"
-            )
-    missing_env = os.environ.copy()
-    missing_env["SKY_DESKTOP_SELFTEST_CHILD"] = json.dumps(
-        [str(cwd / "missing-core.exe")]
-    )
-    missing = subprocess.run(
-        [str(core_exe), "--selftest-desktop-core"],
-        cwd=str(cwd),
-        env=missing_env,
-        capture_output=True,
-        text=False,
-        timeout=10,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        check=False,
-    )
-    if missing.returncode == 0:
-        raise RuntimeError("packaged Core selftest accepted a missing child")
-    print(f"Packaged Desktop Core selftest negative matrix: {len(scenarios) + 1} PASS")
-
-
 def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
+    env = os.environ.copy()
+    env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
+    env["SKY_PACKAGED_SAFE_UPDATE"] = "1"
     result = subprocess.run(
         [str(primary_exe), "--selftest-desktop-shell"],
         cwd=str(cwd),
         capture_output=True,
         text=False,
+        env=env,
         timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
@@ -341,9 +292,8 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
 
 def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
     env = os.environ.copy()
-    # The real production Core remains native-calibration-backed.  This
-    # packaging-only environment selects the explicit no-input seam so the
-    # actual Tauri/Core smoke can exercise calibration safely in CI.
+    # The packaging-only environment selects the explicit no-input seam so
+    # the real Native Desktop smoke can exercise calibration safely in CI.
     env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
     phase_log = cwd / "gui-smoke-phases.log"
     with suppress(OSError):
@@ -380,23 +330,6 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
     print("Packaged Tauri GUI smoke: PASS")
 
 
-def _run_tui_smoke(core_exe: Path, *, cwd: Path) -> None:
-    result = subprocess.run(
-        [str(core_exe), "--tui", "--list"],
-        cwd=str(cwd),
-        capture_output=True,
-        text=False,
-        timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"packaged TUI smoke failed ({result.returncode}): "
-            f"{_decode_output(result.stderr)[-4000:]}"
-        )
-
-
 def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> None:
     env = os.environ.copy()
     env["SKY_PORTABLE_ARTIFACT_DIR"] = str(output_root)
@@ -420,7 +353,7 @@ def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> No
     )
 
 
-def _build() -> tuple[Path, Path, Path, Path, Path]:
+def _build() -> tuple[Path, Path, Path, Path]:
     if sys.platform != "win32":
         raise RuntimeError("portable release build requires Windows")
     git_head = build_app.get_git_head()
@@ -440,13 +373,6 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
     try:
         _run([sys.executable, "scripts/build_rust_wheel.py", "--profile", "dist"], env=env)
         build_app.verify_native_build_info(git_head)
-        core_spec = ROOT / "Sky-Auto-Player-Core.spec"
-        with build_app._source_bootloader_override():
-            _run(
-                [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(core_spec)],
-                env=env,
-            )
-        core_dist = ROOT / "dist" / "Sky-Auto-Player-Core"
         _run(["bun", "install", "--frozen-lockfile"], cwd=ROOT / "desktop")
         _run(["bun", "run", "build"], cwd=ROOT / "desktop")
         _run(
@@ -501,7 +427,6 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
             env=env,
         )
         return (
-            core_dist,
             ROOT / "rust" / "target" / "dist" / "sky_desktop_shell.exe",
             ROOT / "rust" / "target" / "dist" / CALIBRATION_EXE,
             ROOT / "rust" / "target" / "dist" / "sky_updater.exe",
@@ -514,12 +439,11 @@ def _build() -> tuple[Path, Path, Path, Path, Path]:
 
 def run_pipeline(output_root: Path) -> Path:
     repo_head = build_app.get_git_head()
-    core_dist, tauri_exe, calibration_exe, updater_exe, e2e_updater_exe = _build()
+    tauri_exe, calibration_exe, updater_exe, e2e_updater_exe = _build()
     release_dir = output_root / RELEASE_NAME
     assemble_release(
         release_dir,
         tauri_exe=tauri_exe,
-        core_dist=core_dist,
         calibration_exe=calibration_exe,
         updater_exe=updater_exe,
         songs_dir=ROOT / "songs",
@@ -534,11 +458,9 @@ def run_pipeline(output_root: Path) -> Path:
     try:
         smoke_dir = smoke_root / release_dir.name
         shutil.copytree(release_dir, smoke_dir)
-        _run_core_selftest(smoke_dir / CORE_EXE, cwd=smoke_dir)
-        _run_core_selftest_negative_matrix(smoke_dir / CORE_EXE, cwd=smoke_dir)
+        assert_runtime_python_free(smoke_dir)
         _run_tauri_pair_selftest(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
         _run_tauri_gui_smoke(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
-        _run_tui_smoke(smoke_dir / CORE_EXE, cwd=smoke_dir)
     finally:
         shutil.rmtree(smoke_root, ignore_errors=True)
     zip_path, _ = write_deterministic_zip(release_dir, output_root / ZIP_NAME)
@@ -579,10 +501,9 @@ def run_pipeline(output_root: Path) -> Path:
                 "exact_artifact_update": "passed",
                 "exact_artifact_fault_rollback": "passed",
                 "package_selftest": "passed",
-                "core_selftest_negative_matrix": "passed",
-                "tauri_core_pair_smoke": "passed",
+                "native_runtime_negative_matrix": "passed",
+                "tauri_native_runtime_smoke": "passed",
                 "tauri_gui_smoke": "passed",
-                "tui_smoke": "passed",
                 "packaged_updater_identity_smoke": "passed",
                 "packaged_updater_ready_parent_smoke": "passed",
                 "exact_artifact_transaction_restart": "qualified_with_local_source_runner",

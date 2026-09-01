@@ -82,6 +82,14 @@ fn old_manifest() -> Manifest {
         (PRIMARY_EXE, b"previous Tauri replacement".as_slice()),
         (UPDATER_EXE, b"previous updater".as_slice()),
         (CALIBRATION_EXE, b"previous calibration".as_slice()),
+        (
+            "Sky-Auto-Player-Core.exe",
+            b"previous Python Core".as_slice(),
+        ),
+        (
+            "_internal/python314.dll",
+            b"previous CPython runtime".as_slice(),
+        ),
         ("Sky-Player.exe", b"obsolete v3 identity".as_slice()),
     ];
     Manifest {
@@ -109,6 +117,8 @@ fn old_file_bytes(path: &str) -> &'static [u8] {
         PRIMARY_EXE => b"previous Tauri replacement",
         UPDATER_EXE => b"previous updater",
         CALIBRATION_EXE => b"previous calibration",
+        "Sky-Auto-Player-Core.exe" => b"previous Python Core",
+        "_internal/python314.dll" => b"previous CPython runtime",
         "Sky-Player.exe" => b"obsolete v3 identity",
         _ => unreachable!("unknown previous fixture path"),
     }
@@ -535,6 +545,8 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     verify_installed_managed(&install, &target)?;
     assert_preserved_config(&install, &user_config);
     assert!(!install.join("Sky-Player.exe").exists());
+    assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
+    assert!(!install.join("_internal").exists());
     assert!(
         !local_app_data
             .join(APP_NAME)

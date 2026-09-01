@@ -21,17 +21,14 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
 
     tauri::async_runtime::spawn_blocking(move || {
         if exit_after_close {
-            crate::record_gui_smoke_phase("lifecycle.shutdown_core.enter");
+            crate::record_gui_smoke_phase("lifecycle.shutdown_native.enter");
         }
-        if let Ok(supervisor) = state.supervisor() {
-            supervisor.shutdown();
-        }
-        // `app.shutdown` is a Native-owned command.  Route lifecycle cleanup
+        // `app.shutdown` is a Native-owned command. Route lifecycle cleanup
         // through the same executable handler so ownership accounting and the
         // real close path cannot diverge.
         state.shutdown_native();
         if exit_after_close {
-            crate::record_gui_smoke_phase("lifecycle.shutdown_core.return");
+            crate::record_gui_smoke_phase("lifecycle.shutdown_native.return");
             crate::record_gui_smoke_phase("lifecycle.window_destroy.enter");
         }
         // `destroy` does not emit another CloseRequested event, so the
@@ -55,25 +52,25 @@ mod tests {
     fn close_sequence_for_test(
         state: &AppState,
         order: &mut Vec<&'static str>,
-        core_shutdown: impl FnOnce(&mut Vec<&'static str>),
+        native_shutdown: impl FnOnce(&mut Vec<&'static str>),
         destroy: impl FnOnce(&mut Vec<&'static str>),
     ) -> bool {
         if !state.begin_close() {
             return false;
         }
-        core_shutdown(order);
+        native_shutdown(order);
         destroy(order);
         true
     }
 
     #[test]
-    fn controlled_close_cleans_core_before_destroy_and_is_idempotent() {
+    fn controlled_close_cleans_native_before_destroy_and_is_idempotent() {
         let state = AppState::default();
         let mut order = Vec::new();
         assert!(close_sequence_for_test(
             &state,
             &mut order,
-            |order| order.push("core_shutdown"),
+            |order| order.push("native_shutdown"),
             |order| order.push("destroy"),
         ));
         assert!(!close_sequence_for_test(
@@ -82,6 +79,6 @@ mod tests {
             |order| order.push("duplicate_shutdown"),
             |order| order.push("duplicate_destroy"),
         ));
-        assert_eq!(order, ["core_shutdown", "destroy"]);
+        assert_eq!(order, ["native_shutdown", "destroy"]);
     }
 }

@@ -7,18 +7,22 @@
 
 use crate::app_state::{ActivityCoordinator, PhysicalActivityLease};
 use crate::commands::{
-    BootstrapDto, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto, CatalogSearchDto,
-    CatalogSearchRequest, CatalogViewportDto, CatalogViewportRequest, DiagnosticsEnabledDto,
-    DiagnosticsSetEnabledRequest, PlaybackAdmission, PlaybackCommandAckDto, PlaybackConfigDto,
-    PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto, PlaybackPendingControl,
-    PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto, PlaybackSessionState,
-    PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto, RiskSummaryDto, SettingsDto,
-    SettingsPatch, SongDetailDto, UpdatePreferencesDto, UpdatePreferencesPatch,
+    BootstrapDto, CalibrationCancelAckDto, CalibrationCancelRequest, CalibrationStartAckDto,
+    CalibrationStartRequest, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto,
+    CatalogSearchDto, CatalogSearchRequest, CatalogViewportDto, CatalogViewportRequest,
+    DiagnosticsEnabledDto, DiagnosticsSetEnabledRequest, PlaybackAdmission, PlaybackCommandAckDto,
+    PlaybackConfigDto, PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto,
+    PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto,
+    PlaybackSessionState, PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto,
+    RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckDto, UpdateHandoffDto,
+    UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::ui_events::{
-    CatalogChangedPayload, DiagnosticsBackendStatus, PlaybackEventState, PlaybackFailedPayload,
-    PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload,
-    PlaybackStateChangedPayload, UiEvent,
+    CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
+    CalibrationState, CatalogChangedPayload, CoreReadyPayload, DiagnosticsBackendStatus,
+    NativeBuildPayload, PlaybackEventState, PlaybackFailedPayload, PlaybackFinishedPayload,
+    PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, PlaybackStateChangedPayload,
+    UiEvent,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -33,7 +37,13 @@ use sky_app_core::song::{
     build_schedule_with_policy, parse_song_json,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
-use sky_native_adapters::{FileCatalogSource, JsonSettingsStore, load_calibration_resolution};
+use sky_native_adapters::{
+    CALIBRATION_ARTIFACT_SCHEMA_VERSION, CALIBRATION_CACHE_VERSION, CALIBRATION_EVIDENCE_KIND,
+    CALIBRATION_HOST_FINGERPRINT_VERSION, CALIBRATION_MAX_SHRINK_US,
+    CALIBRATION_MEASUREMENT_PROTOCOL_VERSION, CALIBRATION_NATIVE_VERSION,
+    CALIBRATION_REQUIRED_BUCKETS, CALIBRATION_SAMPLE_COUNT, CALIBRATION_SOURCE_FORMULA_VERSION,
+    FileCatalogSource, JsonSettingsStore, load_calibration_resolution,
+};
 use sky_player::adapter_support::{
     ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
 };
@@ -45,6 +55,7 @@ use sky_player::engine::{
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -55,6 +66,844 @@ use tauri::ipc::Channel;
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
 const MAX_PREPARED_PLANS: usize = 64;
 const MAX_DECISION_COUNT: usize = 8;
+const MAX_CALIBRATION_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CALIBRATION_ERROR_BYTES: usize = 64 * 1024;
+const CALIBRATION_DEFAULT_TIMEOUT_SECONDS: f64 = 120.0;
+
+struct NativeCalibrationService {
+    install_root: PathBuf,
+    activity: ActivityCoordinator,
+    events: Arc<Mutex<NativeEventHub>>,
+    playback: Arc<NativePlaybackService>,
+    operation: Mutex<Option<NativeCalibrationOperation>>,
+}
+
+struct NativeCalibrationOperation {
+    operation_id: String,
+    state: CalibrationState,
+    cancel: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<std::process::Child>>>,
+    worker: Option<thread::JoinHandle<()>>,
+    reservation: Option<crate::app_state::CalibrationReservation>,
+}
+
+impl NativeCalibrationService {
+    fn new(
+        install_root: PathBuf,
+        activity: ActivityCoordinator,
+        events: Arc<Mutex<NativeEventHub>>,
+        playback: Arc<NativePlaybackService>,
+    ) -> Self {
+        Self {
+            install_root,
+            activity,
+            events,
+            playback,
+            operation: Mutex::new(None),
+        }
+    }
+
+    fn start(
+        self: &Arc<Self>,
+        request: CalibrationStartRequest,
+    ) -> Result<CalibrationStartAckDto, String> {
+        validate_calibration_request(&request)?;
+        let reservation = self.activity.reserve_calibration()?;
+        let operation_id = opaque_native_id()?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let child = Arc::new(Mutex::new(None));
+        {
+            let mut current = self
+                .operation
+                .lock()
+                .map_err(|_| "native calibration state lock poisoned".to_string())?;
+            if current.as_ref().is_some_and(|value| {
+                matches!(
+                    value.state,
+                    CalibrationState::Starting
+                        | CalibrationState::Running
+                        | CalibrationState::Cancelling
+                )
+            }) {
+                return Err("already_running: a calibration operation is already active".into());
+            }
+            *current = Some(NativeCalibrationOperation {
+                operation_id: operation_id.clone(),
+                state: CalibrationState::Running,
+                cancel: cancel.clone(),
+                child: child.clone(),
+                worker: None,
+                reservation: Some(reservation),
+            });
+        }
+        if let Err(error) = self.publish_progress(
+            &operation_id,
+            CalibrationState::Running,
+            "starting",
+            0,
+            1,
+            "Starting calibration",
+        ) {
+            if let Ok(mut current) = self.operation.lock() {
+                current.take();
+            }
+            return Err(error);
+        }
+        let service = Arc::clone(self);
+        let worker_id = operation_id.clone();
+        let handle = match thread::Builder::new()
+            .name("native-calibration-orchestrator".into())
+            .spawn(move || service.run(worker_id, request, cancel, child))
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                if let Ok(mut current) = self.operation.lock() {
+                    current.take();
+                }
+                return Err(format!("could not start calibration worker: {error}"));
+            }
+        };
+        if let Ok(mut current) = self.operation.lock()
+            && let Some(operation) = current.as_mut()
+            && operation.operation_id == operation_id
+        {
+            operation.worker = Some(handle);
+        }
+        Ok(CalibrationStartAckDto {
+            operation_id,
+            state: CalibrationState::Running,
+        })
+    }
+
+    fn cancel(&self, request: CalibrationCancelRequest) -> Result<CalibrationCancelAckDto, String> {
+        let mut operation = self
+            .operation
+            .lock()
+            .map_err(|_| "native calibration state lock poisoned".to_string())?;
+        let Some(current) = operation.as_mut() else {
+            return Err("stale_operation: calibration operation is stale".into());
+        };
+        if current.operation_id != request.operation_id {
+            return Err("stale_operation: calibration operation is stale".into());
+        }
+        if matches!(
+            current.state,
+            CalibrationState::Starting | CalibrationState::Running
+        ) {
+            current.state = CalibrationState::Cancelling;
+            current.cancel.store(true, Ordering::Release);
+            if let Ok(mut child) = current.child.lock()
+                && let Some(child) = child.as_mut()
+            {
+                let _ = child.kill();
+            }
+            return Ok(CalibrationCancelAckDto {
+                operation_id: request.operation_id,
+                state: CalibrationState::Cancelling,
+                accepted: true,
+            });
+        }
+        if current.state == CalibrationState::Cancelling {
+            return Ok(CalibrationCancelAckDto {
+                operation_id: request.operation_id,
+                state: CalibrationState::Cancelling,
+                accepted: true,
+            });
+        }
+        Ok(CalibrationCancelAckDto {
+            operation_id: request.operation_id,
+            state: current.state,
+            accepted: false,
+        })
+    }
+
+    fn shutdown(&self) {
+        let worker = if let Ok(mut operation) = self.operation.lock() {
+            if let Some(current) = operation.as_mut()
+                && matches!(
+                    current.state,
+                    CalibrationState::Starting
+                        | CalibrationState::Running
+                        | CalibrationState::Cancelling
+                )
+            {
+                current.state = CalibrationState::Cancelling;
+                current.cancel.store(true, Ordering::Release);
+                if let Ok(mut child) = current.child.lock()
+                    && let Some(child) = child.as_mut()
+                {
+                    let _ = child.kill();
+                }
+            }
+            operation.as_mut().and_then(|value| value.worker.take())
+        } else {
+            None
+        };
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+
+    fn wait_for_terminal(&self, timeout: Duration) -> Result<CalibrationState, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let state = self
+                .operation
+                .lock()
+                .map_err(|_| "native calibration state lock poisoned".to_string())?
+                .as_ref()
+                .map(|operation| operation.state);
+            if let Some(
+                state @ (CalibrationState::Succeeded
+                | CalibrationState::Failed
+                | CalibrationState::Cancelled),
+            ) = state
+            {
+                return Ok(state);
+            }
+            if Instant::now() >= deadline {
+                return Err("calibration selftest timed out".into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn run(
+        &self,
+        operation_id: String,
+        request: CalibrationStartRequest,
+        cancel: Arc<AtomicBool>,
+        child_slot: Arc<Mutex<Option<std::process::Child>>>,
+    ) {
+        let result = self.run_child(&request, &cancel, child_slot);
+        if cancel.load(Ordering::Acquire) {
+            self.finish(
+                &operation_id,
+                CalibrationState::Cancelled,
+                CalibrationOutcome::Cancelled,
+                "cancelled",
+                None,
+                0,
+                "none",
+                "Calibration was cancelled.",
+                false,
+            );
+            return;
+        }
+        match result {
+            Ok(_raw) if request.mode == CalibrationMode::Diagnostic => self.finish(
+                &operation_id,
+                CalibrationState::Succeeded,
+                CalibrationOutcome::Succeeded,
+                "succeeded",
+                None,
+                request.samples.unwrap_or_default() as u64,
+                "native",
+                "Diagnostic calibration completed successfully.",
+                false,
+            ),
+            Ok(raw) => match publish_calibration_cache(&self.install_root, &raw) {
+                Ok((margin, samples)) => {
+                    // Cache publication and prepared-plan invalidation precede
+                    // the terminal event and release of the activity lease.
+                    self.playback.invalidate_settings();
+                    self.finish(
+                        &operation_id,
+                        CalibrationState::Succeeded,
+                        CalibrationOutcome::Succeeded,
+                        "succeeded",
+                        Some(margin),
+                        samples,
+                        "native",
+                        "Calibration completed successfully.",
+                        true,
+                    );
+                }
+                Err(error) => self.finish(
+                    &operation_id,
+                    CalibrationState::Failed,
+                    CalibrationOutcome::Failed,
+                    "failed",
+                    None,
+                    0,
+                    "none",
+                    &error,
+                    false,
+                ),
+            },
+            Err(CalibrationRunError::Cancelled) => self.finish(
+                &operation_id,
+                CalibrationState::Cancelled,
+                CalibrationOutcome::Cancelled,
+                "cancelled",
+                None,
+                0,
+                "none",
+                "Calibration was cancelled.",
+                false,
+            ),
+            Err(CalibrationRunError::Failed(error)) => self.finish(
+                &operation_id,
+                CalibrationState::Failed,
+                CalibrationOutcome::Failed,
+                "failed",
+                None,
+                0,
+                "none",
+                &error,
+                false,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &self,
+        operation_id: &str,
+        state: CalibrationState,
+        outcome: CalibrationOutcome,
+        status: &str,
+        margin_us: Option<u64>,
+        sample_count: u64,
+        source: &str,
+        message: &str,
+        applied: bool,
+    ) {
+        let reservation = if let Ok(mut operation) = self.operation.lock() {
+            let Some(current) = operation.as_mut() else {
+                return;
+            };
+            if current.operation_id != operation_id
+                || matches!(
+                    current.state,
+                    CalibrationState::Succeeded
+                        | CalibrationState::Failed
+                        | CalibrationState::Cancelled
+                )
+            {
+                return;
+            }
+            current.state = state;
+            current.reservation.take()
+        } else {
+            None
+        };
+        let _ = self.publish_finished(CalibrationFinishedPayload {
+            operation_id: operation_id.to_owned(),
+            outcome,
+            status: bounded_text(status),
+            margin_us,
+            sample_count,
+            source: bounded_text(source),
+            message: bounded_text(message),
+            applied,
+        });
+        drop(reservation);
+    }
+
+    fn publish_progress(
+        &self,
+        operation_id: &str,
+        state: CalibrationState,
+        phase: &str,
+        completed: u64,
+        total: u64,
+        message: &str,
+    ) -> Result<(), String> {
+        self.publish(UiEvent::CalibrationProgress {
+            v: crate::DESKTOP_PROTOCOL_VERSION,
+            payload: CalibrationProgressPayload {
+                operation_id: operation_id.to_owned(),
+                state,
+                phase: bounded_text(phase),
+                completed: completed.min(10_000),
+                total: total.clamp(1, 10_000),
+                message: bounded_text(message),
+            },
+        })
+    }
+
+    fn publish_finished(&self, payload: CalibrationFinishedPayload) -> Result<(), String> {
+        self.publish(UiEvent::CalibrationFinished {
+            v: crate::DESKTOP_PROTOCOL_VERSION,
+            payload,
+        })
+    }
+
+    fn publish(&self, event: UiEvent) -> Result<(), String> {
+        self.events
+            .lock()
+            .map_err(|_| "native event hub lock poisoned".to_string())?
+            .publish(event)
+    }
+
+    fn run_child(
+        &self,
+        request: &CalibrationStartRequest,
+        cancel: &AtomicBool,
+        child_slot: Arc<Mutex<Option<std::process::Child>>>,
+    ) -> Result<Value, CalibrationRunError> {
+        if cancel.load(Ordering::Acquire) {
+            return Err(CalibrationRunError::Cancelled);
+        }
+        if std::env::var_os("SKY_PACKAGED_SAFE_CALIBRATION").is_some() {
+            return Ok(safe_calibration_evidence());
+        }
+        let binary = self.install_root.join(sky_updater::CALIBRATION_EXE);
+        let mode = match request.mode {
+            CalibrationMode::Quick => "quick",
+            CalibrationMode::Full => "full",
+            CalibrationMode::Diagnostic => "bucket",
+        };
+        let timeout = request
+            .timeout_seconds
+            .unwrap_or(CALIBRATION_DEFAULT_TIMEOUT_SECONDS);
+        let mut command = std::process::Command::new(&binary);
+        command
+            .arg("--mode")
+            .arg(mode)
+            .arg("--budget-seconds")
+            .arg((timeout.ceil() as u64).clamp(6, 120).to_string());
+        if request.mode == CalibrationMode::Diagnostic {
+            command
+                .arg("--class")
+                .arg(request.class_name.as_deref().unwrap_or_default())
+                .arg("--polyphony")
+                .arg(request.polyphony.unwrap_or_default().to_string())
+                .arg("--samples")
+                .arg(request.samples.unwrap_or_default().to_string());
+        }
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().map_err(|error| {
+            CalibrationRunError::Failed(format!("calibration child failed to start: {error}"))
+        })?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let out_reader = thread::spawn(move || read_bounded(stdout, MAX_CALIBRATION_OUTPUT_BYTES));
+        let err_reader = thread::spawn(move || read_bounded(stderr, MAX_CALIBRATION_ERROR_BYTES));
+        {
+            let mut slot = child_slot.lock().map_err(|_| {
+                CalibrationRunError::Failed("calibration child lock poisoned".into())
+            })?;
+            *slot = Some(child);
+        }
+        let deadline = Instant::now()
+            + Duration::from_secs_f64(timeout.clamp(0.001, CALIBRATION_DEFAULT_TIMEOUT_SECONDS));
+        let mut exited = false;
+        while Instant::now() < deadline {
+            if cancel.load(Ordering::Acquire) {
+                if let Ok(mut slot) = child_slot.lock()
+                    && let Some(child) = slot.as_mut()
+                {
+                    let _ = child.kill();
+                }
+                break;
+            }
+            if let Ok(mut slot) = child_slot.lock()
+                && let Some(child) = slot.as_mut()
+                && child.try_wait().ok().flatten().is_some()
+            {
+                exited = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        if !exited
+            && !cancel.load(Ordering::Acquire)
+            && let Ok(mut slot) = child_slot.lock()
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
+        let status = child_slot
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+            .and_then(|mut child| child.wait().ok());
+        let stdout = out_reader
+            .join()
+            .unwrap_or_else(|_| Err("stdout reader panicked".into()))
+            .map_err(CalibrationRunError::Failed)?;
+        let stderr = err_reader
+            .join()
+            .unwrap_or_else(|_| Err("stderr reader panicked".into()))
+            .map_err(CalibrationRunError::Failed)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(CalibrationRunError::Cancelled);
+        }
+        if status.is_none_or(|value| !value.success()) {
+            return Err(CalibrationRunError::Failed(format!(
+                "native calibration failed: {}",
+                bounded_text(String::from_utf8_lossy(&stderr))
+            )));
+        }
+        serde_json::from_slice(&stdout).map_err(|error| {
+            CalibrationRunError::Failed(format!("native calibration output invalid: {error}"))
+        })
+    }
+}
+
+enum CalibrationRunError {
+    Cancelled,
+    Failed(String),
+}
+
+fn safe_calibration_evidence() -> Value {
+    let quantiles = || {
+        serde_json::json!({
+            "min": 0,
+            "p50": 0,
+            "p90": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+        })
+    };
+    let bucket = || {
+        serde_json::json!({
+            "attempted": 100,
+            "clean": 100,
+            "clean_pair_count": 100,
+            "clean_sample_count": 100,
+            "rejected": 0,
+            "partial_send": 0,
+            "sample_count": 100,
+            "anomaly_count": 0,
+            "pairing_anomaly_count": 0,
+            "duplicate_receipt_count": 0,
+            "unexpected_scan_code_count": 0,
+            "direction_mismatch_count": 0,
+            "reordered_receipt_count": 0,
+            "timeout_count": 0,
+            "class_mismatch_count": 0,
+            "receipt_before_completion_count": 0,
+            "pair_sender_hold_shrink_us": quantiles(),
+            "scheduler_shrink_us": quantiles(),
+            "sendinput_shrink_us": quantiles(),
+            "down_call_duration_us": quantiles(),
+            "up_call_duration_us": quantiles()
+        })
+    };
+    let host = sky_dispatch_win32::calibration::build_host_fingerprint()
+        .ok()
+        .and_then(|value| serde_json::to_value(value).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "host_fingerprint_version": CALIBRATION_HOST_FINGERPRINT_VERSION,
+                "qpc_frequency_hz": 1,
+                "win32_build": "safe-packaged-selftest",
+                "processor_architecture": std::env::consts::ARCH,
+                "cpu_vendor": "safe-packaged-selftest",
+                "cpu_family": 0,
+                "cpu_model": 0,
+                "cpu_stepping": 0,
+                "logical_processor_count": 1,
+                "processor_group_count": 1,
+                "cpu_set_efficiency_classes": [0]
+            })
+        });
+    serde_json::json!({
+        "version": CALIBRATION_NATIVE_VERSION,
+        "calibration_schema_version": CALIBRATION_NATIVE_VERSION,
+        "measurement_protocol_version": CALIBRATION_MEASUREMENT_PROTOCOL_VERSION,
+        "source_git_sha": "safe-packaged-selftest",
+        "native_build_id": "safe-packaged-selftest",
+        "dirty_worktree": false,
+        "native_source_fingerprint": "safe-packaged-selftest",
+        "rustc_version": "safe-packaged-selftest",
+        "evidence_kind": CALIBRATION_EVIDENCE_KIND,
+        "host_fingerprint": host,
+        "scheduling_aids": {
+            "mmcss_acquired": "off",
+            "mmcss_active": false,
+            "power_throttling_active": false,
+            "waiter_mode": "event+high_resolution_timer"
+        },
+        "configuration": {
+            "polyphonies": [1, 5, 15],
+            "samples_per_hot_bucket": 100,
+            "samples_per_cold_bucket": 100,
+            "warmup_samples": 0,
+            "hot_gap_target_us": 5000,
+            "cold_idle_gap_us": 25000,
+            "cold_threshold_us": 25000,
+            "budget_seconds": 6
+        },
+        "pair_buckets": {
+            "1": {"hot": bucket(), "cold": bucket()},
+            "5": {"hot": bucket(), "cold": bucket()},
+            "15": {"hot": bucket(), "cold": bucket()}
+        }
+    })
+}
+
+fn validate_calibration_request(request: &CalibrationStartRequest) -> Result<(), String> {
+    if let Some(timeout) = request.timeout_seconds
+        && (!timeout.is_finite() || timeout <= 0.0 || timeout > 120.0)
+    {
+        return Err("invalid_params: timeout_seconds must be finite and in (0, 120]".into());
+    }
+    if request.mode == CalibrationMode::Diagnostic {
+        if !matches!(request.class_name.as_deref(), Some("hot") | Some("cold")) {
+            return Err("invalid_params: diagnostic class_name must be hot or cold".into());
+        }
+        if !matches!(request.polyphony, Some(1 | 5 | 15)) {
+            return Err("invalid_params: diagnostic polyphony must be 1, 5, or 15".into());
+        }
+        if !matches!(request.samples, Some(1..=5000)) {
+            return Err("invalid_params: diagnostic samples must be 1..5000".into());
+        }
+    } else if request.class_name.is_some()
+        || request.polyphony.is_some()
+        || request.samples.is_some()
+    {
+        return Err("invalid_params: diagnostic fields are only valid in diagnostic mode".into());
+    }
+    Ok(())
+}
+
+fn read_bounded<R: Read>(reader: Option<R>, limit: usize) -> Result<Vec<u8>, String> {
+    let Some(reader) = reader else {
+        return Ok(Vec::new());
+    };
+    let mut bytes = Vec::new();
+    reader
+        .take((limit + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > limit {
+        return Err("calibration child output exceeds bound".into());
+    }
+    Ok(bytes)
+}
+
+fn bounded_text(value: impl AsRef<str>) -> String {
+    value.as_ref().chars().take(4096).collect()
+}
+
+/// Convert the child protocol-vNext evidence into the accepted cache-v8
+/// shape.  All required production buckets and publishability counters are
+/// checked before the atomic replace; a zero/partial/malformed child result
+/// can never become a timing policy.
+fn publish_calibration_cache(install_root: &Path, raw: &Value) -> Result<(u64, u64), String> {
+    let root = raw
+        .as_object()
+        .ok_or("calibration evidence root must be an object")?;
+    if root.get("version").and_then(Value::as_u64) != Some(CALIBRATION_NATIVE_VERSION)
+        || root
+            .get("measurement_protocol_version")
+            .and_then(Value::as_u64)
+            != Some(CALIBRATION_MEASUREMENT_PROTOCOL_VERSION)
+        || root.get("evidence_kind").and_then(Value::as_str) != Some(CALIBRATION_EVIDENCE_KIND)
+        || root.get("dirty_worktree").and_then(Value::as_bool) != Some(false)
+    {
+        return Err("calibration evidence metadata is incompatible".into());
+    }
+    let source = root
+        .get("pair_buckets")
+        .and_then(Value::as_object)
+        .ok_or("calibration pair buckets are missing")?;
+    let mut flattened = serde_json::Map::new();
+    let mut worst = 0_i64;
+    let mut worst_bucket = CALIBRATION_REQUIRED_BUCKETS[0];
+    let mut samples = 0_u64;
+    for key in CALIBRATION_REQUIRED_BUCKETS {
+        let (polyphony, class_name) = key.split_once('/').expect("required bucket shape");
+        let value = source
+            .get(polyphony)
+            .and_then(Value::as_object)
+            .and_then(|value| value.get(class_name))
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("calibration bucket is missing: {key}"))?;
+        let mut bucket = value.clone();
+        let clean = bucket
+            .get("clean")
+            .and_then(Value::as_u64)
+            .or_else(|| bucket.get("clean_pair_count").and_then(Value::as_u64))
+            .ok_or_else(|| format!("calibration clean count is missing: {key}"))?;
+        let attempted = bucket
+            .get("attempted")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("calibration attempted count is missing: {key}"))?;
+        if !(CALIBRATION_SAMPLE_COUNT..=CALIBRATION_SAMPLE_COUNT * 2).contains(&attempted)
+            || clean != CALIBRATION_SAMPLE_COUNT
+        {
+            return Err(format!("calibration bucket is not publishable: {key}"));
+        }
+        let rejected = bucket
+            .get("rejected")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("calibration rejected count is missing: {key}"))?;
+        if rejected != attempted.saturating_sub(clean)
+            || bucket.get("anomaly_count").and_then(Value::as_u64) != Some(rejected)
+            || bucket.get("class_mismatch_count").and_then(Value::as_u64) != Some(rejected)
+            || bucket.get("timeout_count").and_then(Value::as_u64) != Some(0)
+            || bucket.get("partial_send").and_then(Value::as_u64) != Some(0)
+        {
+            return Err(format!(
+                "calibration bucket counters are not publishable: {key}"
+            ));
+        }
+        for quantiles in [
+            "pair_sender_hold_shrink_us",
+            "scheduler_shrink_us",
+            "sendinput_shrink_us",
+        ] {
+            validate_signed_quantiles(
+                bucket.get(quantiles),
+                &format!("calibration {quantiles} is invalid: {key}"),
+            )?;
+        }
+        for quantiles in ["down_call_duration_us", "up_call_duration_us"] {
+            validate_unsigned_quantiles(
+                bucket.get(quantiles),
+                &format!("calibration {quantiles} is invalid: {key}"),
+            )?;
+        }
+        bucket.insert("clean_pair_count".into(), Value::from(clean));
+        let shrink = bucket
+            .get("sendinput_shrink_us")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("max"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| format!("calibration sendinput quantile is missing: {key}"))?;
+        if shrink > worst {
+            worst = shrink;
+            worst_bucket = key;
+        }
+        samples = samples.saturating_add(clean);
+        flattened.insert(key.to_owned(), Value::Object(bucket));
+    }
+    let candidate = worst.saturating_add(100);
+    let valid = candidate <= 2_000;
+    let applied = candidate.clamp(300, 2_000);
+    let mut cache = root.clone();
+    cache.insert("version".into(), Value::from(CALIBRATION_CACHE_VERSION));
+    cache.insert(
+        "calibration_schema_version".into(),
+        Value::from(CALIBRATION_NATIVE_VERSION),
+    );
+    cache.insert(
+        "artifact_schema_version".into(),
+        Value::from(CALIBRATION_ARTIFACT_SCHEMA_VERSION),
+    );
+    cache.insert(
+        "native_calibration_version".into(),
+        Value::from(CALIBRATION_NATIVE_VERSION),
+    );
+    cache.insert(
+        "source_formula_version".into(),
+        Value::from(CALIBRATION_SOURCE_FORMULA_VERSION),
+    );
+    cache.insert(
+        "source".into(),
+        Value::from(sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE),
+    );
+    cache.insert(
+        "status".into(),
+        Value::from(if valid { "valid" } else { "out_of_envelope" }),
+    );
+    cache.insert("transport_margin_us".into(), Value::from(applied));
+    cache.insert(
+        "transport_margin_source".into(),
+        Value::from("device_cache"),
+    );
+    cache.insert(
+        "transport_worst_positive_us".into(),
+        Value::from(worst.max(0)),
+    );
+    cache.insert("transport_guard_us".into(), Value::from(100));
+    cache.insert("transport_floor_us".into(), Value::from(300));
+    cache.insert("transport_ceiling_us".into(), Value::from(2000));
+    cache.insert("calibration_timing_qualified".into(), Value::from(valid));
+    cache.insert(
+        "required_buckets".into(),
+        serde_json::json!(CALIBRATION_REQUIRED_BUCKETS),
+    );
+    cache.insert("pair_buckets".into(), Value::Object(flattened));
+    cache.insert(
+        "qualification".into(),
+        serde_json::json!({
+            "basis": "max_required_bucket_max_positive_sendinput_shrink",
+            "worst_bucket": worst_bucket,
+            "transport_worst_positive_us": worst.max(0),
+            "guard_us": 100,
+            "floor_us": 300,
+            "ceiling_us": 2000,
+            "candidate_transport_margin_us": candidate,
+            "applied_transport_margin_us": if valid { Value::from(applied) } else { Value::Null }
+        }),
+    );
+    let cache_path = install_root.join(".cache").join("input_latency.json");
+    fs::create_dir_all(cache_path.parent().expect("cache parent"))
+        .map_err(|error| error.to_string())?;
+    let temp = cache_path.with_extension(format!("json.{}.tmp", opaque_native_id()?));
+    fs::write(
+        &temp,
+        serde_json::to_vec_pretty(&Value::Object(cache)).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let resolution = load_calibration_resolution(&temp);
+    if !matches!(
+        resolution.source.as_str(),
+        sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE
+            | sky_native_adapters::CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE
+    ) {
+        let _ = fs::remove_file(&temp);
+        return Err("published calibration cache failed its compatibility validation".into());
+    }
+    fs::rename(&temp, &cache_path).map_err(|error| error.to_string())?;
+    Ok((applied as u64, samples))
+}
+
+fn validate_signed_quantiles(value: Option<&Value>, message: &str) -> Result<(), String> {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return Err(message.into());
+    };
+    let fields = ["min", "p50", "p90", "p95", "p99", "max", "mean"];
+    let Some(values) = fields
+        .iter()
+        .map(|field| object.get(*field).and_then(Value::as_i64))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Err(message.into());
+    };
+    if !values[..6].windows(2).all(|pair| pair[0] <= pair[1])
+        || values[0] > values[6]
+        || values[6] > values[5]
+        || values[..6]
+            .iter()
+            .any(|value| value.unsigned_abs() > CALIBRATION_MAX_SHRINK_US as u64)
+    {
+        return Err(message.into());
+    }
+    Ok(())
+}
+
+fn validate_unsigned_quantiles(value: Option<&Value>, message: &str) -> Result<(), String> {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return Err(message.into());
+    };
+    let fields = ["min", "p50", "p90", "p95", "p99", "max", "mean"];
+    let Some(values) = fields
+        .iter()
+        .map(|field| object.get(*field).and_then(Value::as_u64))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Err(message.into());
+    };
+    if !values[..6].windows(2).all(|pair| pair[0] <= pair[1])
+        || values[0] > values[6]
+        || values[6] > values[5]
+    {
+        return Err(message.into());
+    }
+    Ok(())
+}
 
 pub(crate) struct NativeDesktopRuntime {
     #[allow(dead_code)]
@@ -64,7 +913,10 @@ pub(crate) struct NativeDesktopRuntime {
     catalog: Mutex<CatalogIndex>,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
+    calibration: Arc<NativeCalibrationService>,
+    update_state: Mutex<crate::native_update::NativeUpdateState>,
     activity: ActivityCoordinator,
+    ready_emitted: AtomicBool,
     closed: AtomicBool,
 }
 
@@ -96,14 +948,25 @@ impl NativeDesktopRuntime {
         let settings = SettingsService::load(settings_store)
             .map_err(|error| format!("native settings startup failed: {error}"))?;
         let songs_dir = install_root.join(settings.snapshot().songs_dir.clone());
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let playback = Arc::new(NativePlaybackService::new(activity.clone()));
+        let calibration = Arc::new(NativeCalibrationService::new(
+            install_root.clone(),
+            activity.clone(),
+            events.clone(),
+            playback.clone(),
+        ));
         Ok(Self {
             install_root,
             settings: Mutex::new(settings),
             catalog_source: FileCatalogSource::new(songs_dir),
             catalog: Mutex::new(CatalogIndex::default()),
-            events: Arc::new(Mutex::new(NativeEventHub::default())),
-            playback: Arc::new(NativePlaybackService::new(activity.clone())),
+            events,
+            playback,
+            calibration,
+            update_state: Mutex::new(crate::native_update::NativeUpdateState::default()),
             activity,
+            ready_emitted: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })
     }
@@ -128,7 +991,7 @@ impl NativeDesktopRuntime {
             "app.bootstrap" => encode_result(self.bootstrap()),
             "app.shutdown" => {
                 self.shutdown();
-                Ok(Value::Object(Default::default()))
+                Ok(Value::Null)
             }
             "catalog.search" => {
                 let request: CatalogSearchRequest =
@@ -166,6 +1029,17 @@ impl NativeDesktopRuntime {
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.patch_update_preferences(request.into_public()))
             }
+            "update.check" => {
+                if !params.as_object().is_some_and(|object| object.is_empty()) {
+                    return Err("invalid_params: update.check takes no parameters".into());
+                }
+                encode_result(self.check_update())
+            }
+            "update.begin_handoff" => {
+                let request: crate::commands::UpdateBeginHandoffRequest =
+                    serde_json::from_value(params).map_err(json_error)?;
+                encode_result(self.begin_update_handoff(request.target_version))
+            }
             "playback.prepare" => {
                 let request: NativePlaybackPrepareRequest =
                     serde_json::from_value(params).map_err(json_error)?;
@@ -187,6 +1061,16 @@ impl NativeDesktopRuntime {
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.set_diagnostics_enabled(request))
             }
+            "calibration.start" => {
+                let request: CalibrationStartRequest =
+                    serde_json::from_value(params).map_err(json_error)?;
+                encode_result(self.start_calibration(request))
+            }
+            "calibration.cancel" => {
+                let request: CalibrationCancelRequest =
+                    serde_json::from_value(params).map_err(json_error)?;
+                encode_result(self.cancel_calibration(request))
+            }
             _ => Err(format!("native command is not implemented: {method}")),
         }
     }
@@ -194,14 +1078,9 @@ impl NativeDesktopRuntime {
     pub(crate) fn bootstrap(&self) -> Result<BootstrapDto, String> {
         let snapshot = self.ensure_catalog_loaded()?;
         let settings = self.settings_snapshot()?;
-        // Core remains the delivery source for `core.ready` while the
-        // transitional Python-owned commands still require its event stream.
-        // Emitting a second CoreReady here would duplicate the stable event on
-        // the shared Native/Core channel. The native bootstrap DTO below is
-        // authoritative for the command response itself.
-        Ok(BootstrapDto {
+        let result = BootstrapDto {
             app_version: env!("CARGO_PKG_VERSION").into(),
-            protocol_version: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+            protocol_version: crate::DESKTOP_PROTOCOL_VERSION,
             native_build: native_build_dto(),
             playback_defaults: playback_defaults(&settings),
             option_sets: crate::commands::PlaybackOptionSetsDto {
@@ -213,7 +1092,25 @@ impl NativeDesktopRuntime {
             telemetry_enabled: settings.telemetry_enabled,
             update_preferences: update_preferences_dto(&settings),
             catalog_generation: snapshot.generation,
-        })
+        };
+        if !self.ready_emitted.swap(true, Ordering::AcqRel) {
+            self.publish(UiEvent::CoreReady {
+                v: crate::DESKTOP_PROTOCOL_VERSION,
+                payload: CoreReadyPayload {
+                    app_version: result.app_version.clone(),
+                    protocol_version: result.protocol_version,
+                    native_build: NativeBuildPayload {
+                        native_build_commit: result.native_build.native_build_commit.clone(),
+                        native_version: result.native_build.native_version.clone(),
+                        schema_version: result.native_build.schema_version,
+                        native_abi: result.native_build.native_abi.clone(),
+                        rustc_version: result.native_build.rustc_version.clone(),
+                        win32_backend: result.native_build.win32_backend,
+                    },
+                },
+            })?;
+        }
+        Ok(result)
     }
 
     fn settings_snapshot(&self) -> Result<ApplicationSettings, String> {
@@ -221,11 +1118,8 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
-        // Python-owned settings commands update this same file through an
-        // atomic replace, while Core keeps a process-local cache. Reloading
-        // the native shadow before a read prevents native playback and detail
-        // paths from observing stale persisted settings without introducing a
-        // second write authority or Native->Python fallback.
+        // Reloading from the one Native-owned store keeps every application
+        // service on the same persisted snapshot across process restarts.
         service
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
@@ -238,6 +1132,7 @@ impl NativeDesktopRuntime {
     }
 
     fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
+        let update_preferences_changed = patch.update_preferences.is_some();
         let core_patch = sky_app_core::settings::SettingsPatch {
             theme: patch.theme,
             telemetry_enabled: patch.telemetry_enabled,
@@ -268,12 +1163,48 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native settings lock poisoned".to_string())?;
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?;
         self.playback.invalidate_settings();
+        if update_preferences_changed {
+            let mut update = self
+                .update_state
+                .lock()
+                .map_err(|_| "native update state lock poisoned".to_string())?;
+            update.candidate = None;
+            update.handoff_id = None;
+        }
         Ok(settings_dto(snapshot))
     }
 
     fn update_preferences(&self) -> Result<UpdatePreferencesDto, String> {
         let settings = self.settings_snapshot()?;
         Ok(update_preferences_dto(&settings))
+    }
+
+    fn check_update(&self) -> Result<UpdateCheckDto, String> {
+        let mut settings = self
+            .settings
+            .lock()
+            .map_err(|_| "native settings lock poisoned".to_string())?;
+        settings
+            .reload()
+            .map_err(|error| format!("native settings reload failed: {error}"))?;
+        crate::native_update::check(&mut settings, &self.update_state, |event| {
+            self.publish(event)
+        })
+    }
+
+    fn begin_update_handoff(&self, target_version: String) -> Result<UpdateHandoffDto, String> {
+        if target_version.is_empty() || target_version.len() > 64 || target_version.contains('\0') {
+            return Err("invalid_params: target_version is invalid".into());
+        }
+        let settings = self.settings_snapshot()?;
+        let result = crate::native_update::handoff(
+            &self.install_root,
+            &self.update_state,
+            &settings,
+            &target_version,
+            |event| self.publish(event),
+        )?;
+        Ok(result)
     }
 
     fn patch_update_preferences(
@@ -301,6 +1232,10 @@ impl NativeDesktopRuntime {
                 ..Default::default()
             })
             .map_err(settings_error)?;
+        if let Ok(mut update) = self.update_state.lock() {
+            update.candidate = None;
+            update.handoff_id = None;
+        }
         Ok(update_preferences_dto(snapshot))
     }
 
@@ -326,7 +1261,7 @@ impl NativeDesktopRuntime {
             .map_err(catalog_error)?;
         self.playback.invalidate_catalog(snapshot.generation);
         self.publish(UiEvent::CatalogChanged {
-            v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+            v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: CatalogChangedPayload {
                 generation: snapshot.generation,
                 total: snapshot.total as u64,
@@ -579,6 +1514,27 @@ impl NativeDesktopRuntime {
         })
     }
 
+    fn start_calibration(
+        &self,
+        request: CalibrationStartRequest,
+    ) -> Result<CalibrationStartAckDto, String> {
+        self.calibration.start(request)
+    }
+
+    fn cancel_calibration(
+        &self,
+        request: CalibrationCancelRequest,
+    ) -> Result<CalibrationCancelAckDto, String> {
+        self.calibration.cancel(request)
+    }
+
+    pub(crate) fn wait_for_calibration_terminal(
+        &self,
+        timeout: Duration,
+    ) -> Result<CalibrationState, String> {
+        self.calibration.wait_for_terminal(timeout)
+    }
+
     pub(crate) fn subscribe(&self, channel: Channel<UiEvent>) -> Result<(), String> {
         self.events
             .lock()
@@ -586,14 +1542,12 @@ impl NativeDesktopRuntime {
             .subscribe(channel)
     }
 
+    #[cfg(test)]
     pub(crate) fn invalidate_prepared_for_calibration(&self) {
         self.playback.invalidate_settings();
     }
 
-    pub(crate) fn invalidate_prepared_for_external_mutation(&self) {
-        self.playback.invalidate_settings();
-    }
-
+    #[cfg(test)]
     pub(crate) fn relay_core_event(&self, event: UiEvent) -> Result<(), String> {
         self.publish(event)
     }
@@ -608,6 +1562,7 @@ impl NativeDesktopRuntime {
     pub(crate) fn shutdown(&self) {
         self.activity.begin_shutdown();
         if !self.closed.swap(true, Ordering::AcqRel) {
+            self.calibration.shutdown();
             self.playback.shutdown(self.events.clone());
             if let Ok(mut events) = self.events.lock() {
                 events.close();
@@ -744,6 +1699,7 @@ struct NativeActivePlayback {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativePlaybackPrepareRequest {
     song_id: String,
@@ -752,6 +1708,7 @@ struct NativePlaybackPrepareRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativePlaybackStartRequest {
     prepared_id: String,
@@ -759,6 +1716,7 @@ struct NativePlaybackStartRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativePlaybackSessionRequest {
     session_id: String,
@@ -1954,7 +2912,7 @@ fn publish_diagnostics_snapshot_for_active(
             .lock()
             .map_err(|_| "native event hub lock poisoned".to_string())?
             .publish(UiEvent::DiagnosticsSnapshot {
-                v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+                v: crate::DESKTOP_PROTOCOL_VERSION,
                 payload,
             })
     })?;
@@ -2090,7 +3048,7 @@ fn publish_playback_state(
     outcome: Option<String>,
 ) -> Result<(), String> {
     let event = UiEvent::PlaybackStateChanged {
-        v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+        v: crate::DESKTOP_PROTOCOL_VERSION,
         payload: PlaybackStateChangedPayload {
             session_id: active.session_id.clone(),
             song_id: active.song_id.clone(),
@@ -2168,7 +3126,7 @@ fn publish_playback_snapshot(
         )
     };
     let event = UiEvent::PlaybackSnapshot {
-        v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+        v: crate::DESKTOP_PROTOCOL_VERSION,
         payload: PlaybackSnapshotPayload {
             session_id: active.session_id.clone(),
             seq: active.sequence.fetch_add(1, Ordering::Relaxed) + 1,
@@ -2272,7 +3230,7 @@ fn publish_playback_failed(
         .lock()
         .map_err(|_| "native event hub lock poisoned".to_string())?
         .publish(UiEvent::PlaybackFailed {
-            v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+            v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: PlaybackFailedPayload {
                 session_id: active.session_id.clone(),
                 song_id: active.song_id.clone(),
@@ -2292,7 +3250,7 @@ fn publish_playback_finished(
         .lock()
         .map_err(|_| "native event hub lock poisoned".to_string())?
         .publish(UiEvent::PlaybackFinished {
-            v: crate::core::protocol::DESKTOP_PROTOCOL_VERSION,
+            v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: PlaybackFinishedPayload {
                 session_id: active.session_id.clone(),
                 song_id: active.song_id.clone(),
@@ -2376,6 +3334,7 @@ fn json_error(error: impl std::fmt::Display) -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeCatalogDetailRequest {
     song_id: String,
@@ -2383,6 +3342,7 @@ struct NativeCatalogDetailRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeCatalogViewportRequest {
     generation: u64,
@@ -2392,6 +3352,7 @@ struct NativeCatalogViewportRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativePlaybackPatch {
     hold_frames: Option<f64>,
@@ -2400,6 +3361,7 @@ struct NativePlaybackPatch {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeUpdatePreferencesPatch {
     auto_check: Option<bool>,
@@ -2408,6 +3370,7 @@ struct NativeUpdatePreferencesPatch {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeSettingsPatch {
     theme: Option<String>,
@@ -2731,19 +3694,19 @@ mod tests {
         assert!(
             runtime
                 .dispatch("settings.get", Value::Object(Default::default()))
-                .is_err()
+                .is_ok()
         );
         assert_eq!(
             runtime
                 .dispatch("app.shutdown", Value::Object(Default::default()))
                 .expect("first shutdown"),
-            Value::Object(Default::default())
+            Value::Null
         );
         assert_eq!(
             runtime
                 .dispatch("app.shutdown", Value::Object(Default::default()))
                 .expect("idempotent shutdown"),
-            Value::Object(Default::default())
+            Value::Null
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -3257,7 +4220,7 @@ mod tests {
             .dispatch(
                 "playback.prepare",
                 serde_json::json!({
-                    "song_id": song_id,
+                    "songId": song_id,
                     "generation": generation,
                     "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
@@ -3270,7 +4233,7 @@ mod tests {
 
         let malformed = runtime.dispatch(
             "playback.start",
-            serde_json::json!({"prepared_id":"A".repeat(32),"decisions":[]}),
+            serde_json::json!({"preparedId":"A".repeat(32),"decisions":[]}),
         );
         assert!(
             malformed
@@ -3281,7 +4244,7 @@ mod tests {
         let oversized = runtime.dispatch(
             "playback.start",
             serde_json::json!({
-                "prepared_id": prepared_id,
+                "preparedId": prepared_id,
                 "decisions": (0..=MAX_DECISION_COUNT)
                     .map(|_| serde_json::json!({"decision":"proceed","accepted":false}))
                     .collect::<Vec<_>>()
@@ -3296,7 +4259,7 @@ mod tests {
         let wrong_confirmation = runtime.dispatch(
             "playback.start",
             serde_json::json!({
-                "prepared_id": prepared_id,
+                "preparedId": prepared_id,
                 "decisions": [{"decision":"proceed","accepted":true}]
             }),
         );
@@ -3309,7 +4272,7 @@ mod tests {
         let valid = runtime
             .dispatch(
                 "playback.start",
-                serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+                serde_json::json!({"preparedId":prepared_id,"decisions":[]}),
             )
             .expect("valid ready start");
         assert_eq!(valid["state"], "starting");
@@ -3616,7 +4579,7 @@ mod tests {
             .dispatch(
                 "playback.prepare",
                 serde_json::json!({
-                    "song_id": song_id,
+                    "songId": song_id,
                     "generation": generation,
                     "config": {
                         "hold_frames": 1.0,
@@ -3697,7 +4660,7 @@ mod tests {
             .dispatch(
                 "playback.prepare",
                 serde_json::json!({
-                    "song_id": song_id,
+                    "songId": song_id,
                     "generation": generation,
                     "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
@@ -3733,7 +4696,7 @@ mod tests {
             .dispatch(
                 "playback.prepare",
                 serde_json::json!({
-                    "song_id": song_id,
+                    "songId": song_id,
                     "generation": generation,
                     "config": {"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),

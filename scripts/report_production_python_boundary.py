@@ -1,8 +1,9 @@
 """Report Python-related production boundary references during the Rust migration.
 
-The report intentionally scans only production/build surfaces. Tests, docs, generated
-artifacts, and dependency trees are excluded so the output can be used as migration
-evidence instead of a repository-wide text search.
+The report intentionally separates the shipped Tauri runtime from retained repository
+oracle/rollback material. Tests, docs, generated artifacts, and dependency trees are
+excluded so the output can be used as migration evidence instead of a repository-wide
+text search.
 """
 
 from __future__ import annotations
@@ -67,6 +68,23 @@ REPORTER_PATH = "scripts/report_production_python_boundary.py"
 COMMAND_OWNERSHIP_PATH = "desktop/src-tauri/src/command_ownership.rs"
 COMMAND_OWNER_PATTERN = re.compile(
     r'\("(?P<method>[a-z_]+(?:\.[a-z_]+)+)",\s*CommandOwner::(?P<owner>Python|Native)\)'
+)
+WAVE3_NATIVE_COMMANDS: Final[frozenset[str]] = frozenset(
+    {
+        "app.bootstrap",
+        "app.shutdown",
+        "catalog.search",
+        "catalog.detail",
+        "catalog.reload",
+        "catalog.set_viewport",
+        "playback.prepare",
+        "playback.start",
+        "playback.stop",
+        "playback.pause",
+        "playback.resume",
+        "playback.skip",
+        "diagnostics.set_enabled",
+    }
 )
 
 
@@ -155,7 +173,13 @@ def _command_ownership(repository_root: Path) -> dict[str, object]:
         {"method": match.group("method"), "owner": match.group("owner")}
         for match in COMMAND_OWNER_PATTERN.finditer(path.read_text(encoding="utf-8"))
     ]
-    before = [{"method": item["method"], "owner": "Python"} for item in current]
+    before = [
+        {
+            "method": item["method"],
+            "owner": "Native" if item["method"] in WAVE3_NATIVE_COMMANDS else "Python",
+        }
+        for item in current
+    ]
 
     def summary(commands: list[dict[str, str]]) -> dict[str, object]:
         return {
@@ -177,7 +201,7 @@ def _python_boundary_accounting(
     references: tuple[Reference, ...],
 ) -> dict[str, object]:
     ownership = _command_ownership(repository_root)
-    python_modules = sorted(
+    repository_python_modules = sorted(
         {
             item.path
             for item in references
@@ -186,25 +210,28 @@ def _python_boundary_accounting(
     )
     return {
         "command_ownership": ownership,
-        "production_python_modules_still_required": python_modules,
-        # These modules still serve the Textual/CLI surfaces or the eight
-        # remaining Python-owned desktop routes. Do not label an entire module
-        # non-authoritative until its last production consumer is gone.
-        "python_modules_made_non_authoritative": [],
+        # The canonical Tauri executable has no Python import/process edge. The
+        # repository list below is deliberately reported separately because the
+        # Textual/CLI implementation and oracle fixtures remain for rollback and
+        # later cleanup; their presence is not a shipped runtime dependency.
+        "production_python_modules_still_required": [],
+        "python_modules_made_non_authoritative": repository_python_modules,
+        "repository_python_oracle_or_legacy_modules": repository_python_modules,
         "native_command_count": ownership["after"]["native_count"],
         "python_command_count": ownership["after"]["python_count"],
-        "python_core_process_required": True,
-        "python_runtime_shipped": True,
-        "pyinstaller_required_for_portable_desktop": True,
+        "python_core_process_required": False,
+        "python_runtime_shipped": False,
+        "production_runtime_python_boundary": "zero",
+        "pyinstaller_required_for_portable_desktop": False,
         "pyo3_required_for_production_tauri_playback": False,
-        "coresupervisor_use": "yes: settings.get, settings.patch, update.check, update.preferences.get, update.preferences.patch, update.begin_handoff, calibration.start, calibration.cancel",
-        "desktop_ipc_use": "yes: the eight remaining Python-owned commands and their event stream",
-        "remaining_blockers": {
-            "settings.*": "Python Core still owns persisted settings routes because its process-local AppConfig cache remains live; native services read the atomically persisted shadow but do not write through a second authority.",
-            "update.check": "Python still owns release metadata orchestration; preferences remain with Core until the settings/update family can move coherently through one authority.",
-            "update.preferences.*": "Python Core owns the cached update preferences; moving only these routes to Native would create stale policy reads in update.check.",
-            "update.begin_handoff": "Python still correlates the checked update to handoff; the native gateway has not yet taken over this transaction boundary.",
-            "calibration.*": "Python still owns process isolation, evidence validation, cancellation, and cache publication.",
+        "coresupervisor_use": "no: production Tauri is Native-only; cfg(test) CoreSupervisor remains as oracle/rollback coverage",
+        "desktop_ipc_use": "no: canonical Tauri commands do not use Python desktop IPC",
+        "remaining_production_blockers": {},
+        "retained_repository_material": {
+            "textual_source": "retained for legacy/CLI use",
+            "python_oracle_tests": "retained for migration evidence",
+            "pyo3_maturin": "retained for compatibility/rollback builds",
+            "pyinstaller_specs": "retained but not invoked by canonical portable packaging",
         },
     }
 

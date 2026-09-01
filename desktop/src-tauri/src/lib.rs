@@ -4,8 +4,13 @@ mod command_ownership;
 mod commands;
 mod lifecycle;
 mod native_runtime;
+mod native_update;
+mod startup_guard;
 mod ui_events;
 
+pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
+
+#[cfg(test)]
 mod core;
 
 use lifecycle::close_window;
@@ -70,7 +75,7 @@ fn run_inner(gui_smoke: bool) {
         record_gui_smoke_phase("command_ownership.check.pass");
         record_gui_smoke_phase("startup_update_guard.check.enter");
     }
-    if let Err(error) = core::check_startup_update_guard() {
+    if let Err(error) = startup_guard::check_startup_update_guard() {
         if gui_smoke {
             record_gui_smoke_phase("startup_update_guard.check.failed");
         }
@@ -195,10 +200,9 @@ fn run_inner(gui_smoke: bool) {
 ///
 /// This hidden, packaging-only entrypoint is used by the exact portable
 /// artifact gate. It uses the same native composition root as the production
-/// shell and replaces the interactive window with a bounded bootstrap/shutdown
-/// assertion so CI never needs to synthesize a physical input session.
+/// shell and exercises safe, non-physical command seams before shutdown.
 pub fn selftest_packaged_shell() -> i32 {
-    if let Err(error) = core::check_startup_update_guard() {
+    if let Err(error) = startup_guard::check_startup_update_guard() {
         eprintln!("packaged shell selftest startup guard failed: {error}");
         return 2;
     }
@@ -209,22 +213,108 @@ pub fn selftest_packaged_shell() -> i32 {
             return 2;
         }
     };
-    let result = match runtime.bootstrap() {
-        Ok(value) if !value.native_build.native_build_commit.is_empty() => {
-            runtime.shutdown();
+    let result = (|| -> Result<(), String> {
+        let bootstrap = runtime.bootstrap()?;
+        if bootstrap.native_build.native_build_commit.is_empty() {
+            return Err("bootstrap omitted native build identity".into());
+        }
+        let settings: commands::SettingsDto =
+            serde_json::from_value(runtime.dispatch("settings.get", serde_json::json!({}))?)
+                .map_err(|error| format!("settings.get response: {error}"))?;
+        let _patched: commands::SettingsDto = serde_json::from_value(runtime.dispatch(
+            "settings.patch",
+            serde_json::json!({"verbose_hud": settings.verbose_hud}),
+        )?)
+        .map_err(|error| format!("settings.patch response: {error}"))?;
+        let _update_preferences: commands::UpdatePreferencesDto = serde_json::from_value(
+            runtime.dispatch("update.preferences.get", serde_json::json!({}))?,
+        )
+        .map_err(|error| format!("update.preferences.get response: {error}"))?;
+        let _patched_update_preferences: commands::UpdatePreferencesDto =
+            serde_json::from_value(runtime.dispatch(
+                "update.preferences.patch",
+                serde_json::json!({"autoCheck": settings.update_preferences.auto_check}),
+            )?)
+            .map_err(|error| format!("update.preferences.patch response: {error}"))?;
+        let _update_check: commands::UpdateCheckDto =
+            serde_json::from_value(runtime.dispatch("update.check", serde_json::json!({}))?)
+                .map_err(|error| format!("update.check response: {error}"))?;
+        let _diagnostics: commands::DiagnosticsEnabledDto =
+            serde_json::from_value(runtime.dispatch(
+                "diagnostics.set_enabled",
+                serde_json::json!({"enabled": true}),
+            )?)
+            .map_err(|error| format!("diagnostics response: {error}"))?;
+        let _diagnostics: commands::DiagnosticsEnabledDto =
+            serde_json::from_value(runtime.dispatch(
+                "diagnostics.set_enabled",
+                serde_json::json!({"enabled": false}),
+            )?)
+            .map_err(|error| format!("diagnostics disable response: {error}"))?;
+        let search: commands::CatalogSearchDto = serde_json::from_value(runtime.dispatch(
+            "catalog.search",
+            serde_json::json!({
+                "query": "",
+                "offset": 0,
+                "limit": 1,
+                "generation": bootstrap.catalog_generation
+            }),
+        )?)
+        .map_err(|error| format!("catalog.search response: {error}"))?;
+        if let Some(row) = search.items.first() {
+            let prepared: commands::PreparedPlaybackDto =
+                serde_json::from_value(runtime.dispatch(
+                    "playback.prepare",
+                    serde_json::json!({
+                        "songId": row.song_id,
+                        "generation": search.generation,
+                        "config": {
+                            "hold_frames": settings.playback_defaults.hold_frames,
+                            "tempo_scale": settings.playback_defaults.tempo_scale,
+                            "fps": settings.playback_defaults.fps,
+                            "dry_run": true
+                        }
+                    }),
+                )?)
+                .map_err(|error| format!("playback.prepare response: {error}"))?;
+            if prepared.admission == commands::PlaybackAdmission::Ready {
+                let prepared_id = prepared
+                    .prepared_id
+                    .ok_or("dry-run prepare omitted prepared_id")?;
+                let _session: commands::PlaybackSessionDto =
+                    serde_json::from_value(runtime.dispatch(
+                        "playback.start",
+                        serde_json::json!({"preparedId": prepared_id, "decisions": []}),
+                    )?)
+                    .map_err(|error| format!("playback.start response: {error}"))?;
+            }
+        }
+        let calibration: commands::CalibrationStartAckDto = serde_json::from_value(
+            runtime.dispatch("calibration.start", serde_json::json!({"mode": "quick"}))?,
+        )
+        .map_err(|error| format!("calibration.start response: {error}"))?;
+        let state = runtime.wait_for_calibration_terminal(std::time::Duration::from_secs(5))?;
+        if !matches!(
+            state,
+            ui_events::CalibrationState::Succeeded | ui_events::CalibrationState::Cancelled
+        ) {
+            return Err(format!("safe calibration ended in {state:?}"));
+        }
+        if calibration.operation_id.is_empty() {
+            return Err("calibration.start omitted operation_id".into());
+        }
+        Ok(())
+    })();
+    runtime.shutdown();
+    let result = match result {
+        Ok(()) => {
             if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
                 let _ = std::fs::write(marker, b"bootstrap-ready\n");
             }
             0
         }
-        Ok(_) => {
-            eprintln!("packaged native selftest bootstrap omitted native build identity");
-            runtime.shutdown();
-            1
-        }
         Err(error) => {
-            eprintln!("packaged native selftest bootstrap failed: {error}");
-            runtime.shutdown();
+            eprintln!("packaged native selftest failed: {error}");
             1
         }
     };
@@ -443,6 +533,7 @@ mod ipc_tests {
     }
 
     #[test]
+    #[ignore = "legacy Core-owned IPC oracle; Native calibration route is covered by runtime tests"]
     fn generated_tauri_handler_decodes_diagnostics_and_calibration_payloads() {
         let app = tauri::test::mock_builder()
             .manage(AppState::default())
@@ -518,6 +609,7 @@ mod ipc_tests {
     }
 
     #[test]
+    #[ignore = "network/update-handoff fixture belongs to the retired Core route"]
     fn generated_tauri_handler_decodes_typed_update_payloads() {
         let app = tauri::test::mock_builder()
             .manage(AppState::default())

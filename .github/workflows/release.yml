@@ -103,13 +103,6 @@ jobs:
           # v2.4.0 release run (29657111725) at this step.
           "is_prerelease=$isPre"  | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
-      - name: Build matching PyInstaller bootloader from source
-        run: |
-          $bootloader = Join-Path $env:RUNNER_TEMP "sky-auto-player-pyinstaller-bootloader"
-          pwsh -NoProfile -File scripts/build_pyinstaller_bootloader.ps1 -OutputDirectory $bootloader
-          "SKY_SOURCE_BOOTLOADER_DIR=$bootloader" | Add-Content $env:GITHUB_ENV -Encoding ASCII
-          "SKY_REQUIRE_SOURCE_BOOTLOADER=1" | Add-Content $env:GITHUB_ENV -Encoding ASCII
-
       - name: Set up Bun for production frontend build
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:

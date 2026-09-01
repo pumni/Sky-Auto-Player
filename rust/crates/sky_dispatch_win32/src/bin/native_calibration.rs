@@ -215,6 +215,24 @@ fn main() -> Result<(), String> {
         println!("{output}");
         Ok(())
     } else {
-        Err("full mode is orchestrated by scripts/run_native_calibration.py; use --mode bucket for one bucket".to_string())
+        let mut config = CalibrationConfig::full();
+        // The desktop publication contract is the six required production
+        // buckets: 1/5/15 keys crossed with hot/cold.  Keep legacy wider
+        // calibration presets available to library callers, but do not make
+        // the packaged orchestrator spend budget on non-publishable buckets.
+        config.polyphonies = vec![1, 5, 15];
+        config.budget_seconds = budget_seconds;
+        if let Some(value) = hot_gap_target_us {
+            config.hot_gap_target_us = value;
+        }
+        if let Some(value) = cold_threshold_us {
+            config.cold_threshold_us = value;
+        }
+        if let Some(value) = cold_idle_gap_us {
+            config.cold_idle_gap_us = value;
+        }
+        let output = run_calibration_json(&config).map_err(|error| error.to_string())?;
+        println!("{output}");
+        Ok(())
     }
 }
