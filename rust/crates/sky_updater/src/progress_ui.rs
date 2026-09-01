@@ -1,6 +1,6 @@
 //! Small native progress surface owned by the updater process.
 //!
-//! The updater must remain visible after the Textual process exits.  The
+//! The updater must remain visible after the desktop process exits.  The
 //! Windows implementation keeps all HWND values inside this module and sends
 //! state changes to a dedicated window thread through ordinary Win32 window
 //! messages.

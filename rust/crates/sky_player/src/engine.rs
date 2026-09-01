@@ -88,7 +88,7 @@ pub mod binding_support {
 /// Test-only hooks for §8.12 slow-observer regression scenarios.
 ///
 /// Functions are hand-written wrappers (not `pub use` re-exports) so the
-/// public path via `sky_player_rs::engine::observer_test_hooks::*` is stable
+/// public path via `sky_player::observer_test_hooks::*` is stable
 /// for both crate-internal unit tests and the external `tests/` integration
 /// test binary, without leaking the crate-internal `worker::dispatch` module
 /// into the public API (E0364).

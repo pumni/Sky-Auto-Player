@@ -31,12 +31,9 @@
     {"path":"rust/crates/sky_dispatch_win32/src/wait/spin.rs","rule":"production_glob_import","reason":"make wait dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player/src/engine/worker.rs","rule":"production_glob_import","reason":"make worker dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player/src/engine/worker/orchestration.rs","rule":"production_glob_import","reason":"make orchestration dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/python/conversion.rs","rule":"production_glob_import","reason":"make Python conversion dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/python/telemetry.rs","rule":"production_glob_import","reason":"make Python telemetry dependencies explicit in Phase 9","expires_phase":"Phase 9"},
 
     {"path":"rust/crates/sky_player/src/engine/config.rs","rule":"context_fields","reason":"replace WorkerConfig parameter bag with validated options in Phase 8","expires_phase":"Phase 8"},
     {"path":"rust/crates/sky_player/src/engine/shared.rs","rule":"context_fields","reason":"consolidate direct shared ownership in Phase 3","expires_phase":"Phase 3"},
-    {"path":"rust/crates/sky_player_rs/src/python.rs","rule":"pyo3_boundary","reason":"legacy Python root module; keep FFI migration explicit","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player/src/engine/telemetry/metrics.rs","rule":"unsafe_boundary","reason":"bounded dual-slot telemetry snapshot synchronization uses a reviewed UnsafeCell boundary","expires_phase":"Phase 12"}
   ]
 }

@@ -50,9 +50,9 @@ fn collect_project_pyds(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
         if path.is_dir() {
             collect_project_pyds(&path, output)?;
         } else if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("sky_player_rs") && name.ends_with(".pyd"))
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pyd"))
         {
             output.push(path);
         }

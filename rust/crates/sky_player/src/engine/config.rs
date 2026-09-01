@@ -10,8 +10,8 @@ pub(crate) const CALIBRATION_SAMPLES: usize = 6;
 pub(crate) const CALIBRATION_MAX_STARTUP_BUDGET_US: u64 = 20_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 /// Maximum interval for the non-realtime supervisor to prove it is still
-/// alive.  Both the temporary PyO3 adapter and the direct desktop adapter
-/// consume this same qualified safety boundary.
+/// alive. The direct desktop adapter consumes this same qualified safety
+/// boundary.
 pub const DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US: u64 = 3_000_000;
 
 #[cfg(any(test, feature = "test-support"))]

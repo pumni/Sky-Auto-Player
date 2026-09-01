@@ -6042,8 +6042,8 @@ fn quantile_stats_i64(values: &[i64]) -> Result<SignedQuantileStats, Calibration
 
 /// Run a complete calibration and return JSON-serialised output.
 ///
-/// This is the primary entry point for callers (including the PyO3 wrapper in
-/// `sky_player_rs`).  It blocks the calling thread for the duration of the
+/// This is the primary entry point for native calibration callers. It blocks
+/// the calling thread for the duration of the
 /// calibration run.
 ///
 /// # Errors

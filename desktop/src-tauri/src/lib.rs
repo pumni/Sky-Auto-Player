@@ -10,9 +10,6 @@ mod ui_events;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
 
-#[cfg(test)]
-mod core;
-
 use lifecycle::close_window;
 use native_runtime::TestSeams;
 
@@ -130,28 +127,26 @@ fn run_inner(gui_smoke: bool) {
             Ok(())
         });
     if gui_smoke {
-        builder = builder.on_page_load(|webview, payload| {
-            match payload.event() {
-                tauri::webview::PageLoadEvent::Started => {
-                    record_gui_smoke_phase(&format!(
-                        "webview.page_load.started {}",
-                        payload.url()
-                    ));
-                }
-                tauri::webview::PageLoadEvent::Finished => {
-                    record_gui_smoke_phase(&format!(
-                        "webview.page_load.finished {}",
-                        payload.url()
-                    ));
-                    let result = webview.eval(
-                        "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
-                    );
-                    record_gui_smoke_phase(if result.is_ok() {
-                        "webview.smoke_dispatched"
-                    } else {
-                        "webview.smoke_dispatch.failed"
-                    });
-                }
+        builder = builder.on_page_load(|webview, payload| match payload.event() {
+            tauri::webview::PageLoadEvent::Started => {
+                record_gui_smoke_phase(&format!(
+                    "webview.page_load.started {}",
+                    payload.url()
+                ));
+            }
+            tauri::webview::PageLoadEvent::Finished => {
+                record_gui_smoke_phase(&format!(
+                    "webview.page_load.finished {}",
+                    payload.url()
+                ));
+                let result = webview.eval(
+                    "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
+                );
+                record_gui_smoke_phase(if result.is_ok() {
+                    "webview.smoke_dispatched"
+                } else {
+                    "webview.smoke_dispatch.failed"
+                });
             }
         });
     }
@@ -192,10 +187,6 @@ fn run_inner(gui_smoke: bool) {
     }
     if gui_smoke && smoke_state.gui_smoke_exit_code() != 0 {
         record_gui_smoke_phase("tauri.run.return.failed");
-        // Tauri's graceful AppHandle::exit request can return the event loop
-        // without propagating its code through this library entrypoint. Make
-        // watchdog and frontend-failure paths fail closed at the process
-        // boundary so the Python harness cannot accept a false green smoke.
         std::process::exit(smoke_state.gui_smoke_exit_code());
     }
     result.expect("error while running Sky Auto Player desktop shell");
@@ -227,11 +218,6 @@ pub fn selftest_packaged_shell() -> i32 {
             }
         };
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
-        // The updater restart qualification must verify that the newly
-        // installed application can bootstrap without mutating preserved
-        // user state.  The ordinary packaged selftest below exercises all
-        // mutating command paths; this restart seam is intentionally
-        // read-only apart from the external marker.
         let result = match runtime.bootstrap() {
             Ok(bootstrap) if !bootstrap.native_build.native_build_commit.is_empty() => 0,
             Ok(_) => {
@@ -369,26 +355,7 @@ pub fn selftest_packaged_shell() -> i32 {
 #[cfg(all(test, feature = "tauri-test", not(feature = "desktop-runtime")))]
 mod ipc_tests {
     use super::app_state::AppState;
-    use super::core::CoreSupervisor;
     use serde_json::json;
-    use std::path::PathBuf;
-    use std::process::Command;
-    use tauri::Manager;
-
-    fn fake_core() -> Command {
-        let python = std::env::var("SKY_PYTHON").unwrap_or_else(|_| "python".into());
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("fake_core.py");
-        let mut command = Command::new(python);
-        command
-            .arg("-u")
-            .arg(fixture)
-            .arg("tauri_commands")
-            .env("PYTHONUNBUFFERED", "1");
-        command
-    }
 
     fn request(
         command: &str,
@@ -422,18 +389,11 @@ mod ipc_tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-
         let valid = tauri::test::get_ipc_response(
             &webview,
             request(
                 "search_songs",
-                json!({
-                    "params": {
-                        "query": "Aurora",
-                        "offset": 0,
-                        "limit": 200
-                    }
-                }),
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
                 0,
             ),
         )
@@ -442,18 +402,11 @@ mod ipc_tests {
         assert_eq!(value["offset"], 0);
         assert_eq!(value["limit"], 200);
         assert!(value["generation"].as_u64().is_some_and(|value| value > 0));
-
         let wrong = tauri::test::get_ipc_response(
             &webview,
             request(
                 "search_songs",
-                json!({
-                    "request": {
-                        "query": "Aurora",
-                        "offset": 0,
-                        "limit": 200
-                    }
-                }),
+                json!({"request":{"query":"Aurora","offset":0,"limit":200}}),
                 2,
             ),
         );
@@ -461,7 +414,7 @@ mod ipc_tests {
     }
 
     #[test]
-    fn generated_tauri_handler_decodes_playback_command_payloads() {
+    fn generated_tauri_handler_decodes_native_playback_payloads() {
         let app = tauri::test::mock_builder()
             .manage(AppState::default())
             .invoke_handler(tauri::generate_handler![
@@ -500,44 +453,25 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({
-                    "params": {
-                        "songId": song_id,
-                        "generation": 1,
-                        "config": {
-                            "hold_frames": 1.0,
-                            "tempo_scale": 1.0,
-                            "fps": 60,
-                            "dry_run": true
-                        }
-                    }
-                }),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 10,
             ),
         )
         .expect("playback params envelope should reach command");
         let prepared_value: serde_json::Value = prepared.deserialize().expect("prepared JSON");
-        assert!(prepared_value["prepared_id"].as_str().is_some());
-        let prepared_id = prepared_value["prepared_id"].as_str().unwrap_or_default();
-
+        let prepared_id = prepared_value["prepared_id"].as_str().expect("prepared ID");
         let started = tauri::test::get_ipc_response(
             &webview,
             request(
                 "start_playback",
-                json!({
-                    "params": {
-                        "preparedId": prepared_id,
-                        "decisions": []
-                    }
-                }),
+                json!({"params":{"preparedId":prepared_id,"decisions":[]}}),
                 12,
             ),
         )
-        .expect("playback start params envelope should reach command");
+        .expect("playback start params envelope should decode");
         let started_value: serde_json::Value = started.deserialize().expect("session JSON");
         assert_eq!(started_value["state"], "starting");
         let session_id = started_value["session_id"].as_str().expect("session ID");
-
         tauri::test::get_ipc_response(
             &webview,
             request(
@@ -546,24 +480,12 @@ mod ipc_tests {
                 16,
             ),
         )
-        .expect("native stop params envelope should decode");
-
+        .expect("native stop params should decode");
         let wrong = tauri::test::get_ipc_response(
             &webview,
             request(
                 "prepare_playback",
-                json!({
-                    "request": {
-                        "songId": song_id,
-                        "generation": 1,
-                        "config": {
-                            "hold_frames": 1.0,
-                            "tempo_scale": 1.0,
-                            "fps": 60,
-                            "dry_run": true
-                        }
-                    }
-                }),
+                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 14,
             ),
         );
@@ -572,262 +494,7 @@ mod ipc_tests {
     }
 
     #[test]
-    #[ignore = "legacy Core-owned IPC oracle; Native calibration route is covered by runtime tests"]
-    fn generated_tauri_handler_decodes_diagnostics_and_calibration_payloads() {
-        let app = tauri::test::mock_builder()
-            .manage(AppState::default())
-            .invoke_handler(tauri::generate_handler![
-                super::commands::set_diagnostics_enabled,
-                super::commands::start_calibration,
-                super::commands::cancel_calibration,
-            ])
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("mock Tauri app");
-        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
-        app.state::<AppState>()
-            .inner()
-            .install_ready_for_test(supervisor.clone());
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-            .build()
-            .expect("mock webview");
-
-        let enabled = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "set_diagnostics_enabled",
-                json!({"params": {"enabled": true}}),
-                24,
-            ),
-        )
-        .expect("diagnostics params envelope should decode");
-        let enabled_value: serde_json::Value = enabled.deserialize().expect("enabled JSON");
-        assert_eq!(enabled_value["enabled"], true);
-
-        let started = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "start_calibration",
-                json!({
-                    "params": {
-                        "mode": "quick",
-                        "className": null,
-                        "polyphony": null,
-                        "samples": null,
-                        "timeoutSeconds": null
-                    }
-                }),
-                26,
-            ),
-        )
-        .expect("calibration params envelope should decode");
-        let started_value: serde_json::Value = started.deserialize().expect("start JSON");
-        assert_eq!(started_value["operation_id"], "d".repeat(32));
-
-        let cancelled = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "cancel_calibration",
-                json!({"params": {"operationId": "d".repeat(32)}}),
-                28,
-            ),
-        )
-        .expect("calibration cancel params envelope should decode");
-        let cancelled_value: serde_json::Value = cancelled.deserialize().expect("cancel JSON");
-        assert_eq!(cancelled_value["state"], "cancelled");
-
-        let wrong = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "set_diagnostics_enabled",
-                json!({"request": {"enabled": true}}),
-                32,
-            ),
-        );
-        assert!(wrong.is_err(), "legacy request envelope must fail");
-        supervisor.shutdown();
-    }
-
-    #[test]
-    #[ignore = "network/update-handoff fixture belongs to the retired Core route"]
-    fn generated_tauri_handler_decodes_typed_update_payloads() {
-        let app = tauri::test::mock_builder()
-            .manage(AppState::default())
-            .invoke_handler(tauri::generate_handler![
-                super::commands::check_for_update,
-                super::commands::get_update_preferences,
-                super::commands::patch_update_preferences,
-                super::commands::begin_update_handoff,
-                super::commands::shutdown,
-            ])
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("mock Tauri app");
-        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
-        app.state::<AppState>()
-            .inner()
-            .install_ready_for_test(supervisor.clone());
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-            .build()
-            .expect("mock webview");
-
-        let check =
-            tauri::test::get_ipc_response(&webview, request("check_for_update", json!({}), 50))
-                .expect("update check must decode");
-        let check_value: serde_json::Value = check.deserialize().expect("update check JSON");
-        assert_eq!(check_value["state"], "available");
-
-        let preferences = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "patch_update_preferences",
-                json!({
-                    "params": {"autoCheck": false, "channel": "beta", "skipVersion": "3.6.0"}
-                }),
-                52,
-            ),
-        )
-        .expect("update preference patch must decode");
-        let preferences_value: serde_json::Value =
-            preferences.deserialize().expect("update preferences JSON");
-        assert_eq!(preferences_value["channel"], "beta");
-
-        let handoff = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "begin_update_handoff",
-                json!({
-                    "params": {"targetVersion": "3.6.0"}
-                }),
-                54,
-            ),
-        )
-        .expect("update handoff must decode");
-        let handoff_value: serde_json::Value = handoff.deserialize().expect("handoff JSON");
-        assert_eq!(handoff_value["state"], "handoff_ready");
-        assert_eq!(handoff_value["target_version"], "3.6.0");
-
-        let shutdown = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 55))
-            .expect("successful handoff must use the controlled shell close command");
-        let _: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
-        assert!(app.state::<AppState>().inner().is_closing_for_test());
-
-        let wrong = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "begin_update_handoff",
-                json!({
-                    "params": {"target_version": "3.6.0"}
-                }),
-                56,
-            ),
-        );
-        assert!(wrong.is_err(), "snake_case frontend payload must fail");
-        supervisor.shutdown();
-    }
-
-    #[test]
-    fn generated_tauri_handler_runs_real_core_dry_run_lifecycle() {
-        let app = tauri::test::mock_builder()
-            .manage(AppState::default())
-            .invoke_handler(tauri::generate_handler![
-                super::commands::bootstrap,
-                super::commands::search_songs,
-                super::commands::prepare_playback,
-                super::commands::start_playback,
-                super::commands::shutdown,
-            ])
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("mock Tauri app");
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-            .build()
-            .expect("mock webview");
-
-        let bootstrap =
-            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 30))
-                .expect("real Core bootstrap");
-        let bootstrap_value: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
-        let generation = bootstrap_value["catalog_generation"]
-            .as_u64()
-            .expect("catalog generation");
-
-        let search = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "search_songs",
-                json!({
-                    "params": {
-                        "query": "blue",
-                        "offset": 0,
-                        "limit": 1,
-                        "generation": generation
-                    }
-                }),
-                34,
-            ),
-        )
-        .expect("real Core search");
-        let search_value: serde_json::Value = search.deserialize().expect("search JSON");
-        let song_id = search_value["items"][0]["song_id"]
-            .as_str()
-            .expect("opaque song ID")
-            .to_owned();
-
-        let prepared = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "prepare_playback",
-                json!({
-                    "params": {
-                        "songId": song_id,
-                        "generation": generation,
-                        "config": {
-                            "hold_frames": 1.0,
-                            "tempo_scale": 1.0,
-                            "fps": 60,
-                            "dry_run": true
-                        }
-                    }
-                }),
-                38,
-            ),
-        )
-        .expect("real Core dry-run prepare");
-        let prepared_value: serde_json::Value = prepared.deserialize().expect("prepare JSON");
-        let prepared_id = prepared_value["prepared_id"]
-            .as_str()
-            .expect("opaque prepared ID")
-            .to_owned();
-        let decisions = prepared_value["decisions"]
-            .as_array()
-            .and_then(|items| items.first())
-            .and_then(|item| item["decision"].as_str())
-            .map(|decision| json!([{"decision": decision, "accepted": true}]))
-            .unwrap_or_else(|| json!([]));
-
-        let started = tauri::test::get_ipc_response(
-            &webview,
-            request(
-                "start_playback",
-                json!({
-                    "params": {
-                        "preparedId": prepared_id,
-                        "decisions": decisions
-                    }
-                }),
-                42,
-            ),
-        )
-        .expect("real Core dry-run start");
-        let started_value: serde_json::Value = started.deserialize().expect("start JSON");
-        assert_eq!(started_value["state"], "starting");
-
-        let shutdown = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 46))
-            .expect("real Core shutdown");
-        let shutdown_value: serde_json::Value = shutdown.deserialize().expect("shutdown JSON");
-        assert!(shutdown_value.is_null());
-    }
-
-    #[test]
-    fn routed_python_settings_patch_invalidates_native_prepared_plan() {
+    fn native_settings_patch_invalidates_prepared_plan() {
         let app = tauri::test::mock_builder()
             .manage(AppState::default())
             .invoke_handler(tauri::generate_handler![
@@ -840,14 +507,9 @@ mod ipc_tests {
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
-        let supervisor = CoreSupervisor::spawn_with_command(fake_core()).expect("fake Core");
-        app.state::<AppState>()
-            .inner()
-            .install_ready_for_test(supervisor.clone());
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-
         let bootstrap =
             tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 60))
                 .expect("native bootstrap");
@@ -865,27 +527,19 @@ mod ipc_tests {
         )
         .expect("native search");
         let search: serde_json::Value = search.deserialize().expect("search JSON");
-        let song_id = search["items"][0]["song_id"]
-            .as_str()
-            .expect("song ID")
-            .to_owned();
+        let song_id = search["items"][0]["song_id"].as_str().expect("song ID");
         let prepared = tauri::test::get_ipc_response(
             &webview,
             request(
                 "prepare_playback",
-                json!({"params":{
-                    "songId":song_id,
-                    "generation":generation,
-                    "config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}
-                }}),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 64,
             ),
         )
         .expect("native prepare");
         let prepared: serde_json::Value = prepared.deserialize().expect("prepare JSON");
         let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
-
-        let patched = tauri::test::get_ipc_response(
+        tauri::test::get_ipc_response(
             &webview,
             request(
                 "patch_settings",
@@ -893,9 +547,7 @@ mod ipc_tests {
                 66,
             ),
         )
-        .expect("Python-owned settings patch");
-        let _: serde_json::Value = patched.deserialize().expect("settings JSON");
-
+        .expect("native settings patch");
         let start = tauri::test::get_ipc_response(
             &webview,
             request(
@@ -909,6 +561,5 @@ mod ipc_tests {
             "settings patch must stale native prepared ID"
         );
         let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 70));
-        supervisor.shutdown();
     }
 }

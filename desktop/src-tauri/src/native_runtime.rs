@@ -1941,16 +1941,6 @@ impl NativeDesktopRuntime {
             .subscribe(channel)
     }
 
-    #[cfg(test)]
-    pub(crate) fn invalidate_prepared_for_calibration(&self) {
-        self.playback.invalidate_settings();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn relay_core_event(&self, event: UiEvent) -> Result<(), String> {
-        self.publish(event)
-    }
-
     fn publish(&self, event: UiEvent) -> Result<(), String> {
         self.events
             .lock()

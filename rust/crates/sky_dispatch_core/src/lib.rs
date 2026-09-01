@@ -1,5 +1,5 @@
 //! Core dispatch domain logic for Sky Auto Player.
-//! Pure Rust — no PyO3, no Windows API bindings.
+//! Pure Rust — no foreign-language or Windows API bindings.
 
 #![forbid(unsafe_code)]
 

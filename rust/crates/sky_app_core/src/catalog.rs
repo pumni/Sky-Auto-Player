@@ -3,7 +3,7 @@
 //! Directory enumeration and canonicalization are outer-adapter concerns. The
 //! core receives canonical path strings, owns opaque IDs, stable ordering,
 //! generation checks, and bounded path-free rows. Fuzzy ranking is an explicit
-//! port because the current Python implementation uses RapidFuzz WRatio; the
+//! port because the accepted Python oracle defines a WRatio contract; the
 //! core must not silently substitute a different algorithm.
 
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ pub trait FuzzyRanker {
 
 /// Bounded WRatio-compatible ranker for the native index.
 ///
-/// RapidFuzz's WRatio is a composition of normalized Levenshtein, partial,
+/// The accepted WRatio contract is a composition of normalized Levenshtein, partial,
 /// token-sort, and token-set ratios.  The native implementation keeps the
 /// same score selection/cutoff policy while operating on the already
 /// normalized catalog keys.  It is deliberately allocation-bounded by the
@@ -411,7 +411,7 @@ fn validate_window(query: &str, _offset: usize, limit: usize) -> Result<(), Cata
     Ok(())
 }
 
-/// Return the RapidFuzz-compatible WRatio score for two normalized catalog
+/// Return the accepted WRatio-compatible score for two normalized catalog
 /// keys. This is a non-realtime search operation and is intentionally kept
 /// separate from the realtime/player crates.
 pub fn wratio_score(query: &str, candidate: &str) -> f64 {
@@ -457,7 +457,7 @@ fn partial_ratio(left: &str, right: &str) -> f64 {
     best
 }
 
-/// RapidFuzz's bounded short-needle candidate selection using the same Indel
+/// The bounded short-needle candidate selection uses the same Indel
 /// score. The upstream implementation uses a bit-parallel optimization; the
 /// direct candidate evaluation keeps the score semantics while staying off
 /// the realtime path.
@@ -699,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn wratio_matches_rapidfuzz_reference_vectors() {
+    fn wratio_matches_reference_vectors() {
         let cases = [
             (("this is a test", "this is a test!"), 96.55172413793103),
             (("fuzzy was a bear", "fuzzy fuzzy was a bear"), 95.0),
