@@ -186,3 +186,12 @@ def test_release_builder_uses_observed_commit_not_repo_assignment() -> None:
     assert "built_native_commit = observe_native_build_metadata" in source
     assert "copied_native_commit = observe_native_build_metadata" in source
     assert "native_build_commit=repo_head" not in source
+
+
+def test_native_source_fingerprint_ignores_generated_tauri_bindings(tmp_path: Path) -> None:
+    common = _common()
+    before = common.native_source_fingerprint(tmp_path)
+    generated = tmp_path / "desktop" / "src-tauri" / "gen" / "schemas"
+    generated.mkdir(parents=True)
+    (generated / "bindings.json").write_text("generated", encoding="utf-8")
+    assert common.native_source_fingerprint(tmp_path) == before

@@ -35,6 +35,7 @@ NATIVE_PROVENANCE_PATHS = (
     Path("rust") / "crates" / "sky_updater",
     Path("desktop") / "src-tauri",
 )
+NATIVE_PROVENANCE_EXCLUDED_PREFIXES = (Path("desktop") / "src-tauri" / "gen",)
 
 
 def get_project_version() -> str:
@@ -113,6 +114,11 @@ def native_source_fingerprint(repo_root: Path) -> str:
             files.extend(candidate for candidate in path.rglob("*") if candidate.is_file())
     for path in sorted(files, key=lambda item: item.relative_to(repo_root).as_posix()):
         relative = path.relative_to(repo_root).as_posix()
+        if any(
+            relative == prefix.as_posix() or relative.startswith(prefix.as_posix() + "/")
+            for prefix in NATIVE_PROVENANCE_EXCLUDED_PREFIXES
+        ):
+            continue
         digest.update(relative.encode())
         digest.update(b"\0")
         with path.open("rb") as stream:
