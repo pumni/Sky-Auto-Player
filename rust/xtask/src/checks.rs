@@ -1,5 +1,6 @@
 use crate::{Result, process, repo};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -258,6 +259,12 @@ fn validate_tooling_ledger(root: &Path) -> Result<()> {
 
 pub fn bindings() -> Result<()> {
     let root = repo::root();
+    let export_dir = prepare_binding_export_dir(&root)?;
+    let export_dir = export_dir
+        .to_str()
+        .ok_or("binding export directory is not valid UTF-8")?
+        .to_owned();
+    let export_env = [("TS_RS_EXPORT_DIR", export_dir.as_str())];
     process::run(
         "cargo",
         &[
@@ -271,14 +278,73 @@ pub fn bindings() -> Result<()> {
             "--locked",
         ],
         &root,
-        &[],
+        &export_env,
     )?;
-    process::run(
-        "git",
-        &["diff", "--exit-code", "--", "desktop/src/bridge/generated"],
-        &root,
-        &[],
-    )?;
+    compare_generated_bindings(&root, Path::new(&export_dir))?;
+    Ok(())
+}
+
+fn prepare_binding_export_dir(root: &Path) -> Result<std::path::PathBuf> {
+    let export_dir = root.join("rust/target/xtask-bindings");
+    if export_dir.exists() {
+        if fs::symlink_metadata(&export_dir)?.file_type().is_symlink() {
+            return Err("binding export directory must not be a symlink".into());
+        }
+        fs::remove_dir_all(&export_dir)?;
+    }
+    fs::create_dir_all(&export_dir)?;
+    Ok(export_dir)
+}
+
+fn collect_binding_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    if !root.is_dir() {
+        return Err(format!("binding export directory is missing: {}", root.display()).into());
+    }
+    let mut files = BTreeMap::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "binding export contains a symlink: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.insert(relative, fs::read(entry.path())?);
+    }
+    Ok(files)
+}
+
+fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
+    let checked_in_dir = root.join("desktop/src/bridge/generated");
+    let mut expected = collect_binding_files(&checked_in_dir)?;
+    // These are maintained frontend support files rather than ts-rs exports.
+    expected.remove("index.ts");
+    expected.remove("serde_json/JsonValue.ts");
+    let actual = collect_binding_files(export_dir)?;
+    if expected != actual {
+        let expected_paths = expected.keys().cloned().collect::<Vec<_>>();
+        let actual_paths = actual.keys().cloned().collect::<Vec<_>>();
+        let changed = expected_paths
+            .iter()
+            .chain(actual_paths.iter())
+            .filter(|path| expected.get(*path) != actual.get(*path))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        return Err(format!(
+            "generated Tauri bindings differ from committed output: {}",
+            changed.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -294,7 +360,15 @@ pub fn run(group: &str) -> Result<()> {
             // The canonical Windows qualification runs workspace tests in a
             // restricted environment.  Keep process-global test fixtures
             // deterministic there; this does not change product concurrency.
-            let test_env = [("RUST_TEST_THREADS", "1")];
+            let export_dir = prepare_binding_export_dir(&root)?;
+            let export_dir = export_dir
+                .to_str()
+                .ok_or("binding export directory is not valid UTF-8")?
+                .to_owned();
+            let test_env = [
+                ("RUST_TEST_THREADS", "1"),
+                ("TS_RS_EXPORT_DIR", export_dir.as_str()),
+            ];
             process::run(
                 "cargo",
                 &[
