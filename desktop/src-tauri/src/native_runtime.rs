@@ -5,7 +5,7 @@
 //! plus outer adapters.  It never delegates a native-owned command to the
 //! Python Core.
 
-use crate::app_state::{ActivityCoordinator, PhysicalActivityLease};
+use crate::app_state::{ActivityCoordinator, ActivityReservationError, PhysicalActivityLease};
 use crate::commands::{
     BootstrapDto, CalibrationCancelAckDto, CalibrationCancelRequest, CalibrationStartAckDto,
     CalibrationStartRequest, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto,
@@ -95,6 +95,115 @@ pub(crate) enum TestSeams {
     SafePackage,
 }
 
+#[derive(Default)]
+struct CalibrationPublicationGate {
+    state: Mutex<CalibrationPublicationState>,
+    changed: Condvar,
+    #[cfg(test)]
+    before_admission: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    #[cfg(test)]
+    after_admission: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+}
+
+#[derive(Default)]
+struct CalibrationPublicationState {
+    closing: bool,
+    commit_in_progress: bool,
+}
+
+struct CalibrationPublicationAdmission {
+    gate: Arc<CalibrationPublicationGate>,
+}
+
+impl Drop for CalibrationPublicationAdmission {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.gate.state.lock() {
+            state.commit_in_progress = false;
+            self.gate.changed.notify_all();
+        }
+    }
+}
+
+impl CalibrationPublicationGate {
+    fn try_admit(self: &Arc<Self>) -> Option<CalibrationPublicationAdmission> {
+        #[cfg(test)]
+        let before_admission = self
+            .before_admission
+            .lock()
+            .ok()
+            .and_then(|mut hook| hook.take());
+        #[cfg(test)]
+        if let Some((entered, release)) = before_admission {
+            entered.wait();
+            release.wait();
+        }
+
+        let mut state = self.state.lock().ok()?;
+        if state.closing || state.commit_in_progress {
+            return None;
+        }
+        state.commit_in_progress = true;
+        drop(state);
+
+        #[cfg(test)]
+        let after_admission = self
+            .after_admission
+            .lock()
+            .ok()
+            .and_then(|mut hook| hook.take());
+        #[cfg(test)]
+        if let Some((entered, release)) = after_admission {
+            entered.wait();
+            release.wait();
+        }
+
+        Some(CalibrationPublicationAdmission {
+            gate: Arc::clone(self),
+        })
+    }
+
+    fn close_until(&self, deadline: Instant) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        state.closing = true;
+        while state.commit_in_progress {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.changed.wait_timeout(state, remaining) {
+                Ok((next, _)) => state = next,
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn is_closing(&self) -> bool {
+        self.state.lock().map(|state| state.closing).unwrap_or(true)
+    }
+
+    #[cfg(test)]
+    fn pause_before_next_admission(
+        &self,
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+    ) {
+        *self.before_admission.lock().expect("publication hook") = Some((entered, release));
+    }
+
+    #[cfg(test)]
+    fn pause_after_next_admission(
+        &self,
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+    ) {
+        *self.after_admission.lock().expect("publication hook") = Some((entered, release));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CalibrationBudget {
     child_timeout_seconds: f64,
@@ -143,7 +252,7 @@ struct NativeCalibrationService {
     playback: Arc<NativePlaybackService>,
     test_seams: TestSeams,
     operation: Mutex<Option<NativeCalibrationOperation>>,
-    publication: Mutex<()>,
+    publication: Arc<CalibrationPublicationGate>,
     closed: AtomicBool,
 }
 
@@ -172,7 +281,7 @@ impl NativeCalibrationService {
             playback,
             test_seams,
             operation: Mutex::new(None),
-            publication: Mutex::new(()),
+            publication: Arc::new(CalibrationPublicationGate::default()),
             closed: AtomicBool::new(false),
         }
     }
@@ -205,7 +314,10 @@ impl NativeCalibrationService {
             // reservation.  This gives a second calibration start a stable
             // `already_running` linearization point instead of exposing the
             // generic activity error from a duplicate request.
-            let reservation = self.activity.reserve_calibration()?;
+            let reservation = self
+                .activity
+                .reserve_calibration()
+                .map_err(calibration_activity_error)?;
             *current = Some(NativeCalibrationOperation {
                 operation_id: operation_id.clone(),
                 state: CalibrationState::Running,
@@ -305,6 +417,28 @@ impl NativeCalibrationService {
 
     fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
+        let deadline = Instant::now() + CALIBRATION_SHUTDOWN_TIMEOUT;
+        if !self.publication.close_until(deadline) {
+            // A commit admitted before Closing owns the final production
+            // mutation.  Returning while it is still in flight would permit a
+            // post-shutdown cache writer, so the process boundary fails closed
+            // if that bounded admission contract cannot complete.
+            std::process::abort();
+        }
+        let _ = self.shutdown_worker_until(deadline);
+    }
+
+    #[cfg(test)]
+    fn shutdown_with_timeout(&self, timeout: Duration) -> bool {
+        self.closed.store(true, Ordering::Release);
+        let deadline = Instant::now() + timeout;
+        if !self.publication.close_until(deadline) {
+            return false;
+        }
+        self.shutdown_worker_until(deadline)
+    }
+
+    fn shutdown_worker_until(&self, deadline: Instant) -> bool {
         let worker_and_done = if let Ok(mut operation) = self.operation.lock() {
             if let Some(current) = operation.as_mut()
                 && matches!(
@@ -334,7 +468,6 @@ impl NativeCalibrationService {
         };
         if let Some((worker, done, reservation)) = worker_and_done {
             if let Some(worker) = worker {
-                let deadline = Instant::now() + CALIBRATION_SHUTDOWN_TIMEOUT;
                 let mut finished = done.0.lock().ok();
                 while let Some(value) = finished.take() {
                     if *value || Instant::now() >= deadline {
@@ -349,15 +482,20 @@ impl NativeCalibrationService {
                 }
                 if finished.as_deref() == Some(&true) {
                     let _ = worker.join();
+                    drop(reservation);
+                    return true;
                 }
                 // A worker that did not acknowledge completion within the
-                // bounded shutdown budget cannot be allowed to publish a cache or
-                // terminal event after shutdown. `closed` is checked by finish;
-                // dropping this handle is therefore a safe, non-publishing
-                // containment path rather than an unbounded join.
+                // bounded shutdown budget cannot be allowed to publish a cache
+                // or terminal event after shutdown.  The publication gate is
+                // already Closing, so dropping this handle is a safe,
+                // non-publishing containment path rather than an unbounded join.
+                drop(reservation);
+                return false;
             }
             drop(reservation);
         }
+        true
     }
 
     fn wait_for_terminal(&self, timeout: Duration) -> Result<CalibrationState, String> {
@@ -425,19 +563,38 @@ impl NativeCalibrationService {
                 false,
             ),
             Ok(raw) => {
-                // Serialization/publication is guarded together with the
-                // shutdown flag.  Shutdown can therefore not return while a
-                // worker is about to publish a cache after the close boundary.
-                let publication = self.publication.lock();
-                if publication.is_err() || self.closed.load(Ordering::Acquire) {
+                // Evidence validation and temporary-cache generation happen
+                // before commit admission.  Only the final production rename,
+                // prepared-plan invalidation, and terminal publication are
+                // protected by the shared shutdown/publication gate.
+                let prepared = match prepare_calibration_cache(&self.install_root, &raw) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.finish(
+                            &operation_id,
+                            CalibrationState::Failed,
+                            CalibrationOutcome::Failed,
+                            "failed",
+                            None,
+                            0,
+                            "none",
+                            &error,
+                            false,
+                        );
+                        return;
+                    }
+                };
+                let Some(publication) = self.publication.try_admit() else {
+                    drop(prepared);
                     return;
-                }
-                match publish_calibration_cache(&self.install_root, &raw) {
+                };
+                match prepared.commit() {
                     Ok((margin, samples)) => {
                         // Cache publication and prepared-plan invalidation precede
                         // the terminal event and release of the activity lease.
                         self.playback.invalidate_settings();
-                        self.finish(
+                        self.finish_admitted(
+                            publication,
                             &operation_id,
                             CalibrationState::Succeeded,
                             CalibrationOutcome::Succeeded,
@@ -449,7 +606,8 @@ impl NativeCalibrationService {
                             margin.is_some(),
                         );
                     }
-                    Err(error) => self.finish(
+                    Err(error) => self.finish_admitted(
+                        publication,
                         &operation_id,
                         CalibrationState::Failed,
                         CalibrationOutcome::Failed,
@@ -490,6 +648,37 @@ impl NativeCalibrationService {
     #[allow(clippy::too_many_arguments)]
     fn finish(
         &self,
+        operation_id: &str,
+        state: CalibrationState,
+        outcome: CalibrationOutcome,
+        status: &str,
+        margin_us: Option<u64>,
+        sample_count: u64,
+        source: &str,
+        message: &str,
+        applied: bool,
+    ) {
+        let Some(publication) = self.publication.try_admit() else {
+            return;
+        };
+        self.finish_admitted(
+            publication,
+            operation_id,
+            state,
+            outcome,
+            status,
+            margin_us,
+            sample_count,
+            source,
+            message,
+            applied,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_admitted(
+        &self,
+        _publication: CalibrationPublicationAdmission,
         operation_id: &str,
         state: CalibrationState,
         outcome: CalibrationOutcome,
@@ -819,14 +1008,38 @@ fn bounded_text(value: impl AsRef<str>) -> String {
     value.as_ref().chars().take(4096).collect()
 }
 
+struct PreparedCalibrationCache {
+    temp_path: PathBuf,
+    cache_path: PathBuf,
+    margin_us: Option<u64>,
+    sample_count: u64,
+    committed: bool,
+}
+
+impl PreparedCalibrationCache {
+    fn commit(mut self) -> Result<(Option<u64>, u64), String> {
+        fs::rename(&self.temp_path, &self.cache_path).map_err(|error| error.to_string())?;
+        self.committed = true;
+        Ok((self.margin_us, self.sample_count))
+    }
+}
+
+impl Drop for PreparedCalibrationCache {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
 /// Convert the child protocol-vNext evidence into the accepted cache-v8
 /// shape.  All required production buckets and publishability counters are
-/// checked before the atomic replace; a zero/partial/malformed child result
-/// can never become a timing policy.
-fn publish_calibration_cache(
+/// checked before the temporary cache is exposed to the commit gate; a
+/// zero/partial/malformed child result can never become a timing policy.
+fn prepare_calibration_cache(
     install_root: &Path,
     raw: &Value,
-) -> Result<(Option<u64>, u64), String> {
+) -> Result<PreparedCalibrationCache, String> {
     let root = raw
         .as_object()
         .ok_or("calibration evidence root must be an object")?;
@@ -986,11 +1199,12 @@ fn publish_calibration_cache(
     fs::create_dir_all(cache_path.parent().expect("cache parent"))
         .map_err(|error| error.to_string())?;
     let temp = cache_path.with_extension(format!("json.{}.tmp", opaque_native_id()?));
-    fs::write(
-        &temp,
-        serde_json::to_vec_pretty(&Value::Object(cache)).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    let serialized =
+        serde_json::to_vec_pretty(&Value::Object(cache)).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::write(&temp, serialized) {
+        let _ = fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
     let resolution = load_calibration_resolution(&temp);
     if !matches!(
         resolution.source.as_str(),
@@ -1000,8 +1214,21 @@ fn publish_calibration_cache(
         let _ = fs::remove_file(&temp);
         return Err("published calibration cache failed its compatibility validation".into());
     }
-    fs::rename(&temp, &cache_path).map_err(|error| error.to_string())?;
-    Ok((valid.then_some(applied as u64), samples))
+    Ok(PreparedCalibrationCache {
+        temp_path: temp,
+        cache_path,
+        margin_us: valid.then_some(applied as u64),
+        sample_count: samples,
+        committed: false,
+    })
+}
+
+#[cfg(test)]
+fn publish_calibration_cache(
+    install_root: &Path,
+    raw: &Value,
+) -> Result<(Option<u64>, u64), String> {
+    prepare_calibration_cache(install_root, raw)?.commit()
 }
 
 fn validate_signed_quantiles(value: Option<&Value>, message: &str) -> Result<(), String> {
@@ -1752,6 +1979,8 @@ struct NativePlaybackService {
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
     diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     activity: ActivityCoordinator,
+    #[cfg(test)]
+    settings_invalidation_count: AtomicU64,
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -2142,6 +2371,8 @@ impl NativePlaybackService {
             last_terminal: Arc::new(Mutex::new(None)),
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             activity,
+            #[cfg(test)]
+            settings_invalidation_count: AtomicU64::new(0),
         }
     }
 
@@ -2366,7 +2597,11 @@ impl NativePlaybackService {
         let activity_lease = if variant.config.dry_run {
             None
         } else {
-            Some(self.activity.reserve_playback(&session_id)?)
+            Some(
+                self.activity
+                    .reserve_playback(&session_id)
+                    .map_err(playback_activity_error)?,
+            )
         };
         let (player, target_hwnd) = if variant.config.dry_run {
             (None, None)
@@ -2937,6 +3172,9 @@ impl NativePlaybackService {
     }
 
     fn invalidate_settings(&self) {
+        #[cfg(test)]
+        self.settings_invalidation_count
+            .fetch_add(1, Ordering::Relaxed);
         if let Ok(mut prepared) = self.prepared.lock() {
             prepared.clear();
         }
@@ -2998,6 +3236,8 @@ impl NativePlaybackServiceHandle {
             last_terminal: self.last_terminal.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
+            #[cfg(test)]
+            settings_invalidation_count: AtomicU64::new(0),
         };
         service.monitor(active, events);
     }
@@ -3588,6 +3828,31 @@ fn encode_result<T: serde::Serialize>(result: Result<T, String>) -> Result<Value
 fn settings_error(error: SettingsError) -> String {
     error.to_string()
 }
+
+fn calibration_activity_error(error: ActivityReservationError) -> String {
+    match error {
+        ActivityReservationError::Closing => "closing: desktop application is closing".into(),
+        ActivityReservationError::CalibrationAlreadyActive => {
+            "already_running: a calibration operation is already active".into()
+        }
+        ActivityReservationError::PhysicalPlaybackActive => {
+            "playback_active: calibration cannot run during physical playback".into()
+        }
+    }
+}
+
+fn playback_activity_error(error: ActivityReservationError) -> String {
+    match error {
+        ActivityReservationError::Closing => "closing: desktop application is closing".into(),
+        ActivityReservationError::CalibrationAlreadyActive => {
+            "calibration_active: calibration is active".into()
+        }
+        ActivityReservationError::PhysicalPlaybackActive => {
+            "already_running: another physical playback session is active".into()
+        }
+    }
+}
+
 fn catalog_error(error: CatalogError) -> String {
     error.to_string()
 }
@@ -3771,16 +4036,16 @@ mod tests {
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
     use crate::ui_events::{
-        CalibrationMode, DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState,
-        PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
+        CalibrationMode, CalibrationState, DiagnosticsBackendStatus, PlaybackEventState,
+        PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
     };
     use serde_json::Value;
     use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use sky_native_adapters::load_calibration_resolution;
     use std::fs;
-    use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier, Condvar, Mutex};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn active_for_control(
@@ -3969,6 +4234,265 @@ mod tests {
             })
             .expect_err("duplicate calibration");
         assert!(error.starts_with("already_running:"));
+    }
+
+    fn quick_calibration_request() -> CalibrationStartRequest {
+        CalibrationStartRequest {
+            mode: CalibrationMode::Quick,
+            class_name: None,
+            polyphony: None,
+            samples: None,
+            timeout_seconds: None,
+        }
+    }
+
+    fn calibration_finished_count(events: &Arc<Mutex<NativeEventHub>>) -> usize {
+        events
+            .lock()
+            .expect("event hub")
+            .buffered
+            .iter()
+            .filter(|event| matches!(event, UiEvent::CalibrationFinished { .. }))
+            .count()
+    }
+
+    #[test]
+    fn calibration_shutdown_before_commit_cannot_mutate_after_return() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-calibration-close-before-{suffix}"));
+        let cache = root.join(".cache/input_latency.json");
+        fs::create_dir_all(cache.parent().expect("cache parent")).expect("cache directory");
+        let original = br#"{"sentinel":"unchanged"}"#.to_vec();
+        fs::write(&cache, &original).expect("sentinel cache");
+
+        let activity = ActivityCoordinator::default();
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let playback = Arc::new(NativePlaybackService::new(activity.clone()));
+        let service = Arc::new(NativeCalibrationService::new(
+            root.clone(),
+            activity.clone(),
+            events.clone(),
+            playback.clone(),
+            TestSeams::SafePackage,
+        ));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        service
+            .publication
+            .pause_before_next_admission(entered.clone(), release.clone());
+        service
+            .start(quick_calibration_request())
+            .expect("start calibration");
+        entered.wait();
+
+        let shutdown_service = Arc::clone(&service);
+        let shutdown = std::thread::spawn(move || {
+            shutdown_service.shutdown_with_timeout(Duration::from_millis(50))
+        });
+        let closing_deadline = Instant::now() + Duration::from_secs(1);
+        while !service.publication.is_closing() && Instant::now() < closing_deadline {
+            std::thread::yield_now();
+        }
+        assert!(service.publication.is_closing(), "shutdown crossed Closing");
+        assert!(
+            !shutdown.join().expect("bounded shutdown thread"),
+            "blocked worker must be contained at the shutdown deadline"
+        );
+
+        assert_eq!(fs::read(&cache).expect("cache after shutdown"), original);
+        assert_eq!(
+            playback.settings_invalidation_count.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(calibration_finished_count(&events), 0);
+        assert!(!activity.is_calibration_active());
+        // The worker is now detached behind the Closing gate.  Releasing it
+        // proves that it can finish only by discarding its temporary artifact;
+        // it cannot mutate production state after shutdown returned.
+        release.wait();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            fs::read(&cache).expect("cache after worker release"),
+            original
+        );
+        assert_eq!(
+            playback.settings_invalidation_count.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(calibration_finished_count(&events), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn calibration_commit_before_shutdown_has_one_bounded_outcome() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-calibration-commit-before-{suffix}"));
+        let activity = ActivityCoordinator::default();
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let playback = Arc::new(NativePlaybackService::new(activity.clone()));
+        let service = Arc::new(NativeCalibrationService::new(
+            root.clone(),
+            activity.clone(),
+            events.clone(),
+            playback.clone(),
+            TestSeams::SafePackage,
+        ));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        service
+            .publication
+            .pause_after_next_admission(entered.clone(), release.clone());
+        service
+            .start(quick_calibration_request())
+            .expect("start calibration");
+        entered.wait();
+
+        let shutdown_service = Arc::clone(&service);
+        let shutdown = std::thread::spawn(move || shutdown_service.shutdown());
+        let closing_deadline = Instant::now() + Duration::from_secs(1);
+        while !service.publication.is_closing() && Instant::now() < closing_deadline {
+            std::thread::yield_now();
+        }
+        assert!(service.publication.is_closing(), "shutdown crossed Closing");
+        release.wait();
+        shutdown.join().expect("shutdown thread");
+
+        let cache = root.join(".cache/input_latency.json");
+        let resolution = load_calibration_resolution(&cache);
+        assert_eq!(
+            resolution.source,
+            sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE
+        );
+        assert_eq!(
+            playback.settings_invalidation_count.load(Ordering::Relaxed),
+            1
+        );
+        assert!(calibration_finished_count(&events) <= 1);
+        assert!(!activity.is_calibration_active());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn calibration_shutdown_hung_worker_is_bounded_and_nonpublishing() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-calibration-hung-worker-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let activity = ActivityCoordinator::default();
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let playback = Arc::new(NativePlaybackService::new(activity.clone()));
+        let service = Arc::new(NativeCalibrationService::new(
+            root.clone(),
+            activity.clone(),
+            events.clone(),
+            playback.clone(),
+            TestSeams::SafePackage,
+        ));
+        let reservation = activity.reserve_calibration().expect("calibration slot");
+        let done = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::new(AtomicBool::new(false));
+        let worker_release = release.clone();
+        let worker_finished_flag = worker_finished.clone();
+        let worker = std::thread::spawn(move || {
+            while !worker_release.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            worker_finished_flag.store(true, Ordering::Release);
+        });
+        *service.operation.lock().expect("operation") = Some(NativeCalibrationOperation {
+            operation_id: "h".repeat(32),
+            state: CalibrationState::Running,
+            cancel: Arc::new(AtomicBool::new(false)),
+            child: Arc::new(Mutex::new(None)),
+            worker: Some(worker),
+            done,
+            reservation: Some(reservation),
+        });
+
+        let started = Instant::now();
+        let worker_joined = service.shutdown_with_timeout(Duration::from_millis(50));
+        assert!(!worker_joined);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!activity.is_calibration_active());
+        assert_eq!(
+            playback.settings_invalidation_count.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(calibration_finished_count(&events), 0);
+
+        release.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !worker_finished.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(worker_finished.load(Ordering::Acquire));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn routed_calibration_start_maps_physical_activity_to_playback_active() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-calibration-playback-active-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let activity = ActivityCoordinator::default();
+        let playback = activity
+            .reserve_playback("native-session")
+            .expect("physical playback reservation");
+        let runtime = NativeDesktopRuntime::from_install_root_with_activity_and_seams(
+            root.clone(),
+            activity,
+            TestSeams::SafePackage,
+        )
+        .expect("runtime");
+        let error = runtime
+            .dispatch("calibration.start", serde_json::json!({"mode":"quick"}))
+            .expect_err("physical playback must block calibration");
+        assert!(error.starts_with("playback_active:"), "{error}");
+        drop(playback);
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn routed_duplicate_calibration_start_maps_to_already_running() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-calibration-already-running-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let activity = ActivityCoordinator::default();
+        let reservation = activity
+            .reserve_calibration()
+            .expect("calibration reservation");
+        let runtime = NativeDesktopRuntime::from_install_root_with_activity_and_seams(
+            root.clone(),
+            activity,
+            TestSeams::SafePackage,
+        )
+        .expect("runtime");
+        let error = runtime
+            .dispatch("calibration.start", serde_json::json!({"mode":"quick"}))
+            .expect_err("duplicate calibration must be rejected");
+        assert!(error.starts_with("already_running:"), "{error}");
+        drop(reservation);
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

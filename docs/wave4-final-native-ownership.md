@@ -55,6 +55,16 @@ reserves, and an out-of-envelope result is written with a null applied margin so
 round-trips through the accepted loader as a fallback rather than as a fake device
 margin.
 
+The final cache replacement, prepared-plan invalidation, and terminal-event
+publication share one closing admission gate with calibration shutdown. Shutdown
+closes that gate before waiting for workers; an admitted commit is completed within
+the bounded shutdown contract, while an unadmitted worker can only discard its
+temporary cache. If shutdown has already begun, the admitted cache/invalidation
+outcome is retained and its terminal event is suppressed; shutdown owns the final
+bounded lifecycle boundary. Activity admission is typed: a duplicate calibration reports
+`already_running`, physical playback reports `playback_active`, and concurrent
+playback/calibration requests have one shared linearization point.
+
 **SAFE SELFTEST COMPOSITION:** package qualification enters `TestSeams::SafePackage`
 only through the hidden selftest composition roots. The normal `run()` composition
 always uses `TestSeams::Disabled`; environment variables alone cannot synthesize

@@ -38,6 +38,24 @@ struct ActivityState {
     closing: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActivityReservationError {
+    Closing,
+    CalibrationAlreadyActive,
+    PhysicalPlaybackActive,
+}
+
+impl std::fmt::Display for ActivityReservationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::Closing => "desktop application is closing",
+            Self::CalibrationAlreadyActive => "a calibration operation is already active",
+            Self::PhysicalPlaybackActive => "physical playback is active",
+        };
+        formatter.write_str(message)
+    }
+}
+
 pub(crate) struct PhysicalActivityLease {
     coordinator: ActivityCoordinator,
     session_id: String,
@@ -53,20 +71,20 @@ impl ActivityCoordinator {
     pub(crate) fn reserve_playback(
         &self,
         session_id: impl Into<String>,
-    ) -> Result<PhysicalActivityLease, String> {
+    ) -> Result<PhysicalActivityLease, ActivityReservationError> {
         let session_id = session_id.into();
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "activity gate poisoned".to_string())?;
+            .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
-            return Err("desktop application is closing".into());
+            return Err(ActivityReservationError::Closing);
         }
         if state.calibration_active {
-            return Err("calibration is active".into());
+            return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
         if state.physical_playback.is_some() {
-            return Err("another physical playback session is active".into());
+            return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
         state.physical_playback = Some(session_id.clone());
         Ok(PhysicalActivityLease {
@@ -75,19 +93,21 @@ impl ActivityCoordinator {
         })
     }
 
-    pub(crate) fn reserve_calibration(&self) -> Result<CalibrationReservation, String> {
+    pub(crate) fn reserve_calibration(
+        &self,
+    ) -> Result<CalibrationReservation, ActivityReservationError> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "activity gate poisoned".to_string())?;
+            .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
-            return Err("desktop application is closing".into());
+            return Err(ActivityReservationError::Closing);
         }
         if state.calibration_active {
-            return Err("a calibration operation is already active".into());
+            return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
         if state.physical_playback.is_some() {
-            return Err("calibration cannot run during physical playback".into());
+            return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
         state.calibration_active = true;
         Ok(CalibrationReservation {
@@ -622,7 +642,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityCoordinator, AppState};
+    use super::{ActivityCoordinator, ActivityReservationError, AppState};
     use crate::core::protocol::CoreEvent;
     use crate::native_runtime::NativeDesktopRuntime;
     use crate::ui_events::{CalibrationFinishedPayload, CalibrationOutcome, CatalogChangedPayload};
@@ -692,10 +712,16 @@ mod tests {
         let playback = activity
             .reserve_playback("session")
             .expect("playback lease");
-        assert!(activity.reserve_calibration().is_err());
+        assert!(matches!(
+            activity.reserve_calibration(),
+            Err(ActivityReservationError::PhysicalPlaybackActive)
+        ));
         drop(playback);
         let _calibration = activity.reserve_calibration().expect("calibration slot");
-        assert!(activity.reserve_playback("other").is_err());
+        assert!(matches!(
+            activity.reserve_playback("other"),
+            Err(ActivityReservationError::CalibrationAlreadyActive)
+        ));
         activity.release_calibration();
         let playback = activity.reserve_playback("other").expect("released slot");
         drop(playback);
