@@ -415,6 +415,8 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
         fs::remove_dir_all(&smoke_dir)?;
     }
     copy_tree(release_dir, &smoke_dir)?;
+    let phase_log = smoke_dir.join("gui-smoke-phases.log");
+    let _ = fs::remove_file(&phase_log);
     let path_value = if python_unavailable {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
@@ -432,7 +434,13 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
     } else {
         std::env::var("PATH").unwrap_or_default()
     };
-    let env = vec![("PATH".into(), path_value)];
+    let env = vec![
+        ("PATH".into(), path_value),
+        (
+            "SKY_GUI_SMOKE_PHASE_LOG".into(),
+            phase_log.display().to_string(),
+        ),
+    ];
     let result = (|| -> Result<()> {
         process::run_owned(
             &smoke_dir.join(PRIMARY),
@@ -450,6 +458,19 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
     })();
     let cleanup = fs::remove_dir_all(&smoke_dir);
     let result_error = result.err();
+    if let Some(error) = &result_error {
+        eprintln!(
+            "[xtask] packaged smoke phases ({}): {}",
+            if python_unavailable {
+                "python-unavailable"
+            } else {
+                "normal"
+            },
+            fs::read_to_string(&phase_log)
+                .unwrap_or_else(|read_error| format!("<unavailable: {read_error}>"))
+        );
+        eprintln!("[xtask] packaged smoke failure: {error}");
+    }
     cleanup?;
     if let Some(error) = result_error {
         return Err(error);
