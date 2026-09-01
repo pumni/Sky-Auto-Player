@@ -34,9 +34,6 @@ LEGACY_DISPATCH_PATHS = {
     "rust/crates/sky_player/src/engine/worker/downs.rs",
     "rust/crates/sky_player/src/engine/worker/down_outcome.rs",
     "rust/crates/sky_player/src/engine/worker/releases.rs",
-    "rust/crates/sky_player_rs/src/engine/worker/downs.rs",
-    "rust/crates/sky_player_rs/src/engine/worker/down_outcome.rs",
-    "rust/crates/sky_player_rs/src/engine/worker/releases.rs",
 }
 CANONICAL_DISPATCH_FILES = {
     "authored.rs",
@@ -221,10 +218,7 @@ def _function_line_violations(
 def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
     return [
         violation
-        for include in (
-            "rust/crates/sky_player/src/engine/worker/orchestration.rs",
-            "rust/crates/sky_player_rs/src/engine/worker/orchestration.rs",
-        )
+        for include in ("rust/crates/sky_player/src/engine/worker/orchestration.rs",)
         for violation in _function_line_violations(
             lines,
             path,
@@ -243,24 +237,15 @@ def _dispatch_function_violations(lines: list[str], path: str) -> list[Violation
         "dispatch_function_lines",
         "rust/crates/sky_player/src/engine/worker/dispatch/",
         prefix=True,
-    ) + _function_line_violations(
-        lines,
-        path,
-        DISPATCH_FUNCTION_HARD_LIMIT,
-        "dispatch_function_lines",
-        "rust/crates/sky_player_rs/src/engine/worker/dispatch/",
-        prefix=True,
     )
 
 
 def _worker_schedule_clone_violation(joined: str, path: str) -> Violation | None:
     worker_files = {
         "rust/crates/sky_player/src/engine/worker.rs",
-        "rust/crates/sky_player_rs/src/engine/worker.rs",
     }
     worker_roots = (
         "rust/crates/sky_player/src/engine/worker/",
-        "rust/crates/sky_player_rs/src/engine/worker/",
     )
     if path not in worker_files and not path.startswith(worker_roots):
         return None
@@ -319,24 +304,6 @@ def _record(report: CheckReport, violation: Violation, allowlist: dict[tuple[str
         report.errors.append(violation)
 
 
-def _player_adapter_violations(repository_root: Path) -> list[Violation]:
-    """Keep the temporary Python adapter behind sky_player's typed facade."""
-
-    manifest = repository_root / "rust/crates/sky_player_rs/Cargo.toml"
-    if not manifest.exists():
-        return []
-    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-    dependencies = data.get("dependencies", {})
-    return [
-        Violation(
-            "player_adapter_dependency",
-            "rust/crates/sky_player_rs/Cargo.toml",
-            f"sky_player_rs must not depend directly on {name}; use sky_player::adapter_support",
-        )
-        for name in sorted(PLAYER_ADAPTER_FORBIDDEN_DIRECT_DEPENDENCIES.intersection(dependencies))
-    ]
-
-
 def _app_core_violations(repository_root: Path) -> list[Violation]:
     """Reject delivery/platform/player dependencies in the pure app crate."""
 
@@ -380,15 +347,10 @@ def check_repository(repository_root: Path) -> CheckReport:
         report.errors.append(Violation("workspace", "rust/crates", "workspace not found"))
         return report
 
-    for violation in _player_adapter_violations(repository_root):
-        _record(report, violation, allowlist)
-
     for violation in _app_core_violations(repository_root):
         _record(report, violation, allowlist)
 
     dispatch_dir = repository_root / "rust/crates/sky_player/src/engine/worker/dispatch"
-    if not dispatch_dir.exists():
-        dispatch_dir = repository_root / "rust/crates/sky_player_rs/src/engine/worker/dispatch"
     if dispatch_dir.exists():
         actual_dispatch_files = {
             path.name
@@ -412,7 +374,7 @@ def check_repository(repository_root: Path) -> CheckReport:
                 )
             )
 
-    for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_app_core", "sky_player", "sky_player_rs"):
+    for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_app_core", "sky_player"):
         crate_path = workspace_root / crate / "src"
         if not crate_path.exists():
             continue
@@ -444,36 +406,12 @@ def check_repository(repository_root: Path) -> CheckReport:
 
             if re.search(r"\bunsafe\b", joined) and relative not in ALLOWED_UNSAFE_MODULES:
                 _record(report, Violation("unsafe_boundary", relative, "unsafe code outside allowlist"), allowlist)
-            if ("pyo3::" in joined or "use pyo3" in joined) and not (
-                relative.startswith("rust/crates/sky_player_rs/src/python/")
-                or relative == "rust/crates/sky_player_rs/src/python.rs"
-                or relative == "rust/crates/sky_player_rs/src/lib.rs"
-            ):
-                _record(report, Violation("pyo3_boundary", relative, "PyO3 import outside Python boundary"), allowlist)
             if crate == "sky_dispatch_core" and ("sky_dispatch_win32::" in joined or "use sky_dispatch_win32" in joined):
                 _record(report, Violation("dependency_direction", relative, "core imports sky_dispatch_win32"), allowlist)
-            if crate == "sky_player_rs" and (
-                "sky_dispatch_core::" in joined
-                or "use sky_dispatch_core" in joined
-                or "sky_dispatch_win32::" in joined
-                or "use sky_dispatch_win32" in joined
-            ):
-                _record(
-                    report,
-                    Violation(
-                        "player_adapter_dependency",
-                        relative,
-                        "sky_player_rs source must use sky_player::adapter_support for dispatch access",
-                    ),
-                    allowlist,
-                )
             if crate in {"sky_dispatch_core", "sky_dispatch_win32"} and (
-                "sky_player_rs::" in joined
-                or "use sky_player_rs" in joined
-                or "sky_player::" in joined
-                or "use sky_player" in joined
+                "sky_player::" in joined or "use sky_player" in joined
             ):
-                _record(report, Violation("dependency_direction", relative, "lower crate imports sky_player_rs"), allowlist)
+                _record(report, Violation("dependency_direction", relative, "lower crate imports sky_player"), allowlist)
             if _top_level_glob_import(lines) and not (
                 relative.endswith("/tests.rs") or "/tests/" in relative
             ):

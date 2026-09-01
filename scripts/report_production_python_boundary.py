@@ -37,13 +37,9 @@ SCAN_DIRECTORIES: Final[tuple[str, ...]] = (
 SCAN_FILES: Final[tuple[str, ...]] = (
     ".env.example",
     ".python-version",
-    "Sky-Auto-Player-Core.spec",
-    "Sky-Auto-Player.spec",
     "pyproject.toml",
     "scripts/build_portable_release.py",
-    "scripts/build_pyinstaller_bootloader.ps1",
-    "scripts/build_rust_wheel.py",
-    "scripts/test_windows_updater_e2e.ps1",
+    "scripts/release_common.py",
     "scripts/verify_release_manifest.py",
 )
 TEXT_SUFFIXES: Final[frozenset[str]] = frozenset(
@@ -211,9 +207,9 @@ def _python_boundary_accounting(
     return {
         "command_ownership": ownership,
         # The canonical Tauri executable has no Python import/process edge. The
-        # repository list below is deliberately reported separately because the
-        # Textual/CLI implementation and oracle fixtures remain for rollback and
-        # later cleanup; their presence is not a shipped runtime dependency.
+        # repository list below is deliberately reported separately because
+        # tooling, historical evidence, and migration fixtures are not shipped
+        # runtime dependencies.
         "production_python_modules_still_required": [],
         "python_modules_made_non_authoritative": repository_python_modules,
         "repository_python_oracle_or_legacy_modules": repository_python_modules,
@@ -224,14 +220,14 @@ def _python_boundary_accounting(
         "production_runtime_python_boundary": "zero",
         "pyinstaller_required_for_portable_desktop": False,
         "pyo3_required_for_production_tauri_playback": False,
-        "coresupervisor_use": "no: production Tauri is Native-only; cfg(test) CoreSupervisor remains as oracle/rollback coverage",
+        "coresupervisor_use": "no: production Tauri is Native-only; the production source and test transport were retired",
         "desktop_ipc_use": "no: canonical Tauri commands do not use Python desktop IPC",
         "remaining_production_blockers": {},
         "retained_repository_material": {
-            "textual_source": "retained for legacy/CLI use",
-            "python_oracle_tests": "retained for migration evidence",
-            "pyo3_maturin": "retained for compatibility/rollback builds",
-            "pyinstaller_specs": "retained but not invoked by canonical portable packaging",
+            "textual_source": "retired from the supported product",
+            "python_oracle_tests": "retained only where explicitly classified as tooling",
+            "pyo3_maturin": "removed from the workspace and product build graph",
+            "pyinstaller_specs": "removed from the canonical product build graph",
         },
     }
 

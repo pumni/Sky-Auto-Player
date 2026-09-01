@@ -5,25 +5,14 @@ updates:
     schedule:
       interval: weekly
     groups:
-      python-runtime:
-        patterns:
-          - packaging
-          - rapidfuzz
-          - textual
       python-tooling:
         patterns:
-          - maturin
+          - packaging
           - pyrefly
           - pyright
           - pytest
           - pytest-benchmark
-          - pytest-textual-snapshot
           - ruff
-          - soundcard
-      python-packaging:
-        patterns:
-          - pyinstaller
-          - pyinstaller-hooks-contrib
 
   - package-ecosystem: cargo
     directory: /rust
@@ -43,11 +32,6 @@ updates:
         update-types:
           - patch
           - minor
-      cargo-major-pyo3:
-        patterns:
-          - pyo3
-        update-types:
-          - major
       cargo-major-zip:
         patterns:
           - zip

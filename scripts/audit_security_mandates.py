@@ -1,7 +1,7 @@
 """Audit Sky Auto Player's source tree for SECURITY.md contract violations.
 
-Mirrors the static guard `scripts/audit_free_threaded_wheels.py` plays for the
-build pre-check. Walks Python under ``src/`` with an ``ast`` pass and Rust
+Audits any retained repository Python tooling under ``src/`` (if present) with
+an ``ast`` pass and Rust
 under ``rust/`` with a conservative lexical pass. It flags anything that,
 even if dormant or in dead code, crosses the canonical security boundary:
 
@@ -24,7 +24,7 @@ rule)). Each unsuppressed entry below the baseline fails CI; entries that
 match the baseline are reported but not failed. Delete a baseline entry
 once the underlying code is migrated — the audit will then enforce it.
 
-Stdlib only — no third-party deps. Mirrors `audit_free_threaded_wheels.py`.
+Stdlib only — no third-party dependencies.
 """
 from __future__ import annotations
 

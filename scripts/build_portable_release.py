@@ -1,9 +1,7 @@
-"""Build and qualify the exact v4 portable Windows release candidate.
+"""Build and qualify the exact native portable Windows release candidate.
 
-This is the canonical portable release entry point. It reuses the native build
-and manifest helpers from ``src/build_app.py`` but assembles the Tauri shell
-into a runtime-Python-free portable layout. Python remains repository-only
-oracle/tooling material.
+This is temporary repository tooling.  It assembles the Tauri shell and native
+helpers directly. Wave 6 will replace this orchestration with ``xtask``.
 """
 
 from __future__ import annotations
@@ -24,14 +22,22 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-import build_app  # noqa: E402
+from release_common import (  # noqa: E402
+    cargo_release_build_command,
+    get_git_head,
+    get_project_version,
+    native_build_environment,
+    native_source_fingerprint,
+    validate_native_build_provenance,
+    write_release_manifest,
+)
 
 APP_NAME = "Sky-Auto-Player"
-VERSION = build_app.get_project_version()
+VERSION = get_project_version()
 PRIMARY_EXE = "Sky-Auto-Player.exe"
 UPDATER_EXE = "Sky-Auto-Player-Updater.exe"
 CALIBRATION_EXE = "native_calibration.exe"
@@ -175,7 +181,7 @@ def assemble_release(
         _copy_file(readme, release_dir / "README.md")
     _assert_no_path_escape(release_dir)
     assert_runtime_python_free(release_dir)
-    build_app.write_release_manifest(
+    write_release_manifest(
         release_dir,
         version,
         PRIMARY_EXE,
@@ -201,7 +207,7 @@ def assert_runtime_python_free(release_dir: Path) -> None:
             or folded.startswith("_internal/")
             or name.startswith("python")
             or name == "base_library.zip"
-            or path.suffix.casefold() in {".pyd", ".pyc"}
+            or path.suffix.casefold() in {".pyd", ".py", ".pyc"}
         ):
             forbidden.append(relative)
     if forbidden:
@@ -240,16 +246,13 @@ def write_provenance(
     zip_path: Path,
     native_build_commit: str,
 ) -> dict[str, Any]:
+    validate_native_build_provenance(repo_head, native_build_commit)
     manifest = release_dir / "MANIFEST.json"
     data: dict[str, Any] = {
         "schema_version": 1,
         "repo_head": repo_head,
         "version": VERSION,
-        "python": {
-            "version": platform.python_version(),
-            "implementation": platform.python_implementation(),
-            "free_threaded": not bool(getattr(sys, "_is_gil_enabled", lambda: True)()),
-        },
+        "tooling_python": {"version": platform.python_version(), "implementation": platform.python_implementation()},
         "rust": {"compiler": _capture(["rustc", "--version"])},
         "bun": {"version": _capture(["bun", "--version"])},
         "tauri": {"api": "2.11.1", "cli": "2.11.4", "runtime": "2.11.5"},
@@ -383,89 +386,75 @@ def _run_exact_updater_qualification(output_root: Path, e2e_updater: Path) -> No
 def _build() -> tuple[Path, Path, Path, Path]:
     if sys.platform != "win32":
         raise RuntimeError("portable release build requires Windows")
-    git_head = build_app.get_git_head()
-    version = build_app.get_project_version()
+    git_head = get_git_head()
+    version = get_project_version()
     if version != VERSION:
         raise RuntimeError("project version changed during build")
-    build_app.generate_version_py(version)
-    build_app.generate_native_build_py(git_head)
-    build_app.generate_version_info(version)
-    env = build_app.native_build_environment()
+    env = native_build_environment()
     env["GITHUB_SHA"] = git_head
     env["SKY_NATIVE_BUILD_COMMIT"] = git_head
-    from sky_music.orchestration.native_provenance import native_source_fingerprint
-
-    env["SKY_NATIVE_SOURCE_FINGERPRINT"] = native_source_fingerprint(ROOT, "cp314t-win_amd64")
+    env["SKY_NATIVE_SOURCE_FINGERPRINT"] = native_source_fingerprint(ROOT)
     env["SKY_NATIVE_DIRTY_WORKTREE"] = "false"
-    try:
-        _run([sys.executable, "scripts/build_rust_wheel.py", "--profile", "dist"], env=env)
-        build_app.verify_native_build_info(git_head)
-        _run(["bun", "install", "--frozen-lockfile"], cwd=ROOT / "desktop")
-        _run(["bun", "run", "build"], cwd=ROOT / "desktop")
-        _run(
-            [
-                "cargo",
-                "build",
-                "--manifest-path",
-                str(ROOT / "rust" / "Cargo.toml"),
-                "-p",
-                "sky_desktop_shell",
-                "--bin",
-                "sky_desktop_shell",
-                "--profile",
-                "dist",
-                "--locked",
-            ],
-            env=env,
-        )
-        _run(
-            build_app.cargo_release_build_command(
-                ROOT / "rust" / "crates" / "sky_dispatch_win32" / "Cargo.toml",
-                "native_calibration",
-            ),
-            env=env,
-        )
-        # This disposable feature-gated runner is never copied into the
-        # release tree. It lets exact-artifact qualification use the native
-        # updater transaction runner with a deterministic local source while
-        # the shipped updater remains the production GitHub-only binary.
-        _run(
-            [
-                "cargo",
-                "build",
-                "--manifest-path",
-                str(ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml"),
-                "--bin",
-                "sky_updater_e2e",
-                "--profile",
-                "dist",
-                "--features",
-                "e2e-local-source,e2e-fault-injection",
-                "--locked",
-            ],
-            env=env,
-        )
-        # Build the shipped updater last so the exact release binary is
-        # produced with the default (GitHub-only) feature set.
-        _run(
-            build_app.cargo_release_build_command(
-                ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml", "sky_updater"
-            ),
-            env=env,
-        )
-        return (
-            ROOT / "rust" / "target" / "dist" / "sky_desktop_shell.exe",
-            ROOT / "rust" / "target" / "dist" / CALIBRATION_EXE,
-            ROOT / "rust" / "target" / "dist" / "sky_updater.exe",
-            ROOT / "rust" / "target" / "dist" / "sky_updater_e2e.exe",
-        )
-    finally:
-        build_app.VERSION_PY.unlink(missing_ok=True)
-        build_app.NATIVE_BUILD_PY.unlink(missing_ok=True)
+    _run(["bun", "install", "--frozen-lockfile"], cwd=ROOT / "desktop")
+    _run(["bun", "run", "build"], cwd=ROOT / "desktop")
+    _run(
+        [
+            "cargo",
+            "build",
+            "--manifest-path",
+            str(ROOT / "rust" / "Cargo.toml"),
+            "-p",
+            "sky_desktop_shell",
+            "--bin",
+            "sky_desktop_shell",
+            "--profile",
+            "dist",
+            "--locked",
+        ],
+        env=env,
+    )
+    _run(
+        cargo_release_build_command(
+            ROOT / "rust" / "crates" / "sky_dispatch_win32" / "Cargo.toml",
+            "native_calibration",
+        ),
+        env=env,
+    )
+    # This disposable feature-gated runner is never copied into the release
+    # tree. It qualifies updater transactions using a deterministic local source
+    # while the shipped updater remains the production GitHub-only binary.
+    _run(
+        [
+            "cargo",
+            "build",
+            "--manifest-path",
+            str(ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml"),
+            "--bin",
+            "sky_updater_e2e",
+            "--profile",
+            "dist",
+            "--features",
+            "e2e-local-source,e2e-fault-injection",
+            "--locked",
+        ],
+        env=env,
+    )
+    _run(
+        cargo_release_build_command(
+            ROOT / "rust" / "crates" / "sky_updater" / "Cargo.toml", "sky_updater"
+        ),
+        env=env,
+    )
+    return (
+        ROOT / "rust" / "target" / "dist" / "sky_desktop_shell.exe",
+        ROOT / "rust" / "target" / "dist" / CALIBRATION_EXE,
+        ROOT / "rust" / "target" / "dist" / "sky_updater.exe",
+        ROOT / "rust" / "target" / "dist" / "sky_updater_e2e.exe",
+    )
 
 
 def run_pipeline(output_root: Path) -> Path:
-    repo_head = build_app.get_git_head()
+    repo_head = get_git_head()
     tauri_exe, calibration_exe, updater_exe, e2e_updater_exe = _build()
     release_dir = output_root / RELEASE_NAME
     assemble_release(

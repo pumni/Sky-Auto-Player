@@ -22,11 +22,8 @@ _DURABLE_ROOTS = (
     ".github/actions",
 )
 _DURABLE_FILES = (
-    "play.bat",
     "pyproject.toml",
     "uv.lock",
-    "Sky-Auto-Player.spec",
-    "Sky-Auto-Player-Core.spec",
 )
 _HISTORICAL_PREFIXES = (
     "scripts/bench_phase",

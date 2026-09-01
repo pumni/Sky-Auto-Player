@@ -38,8 +38,7 @@ _PACKAGE_FILES = frozenset(
         "desktop/src-tauri/build.rs",
         "desktop/bun.lock",
         "desktop/package.json",
-        "Sky-Auto-Player.spec",
-        "Sky-Auto-Player-Core.spec",
+        "scripts/release_common.py",
     }
 )
 
@@ -81,7 +80,7 @@ def _is_package_sensitive(path: str) -> bool:
     return (
         path in _PACKAGE_FILES
         or path in _PACKAGE_WORKFLOW_FILES
-        or path in {"desktop/src-tauri/tauri.conf.json", "src/build_app.py"}
+        or path == "desktop/src-tauri/tauri.conf.json"
         or any(path.startswith(prefix) for prefix in _PACKAGE_PATH_PREFIXES)
     )
 
