@@ -256,7 +256,13 @@ fn exact_portable_artifact_updates_previous_stable_and_preserves_user_state() ->
         staged
             .files
             .iter()
-            .any(|file| file.path == "Sky-Auto-Player-Core.exe")
+            .all(|file| file.path != "Sky-Auto-Player-Core.exe")
+    );
+    assert!(
+        staged
+            .files
+            .iter()
+            .all(|file| !file.path.starts_with("_internal/"))
     );
 
     let install = temp_root("install with spaces");
@@ -344,7 +350,8 @@ fn exact_portable_artifact_interrupted_transaction_recovers_and_preserves_user_s
         );
     }
     assert_preserved(&install);
-    assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
+    assert!(install.join("Sky-Auto-Player-Core.exe").is_file());
+    assert!(install.join("_internal/python314.dll").is_file());
 
     let _ = fs::remove_dir_all(&staging);
     let _ = fs::remove_dir_all(&install);
@@ -540,7 +547,7 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
     }
     assert!(
         restart_marker.is_file(),
-        "canonical Tauri restart did not bootstrap the new Core"
+        "canonical Tauri restart did not bootstrap the new native desktop"
     );
     verify_installed_managed(&install, &target)?;
     assert_preserved_config(&install, &user_config);
