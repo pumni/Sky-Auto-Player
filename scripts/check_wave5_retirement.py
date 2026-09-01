@@ -1,9 +1,9 @@
 """Enforce the Wave 5 product/runtime retirement boundary.
 
-This is a small, read-only guard for active manifests, product source, and
-canonical build scripts. Historical documentation, updater migration fixtures,
-and this guard's own retired-token inventory are intentionally outside the
-active product scan.
+This is a small, read-only guard for active manifests, product source, active
+workflows, and canonical build scripts. Historical documentation, updater
+migration fixtures, and this guard's own retired-token inventory are
+intentionally outside the active product scan.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ FORBIDDEN_TOKENS = (
     "desktop_ipc",
     "sky-auto-player-core",
     "python.exe",
+    "build_rust_wheel.py",
     "rapidfuzz",
     "soundcard",
 )
@@ -36,9 +37,10 @@ ACTIVE_FILES = (
     Path("scripts/build_portable_release.py"),
     Path("scripts/release_common.py"),
     Path("scripts/verify_release_manifest.py"),
+    Path(".github/workflows/ci.yml"),
+    Path(".github/workflows/release.yml"),
 )
 ACTIVE_DIRS = (Path("desktop/src-tauri/src"),)
-ACTIVE_FILE_SCAN_EXCLUSIONS = {Path("scripts/build_portable_release.py")}
 EXCLUDED_FILENAMES = {"check_wave5_retirement.py"}
 LEDGER_PATH = ROOT / "docs" / "migration" / "wave5-python-retirement-ledger.json"
 BASELINE = "1634729acbdc236e0e0964a3fc9f74283a68c1c6"
@@ -50,6 +52,13 @@ CLASSIFICATIONS = {
     "FIXTURE_FROZEN",
     "TOOLING_RETAINED",
 }
+EVIDENCE_REQUIRED = {"MIGRATED", "DUPLICATE", "FIXTURE_FROZEN"}
+EVIDENCE_PLACEHOLDERS = (
+    "named native/frontend/updater tests cover",
+    "direct rust/native build evidence is stronger",
+    "native rust/tauri services now own",
+    "direct native qualification or the native release builder supersedes",
+)
 
 
 def _files() -> list[Path]:
@@ -72,18 +81,23 @@ def _files() -> list[Path]:
 
 def _active_hits() -> list[str]:
     hits: list[str] = []
-    pattern = re.compile("|".join(re.escape(token) for token in FORBIDDEN_TOKENS), re.IGNORECASE)
     for path in _files():
-        if path.name in EXCLUDED_FILENAMES or path.relative_to(ROOT) in ACTIVE_FILE_SCAN_EXCLUSIONS:
+        if path.name in EXCLUDED_FILENAMES:
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for line_number, line in enumerate(text.splitlines(), 1):
-            if pattern.search(line):
+            if _find_forbidden_tokens(line):
                 hits.append(f"{path.relative_to(ROOT).as_posix()}:{line_number}: {line.strip()}")
     return hits
+
+
+def _find_forbidden_tokens(text: str) -> list[str]:
+    """Return retired product tokens found in active source text."""
+    pattern = re.compile("|".join(re.escape(token) for token in FORBIDDEN_TOKENS), re.IGNORECASE)
+    return [match.casefold() for match in pattern.findall(text)]
 
 
 def _missing_paths() -> list[str]:
@@ -97,6 +111,53 @@ def _missing_paths() -> list[str]:
         Path("scripts/build_pyinstaller_bootloader.ps1"),
     )
     return [str(path) for path in forbidden if (ROOT / path).exists()]
+
+
+def _evidence_errors(entry: dict[str, object]) -> list[str]:
+    """Validate concrete invariant-transfer evidence for one ledger entry."""
+    classification = entry.get("classification")
+    if classification not in EVIDENCE_REQUIRED:
+        return []
+    path = entry.get("path", "<unknown>")
+    errors: list[str] = []
+    invariants = entry.get("invariants")
+    evidence = entry.get("evidence")
+    if not isinstance(invariants, list) or not invariants or not all(
+        isinstance(item, str) and item.strip() for item in invariants
+    ):
+        errors.append(f"{path}: {classification} requires non-empty invariants")
+    if not isinstance(evidence, list) or not evidence or not all(
+        isinstance(item, str) and item.strip() for item in evidence
+    ):
+        errors.append(f"{path}: {classification} requires a concrete evidence list")
+        return errors
+
+    for item in evidence:
+        folded = item.casefold()
+        if any(placeholder in folded for placeholder in EVIDENCE_PLACEHOLDERS):
+            errors.append(f"{path}: placeholder evidence is not accepted: {item}")
+            continue
+        reference, separator, symbol = item.partition("::")
+        normalized = reference.replace("\\", "/")
+        candidate = Path(normalized)
+        if not separator or candidate.is_absolute() or ".." in candidate.parts:
+            errors.append(f"{path}: evidence must be a repository path::symbol: {item}")
+            continue
+        target = ROOT / candidate
+        if not target.is_file():
+            errors.append(f"{path}: evidence target is missing: {reference}")
+            continue
+        if not symbol.strip():
+            errors.append(f"{path}: evidence symbol is empty: {item}")
+            continue
+        try:
+            source = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"{path}: cannot read evidence target {reference}: {exc}")
+            continue
+        if symbol not in source:
+            errors.append(f"{path}: evidence symbol is missing from {reference}: {symbol}")
+    return errors
 
 
 def _ledger_errors() -> list[str]:
@@ -124,6 +185,7 @@ def _ledger_errors() -> list[str]:
         paths.append(path.replace("\\", "/"))
         if classification not in CLASSIFICATIONS:
             errors.append(f"unknown retirement classification for {path}: {classification}")
+        errors.extend(_evidence_errors(entry))
     if len(paths) != len(set(paths)):
         errors.append("retirement ledger contains duplicate baseline paths")
 

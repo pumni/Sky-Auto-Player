@@ -349,6 +349,30 @@ pub fn selftest_packaged_shell() -> i32 {
     result
 }
 
+/// Emit only compile-time native build metadata for release qualification.
+/// This path has no application composition, I/O, playback, calibration, or
+/// update side effects.
+pub fn selftest_build_info() -> i32 {
+    let dto = native_runtime::native_build_dto();
+    let payload = serde_json::json!({
+        "schema_version": 1,
+        "native_build_commit": dto.native_build_commit,
+        "native_version": dto.native_version,
+        "rustc_version": dto.rustc_version,
+        "win32_backend": dto.win32_backend,
+    });
+    match serde_json::to_string(&payload) {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        Err(error) => {
+            eprintln!("failed to serialize native build metadata: {error}");
+            1
+        }
+    }
+}
+
 // The mock runtime is intentionally exercised in a no-default-features test
 // build. Keeping the production Wry runtime out of that test binary avoids
 // loading the native desktop webview during command-decoder unit tests.

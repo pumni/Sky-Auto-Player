@@ -16,6 +16,9 @@ no path is classified twice.
 - TOOLING_RETAINED: 26
 - TRANSPORT_ONLY: 11
 
+Wave 5 additions: 4 repository-only tooling files, all classified
+`TOOLING_RETAINED`.
+
 ## Classification
 
 - **MIGRATED** — native/TypeScript tests now prove the product invariant.
@@ -34,8 +37,24 @@ exact path in the JSON ledger. Retained Python files are explicitly
 missing product behavior. Evidence roots and replacement boundaries are listed
 in the JSON entry metadata.
 
-Wave 5 adds three repository-only Python files: the retirement guard, its
-direct test, and `release_common.py`. They are explicitly marked
+## Invariant-transfer evidence
+
+Every `MIGRATED`, `DUPLICATE`, and `FIXTURE_FROZEN` entry has two machine-checked
+fields in the JSON ledger:
+
+- `invariants` describes the specific behavior transferred or retired.
+- `evidence` contains one or more current repository references in the form
+  `path::symbol`.
+
+The Wave 5 retirement guard verifies that each evidence file exists and, when a
+symbol is named, that the symbol text is present in that file. It rejects the
+former generic classification-only placeholders, so deleting a Python test or
+module requires a concrete current Rust/TypeScript/packaging proof. `OBSOLETE`,
+`TRANSPORT_ONLY`, and `TOOLING_RETAINED` entries retain a concrete rationale;
+tooling additions are also checked for existence.
+
+Wave 5 adds four repository-only Python files: the retirement guard, its two
+direct test modules, and `release_common.py`. They are explicitly marked
 `TOOLING_RETAINED` and are scheduled for the Wave 6 `xtask` migration.
 
 The supported product is native Tauri/Rust. Wave 6 may remove the remaining

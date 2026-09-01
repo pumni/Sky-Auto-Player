@@ -72,7 +72,9 @@ def test_release_tree_is_exact_and_hash_verified(tmp_path: Path) -> None:
         ("Sky-Auto-Player-Updater.exe", b"updater"),
     ):
         (release_dir / name).write_bytes(payload)
-    _common().write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
+    _common().write_release_manifest(
+        release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40, native_build_commit="a" * 40
+    )
     verifier.verify(release_dir, "3.2.1")
     (release_dir / "Sky-Auto-Player-Updater.exe").write_bytes(b"tampered")
     with pytest.raises(RuntimeError, match="manifest hash/size mismatch"):
@@ -89,7 +91,9 @@ def test_release_tree_rejects_legacy_update_artifacts(tmp_path: Path, legacy_nam
     release_dir.mkdir()
     for name in ("Sky-Auto-Player.exe", "native_calibration.exe", "Sky-Auto-Player-Updater.exe"):
         (release_dir / name).write_bytes(b"native")
-    _common().write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
+    _common().write_release_manifest(
+        release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40, native_build_commit="a" * 40
+    )
     (release_dir / legacy_name).write_bytes(b"legacy")
     with pytest.raises(RuntimeError, match="forbidden artifacts"):
         verifier.verify(release_dir, "3.2.1")
@@ -105,7 +109,9 @@ def test_release_tree_rejects_retired_python_runtime(tmp_path: Path, relative: s
     release_dir.mkdir()
     for name in ("Sky-Auto-Player.exe", "native_calibration.exe", "Sky-Auto-Player-Updater.exe"):
         (release_dir / name).write_bytes(b"native")
-    _common().write_release_manifest(release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40)
+    _common().write_release_manifest(
+        release_dir, "3.2.1", "Sky-Auto-Player.exe", "a" * 40, native_build_commit="a" * 40
+    )
     path = release_dir / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"retired runtime")

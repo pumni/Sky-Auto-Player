@@ -27,7 +27,9 @@ def test_write_release_manifest_covers_exact_file_set(tmp_path: Path) -> None:
     (release_dir / "nested" / "MANIFEST.json").write_text("payload", encoding="utf-8")
     (release_dir / "_smoke_test.log").write_text("temporary", encoding="utf-8")
 
-    common.write_release_manifest(release_dir, "2.4.4", exe.name, "deadbeef")
+    common.write_release_manifest(
+        release_dir, "2.4.4", exe.name, "deadbeef", native_build_commit="deadbeef"
+    )
 
     manifest = json.loads((release_dir / "MANIFEST.json").read_text(encoding="utf-8"))
     assert "executable_sha256" not in manifest
@@ -63,7 +65,9 @@ def test_write_release_manifest_fails_closed_on_hash_error(
     monkeypatch.setattr(common, "hash_file", fail_bad_file)
 
     with pytest.raises(RuntimeError, match="Failed to hash release asset"):
-        common.write_release_manifest(release_dir, "2.4.4", exe.name, "deadbeef")
+        common.write_release_manifest(
+            release_dir, "2.4.4", exe.name, "deadbeef", native_build_commit="deadbeef"
+        )
 
 
 def test_get_git_head_rejects_dirty_release_checkout(monkeypatch: pytest.MonkeyPatch) -> None:

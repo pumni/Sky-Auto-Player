@@ -16,12 +16,14 @@ import subprocess
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "Sky-Auto-Player"
 RUST_DISPATCH_SCHEMA_VERSION = 4
 RUST_TOOLCHAIN_FILE = ROOT / "rust" / "rust-toolchain.toml"
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+NATIVE_METADATA_SCHEMA_VERSION = 1
 
 NATIVE_PROVENANCE_PATHS = (
     Path("rust") / "Cargo.lock",
@@ -135,14 +137,74 @@ def validate_native_build_provenance(repo_head: str, native_build_commit: str) -
         )
 
 
+def parse_native_metadata(output: str, *, label: str) -> dict[str, Any]:
+    """Decode one bounded JSON metadata response emitted by a native binary."""
+    if len(output.encode("utf-8")) > 64 * 1024:
+        raise RuntimeError(f"{label} metadata exceeds the bounded output limit")
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{label} metadata is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} metadata must be a JSON object")
+    return value
+
+
+def validate_observed_native_metadata(
+    *,
+    repo_head: str,
+    version: str,
+    source_fingerprint: str,
+    desktop_metadata: dict[str, Any],
+    calibration_metadata: dict[str, Any],
+) -> str:
+    """Validate independently observed metadata from the exact native binaries."""
+    if COMMIT_PATTERN.fullmatch(repo_head) is None:
+        raise RuntimeError(f"repository HEAD is not a full commit SHA: {repo_head!r}")
+
+    desktop_commit = desktop_metadata.get("native_build_commit")
+    if not isinstance(desktop_commit, str):
+        raise RuntimeError("desktop build metadata omitted native_build_commit")
+    validate_native_build_provenance(repo_head, desktop_commit)
+    if desktop_metadata.get("native_version") != version:
+        raise RuntimeError("desktop build metadata version does not match the release version")
+    if desktop_metadata.get("schema_version") != NATIVE_METADATA_SCHEMA_VERSION:
+        raise RuntimeError("desktop build metadata schema is unsupported")
+    if not isinstance(desktop_metadata.get("rustc_version"), str) or not desktop_metadata["rustc_version"]:
+        raise RuntimeError("desktop build metadata omitted rustc_version")
+    if not isinstance(desktop_metadata.get("win32_backend"), bool):
+        raise RuntimeError("desktop build metadata omitted win32_backend")
+
+    calibration_commit = calibration_metadata.get("source_git_sha")
+    calibration_build_id = calibration_metadata.get("native_build_id")
+    if not isinstance(calibration_commit, str) or not isinstance(calibration_build_id, str):
+        raise RuntimeError("calibration metadata omitted source/build identity")
+    validate_native_build_provenance(repo_head, calibration_commit)
+    validate_native_build_provenance(repo_head, calibration_build_id)
+    if calibration_metadata.get("dirty_worktree") is not False:
+        raise RuntimeError("calibration metadata reports a dirty worktree")
+    if calibration_metadata.get("native_source_fingerprint") != source_fingerprint:
+        raise RuntimeError("calibration metadata source fingerprint does not match the build")
+    for key in ("calibration_schema_version", "measurement_protocol_version", "host_fingerprint_version"):
+        value = calibration_metadata.get(key)
+        if type(value) is not int or value <= 0:
+            raise RuntimeError(f"calibration metadata has an invalid {key}")
+    if not isinstance(calibration_metadata.get("evidence_kind"), str) or not calibration_metadata["evidence_kind"]:
+        raise RuntimeError("calibration metadata omitted evidence_kind")
+
+    if desktop_commit != calibration_commit or desktop_commit != calibration_build_id:
+        raise RuntimeError("desktop and calibration metadata disagree on native build commit")
+    return desktop_commit
+
+
 def write_release_manifest(
     release_dir: Path,
     version: str,
     exe_name: str,
     git_head: str,
     *,
+    native_build_commit: str,
     dirty_worktree: bool = False,
-    native_build_commit: str | None = None,
 ) -> None:
     smoke_log = release_dir / "_smoke_test.log"
     try:
@@ -170,7 +232,7 @@ def write_release_manifest(
         "executable": exe_name,
         "git_head": git_head,
         "dirty_worktree": dirty_worktree,
-        "native_build_commit": git_head if native_build_commit is None else native_build_commit,
+        "native_build_commit": native_build_commit,
         "build_time_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": files,
     }

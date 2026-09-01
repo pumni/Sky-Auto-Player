@@ -3683,7 +3683,7 @@ pub(crate) fn resolve_install_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "executable has no install root".into())
 }
 
-fn native_build_dto() -> crate::commands::NativeBuildDto {
+pub(crate) fn native_build_dto() -> crate::commands::NativeBuildDto {
     crate::commands::NativeBuildDto {
         native_build_commit: option_env!("SKY_NATIVE_BUILD_COMMIT")
             .unwrap_or("unknown")

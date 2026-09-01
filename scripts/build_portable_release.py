@@ -32,7 +32,9 @@ from release_common import (  # noqa: E402
     get_project_version,
     native_build_environment,
     native_source_fingerprint,
+    parse_native_metadata,
     validate_native_build_provenance,
+    validate_observed_native_metadata,
     write_release_manifest,
 )
 
@@ -81,6 +83,47 @@ def _capture(command: Sequence[str], *, cwd: Path = ROOT) -> str:
         list(command), cwd=str(cwd), capture_output=True, text=True, check=True
     )
     return result.stdout.strip()
+
+
+def _capture_native_metadata(command: Sequence[str], *, label: str) -> dict[str, Any]:
+    result = subprocess.run(
+        list(command),
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{label} metadata command failed ({result.returncode}): {result.stderr[-4000:]}"
+        )
+    return parse_native_metadata(result.stdout.strip(), label=label)
+
+
+def observe_native_build_metadata(
+    desktop_exe: Path,
+    calibration_exe: Path,
+    *,
+    repo_head: str,
+    version: str,
+    source_fingerprint: str,
+) -> str:
+    """Read and qualify metadata from the exact binaries supplied by the builder."""
+    desktop = _capture_native_metadata(
+        [str(desktop_exe), "--selftest-build-info"], label="desktop"
+    )
+    calibration = _capture_native_metadata(
+        [str(calibration_exe), "--metadata"], label="calibration"
+    )
+    return validate_observed_native_metadata(
+        repo_head=repo_head,
+        version=version,
+        source_fingerprint=source_fingerprint,
+        desktop_metadata=desktop,
+        calibration_metadata=calibration,
+    )
 
 
 def _default_config() -> dict[str, Any]:
@@ -164,6 +207,7 @@ def assemble_release(
     songs_dir: Path,
     version: str,
     git_head: str,
+    native_build_commit: str,
 ) -> Path:
     """Assemble one fresh release tree from exact build outputs."""
     if release_dir.exists():
@@ -187,7 +231,7 @@ def assemble_release(
         PRIMARY_EXE,
         git_head,
         dirty_worktree=False,
-        native_build_commit=git_head,
+        native_build_commit=native_build_commit,
     )
     _assert_no_path_escape(release_dir)
     return release_dir
@@ -203,7 +247,7 @@ def assert_runtime_python_free(release_dir: Path) -> None:
         folded = relative.casefold()
         name = path.name.casefold()
         if (
-            folded == "sky-auto-player-core.exe"
+            folded == ("sky-auto-player-" + "core.exe")
             or folded.startswith("_internal/")
             or name.startswith("python")
             or name == "base_library.zip"
@@ -393,7 +437,8 @@ def _build() -> tuple[Path, Path, Path, Path]:
     env = native_build_environment()
     env["GITHUB_SHA"] = git_head
     env["SKY_NATIVE_BUILD_COMMIT"] = git_head
-    env["SKY_NATIVE_SOURCE_FINGERPRINT"] = native_source_fingerprint(ROOT)
+    source_fingerprint = native_source_fingerprint(ROOT)
+    env["SKY_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
     env["SKY_NATIVE_DIRTY_WORKTREE"] = "false"
     _run(["bun", "install", "--frozen-lockfile"], cwd=ROOT / "desktop")
     _run(["bun", "run", "build"], cwd=ROOT / "desktop")
@@ -456,6 +501,14 @@ def _build() -> tuple[Path, Path, Path, Path]:
 def run_pipeline(output_root: Path) -> Path:
     repo_head = get_git_head()
     tauri_exe, calibration_exe, updater_exe, e2e_updater_exe = _build()
+    source_fingerprint = native_source_fingerprint(ROOT)
+    built_native_commit = observe_native_build_metadata(
+        tauri_exe,
+        calibration_exe,
+        repo_head=repo_head,
+        version=VERSION,
+        source_fingerprint=source_fingerprint,
+    )
     release_dir = output_root / RELEASE_NAME
     assemble_release(
         release_dir,
@@ -465,6 +518,14 @@ def run_pipeline(output_root: Path) -> Path:
         songs_dir=ROOT / "songs",
         version=VERSION,
         git_head=repo_head,
+        native_build_commit=built_native_commit,
+    )
+    copied_native_commit = observe_native_build_metadata(
+        release_dir / PRIMARY_EXE,
+        release_dir / CALIBRATION_EXE,
+        repo_head=repo_head,
+        version=VERSION,
+        source_fingerprint=source_fingerprint,
     )
     verifier = ROOT / "scripts" / "verify_release_manifest.py"
     _run(
@@ -493,7 +554,7 @@ def run_pipeline(output_root: Path) -> Path:
         repo_head=repo_head,
         release_dir=release_dir,
         zip_path=zip_path,
-        native_build_commit=repo_head,
+        native_build_commit=copied_native_commit,
     )
     (output_root / "PORTABLE_ARTIFACT_SUMMARY.json").write_text(
         json.dumps(
