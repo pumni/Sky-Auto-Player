@@ -425,7 +425,6 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
             smoke_dir.to_path_buf(),
             system_root.join("System32"),
             system_root.join("System32/Wbem"),
-            system_root,
         ]
         .iter()
         .map(|path| path.display().to_string())

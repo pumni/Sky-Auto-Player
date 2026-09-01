@@ -254,7 +254,6 @@ jobs:
             $toolDirectories
             (Join-Path $systemRoot "System32")
             (Join-Path $systemRoot "System32\Wbem")
-            $systemRoot
           ) | Where-Object { $_ } | Select-Object -Unique
           $env:PATH = $restricted -join ";"
           foreach ($name in @("python", "python3", "py", "uv")) {
