@@ -318,9 +318,15 @@ fn collect_binding_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
-        files.insert(relative, fs::read(entry.path())?);
+        files.insert(relative, normalized_text_bytes(fs::read(entry.path())?));
     }
     Ok(files)
+}
+
+fn normalized_text_bytes(bytes: Vec<u8>) -> Vec<u8> {
+    String::from_utf8(bytes.clone())
+        .map(|text| text.replace("\r\n", "\n").into_bytes())
+        .unwrap_or(bytes)
 }
 
 fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
