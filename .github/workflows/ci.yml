@@ -224,8 +224,11 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           cargo xtask check static
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check static failed with exit code $LASTEXITCODE" }
           cargo xtask check rust
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check rust failed with exit code $LASTEXITCODE" }
           cargo xtask check desktop
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check desktop failed with exit code $LASTEXITCODE" }
 
       - name: Repository verification — desktop
         if: needs.changes.outputs.package_required != 'true'

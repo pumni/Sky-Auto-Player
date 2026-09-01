@@ -151,9 +151,9 @@ mod tests {
     #[test]
     fn package_sensitive_changes_require_code_validation() {
         let result = values(&[".github/workflows/ci.yml"]);
-        assert_eq!(result.0, true);
-        assert_eq!(result.1, true);
-        assert_eq!(result.2, true);
+        assert!(result.0);
+        assert!(result.1);
+        assert!(result.2);
     }
 
     #[test]
