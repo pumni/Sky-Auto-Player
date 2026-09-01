@@ -456,7 +456,6 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
         )?;
         Ok(())
     })();
-    let cleanup = fs::remove_dir_all(&smoke_dir);
     let result_error = result.err();
     if let Some(error) = &result_error {
         eprintln!(
@@ -471,6 +470,7 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
         );
         eprintln!("[xtask] packaged smoke failure: {error}");
     }
+    let cleanup = fs::remove_dir_all(&smoke_dir);
     cleanup?;
     if let Some(error) = result_error {
         return Err(error);
