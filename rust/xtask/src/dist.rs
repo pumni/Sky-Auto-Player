@@ -1,8 +1,9 @@
 use crate::{Result, manifest, process, repo, version};
 use serde_json::{Value, json};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use walkdir::WalkDir;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -10,6 +11,9 @@ const APP: &str = "Sky-Auto-Player";
 const PRIMARY: &str = "Sky-Auto-Player.exe";
 const CALIBRATION: &str = "native_calibration.exe";
 const UPDATER: &str = "Sky-Auto-Player-Updater.exe";
+const NATIVE_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+const PACKAGED_SMOKE_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_PHASE_LOG_BYTES: usize = 64 * 1024;
 
 fn safe_output(root: &Path, output: &Path) -> Result<PathBuf> {
     if output.as_os_str().is_empty() {
@@ -143,11 +147,12 @@ fn cargo_build(
 
 fn observe(executable: &Path, args: &[&str], label: &str) -> Result<Value> {
     let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-    let output = process::capture_owned(
+    let output = process::capture_owned_timeout(
         executable.as_os_str(),
         &args,
         executable.parent().unwrap_or(Path::new(".")),
         &[],
+        NATIVE_METADATA_TIMEOUT,
     )?;
     if !output.status.success() {
         return Err(format!(
@@ -278,6 +283,23 @@ fn zip_tree(release_dir: &Path, destination: &Path) -> Result<String> {
     }
     zip.finish()?;
     manifest::sha256(destination)
+}
+
+fn phase_log_tail(path: &Path) -> String {
+    match fs::File::open(path).and_then(|mut file| {
+        let start = file
+            .metadata()?
+            .len()
+            .saturating_sub(MAX_PHASE_LOG_BYTES as u64);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::with_capacity(MAX_PHASE_LOG_BYTES);
+        file.take(MAX_PHASE_LOG_BYTES as u64)
+            .read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => format!("<unavailable: {error}>"),
+    }
 }
 
 pub fn build(output: &Path) -> Result<()> {
@@ -471,17 +493,19 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
         ),
     ];
     let result = (|| -> Result<()> {
-        process::run_owned(
+        process::run_owned_timeout(
             &smoke_dir.join(PRIMARY),
             &["--selftest-desktop-shell".into()],
             &smoke_dir,
             &env,
+            PACKAGED_SMOKE_TIMEOUT,
         )?;
-        process::run_owned(
+        process::run_owned_timeout(
             &smoke_dir.join(PRIMARY),
             &["--selftest-desktop-gui".into()],
             &smoke_dir,
             &env,
+            PACKAGED_SMOKE_TIMEOUT,
         )?;
         Ok(())
     })();
@@ -494,8 +518,7 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
             } else {
                 "normal"
             },
-            fs::read_to_string(&phase_log)
-                .unwrap_or_else(|read_error| format!("<unavailable: {read_error}>"))
+            phase_log_tail(&phase_log)
         );
         eprintln!("[xtask] packaged smoke failure: {error}");
     }
@@ -610,6 +633,23 @@ mod tests {
         assert!(safe_output(&root, Path::new("")).is_err());
     }
 
+    #[test]
+    fn phase_log_tail_is_bounded_and_keeps_latest_diagnostics() {
+        let root = std::env::temp_dir().join(format!("sky-xtask-phase-log-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("gui-smoke-phases.log");
+        let mut contents = vec![b'o'; 32];
+        contents.extend(std::iter::repeat_n(b'x', MAX_PHASE_LOG_BYTES));
+        contents.extend_from_slice(b"latest-phase");
+        fs::write(&path, contents).unwrap();
+        let tail = phase_log_tail(&path);
+        assert!(tail.len() <= MAX_PHASE_LOG_BYTES);
+        assert!(tail.contains("latest-phase"));
+        assert!(!tail.contains(&"o".repeat(32)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn output_safety_rejects_windows_reparse_root() {
@@ -621,10 +661,24 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("must-survive.txt"), b"sentinel").unwrap();
         fs::create_dir_all(&fake_repository).unwrap();
-        if std::os::windows::fs::symlink_dir(&target, &link).is_ok() {
-            assert!(safe_output(&fake_repository, &link.join("release")).is_err());
-            assert!(target.join("must-survive.txt").is_file());
-        }
-        let _ = fs::remove_dir_all(&root);
+        let status = std::process::Command::new("cmd.exe")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.display().to_string(),
+                &target.display().to_string(),
+            ])
+            .status()
+            .expect("cmd.exe must be available for the junction fixture");
+        assert!(
+            status.success(),
+            "directory junction fixture creation failed"
+        );
+        assert!(link.is_dir(), "directory junction fixture was not created");
+        assert!(safe_output(&fake_repository, &link.join("release")).is_err());
+        assert!(target.join("must-survive.txt").is_file());
+        fs::remove_dir(&link).unwrap();
+        fs::remove_dir_all(&root).unwrap();
     }
 }
