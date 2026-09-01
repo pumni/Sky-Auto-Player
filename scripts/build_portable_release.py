@@ -268,10 +268,34 @@ def write_provenance(
     return data
 
 
-def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
+def _runtime_smoke_env(*, cwd: Path, python_unavailable: bool) -> dict[str, str]:
+    """Build a runtime environment that cannot discover repository Python."""
+
     env = os.environ.copy()
-    env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
-    env["SKY_PACKAGED_SAFE_UPDATE"] = "1"
+    if python_unavailable:
+        system_root = Path(env.get("SystemRoot", r"C:\Windows"))
+        env["PATH"] = os.pathsep.join(
+            str(path)
+            for path in (cwd, system_root / "System32", system_root, system_root / "System32" / "Wbem")
+        )
+        for name in (
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "VIRTUAL_ENV",
+            "UV_PROJECT_ENVIRONMENT",
+            "UV_PYTHON",
+        ):
+            env.pop(name, None)
+    return env
+
+
+def _run_tauri_pair_selftest(
+    primary_exe: Path, *, cwd: Path, python_unavailable: bool = False
+) -> None:
+    # SafePackage is selected by the hidden selftest composition root in the
+    # Rust binary.  No environment variable grants calibration/update bypass
+    # authority to the normal production composition.
+    env = _runtime_smoke_env(cwd=cwd, python_unavailable=python_unavailable)
     result = subprocess.run(
         [str(primary_exe), "--selftest-desktop-shell"],
         cwd=str(cwd),
@@ -284,17 +308,19 @@ def _run_tauri_pair_selftest(primary_exe: Path, *, cwd: Path) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"packaged Tauri/Native Desktop selftest failed ({result.returncode}): "
+            f"packaged Tauri/Native Desktop selftest failed ({result.returncode}, "
+            f"python_unavailable={python_unavailable}): "
             f"{_decode_output(result.stderr)[-4000:]}"
         )
     print(_decode_output(result.stdout).strip())
 
 
-def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
-    env = os.environ.copy()
-    # The packaging-only environment selects the explicit no-input seam so
-    # the real Native Desktop smoke can exercise calibration safely in CI.
-    env["SKY_PACKAGED_SAFE_CALIBRATION"] = "1"
+def _run_tauri_gui_smoke(
+    primary_exe: Path, *, cwd: Path, python_unavailable: bool = False
+) -> None:
+    # The hidden GUI smoke entrypoint selects SafePackage explicitly in Rust;
+    # PATH is only restricted here to prove runtime Python independence.
+    env = _runtime_smoke_env(cwd=cwd, python_unavailable=python_unavailable)
     phase_log = cwd / "gui-smoke-phases.log"
     with suppress(OSError):
         phase_log.unlink(missing_ok=True)
@@ -312,14 +338,15 @@ def _run_tauri_gui_smoke(primary_exe: Path, *, cwd: Path) -> None:
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(
-            "packaged Tauri GUI smoke timed out; "
+            f"packaged Tauri GUI smoke timed out (python_unavailable={python_unavailable}); "
             f"stdout={_decode_output(error.stdout)!r} "
             f"stderr={_decode_output(error.stderr)!r} "
             f"phase_log={_read_gui_smoke_phase_log(phase_log)!r}"
         ) from error
     if result.returncode != 0:
         raise RuntimeError(
-            f"packaged Tauri GUI smoke failed ({result.returncode}): "
+            f"packaged Tauri GUI smoke failed ({result.returncode}, "
+            f"python_unavailable={python_unavailable}): "
             f"{_decode_output(result.stderr)[-4000:]} "
             f"phase_log={_read_gui_smoke_phase_log(phase_log)!r}"
         )
@@ -460,7 +487,13 @@ def run_pipeline(output_root: Path) -> Path:
         shutil.copytree(release_dir, smoke_dir)
         assert_runtime_python_free(smoke_dir)
         _run_tauri_pair_selftest(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
+        _run_tauri_pair_selftest(
+            smoke_dir / PRIMARY_EXE, cwd=smoke_dir, python_unavailable=True
+        )
         _run_tauri_gui_smoke(smoke_dir / PRIMARY_EXE, cwd=smoke_dir)
+        _run_tauri_gui_smoke(
+            smoke_dir / PRIMARY_EXE, cwd=smoke_dir, python_unavailable=True
+        )
     finally:
         shutil.rmtree(smoke_root, ignore_errors=True)
     zip_path, _ = write_deterministic_zip(release_dir, output_root / ZIP_NAME)
@@ -501,9 +534,11 @@ def run_pipeline(output_root: Path) -> Path:
                 "exact_artifact_update": "passed",
                 "exact_artifact_fault_rollback": "passed",
                 "package_selftest": "passed",
+                "python_unavailable_selftest": "passed",
                 "native_runtime_negative_matrix": "passed",
                 "tauri_native_runtime_smoke": "passed",
                 "tauri_gui_smoke": "passed",
+                "python_unavailable_gui_smoke": "passed",
                 "packaged_updater_identity_smoke": "passed",
                 "packaged_updater_ready_parent_smoke": "passed",
                 "exact_artifact_transaction_restart": "qualified_with_local_source_runner",

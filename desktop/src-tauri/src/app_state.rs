@@ -4,7 +4,7 @@ use crate::core::CoreSupervisor;
 use crate::core::protocol::CoreEvent;
 #[cfg(test)]
 use crate::core::supervisor::CoreEventObserver;
-use crate::native_runtime::NativeDesktopRuntime;
+use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
 #[cfg(test)]
 use crate::ui_events::CalibrationOutcome;
 #[cfg(test)]
@@ -159,6 +159,7 @@ struct AppStateInner {
     #[cfg(test)]
     core_event_route: Mutex<CoreEventRoute>,
     activity: ActivityCoordinator,
+    test_seams: Mutex<TestSeams>,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
     gui_smoke_failed: AtomicBool,
@@ -204,6 +205,7 @@ impl Default for AppState {
                 activity: ActivityCoordinator {
                     state: Arc::new(Mutex::new(ActivityState::default())),
                 },
+                test_seams: Mutex::new(TestSeams::Disabled),
                 closing: AtomicBool::new(false),
                 gui_smoke_exit: AtomicBool::new(false),
                 gui_smoke_failed: AtomicBool::new(false),
@@ -224,9 +226,18 @@ impl AppState {
         if let Some(runtime) = &*native {
             return Ok(Arc::clone(runtime));
         }
-        let runtime = Arc::new(NativeDesktopRuntime::for_current_install_with_activity(
-            self.activity(),
-        )?);
+        let test_seams = *self
+            .inner
+            .test_seams
+            .lock()
+            .map_err(|_| "native test-seam state poisoned".to_string())?;
+        let runtime = Arc::new(
+            NativeDesktopRuntime::from_install_root_with_activity_and_seams(
+                crate::native_runtime::resolve_install_root()?,
+                self.activity(),
+                test_seams,
+            )?,
+        );
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
@@ -566,6 +577,16 @@ impl AppState {
 
     pub fn set_gui_smoke_exit(&self, enabled: bool) {
         self.inner.gui_smoke_exit.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn with_test_seams(test_seams: TestSeams) -> Self {
+        let state = Self::default();
+        *state
+            .inner
+            .test_seams
+            .lock()
+            .expect("test-seam state poisoned") = test_seams;
+        state
     }
 
     pub fn should_exit_after_close(&self) -> bool {

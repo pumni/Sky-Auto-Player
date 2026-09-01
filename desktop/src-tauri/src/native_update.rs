@@ -6,6 +6,7 @@
 //! artifact path.
 
 use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
+use crate::native_runtime::TestSeams;
 use crate::ui_events::{
     UiEvent, UpdateAvailablePayload, UpdateChannel, UpdateHandoffReadyPayload, UpdateResultPayload,
     UpdateState,
@@ -21,11 +22,15 @@ use sky_updater::install::installed_manifest;
 use sky_updater::signature::verify_project_files;
 use sky_updater::{APP_NAME, MANIFEST_NAME, UPDATER_EXE};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 
 const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_HANDOFF_BYTES: u64 = 16 * 1024;
@@ -44,6 +49,7 @@ pub(crate) struct NativeUpdateCandidate {
 pub(crate) struct NativeUpdateState {
     pub candidate: Option<NativeUpdateCandidate>,
     pub handoff_id: Option<String>,
+    pub handoff_starting: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -70,12 +76,13 @@ struct Release {
 pub(crate) fn check(
     settings: &mut SettingsService<JsonSettingsStore>,
     state: &Mutex<NativeUpdateState>,
+    test_seams: TestSeams,
     publish: impl Fn(UiEvent) -> Result<(), String>,
 ) -> Result<UpdateCheckDto, String> {
     let settings_snapshot = settings.snapshot().clone();
     let channel = to_public_channel(&settings_snapshot.update.channel);
     let current_version = env!("CARGO_PKG_VERSION").to_owned();
-    let result = if std::env::var_os("SKY_PACKAGED_SAFE_UPDATE").is_some() {
+    let result = if test_seams == TestSeams::SafePackage {
         Ok(None)
     } else {
         fetch_release(&settings_snapshot, channel, &WinHttpClient)
@@ -89,8 +96,12 @@ pub(crate) fn check(
             let mut update = state
                 .lock()
                 .map_err(|_| "native update state lock poisoned".to_string())?;
+            if update.handoff_starting {
+                return Err("update_busy: update handoff is already starting".into());
+            }
             update.candidate = Some(candidate.clone());
             update.handoff_id = None;
+            update.handoff_starting = false;
             let dto = UpdateCheckDto {
                 state: UpdateState::Available,
                 current_version: current_version.clone(),
@@ -120,8 +131,12 @@ pub(crate) fn check(
             let mut update = state
                 .lock()
                 .map_err(|_| "native update state lock poisoned".to_string())?;
+            if update.handoff_starting {
+                return Err("update_busy: update handoff is already starting".into());
+            }
             update.candidate = None;
             update.handoff_id = None;
+            update.handoff_starting = false;
             let dto = UpdateCheckDto {
                 state: UpdateState::Current,
                 current_version: current_version.clone(),
@@ -139,8 +154,12 @@ pub(crate) fn check(
             let mut update = state
                 .lock()
                 .map_err(|_| "native update state lock poisoned".to_string())?;
+            if update.handoff_starting {
+                return Err("update_busy: update handoff is already starting".into());
+            }
             update.candidate = None;
             update.handoff_id = None;
+            update.handoff_starting = false;
             let message = bounded(error);
             let dto = UpdateCheckDto {
                 state: UpdateState::Error,
@@ -179,36 +198,67 @@ pub(crate) fn handoff(
     {
         return Err("stale_update: update metadata is stale".into());
     }
-    if let Some(id) = state
-        .lock()
-        .map_err(|_| "native update state lock poisoned".to_string())?
-        .handoff_id
-        .clone()
-    {
-        return Ok(UpdateHandoffDto {
-            handoff_id: id,
-            target_version: target,
-            state: UpdateState::HandoffReady,
-        });
-    }
 
+    // Reserve the application-level handoff before any filesystem or process
+    // side effect.  A second caller observes `handoff_starting` and cannot
+    // stage or spawn a competing updater.
+    {
+        let mut locked = state
+            .lock()
+            .map_err(|_| "native update state lock poisoned".to_string())?;
+        if locked.handoff_starting {
+            return Err("update_busy: update handoff is already starting".into());
+        }
+        if let Some(id) = locked.handoff_id.clone() {
+            return Ok(UpdateHandoffDto {
+                handoff_id: id,
+                target_version: target,
+                state: UpdateState::HandoffReady,
+            });
+        }
+        if locked
+            .candidate
+            .as_ref()
+            .map(|value| value.version.as_str())
+            != Some(target.as_str())
+        {
+            return Err("stale_update: update metadata is stale".into());
+        }
+        locked.handoff_starting = true;
+    }
     let current = env!("CARGO_PKG_VERSION");
     let channel = match settings.update.channel {
         CoreChannel::Stable => UpdaterChannel::Stable,
         CoreChannel::Beta => UpdaterChannel::Beta,
     };
-    if let Some(active) = sky_updater::active_state::active_update_for_install(install_root)
-        .map_err(|error| format!("update state check failed: {error}"))?
-    {
-        let _ = active;
-        return Err("update_busy: another update is already active".into());
+    match sky_updater::active_state::active_update_for_install(install_root) {
+        Ok(Some(_)) => {
+            clear_handoff_starting(state);
+            return Err("update_busy: another update is already active".into());
+        }
+        Ok(None) => {}
+        Err(error) => {
+            clear_handoff_starting(state);
+            return Err(format!("update state check failed: {error}"));
+        }
     }
-    let run_root = new_run_root()?;
+    if let Err(error) = preflight_install_root_writable(install_root) {
+        clear_handoff_starting(state);
+        return Err(error);
+    }
+    let run_root = match new_run_root() {
+        Ok(path) => path,
+        Err(error) => {
+            clear_handoff_starting(state);
+            return Err(error);
+        }
+    };
     let staged = run_root.join(UPDATER_EXE);
     let child = match stage_and_spawn(install_root, &staged, current, &target, channel) {
         Ok(child) => child,
         Err(error) => {
             let _ = fs::remove_dir_all(&run_root);
+            clear_handoff_starting(state);
             return Err(error);
         }
     };
@@ -216,19 +266,29 @@ pub(crate) fn handoff(
         Ok(value) => value,
         Err(error) => {
             let _ = fs::remove_dir_all(&run_root);
+            clear_handoff_starting(state);
             return Err(error);
         }
     };
     if ready.state != "ready" {
         let _ = fs::remove_dir_all(&run_root);
-        return Err("update_busy: updater rejected handoff".into());
+        clear_handoff_starting(state);
+        return Err(handoff_rejection_error(&ready));
     }
-    let handoff_id = opaque_id()?;
+    let handoff_id = match opaque_id() {
+        Ok(id) => id,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&run_root);
+            clear_handoff_starting(state);
+            return Err(error);
+        }
+    };
     {
         let mut locked = state
             .lock()
             .map_err(|_| "native update state lock poisoned".to_string())?;
         locked.handoff_id = Some(handoff_id.clone());
+        locked.handoff_starting = false;
     }
     let dto = UpdateHandoffDto {
         handoff_id: handoff_id.clone(),
@@ -364,6 +424,23 @@ fn bounded(value: impl ToString) -> String {
     value.to_string().chars().take(4096).collect()
 }
 
+fn clear_handoff_starting(state: &Mutex<NativeUpdateState>) {
+    if let Ok(mut locked) = state.lock() {
+        locked.handoff_starting = false;
+    }
+}
+
+fn handoff_rejection_error(ready: &Handoff) -> String {
+    if ready.error_code == "UPDATE_ALREADY_RUNNING" {
+        return "update_busy: another update is already active".into();
+    }
+    format!(
+        "update_handoff_rejected: [{}] {}",
+        bounded(&ready.error_code),
+        bounded(&ready.message)
+    )
+}
+
 fn opaque_id() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)
@@ -373,8 +450,13 @@ fn opaque_id() -> Result<String, String> {
 
 fn new_run_root() -> Result<PathBuf, String> {
     let local = std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is unavailable")?;
-    let runs = PathBuf::from(local).join(APP_NAME).join("update-runs");
-    fs::create_dir_all(&runs).map_err(|error| format!("could not create update state: {error}"))?;
+    allocate_run_root(&PathBuf::from(local).join(APP_NAME))
+}
+
+fn allocate_run_root(state_root: &Path) -> Result<PathBuf, String> {
+    ensure_secure_directory(state_root, "update state root")?;
+    let runs = state_root.join("update-runs");
+    ensure_secure_directory(&runs, "update run root")?;
     let canonical = runs
         .canonicalize()
         .map_err(|error| format!("could not resolve update state: {error}"))?;
@@ -399,6 +481,84 @@ fn new_run_root() -> Result<PathBuf, String> {
         }
     }
     Err("could not allocate unique update run".into())
+}
+
+fn ensure_secure_directory(path: &Path, label: &str) -> Result<(), String> {
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata_is_redirected(&metadata) {
+            return Err(format!("{label} must not be a symlink or reparse point"));
+        }
+        if !metadata.is_dir() {
+            return Err(format!("{label} is not a directory"));
+        }
+        return Ok(());
+    }
+    fs::create_dir_all(path).map_err(|error| format!("could not create {label}: {error}"))?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect {label}: {error}"))?;
+    if metadata_is_redirected(&metadata) || !metadata.is_dir() {
+        return Err(format!("{label} failed secure directory admission"));
+    }
+    Ok(())
+}
+
+fn metadata_is_redirected(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn preflight_install_root_writable(install_root: &Path) -> Result<(), String> {
+    let sentinel = format!(
+        ".sky-auto-player-update-write-{}",
+        opaque_id()
+            .map_err(|error| format!("could not allocate update preflight name: {error}"))?
+    );
+    preflight_install_root_writable_with_cleanup(install_root, &sentinel, |path| {
+        fs::remove_file(path).map_err(|error| error.to_string())
+    })
+}
+
+fn preflight_install_root_writable_with_cleanup<F>(
+    install_root: &Path,
+    sentinel_name: &str,
+    cleanup: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let sentinel = install_root.join(sentinel_name);
+    let mut created = false;
+    let write_result = (|| -> Result<(), String> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&sentinel)
+            .map_err(|error| format!("install root is not writable: {error}"))?;
+        created = true;
+        file.write_all(b"Sky Auto Player update preflight\n")
+            .map_err(|error| format!("install root is not writable: {error}"))?;
+        file.flush()
+            .map_err(|error| format!("install root is not writable: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("install root is not durable: {error}"))?;
+        Ok(())
+    })();
+    if created && let Err(error) = cleanup(&sentinel) {
+        return Err(format!(
+            "install root write preflight cleanup failed: {error}"
+        ));
+    }
+    write_result
 }
 
 fn stage_and_spawn(
@@ -498,6 +658,8 @@ fn wait_for_ready(mut child: Child, run_root: &Path, target: &str) -> Result<Han
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn tag_normalization_and_channel_mapping_are_bounded() {
@@ -515,5 +677,114 @@ mod tests {
             id.bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         );
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("sky-native-update-{label}-{suffix}"))
+    }
+
+    #[test]
+    fn handoff_starting_reservation_blocks_a_competing_operation() {
+        let state = Mutex::new(NativeUpdateState {
+            candidate: Some(NativeUpdateCandidate {
+                version: "9.9.9".into(),
+                channel: UpdateChannel::Stable,
+                release_notes: None,
+                published_at: None,
+            }),
+            handoff_id: None,
+            handoff_starting: true,
+        });
+        let settings = ApplicationSettings::default();
+        let error = handoff(
+            Path::new("missing-install-root"),
+            &state,
+            &settings,
+            "9.9.9",
+            |_| Ok(()),
+        )
+        .expect_err("reserved handoff must not spawn a second updater");
+        assert!(error.starts_with("update_busy: update handoff is already starting"));
+    }
+
+    #[test]
+    fn only_the_established_already_running_handshake_maps_to_busy() {
+        let rejected = |error_code: &str| Handoff {
+            schema_version: 1,
+            state: "rejected".into(),
+            run_id: "run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            updater_pid: 1,
+            target_version: "9.9.9".into(),
+            error_code: error_code.into(),
+            message: "bounded reason".into(),
+        };
+        assert_eq!(
+            handoff_rejection_error(&rejected("UPDATE_ALREADY_RUNNING")),
+            "update_busy: another update is already active"
+        );
+        let error = handoff_rejection_error(&rejected("UI_INITIALIZATION_FAILED"));
+        assert!(error.contains("update_handoff_rejected"));
+        assert!(error.contains("UI_INITIALIZATION_FAILED"));
+        assert!(!error.starts_with("update_busy"));
+    }
+
+    #[test]
+    fn secure_run_root_rejects_redirected_state_directories() {
+        let state_root = temp_path("state");
+        let outside = temp_path("outside");
+        fs::create_dir_all(&outside).expect("outside");
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::symlink_dir;
+            if symlink_dir(&outside, &state_root).is_err() {
+                let _ = fs::remove_dir_all(&outside);
+                return;
+            }
+            let error = allocate_run_root(&state_root).expect_err("state symlink");
+            assert!(error.contains("must not be a symlink or reparse point"));
+            let _ = fs::remove_dir(&state_root);
+        }
+
+        fs::create_dir_all(&state_root).expect("state root");
+        let runs_target = temp_path("runs-target");
+        fs::create_dir_all(&runs_target).expect("runs target");
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::symlink_dir;
+            let runs = state_root.join("update-runs");
+            if symlink_dir(&runs_target, &runs).is_err() {
+                let _ = fs::remove_dir_all(&state_root);
+                let _ = fs::remove_dir_all(&outside);
+                let _ = fs::remove_dir_all(&runs_target);
+                return;
+            }
+            let error = allocate_run_root(&state_root).expect_err("runs symlink");
+            assert!(error.contains("must not be a symlink or reparse point"));
+            let _ = fs::remove_dir(&runs);
+        }
+        let _ = fs::remove_dir_all(state_root);
+        let _ = fs::remove_dir_all(outside);
+        let _ = fs::remove_dir_all(runs_target);
+    }
+
+    #[test]
+    fn install_preflight_rejects_unwritable_root_and_reports_cleanup_failure() {
+        let missing = temp_path("missing");
+        let error = preflight_install_root_writable(&missing).expect_err("missing root");
+        assert!(error.contains("install root is not writable"));
+
+        let root = temp_path("cleanup");
+        fs::create_dir_all(&root).expect("root");
+        let error = preflight_install_root_writable_with_cleanup(&root, ".sentinel", |_| {
+            Err("injected cleanup failure".into())
+        })
+        .expect_err("cleanup failure");
+        assert!(error.contains("preflight cleanup failed"));
+        let _ = fs::remove_dir_all(root);
     }
 }

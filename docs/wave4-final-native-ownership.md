@@ -38,7 +38,10 @@ policy are covered by frozen oracle fixtures and production-route tests.
 catalog detail, playback preparation, update policy, and calibration policy. A
 successful settings mutation invalidates prepared playback before a later start can
 consume it. Update metadata selection and handoff use `sky_updater`'s hardened
-manifest, hash, HTTPS, transaction, rollback, and recovery boundaries.
+manifest, hash, HTTPS, transaction, rollback, and recovery boundaries. The Native
+handoff also reserves its application-level `HandoffStarting` state before any
+run-directory or child-process side effect, rejects redirected update state roots,
+and performs the install-root durable-write preflight before staging.
 
 ## Calibration
 
@@ -47,6 +50,17 @@ qualified `native_calibration.exe` child; physical measurement remains process
 isolated. Rust validates bounded output and evidence before atomically publishing a
 cache, then invalidates prepared playback and emits the terminal result. Activity
 coordination prevents calibration and physical playback from running concurrently.
+Calibration budgets preserve the established publication/process-exit/cleanup
+reserves, and an out-of-envelope result is written with a null applied margin so it
+round-trips through the accepted loader as a fallback rather than as a fake device
+margin.
+
+**SAFE SELFTEST COMPOSITION:** package qualification enters `TestSeams::SafePackage`
+only through the hidden selftest composition roots. The normal `run()` composition
+always uses `TestSeams::Disabled`; environment variables alone cannot synthesize
+calibration evidence or turn an update check into a false successful no-op. The
+safe seam is therefore a qualification composition, not a production runtime
+switch.
 
 ## Core retirement
 
@@ -70,4 +84,6 @@ updater migration tests cover removal of managed sidecar files while preserving 
 configuration, songs, and rollback behavior.
 
 The Python runtime boundary is therefore **zero for the production portable desktop**;
-this does not claim that the repository itself is Python-free.
+the exact package also runs its Native selftest and GUI smoke with a restricted PATH
+that cannot discover repository or system Python. This does not claim that the
+repository itself is Python-free.

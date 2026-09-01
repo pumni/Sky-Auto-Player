@@ -14,6 +14,7 @@ pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
 mod core;
 
 use lifecycle::close_window;
+use native_runtime::TestSeams;
 
 /// Write packaging-only GUI smoke phase markers when the release harness has
 /// explicitly requested them. The trace is intentionally file-based because
@@ -91,7 +92,11 @@ fn run_inner(gui_smoke: bool) {
     if gui_smoke {
         record_gui_smoke_phase("startup_update_guard.check.pass");
     }
-    let app_state = app_state::AppState::default();
+    let app_state = if gui_smoke {
+        app_state::AppState::with_test_seams(TestSeams::SafePackage)
+    } else {
+        app_state::AppState::default()
+    };
     app_state.set_gui_smoke_exit(gui_smoke);
     let smoke_state = app_state.clone();
     let setup_state = smoke_state.clone();
@@ -206,13 +211,21 @@ pub fn selftest_packaged_shell() -> i32 {
         eprintln!("packaged shell selftest startup guard failed: {error}");
         return 2;
     }
-    let runtime = match native_runtime::NativeDesktopRuntime::for_current_install() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("packaged native selftest could not start runtime: {error}");
-            return 2;
-        }
-    };
+    let runtime =
+        match native_runtime::NativeDesktopRuntime::from_install_root_with_activity_and_seams(
+            native_runtime::resolve_install_root().unwrap_or_else(|error| {
+                eprintln!("packaged shell selftest install root failed: {error}");
+                std::process::exit(2);
+            }),
+            app_state::ActivityCoordinator::default(),
+            TestSeams::SafePackage,
+        ) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("packaged native selftest could not start runtime: {error}");
+                return 2;
+            }
+        };
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         // The updater restart qualification must verify that the newly
         // installed application can bootstrap without mutating preserved

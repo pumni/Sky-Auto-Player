@@ -58,7 +58,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
@@ -69,13 +69,82 @@ const MAX_DECISION_COUNT: usize = 8;
 const MAX_CALIBRATION_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CALIBRATION_ERROR_BYTES: usize = 64 * 1024;
 const CALIBRATION_DEFAULT_TIMEOUT_SECONDS: f64 = 120.0;
+const CALIBRATION_GLOBAL_MAX_SECONDS: f64 = 120.0;
+const CALIBRATION_PUBLICATION_RESERVE_SECONDS: f64 = 5.0;
+const CALIBRATION_PARENT_EXIT_RESERVE_SECONDS: f64 = 1.0;
+const CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS: f64 = 1.0;
+const CALIBRATION_NATIVE_CLEANUP_RESERVE_SECONDS: f64 = 5.0;
+const CALIBRATION_MIN_MEASUREMENT_SECONDS: f64 = 1.0;
+const CALIBRATION_MIN_NATIVE_TOTAL_SECONDS: f64 =
+    CALIBRATION_NATIVE_CLEANUP_RESERVE_SECONDS + CALIBRATION_MIN_MEASUREMENT_SECONDS;
+const CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS: f64 = CALIBRATION_PARENT_EXIT_RESERVE_SECONDS
+    + CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS
+    + CALIBRATION_MIN_NATIVE_TOTAL_SECONDS;
+const CALIBRATION_MIN_FULL_TIMEOUT_SECONDS: f64 = CALIBRATION_PUBLICATION_RESERVE_SECONDS
+    + CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS
+    + CALIBRATION_MIN_NATIVE_TOTAL_SECONDS;
+const CALIBRATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// Production composition has no synthetic calibration/update behavior.  The
+/// package harness enters `SafePackage` only through the hidden selftest
+/// composition root, never through an environment variable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TestSeams {
+    #[default]
+    Disabled,
+    SafePackage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CalibrationBudget {
+    child_timeout_seconds: f64,
+    native_budget_seconds: u64,
+}
+
+fn calibration_budget(
+    timeout_seconds: f64,
+    mode: CalibrationMode,
+) -> Result<CalibrationBudget, String> {
+    let minimum = if mode == CalibrationMode::Full {
+        CALIBRATION_MIN_FULL_TIMEOUT_SECONDS
+    } else {
+        CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS
+    };
+    if !timeout_seconds.is_finite()
+        || timeout_seconds < minimum
+        || timeout_seconds > CALIBRATION_GLOBAL_MAX_SECONDS
+    {
+        return Err(format!(
+            "invalid_params: timeout_seconds must be finite and in [{minimum}, {CALIBRATION_GLOBAL_MAX_SECONDS}] for this calibration mode"
+        ));
+    }
+    let child_timeout_seconds = if mode == CalibrationMode::Full {
+        timeout_seconds - CALIBRATION_PUBLICATION_RESERVE_SECONDS
+    } else {
+        timeout_seconds - CALIBRATION_PARENT_EXIT_RESERVE_SECONDS
+    };
+    let native_budget_seconds =
+        (child_timeout_seconds - CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS).floor() as u64;
+    if (native_budget_seconds as f64) < CALIBRATION_MIN_NATIVE_TOTAL_SECONDS {
+        return Err(
+            "invalid_params: timeout leaves no useful calibration measurement budget".into(),
+        );
+    }
+    Ok(CalibrationBudget {
+        child_timeout_seconds,
+        native_budget_seconds: native_budget_seconds.min(CALIBRATION_GLOBAL_MAX_SECONDS as u64),
+    })
+}
 
 struct NativeCalibrationService {
     install_root: PathBuf,
     activity: ActivityCoordinator,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
+    test_seams: TestSeams,
     operation: Mutex<Option<NativeCalibrationOperation>>,
+    publication: Mutex<()>,
+    closed: AtomicBool,
 }
 
 struct NativeCalibrationOperation {
@@ -84,6 +153,7 @@ struct NativeCalibrationOperation {
     cancel: Arc<AtomicBool>,
     child: Arc<Mutex<Option<std::process::Child>>>,
     worker: Option<thread::JoinHandle<()>>,
+    done: Arc<(Mutex<bool>, Condvar)>,
     reservation: Option<crate::app_state::CalibrationReservation>,
 }
 
@@ -93,13 +163,17 @@ impl NativeCalibrationService {
         activity: ActivityCoordinator,
         events: Arc<Mutex<NativeEventHub>>,
         playback: Arc<NativePlaybackService>,
+        test_seams: TestSeams,
     ) -> Self {
         Self {
             install_root,
             activity,
             events,
             playback,
+            test_seams,
             operation: Mutex::new(None),
+            publication: Mutex::new(()),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -108,10 +182,10 @@ impl NativeCalibrationService {
         request: CalibrationStartRequest,
     ) -> Result<CalibrationStartAckDto, String> {
         validate_calibration_request(&request)?;
-        let reservation = self.activity.reserve_calibration()?;
         let operation_id = opaque_native_id()?;
         let cancel = Arc::new(AtomicBool::new(false));
         let child = Arc::new(Mutex::new(None));
+        let done = Arc::new((Mutex::new(false), Condvar::new()));
         {
             let mut current = self
                 .operation
@@ -127,12 +201,18 @@ impl NativeCalibrationService {
             }) {
                 return Err("already_running: a calibration operation is already active".into());
             }
+            // Hold the operation lock while acquiring the shared activity
+            // reservation.  This gives a second calibration start a stable
+            // `already_running` linearization point instead of exposing the
+            // generic activity error from a duplicate request.
+            let reservation = self.activity.reserve_calibration()?;
             *current = Some(NativeCalibrationOperation {
                 operation_id: operation_id.clone(),
                 state: CalibrationState::Running,
                 cancel: cancel.clone(),
                 child: child.clone(),
                 worker: None,
+                done: done.clone(),
                 reservation: Some(reservation),
             });
         }
@@ -151,10 +231,16 @@ impl NativeCalibrationService {
         }
         let service = Arc::clone(self);
         let worker_id = operation_id.clone();
+        let worker_done = done.clone();
         let handle = match thread::Builder::new()
             .name("native-calibration-orchestrator".into())
-            .spawn(move || service.run(worker_id, request, cancel, child))
-        {
+            .spawn(move || {
+                service.run(worker_id, request, cancel, child);
+                if let Ok(mut finished) = worker_done.0.lock() {
+                    *finished = true;
+                    worker_done.1.notify_all();
+                }
+            }) {
             Ok(handle) => handle,
             Err(error) => {
                 if let Ok(mut current) = self.operation.lock() {
@@ -218,7 +304,8 @@ impl NativeCalibrationService {
     }
 
     fn shutdown(&self) {
-        let worker = if let Ok(mut operation) = self.operation.lock() {
+        self.closed.store(true, Ordering::Release);
+        let worker_and_done = if let Ok(mut operation) = self.operation.lock() {
             if let Some(current) = operation.as_mut()
                 && matches!(
                     current.state,
@@ -235,12 +322,41 @@ impl NativeCalibrationService {
                     let _ = child.kill();
                 }
             }
-            operation.as_mut().and_then(|value| value.worker.take())
+            operation.as_mut().map(|value| {
+                (
+                    value.worker.take(),
+                    value.done.clone(),
+                    value.reservation.take(),
+                )
+            })
         } else {
             None
         };
-        if let Some(worker) = worker {
-            let _ = worker.join();
+        if let Some((worker, done, reservation)) = worker_and_done {
+            if let Some(worker) = worker {
+                let deadline = Instant::now() + CALIBRATION_SHUTDOWN_TIMEOUT;
+                let mut finished = done.0.lock().ok();
+                while let Some(value) = finished.take() {
+                    if *value || Instant::now() >= deadline {
+                        finished = Some(value);
+                        break;
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    match done.1.wait_timeout(value, remaining) {
+                        Ok((next, _)) => finished = Some(next),
+                        Err(_) => break,
+                    }
+                }
+                if finished.as_deref() == Some(&true) {
+                    let _ = worker.join();
+                }
+                // A worker that did not acknowledge completion within the
+                // bounded shutdown budget cannot be allowed to publish a cache or
+                // terminal event after shutdown. `closed` is checked by finish;
+                // dropping this handle is therefore a safe, non-publishing
+                // containment path rather than an unbounded join.
+            }
+            drop(reservation);
         }
     }
 
@@ -275,7 +391,13 @@ impl NativeCalibrationService {
         cancel: Arc<AtomicBool>,
         child_slot: Arc<Mutex<Option<std::process::Child>>>,
     ) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         let result = self.run_child(&request, &cancel, child_slot);
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         if cancel.load(Ordering::Acquire) {
             self.finish(
                 &operation_id,
@@ -302,35 +424,44 @@ impl NativeCalibrationService {
                 "Diagnostic calibration completed successfully.",
                 false,
             ),
-            Ok(raw) => match publish_calibration_cache(&self.install_root, &raw) {
-                Ok((margin, samples)) => {
-                    // Cache publication and prepared-plan invalidation precede
-                    // the terminal event and release of the activity lease.
-                    self.playback.invalidate_settings();
-                    self.finish(
-                        &operation_id,
-                        CalibrationState::Succeeded,
-                        CalibrationOutcome::Succeeded,
-                        "succeeded",
-                        Some(margin),
-                        samples,
-                        "native",
-                        "Calibration completed successfully.",
-                        true,
-                    );
+            Ok(raw) => {
+                // Serialization/publication is guarded together with the
+                // shutdown flag.  Shutdown can therefore not return while a
+                // worker is about to publish a cache after the close boundary.
+                let publication = self.publication.lock();
+                if publication.is_err() || self.closed.load(Ordering::Acquire) {
+                    return;
                 }
-                Err(error) => self.finish(
-                    &operation_id,
-                    CalibrationState::Failed,
-                    CalibrationOutcome::Failed,
-                    "failed",
-                    None,
-                    0,
-                    "none",
-                    &error,
-                    false,
-                ),
-            },
+                match publish_calibration_cache(&self.install_root, &raw) {
+                    Ok((margin, samples)) => {
+                        // Cache publication and prepared-plan invalidation precede
+                        // the terminal event and release of the activity lease.
+                        self.playback.invalidate_settings();
+                        self.finish(
+                            &operation_id,
+                            CalibrationState::Succeeded,
+                            CalibrationOutcome::Succeeded,
+                            "succeeded",
+                            margin,
+                            samples,
+                            "native",
+                            "Calibration completed successfully.",
+                            margin.is_some(),
+                        );
+                    }
+                    Err(error) => self.finish(
+                        &operation_id,
+                        CalibrationState::Failed,
+                        CalibrationOutcome::Failed,
+                        "failed",
+                        None,
+                        0,
+                        "none",
+                        &error,
+                        false,
+                    ),
+                }
+            }
             Err(CalibrationRunError::Cancelled) => self.finish(
                 &operation_id,
                 CalibrationState::Cancelled,
@@ -369,6 +500,9 @@ impl NativeCalibrationService {
         message: &str,
         applied: bool,
     ) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         let reservation = if let Ok(mut operation) = self.operation.lock() {
             let Some(current) = operation.as_mut() else {
                 return;
@@ -446,7 +580,7 @@ impl NativeCalibrationService {
         if cancel.load(Ordering::Acquire) {
             return Err(CalibrationRunError::Cancelled);
         }
-        if std::env::var_os("SKY_PACKAGED_SAFE_CALIBRATION").is_some() {
+        if self.test_seams == TestSeams::SafePackage {
             return Ok(safe_calibration_evidence());
         }
         let binary = self.install_root.join(sky_updater::CALIBRATION_EXE);
@@ -458,12 +592,14 @@ impl NativeCalibrationService {
         let timeout = request
             .timeout_seconds
             .unwrap_or(CALIBRATION_DEFAULT_TIMEOUT_SECONDS);
+        let budget =
+            calibration_budget(timeout, request.mode).map_err(CalibrationRunError::Failed)?;
         let mut command = std::process::Command::new(&binary);
         command
             .arg("--mode")
             .arg(mode)
             .arg("--budget-seconds")
-            .arg((timeout.ceil() as u64).clamp(6, 120).to_string());
+            .arg(budget.native_budget_seconds.to_string());
         if request.mode == CalibrationMode::Diagnostic {
             command
                 .arg("--class")
@@ -490,8 +626,7 @@ impl NativeCalibrationService {
             })?;
             *slot = Some(child);
         }
-        let deadline = Instant::now()
-            + Duration::from_secs_f64(timeout.clamp(0.001, CALIBRATION_DEFAULT_TIMEOUT_SECONDS));
+        let deadline = Instant::now() + Duration::from_secs_f64(budget.child_timeout_seconds);
         let mut exited = false;
         while Instant::now() < deadline {
             if cancel.load(Ordering::Acquire) {
@@ -642,11 +777,10 @@ fn safe_calibration_evidence() -> Value {
 }
 
 fn validate_calibration_request(request: &CalibrationStartRequest) -> Result<(), String> {
-    if let Some(timeout) = request.timeout_seconds
-        && (!timeout.is_finite() || timeout <= 0.0 || timeout > 120.0)
-    {
-        return Err("invalid_params: timeout_seconds must be finite and in (0, 120]".into());
-    }
+    let timeout = request
+        .timeout_seconds
+        .unwrap_or(CALIBRATION_DEFAULT_TIMEOUT_SECONDS);
+    calibration_budget(timeout, request.mode)?;
     if request.mode == CalibrationMode::Diagnostic {
         if !matches!(request.class_name.as_deref(), Some("hot") | Some("cold")) {
             return Err("invalid_params: diagnostic class_name must be hot or cold".into());
@@ -689,7 +823,10 @@ fn bounded_text(value: impl AsRef<str>) -> String {
 /// shape.  All required production buckets and publishability counters are
 /// checked before the atomic replace; a zero/partial/malformed child result
 /// can never become a timing policy.
-fn publish_calibration_cache(install_root: &Path, raw: &Value) -> Result<(u64, u64), String> {
+fn publish_calibration_cache(
+    install_root: &Path,
+    raw: &Value,
+) -> Result<(Option<u64>, u64), String> {
     let root = raw
         .as_object()
         .ok_or("calibration evidence root must be an object")?;
@@ -807,7 +944,14 @@ fn publish_calibration_cache(install_root: &Path, raw: &Value) -> Result<(u64, u
         "status".into(),
         Value::from(if valid { "valid" } else { "out_of_envelope" }),
     );
-    cache.insert("transport_margin_us".into(), Value::from(applied));
+    cache.insert(
+        "transport_margin_us".into(),
+        if valid {
+            Value::from(applied)
+        } else {
+            Value::Null
+        },
+    );
     cache.insert(
         "transport_margin_source".into(),
         Value::from("device_cache"),
@@ -857,7 +1001,7 @@ fn publish_calibration_cache(install_root: &Path, raw: &Value) -> Result<(u64, u
         return Err("published calibration cache failed its compatibility validation".into());
     }
     fs::rename(&temp, &cache_path).map_err(|error| error.to_string())?;
-    Ok((applied as u64, samples))
+    Ok((valid.then_some(applied as u64), samples))
 }
 
 fn validate_signed_quantiles(value: Option<&Value>, message: &str) -> Result<(), String> {
@@ -916,32 +1060,53 @@ pub(crate) struct NativeDesktopRuntime {
     calibration: Arc<NativeCalibrationService>,
     update_state: Mutex<crate::native_update::NativeUpdateState>,
     activity: ActivityCoordinator,
+    test_seams: TestSeams,
     ready_emitted: AtomicBool,
     closed: AtomicBool,
 }
 
 impl NativeDesktopRuntime {
+    #[allow(dead_code)]
     pub(crate) fn for_current_install() -> Result<Self, String> {
-        Self::from_install_root_with_activity(
+        Self::from_install_root_with_activity_and_seams(
             resolve_install_root()?,
             ActivityCoordinator::default(),
+            TestSeams::Disabled,
         )
     }
 
     #[allow(dead_code)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
-        Self::from_install_root_with_activity(install_root, ActivityCoordinator::default())
+        Self::from_install_root_with_activity_and_seams(
+            install_root,
+            ActivityCoordinator::default(),
+            TestSeams::Disabled,
+        )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn for_current_install_with_activity(
         activity: ActivityCoordinator,
     ) -> Result<Self, String> {
-        Self::from_install_root_with_activity(resolve_install_root()?, activity)
+        Self::from_install_root_with_activity_and_seams(
+            resolve_install_root()?,
+            activity,
+            TestSeams::Disabled,
+        )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_install_root_with_activity(
         install_root: PathBuf,
         activity: ActivityCoordinator,
+    ) -> Result<Self, String> {
+        Self::from_install_root_with_activity_and_seams(install_root, activity, TestSeams::Disabled)
+    }
+
+    pub(crate) fn from_install_root_with_activity_and_seams(
+        install_root: PathBuf,
+        activity: ActivityCoordinator,
+        test_seams: TestSeams,
     ) -> Result<Self, String> {
         let settings_path = install_root.join("config.json");
         let settings_store = JsonSettingsStore::new(settings_path);
@@ -955,6 +1120,7 @@ impl NativeDesktopRuntime {
             activity.clone(),
             events.clone(),
             playback.clone(),
+            test_seams,
         ));
         Ok(Self {
             install_root,
@@ -966,6 +1132,7 @@ impl NativeDesktopRuntime {
             calibration,
             update_state: Mutex::new(crate::native_update::NativeUpdateState::default()),
             activity,
+            test_seams,
             ready_emitted: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })
@@ -1170,6 +1337,7 @@ impl NativeDesktopRuntime {
                 .map_err(|_| "native update state lock poisoned".to_string())?;
             update.candidate = None;
             update.handoff_id = None;
+            update.handoff_starting = false;
         }
         Ok(settings_dto(snapshot))
     }
@@ -1187,9 +1355,12 @@ impl NativeDesktopRuntime {
         settings
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
-        crate::native_update::check(&mut settings, &self.update_state, |event| {
-            self.publish(event)
-        })
+        crate::native_update::check(
+            &mut settings,
+            &self.update_state,
+            self.test_seams,
+            |event| self.publish(event),
+        )
     }
 
     fn begin_update_handoff(&self, target_version: String) -> Result<UpdateHandoffDto, String> {
@@ -1235,6 +1406,7 @@ impl NativeDesktopRuntime {
         if let Ok(mut update) = self.update_state.lock() {
             update.candidate = None;
             update.handoff_id = None;
+            update.handoff_starting = false;
         }
         Ok(update_preferences_dto(snapshot))
     }
@@ -3261,7 +3433,7 @@ fn publish_playback_finished(
         })
 }
 
-fn resolve_install_root() -> Result<PathBuf, String> {
+pub(crate) fn resolve_install_root() -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("SKY_INSTALL_ROOT") {
         return fs::canonicalize(value)
             .map_err(|error| format!("invalid SKY_INSTALL_ROOT: {error}"));
@@ -3583,24 +3755,29 @@ fn remove_oldest_snapshot(buffered: &mut VecDeque<UiEvent>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticsPublicationGate, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
-        MaterializedTimingPolicy, NativeActivePlayback, NativeDesktopRuntime,
+        CALIBRATION_DEFAULT_TIMEOUT_SECONDS, CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
+        CALIBRATION_MIN_NATIVE_TOTAL_SECONDS, CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
+        CalibrationRunError, DiagnosticsPublicationGate, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS,
+        MAX_PREPARED_PLANS, MaterializedTimingPolicy, NativeActivePlayback,
+        NativeCalibrationOperation, NativeCalibrationService, NativeDesktopRuntime,
         NativeDiagnosticsSample, NativeEventHub, NativePlaybackService, PlaybackPendingControl,
-        diagnostics_backend_status, opaque_native_id, percentile_ms, plan_fingerprint,
-        population_sigma_ms, publish_diagnostics_snapshot_for_active, publish_playback_state,
+        TestSeams, calibration_budget, diagnostics_backend_status, opaque_native_id, percentile_ms,
+        plan_fingerprint, population_sigma_ms, publish_calibration_cache,
+        publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
-        resolve_install_root, retain_prepared_capacity, settings_fingerprint,
-        validate_playback_start_request,
+        resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
+        settings_fingerprint, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
-    use crate::commands::{PlaybackConfigDto, PlaybackSessionState};
+    use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
     use crate::ui_events::{
-        DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState, PlaybackHealthState,
-        PlaybackSnapshotPayload, UiEvent,
+        CalibrationMode, DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState,
+        PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
     };
     use serde_json::Value;
     use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
+    use sky_native_adapters::load_calibration_resolution;
     use std::fs;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
@@ -3672,6 +3849,168 @@ mod tests {
             let root = resolve_install_root().expect("root");
             assert!(root.join("rust").is_dir());
             assert!(root.join("desktop").is_dir());
+        }
+    }
+
+    #[test]
+    fn production_composition_has_no_environment_only_safe_bypass() {
+        assert_eq!(TestSeams::default(), TestSeams::Disabled);
+        assert_ne!(TestSeams::Disabled, TestSeams::SafePackage);
+        // The only selector is an explicit composition value.  There is no
+        // environment-to-seam conversion in either production constructor.
+        assert!(!matches!(TestSeams::Disabled, TestSeams::SafePackage));
+        assert!(matches!(TestSeams::SafePackage, TestSeams::SafePackage));
+    }
+
+    #[test]
+    fn calibration_budget_preserves_mode_specific_reserves() {
+        let single = calibration_budget(
+            CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
+            crate::ui_events::CalibrationMode::Quick,
+        )
+        .expect("minimum single budget");
+        assert_eq!(
+            single.native_budget_seconds,
+            CALIBRATION_MIN_NATIVE_TOTAL_SECONDS as u64
+        );
+        assert_eq!(single.child_timeout_seconds, 7.0);
+        assert!(
+            calibration_budget(
+                CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS - 0.01,
+                crate::ui_events::CalibrationMode::Quick,
+            )
+            .is_err()
+        );
+
+        let full = calibration_budget(
+            CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
+            crate::ui_events::CalibrationMode::Full,
+        )
+        .expect("minimum full budget");
+        assert_eq!(
+            full.native_budget_seconds,
+            CALIBRATION_MIN_NATIVE_TOTAL_SECONDS as u64
+        );
+        assert_eq!(full.child_timeout_seconds, 7.0);
+        let maximum = calibration_budget(
+            CALIBRATION_DEFAULT_TIMEOUT_SECONDS,
+            crate::ui_events::CalibrationMode::Full,
+        )
+        .expect("maximum budget");
+        assert_eq!(maximum.native_budget_seconds, 114);
+        assert_eq!(maximum.child_timeout_seconds, 115.0);
+    }
+
+    #[test]
+    fn synthetic_calibration_requires_explicit_package_composition() {
+        let root = std::env::temp_dir().join("sky-native-calibration-no-child");
+        let activity = ActivityCoordinator::default();
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let playback = Arc::new(NativePlaybackService::new(activity.clone()));
+        let request = CalibrationStartRequest {
+            mode: CalibrationMode::Quick,
+            class_name: None,
+            polyphony: None,
+            samples: None,
+            timeout_seconds: None,
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let safe = NativeCalibrationService::new(
+            root.clone(),
+            activity.clone(),
+            events.clone(),
+            playback.clone(),
+            TestSeams::SafePackage,
+        );
+        assert!(
+            safe.run_child(&request, &cancel, Arc::new(Mutex::new(None)))
+                .is_ok()
+        );
+
+        let production =
+            NativeCalibrationService::new(root, activity, events, playback, TestSeams::Disabled);
+        let error = production
+            .run_child(&request, &cancel, Arc::new(Mutex::new(None)))
+            .expect_err("production composition must select the real child");
+        assert!(matches!(
+            error,
+            CalibrationRunError::Failed(message) if message.contains("failed to start")
+        ));
+    }
+
+    #[test]
+    fn duplicate_calibration_start_keeps_already_running_contract() {
+        let activity = ActivityCoordinator::default();
+        let reservation = activity.reserve_calibration().expect("first reservation");
+        let service = NativeCalibrationService::new(
+            std::env::temp_dir(),
+            activity,
+            Arc::new(Mutex::new(NativeEventHub::default())),
+            Arc::new(NativePlaybackService::new(ActivityCoordinator::default())),
+            TestSeams::SafePackage,
+        );
+        let done = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        *service.operation.lock().expect("operation") = Some(NativeCalibrationOperation {
+            operation_id: "a".repeat(32),
+            state: crate::ui_events::CalibrationState::Running,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            child: Arc::new(Mutex::new(None)),
+            worker: None,
+            done,
+            reservation: Some(reservation),
+        });
+        let error = Arc::new(service)
+            .start(CalibrationStartRequest {
+                mode: CalibrationMode::Quick,
+                class_name: None,
+                polyphony: None,
+                samples: None,
+                timeout_seconds: None,
+            })
+            .expect_err("duplicate calibration");
+        assert!(error.starts_with("already_running:"));
+    }
+
+    #[test]
+    fn calibration_cache_writer_and_loader_round_trip_out_of_envelope() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let cases = [
+            (0_i64, Some(300_u64)),
+            (677, Some(777)),
+            (1900, Some(2000)),
+            (2100, None),
+        ];
+        for (worst, expected_margin) in cases {
+            let root =
+                std::env::temp_dir().join(format!("sky-calibration-roundtrip-{suffix}-{worst}"));
+            let mut raw = safe_calibration_evidence();
+            raw["pair_buckets"]["1"]["hot"]["sendinput_shrink_us"]["max"] = Value::from(worst);
+            publish_calibration_cache(&root, &raw).expect("cache publication");
+            let cache = root.join(".cache/input_latency.json");
+            let resolution = load_calibration_resolution(&cache);
+            assert_eq!(resolution.margin_us, expected_margin.unwrap_or(300));
+            assert_eq!(
+                resolution.source,
+                if expected_margin.is_some() {
+                    sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE
+                } else {
+                    sky_native_adapters::CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE
+                }
+            );
+            if expected_margin.is_none() {
+                let value: Value =
+                    serde_json::from_slice(&fs::read(&cache).expect("cache")).expect("json");
+                assert!(value["transport_margin_us"].is_null());
+                assert!(
+                    !value["calibration_timing_qualified"]
+                        .as_bool()
+                        .unwrap_or(true)
+                );
+            }
+            let _ = fs::remove_dir_all(root);
         }
     }
 
