@@ -285,10 +285,6 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Install Chromium for packaged desktop verification
-        working-directory: desktop
-        run: bunx playwright install chromium
-
       - name: Construct Python-unavailable canonical environment
         run: |
           $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
