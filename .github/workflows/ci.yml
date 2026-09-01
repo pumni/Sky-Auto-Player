@@ -175,6 +175,7 @@ jobs:
           cache-on-failure: true
 
       - name: Repository verification — Rust
+        if: needs.changes.outputs.package_required != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check rust
@@ -188,7 +189,46 @@ jobs:
         working-directory: desktop
         run: bunx playwright install chromium
 
+      - name: Construct Python-unavailable validation environment
+        if: needs.changes.outputs.package_required == 'true'
+        run: |
+          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $toolDirectories = foreach ($name in $required) {
+            $command = Get-Command $name -ErrorAction SilentlyContinue
+            if ($command) { Split-Path -Parent $command.Source }
+          }
+          $systemRoot = if ($env:SystemRoot) { $env:SystemRoot } else { "C:\Windows" }
+          $restricted = @(
+            $toolDirectories
+            (Join-Path $systemRoot "System32")
+            (Join-Path $systemRoot "System32\Wbem")
+          ) | Where-Object { $_ } | Select-Object -Unique
+          $env:PATH = $restricted -join ";"
+          foreach ($name in @("python", "python3", "py", "uv")) {
+            $found = where.exe $name 2>$null
+            if ($LASTEXITCODE -eq 0 -and $found) { throw "$name remains discoverable in restricted PATH: $found" }
+            Write-Host "${name}: not found"
+          }
+          $global:LASTEXITCODE = 0
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          "PATH=$env:PATH" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          }
+
+      - name: Restricted repository verification without Python
+        if: needs.changes.outputs.package_required == 'true'
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          cargo xtask check static
+          cargo xtask check rust
+          cargo xtask check desktop
+
       - name: Repository verification — desktop
+        if: needs.changes.outputs.package_required != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check desktop
@@ -273,14 +313,6 @@ jobs:
           foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
             "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           }
-
-      - name: Canonical checks without Python
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          cargo xtask check static
-          cargo xtask check rust
-          cargo xtask check desktop
 
       - name: Build and qualify exact portable artifact
         env:
