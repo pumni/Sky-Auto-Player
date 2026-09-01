@@ -1,8 +1,12 @@
-# Target Desktop Architecture
+# Target Desktop Architecture (superseded by Wave 5)
 
-This document describes the Rust-first migration target. The current runtime
-remains documented in [architecture.md](architecture.md) until each boundary
-has passed its phase acceptance gate.
+Wave 5 completed this target. For the current supported product boundary, use
+[`architecture.md`](architecture.md) and
+[`wave5-legacy-python-retirement.md`](wave5-legacy-python-retirement.md).
+
+This document describes the Rust-first migration target. It is retained as
+migration history; the current runtime and ownership are documented in
+[architecture.md](architecture.md).
 
 ```text
 React / TypeScript

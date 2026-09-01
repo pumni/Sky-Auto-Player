@@ -24,7 +24,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
     label: Domain models — schedule và timing frame
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/src/sky_music/domain/
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_app_core/src/song.rs
 ---
 
 ## Tổng quan
@@ -55,7 +55,7 @@ Sky-Auto-Player/
 ```
 
 Sau khi thêm file, nhấn **Reload songs** trong Library desktop mà không cần khởi động lại ứng
-dụng. Fallback Textual dùng `Ctrl+R` cho thao tác tương tự.
+dụng.
 
 ## Lấy file sheet ở đâu
 
@@ -67,7 +67,7 @@ dụng. Fallback Textual dùng `Ctrl+R` cho thao tác tương tự.
 ## Các lỗi thường gặp
 
 **File không hiện trong Library**
-: Dùng **Reload songs** trong GUI desktop. Trong fallback Textual, reload bằng `Ctrl+R`.
+: Dùng **Reload songs** trong GUI desktop.
 Nếu vẫn không hiện, kiểm tra phần mở rộng file phải là `.json`, `.skysheet`, hoặc `.txt`.
 Các phần mở rộng khác không được nhận diện.
 

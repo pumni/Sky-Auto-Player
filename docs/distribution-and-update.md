@@ -1,8 +1,8 @@
 # Distribution and Update Model
 
 This is the normative contract for the unsigned, portable Windows package and
-its user-triggered native updater. It tracks `[project].version` in
-`pyproject.toml` and is independent of the Rust playback dispatcher.
+its user-triggered native updater. It tracks the native desktop Cargo version
+and is independent of the Rust playback dispatcher.
 
 ## 1. Distribution
 
@@ -14,7 +14,7 @@ Sky-Auto-Player-v<version>.zip.sha256
 MANIFEST.json
 ```
 
-The ZIP expands to one folder containing the PyInstaller application,
+The ZIP expands to one folder containing the native Tauri application,
 `native_calibration.exe`, and the canonical `Sky-Auto-Player-Updater.exe`.
 There are no BAT/PowerShell updater scripts, system installer, legacy
 executable name, bridge ZIP, or second bundle. Runtime-owned paths are kept
@@ -38,7 +38,7 @@ qualification gates pass. Published tags and assets are immutable; fixes
 require a new version.
 
 Release publication is draft-first. A version tag runs the release workflow,
-which builds and attests the exact ZIP, sidecar, and manifest, then creates a
+which builds and attests the exact ZIP and manifest, then creates a
 draft GitHub Release. The draft is the qualification input: it is published
 as a prerelease or stable release only after exact-artifact and platform
 qualification pass. Assets are not replaced and the tag is not moved between
@@ -47,19 +47,19 @@ or RC instead.
 
 ## 2. Runtime ownership
 
-Python owns update checking, stable/beta selection, the modal, update-notice
-state, and the fixed manual fallback URL. It does not download, extract,
-replace, delete, or restart application files itself. The native updater owns
-the visible progress window and the durable update lifecycle.
+The Native Desktop Runtime owns update checking, stable/beta selection,
+update-notice state, and the fixed manual fallback URL. It does not download,
+extract, replace, delete, or restart application files itself. The native
+updater owns the visible progress window and the durable update lifecycle.
 
-When the user chooses **Update and Restart**, Python first validates the
+When the user chooses **Update and Restart**, the Native Runtime first validates the
 currently installed `MANIFEST.json` and the updater's exact size/SHA256. It
 copies the updater into an allow-listed random run directory under
 `%LOCALAPPDATA%\Sky-Auto-Player\update-runs\`, starts it with `shell=False`,
 and waits for a bounded ready/rejected handoff at
 `<run_root>\handoff.json`. The ready record is published only after the native
-progress UI, per-install lock, and active-update state are established. Python
-exits the UI only after the ready handshake; a rejected handshake leaves the
+progress UI, per-install lock, and active-update state are established. The
+desktop exits the UI only after the ready handshake; a rejected handshake leaves the
 app running. The Rust updater then:
 
 1. waits for the parent app without terminating or injecting into it;
@@ -101,7 +101,7 @@ transaction directory.
 
 The canonical-root hash uses the Windows verbatim canonical form (`\\?\` for
 drive paths and `\\?\UNC\` for UNC paths) so the Rust updater's lock/active
-identity and Python's frozen-startup validation derive the same `install_id`.
+identity and the native desktop startup guard derive the same `install_id`.
 
 The active lifecycle record is bounded and atomic at:
 
@@ -111,8 +111,8 @@ The active lifecycle record is bounded and atomic at:
 
 It records the canonical install identity, updater PID, run ID, run root, and
 current phase. It is created only after the progress window and lock exist,
-updated at phase boundaries, and removed before the updater exits. On frozen
-Windows startup, Python validates that any active PID is a live canonical
+updated at phase boundaries, and removed before the updater exits. On packaged
+Windows startup, the native shell validates that any active PID is a live canonical
 `Sky-Auto-Player-Updater.exe` inside the expected `update-runs\run-<32 hex>`
 directory; a valid active update makes startup exit cleanly with the bounded
 output `Sky Auto Player is currently updating to vX (Phase). The updater window
@@ -120,8 +120,7 @@ will restart the app automatically.`
 
 ## 3. Release selection and network
 
-The desktop GUI is the canonical user-facing selector, while the supported
-Textual fallback uses the same update policy. Stable excludes prereleases;
+The desktop GUI is the canonical user-facing selector. Stable excludes prereleases;
 beta may include them. The checker uses:
 
 ```text
@@ -167,7 +166,6 @@ The manifest must include at least:
 Sky-Auto-Player.exe
 native_calibration.exe
 Sky-Auto-Player-Updater.exe
-_internal/**/sky_player_rs*.pyd
 ```
 
 The native updater verifies unsigned project-owned files by SHA256. It has no

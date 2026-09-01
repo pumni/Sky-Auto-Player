@@ -78,8 +78,8 @@ that HWND for both focus modes: `--require-focus` verifies it stays focused;
 authorize an unspecified foreground window. The sink records ordinary window
 key events only and never emits input.
 
-If the free-threaded Python distribution does not include Tcl/Tk, use the
-equivalent WinForms sink with `pwsh -NoProfile -File
+If the tooling environment does not provide the receive-only Python sink, use
+the equivalent WinForms sink with `pwsh -NoProfile -File
 scripts/native_acceptance_sink.ps1 -ReadyFile .benchmarks/sink.json -EventLog
 .benchmarks/sink-events.json`. The two sinks have the same receive-only
 contract.
@@ -230,7 +230,7 @@ identity changes after cleanup, the worker clears the restore marker and stays
 paused for another attempt. A manual pause remains independent; restoring
 focus never clears it.
 
-When focus is required, the Python supervisor makes one minimal
+When focus is required, the native desktop supervisor makes one minimal
 `ShowWindow(SW_RESTORE)` plus `SetForegroundWindow` attempt at playback
 startup, before the native worker starts. It refreshes the cached target and
 actual foreground state afterward and treats an OS refusal as an ordinary
@@ -240,7 +240,7 @@ refocus remains the user-controlled retry path.
 
 ## 4. Authored timestamp and minimum-hold model
 
-Python materializes the fixed floor before native startup:
+The native application materializes the fixed floor before worker startup:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
@@ -409,7 +409,7 @@ the observer can no longer prove generation ownership.
   ownership, stale/retrigger/mixed-packet, and soak tests.
 - `sky_dispatch_win32`: packet ordering, strict mask validation, QPC/wait,
   focus, and `SendInput` seam tests.
-- `sky_player_rs`: final-gate ordering, completion evidence, diagnostic observer queue
+- `sky_player`: final-gate ordering, completion evidence, diagnostic observer queue
   overflow, startup/stale handling, cleanup, and no-allocation dispatch tests.
 - Security audit: only the platform crate contains Win32 bindings and
   `SendInput`; forbidden hook/injection/process-tampering mechanisms remain

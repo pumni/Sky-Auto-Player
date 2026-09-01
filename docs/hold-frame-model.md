@@ -82,7 +82,8 @@ The identity is checked with checked arithmetic. It describes completion
 interval compression in the Rust/SendInput sender only; it is not a claim
 about game-observed timing.
 The native worker receives the materialized `effective_min_hold_us` and
-`min_release_gap_us` values and uses them as fixed durations. PyO3 does not add
+`min_release_gap_us` values and uses them as fixed durations. The native desktop
+adapter does not add
 another frame-relative floor; Rust only range-checks and validates these values
 in QPC ticks. It does not learn or subtract SendInput cost.
 `FrameTimingPolicy.min_hold_margin_us` is the

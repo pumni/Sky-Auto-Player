@@ -37,8 +37,7 @@ evidence:
 **Sửa**:
 
 1. Xác nhận phần mở rộng là `.json`, `.skysheet`, hoặc `.txt`.
-2. Nhấn **Reload songs** trong desktop GUI để reload mà không cần khởi động lại. Trong fallback
-   Textual, nhấn `Ctrl+R`.
+2. Nhấn **Reload songs** trong desktop GUI để reload mà không cần khởi động lại.
 3. Nếu vẫn không hiện, kiểm tra file nằm trực tiếp trong thư mục `songs/`, không phải trong thư mục con.
 
 ## Lỗi "Failed to parse" hoặc lỗi parse khi khởi động

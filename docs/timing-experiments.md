@@ -1,4 +1,8 @@
-# Active Timing & Infrastructure Experiments
+# Native Timing & Infrastructure Experiments
+
+The former Python/Textual experiment commands are retired. This document is a
+record of native timing evidence and must not be used to launch `src/main.py`
+or any other Python product entrypoint.
 
 This document records the open experiments and calibration procedures for Sky Auto Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](archive/2026-06_timing-experiments.md).
 
@@ -7,9 +11,10 @@ This document records the open experiments and calibration procedures for Sky Au
 ## 0. Setup and Tooling
 
 ### 0.1 Build the Test Songs
-Run this command once to generate the test songs under `songs/`:
+Use the committed native test songs under `songs/`; the retired Python helper
+is no longer part of the supported workflow.
 ```bash
-uv run python tests/make_test_song.py
+cargo test --manifest-path rust/Cargo.toml -p sky_player --locked
 ```
 
 For the active experiments below, the relevant test song is:
@@ -36,10 +41,7 @@ To record game audio accurately on Windows without background noise:
   2. Run the 4 levels in randomized/alternate order (do not run all `0` runs before moving to next levels).
   3. Perform at least 7 runs per level on the real threaded backend. Record the median and worst-run p95/p99 lateness.
      ```bash
-     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 0 --debug-csv
-     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 500 --debug-csv
-     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 800 --debug-csv
-     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 1200 --debug-csv
+     cargo test --manifest-path rust/Cargo.toml -p sky_player --locked -- spin_threshold
      ```
   4. **Metrics:** Down-event IOI std, lateness p95/p99, count of events exceeding 1ms/2ms, worst-case latency spike, and process CPU time.
 * **Null Hypothesis / Decision Rule:** Choose the lowest spin threshold that matches the p95/p99 latency performance of the higher thresholds without a significant worst-case regression.
@@ -72,8 +74,8 @@ To record game audio accurately on Windows without background noise:
   Decision: global focus_restore_grace_us = __ / INCONCLUSIVE / REMOVE (grace=0 passes) / CONFIRMATION_LOOP (race detected)
   ```
 
-### O10.7 UI-Contention GIL Tail-Latency Investigation
-* **Objective:** Determine if GIL contention between the Textual UI thread and the real-time dispatch thread introduces tail latency at the dispatch loop.
+### O10.7 Retired Python UI-contention investigation
+* **Status:** Historical evidence. The Textual UI and Python dispatch path are retired.
 * **Tooling:** Automated using [measure_dispatch_tail.py](file:///d:/Dev/Sky%20Player/scripts/measure_dispatch_tail.py) simulating 60Hz UI load (GIL contention) and SendInput latency (empirical distribution: p50≈477µs, p99≈953µs, max≈1695µs).
 * **Matrix results (2026-06-25):**
   - **Load Off / Def:** p50 lateness: -567.0µs | p99 lateness: 62.0µs | max lateness: 68.0µs

@@ -21,18 +21,16 @@
   </a>
 </div>
 
-The packaged `Sky-Auto-Player.exe` opens the canonical Tauri desktop GUI. The supported Textual
-interface remains available as a keyboard-first fallback through `play.bat` or
-`Sky-Auto-Player-Core.exe --tui`.
+The packaged `Sky-Auto-Player.exe` opens the canonical Tauri desktop GUI. It is the only supported
+user-facing application and runs entirely on the native Rust desktop runtime.
 
 ---
 
 **Sky Auto Player** transforms song sheets from the [specy/skyMusic](https://specy.github.io/skyMusic/) editor into clean chords, rapid arpeggios, and expressive holds played in-game with microsecond-level timing accuracy.
 
-The application uses a **high-performance hybrid architecture**:
-- 🦀 **Native Rust Real-Time Core (`sky_player_rs`)** — Dedicated RT worker handling timeline compilation, absolute QPC scheduling, MMCSS thread priority, sub-millisecond spin-wait, focus gating, and safe input dispatch.
+The application uses a **high-performance native architecture**:
+- 🦀 **Native Rust Real-Time Core (`sky_player`)** — Dedicated RT worker handling timeline compilation, absolute QPC scheduling, MMCSS thread priority, sub-millisecond spin-wait, focus gating, and safe input dispatch.
 - 🖥️ **Tauri 2 + React/TypeScript desktop GUI** — The canonical packaged interface for Library, Song Detail, Player Dock, Diagnostics, Settings, and Updates.
-- 🐍 **Free-Threaded Python 3.14 (`no-GIL`)** — Shared application services and the supported Textual TUI fallback without UI/dispatch thread contention.
 
 Keystrokes are submitted solely through the public Windows `SendInput` API — the exact same channel used by standard keyboard macros. Sky Auto Player **never** reads game memory, injects DLLs, hooks processes, attaches debuggers, or tampers with game files.
 
@@ -45,7 +43,7 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 - **Holds keep their full duration** — Long notes are never clipped short, even when subsequent notes follow in rapid succession.
 - **Explicit hold-frame timing** — Select exact game frame holds (`1.0`, `1.25`, or `1.5` frames) tailored to the in-game FPS configuration.
 - **Calibrated transport margins** — Sender-side hold shrink is calibrated and proven during admission to safeguard physical hold floors.
-- **Zero GIL contention** — Python 3.14 free-threaded runtime cleanly decouples application services and the fallback TUI from the native dispatch worker.
+- **Zero runtime Python dependency** — the portable desktop runs without a Python interpreter or extension module.
 
 > [!WARNING]
 > Automated music playback may violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
@@ -60,15 +58,12 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 2. Extract it anywhere (e.g. `C:\Sky-Auto-Player\`).
 3. Run `Sky-Auto-Player.exe`.
 
-The desktop GUI is the canonical packaged experience. For the supported keyboard-first fallback,
-run `play.bat` or `Sky-Auto-Player-Core.exe --tui` from the extracted folder.
-
 ### Adding Songs
 
 1. Open the [Sky Music Nightly editor](https://specy.github.io/skyMusic/).
 2. Export a song as **JSON**, **skysheet**, or JSON-compatible **txt**.
 3. Drop the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
-4. In the desktop Library, press **Reload songs**. In the Textual fallback, press `Ctrl+R`.
+4. In the desktop Library, press **Reload songs**.
 
 ---
 
@@ -77,12 +72,10 @@ run `play.bat` or `Sky-Auto-Player-Core.exe --tui` from the extracted folder.
 - ⚡ **Native Rust Dispatch Core** — Absolute QPC scheduling with MMCSS audio priority and zero GC/GIL pauses
 - 🎹 **Timing-first playback** — Contiguous chord batching, full hold preservation, and verified release gaps
 - 🖥️ **Modern Tauri desktop GUI** — Library search, Song Detail, Player Dock, Diagnostics, Settings, and Updates
-- ⌨️ **Textual TUI fallback** — Keyboard-first song selection, command palette, and live HUD
 - 🎛️ **Per-song configuration** — Customizable hold profile, tempo multiplier, target FPS, and visual themes
 - 🛡️ **Fail-safe controls** — Real-time focus loss detection, auto-pause, and immediate all-up key release
 - 🔍 **Dry-run mode** — Preview playback rhythm in the HUD without sending keyboard input
 - ⌨️ **Desktop shortcuts** — `/` or `Ctrl+F` focuses search · `Esc` closes safe overlays · `q` does not quit the GUI
-- ⌨️ **Textual fallback hotkeys** — `/` Commands · `F8` Pause/Resume · `F9` Skip · `F10` Stop · `q` / `Esc` Quit
 
 ---
 
@@ -114,27 +107,22 @@ No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for 
 <details>
 <summary><b>Can I build it from source?</b></summary>
 
-Yes. Prerequisites: Windows 10/11, [uv](https://docs.astral.sh/uv/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`).
+Yes. Prerequisites: Windows 10/11, [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). Python is used only to run temporary repository tooling during this wave; it is not a product runtime dependency.
 
 ```powershell
 # 1. Clone repository
 git clone https://github.com/pumni/Sky-Auto-Player.git
 cd Sky-Auto-Player
 
-# 2. Set up Python 3.14 free-threaded virtual environment
+# 2. Set up the temporary repository-tooling environment
 uv sync
 
-# 3. Build and install the native Rust dispatch extension wheel
-uv run python scripts/build_rust_wheel.py
+# 3. Run repository verification
+uv run python scripts/check.py
 
-# 4. Launch the supported Textual fallback from source
-uv run python src/main.py
+# 4. Build the portable native desktop package
+uv run python scripts/build_portable_release.py --output-root dist
 ```
-
-Run `--doctor` (`uv run python src/main.py --doctor`) to verify your GIL state, native extension ABI, MMCSS availability, and key mappings.
-
-The packaged GUI is built separately from the Tauri workspace. `src/main.py` is intentionally kept
-as the source TUI/CLI entry point; it is not Tauri glue.
 </details>
 
 The complete FAQ — covering supported file formats, troubleshooting, timing architecture, and the security model — is available at **<https://pumni.github.io/Sky-Auto-Player/faq/>**.
