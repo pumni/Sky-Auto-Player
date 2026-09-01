@@ -223,7 +223,7 @@ pub fn selftest_packaged_shell() -> i32 {
                 .map_err(|error| format!("settings.get response: {error}"))?;
         let _patched: commands::SettingsDto = serde_json::from_value(runtime.dispatch(
             "settings.patch",
-            serde_json::json!({"verbose_hud": settings.verbose_hud}),
+            serde_json::json!({"verboseHud": settings.verbose_hud}),
         )?)
         .map_err(|error| format!("settings.patch response: {error}"))?;
         let _update_preferences: commands::UpdatePreferencesDto = serde_json::from_value(
