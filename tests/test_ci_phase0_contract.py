@@ -7,11 +7,11 @@ ROOT = Path(__file__).parents[1]
 RUST_CACHE_PIN = "6323deb102c322ba6fcbdcafc7e3dddab59af2b6"
 
 
-def test_ci_keeps_full_history_only_for_change_classification() -> None:
+def test_ci_fetches_history_for_change_classification_and_retirement_ledger() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert workflow.count("fetch-depth: 0") == 1
-    assert workflow.count("fetch-depth: 1") == 3
+    assert workflow.count("fetch-depth: 0") == 4
+    assert "fetch-depth: 1" not in workflow
     assert 'printf \'\\n\' | python scripts/classify_ci_changes.py --full' in workflow
     assert 'if [[ "$PACKAGE_REQUIRED" == "true" ]]' in workflow
 
