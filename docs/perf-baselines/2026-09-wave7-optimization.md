@@ -3,9 +3,11 @@
 Date recorded: 2026-09-02
 Wave 6 baseline: `main@509db0a191c22b8d082945473fa7b58fa6864f41`
 
-This report records the first measured Wave 7 experiment. The only adopted
-candidate so far is CI critical-path parallelization. No product, realtime,
-compiler-profile, Tauri-feature, or cache implementation was changed.
+This report records the measured Wave 7 experiments completed so far. The
+adopted changes are CI critical-path parallelization, removal of redundant
+packaged Chromium setup, and restore-only Rust caching for pull-request
+packaged jobs. No product, realtime, compiler-profile, or Tauri-feature
+behavior was changed.
 
 ## Method and baseline
 
@@ -148,6 +150,135 @@ committed. The observed reduction is large, coverage is preserved, and the
 change is independently revertible in the CI/classifier files. No claim is
 made that the engineering p50/p95 targets are met.
 
+## Candidate A.1 — remove redundant packaged Chromium installation
+
+### Hypothesis
+
+The packaged job no longer runs browser E2E after Candidate A, and `cargo
+xtask dist` does not invoke Playwright. Removing only the packaged Chromium
+installation should save setup work without changing packaged Tauri GUI
+smoke, restricted-PATH qualification, updater qualification, or artifact
+contents. The validation job must retain its Chromium installation because it
+still runs the browser E2E suite.
+
+### Implementation and qualification
+
+| Commit | Purpose |
+| --- | --- |
+| `34ef2f7431b10991181021ac0dca234cc7b53ab5` | Remove packaged-job Chromium installation only; retain validation-job installation |
+
+The exact A.1 workflow was `33567068463` on `34ef2f74`, with all five
+required jobs passing. The validation log still contains `Install Chromium
+for desktop browser smoke` and desktop checks pass. The packaged log has no
+Chromium/Playwright installation, while `dist`, both normal and restricted
+shell/GUI smoke paths, the updater exact-artifact suite, and upload all pass.
+
+| Metric | Before A.1 (`2aeb9e30`) | A.1 (`34ef2f74`) | Delta | Cache state |
+| --- | ---: | ---: | ---: | --- |
+| Packaged job | 10m06s | 10m18s | +12s | both restore-key-hit/no exact cache; hosted-run variance |
+| Packaged Chromium setup | present, about 23s | absent | about -23s setup work | validation install unchanged |
+| Artifact upload | 9,239,364 bytes | 9,239,341 bytes | -23 bytes | different commit |
+
+The total packaged-job comparison is not a controlled speedup because cache
+restore/build timing varied. The direct setup removal is nevertheless
+verified by the exact logs, and no packaged phase consumed Playwright.
+
+### A.1 artifact inspection
+
+The uploaded artifact was downloaded and inspected independently:
+
+| Field | Value |
+| --- | --- |
+| Artifact ID | `9823765983` |
+| Upload size | 9,239,341 bytes |
+| Upload digest | `sha256:66be676402ad678facdc13bfb2fd6d0a103b0ecdd844b65a922750391e8fe48b` |
+| Inner ZIP size / SHA-256 | 4,531,763 bytes / `64e83bd2ce5b3221537b7664a657410585071052dc1211a8f4a85ba333c83830` |
+| MANIFEST SHA-256 | `46f1e280e8aaa142c244530ac564a56762efeb8a2f4a52f3f64ae4ad066894f2` |
+| Portable / managed entries | 102 / 101 |
+
+The release tree and ZIP each contain the expected 102 files; 101 managed
+entries have zero missing/unexpected/hash/size mismatches. The runtime/test
+negative scan is zero. Observed desktop/calibration provenance and the
+manifest/provenance commit are all `34ef2f7431b10991181021ac0dca234cc7b53ab5`;
+the native source fingerprint remains
+`6aa3f9d6f05f1c1778d3cdfba1e7cf2a5ba8867d7259501fefc9d42bd11c56d9`.
+
+### A.1 decision
+
+`ADOPTED`. This is a narrow, independently revertible workflow cleanup with
+coverage preserved. It does not justify any p50/p95 claim.
+
+## Candidate B — pull-request packaged Rust cache restore-only policy
+
+### Hypothesis
+
+The packaged job restores the existing Rust cache but, on pull requests,
+spends about 145 seconds after artifact upload cleaning/compressing a cache
+that commonly collides with another writer. Setting the packaged action's
+`save-if` to false for pull requests should keep restore behavior and all
+build/package coverage while removing that post-job critical-path write. Main
+pushes and manual runs remain the cache population path.
+
+### A/B implementation
+
+| Commit | Purpose |
+| --- | --- |
+| `c1fc52eccccbde5b9e0826f4291150427e87c5e5` | Set packaged Rust cache `save-if: ${{ github.event_name != 'pull_request' }}` |
+
+The A/B baseline was the A.1 workflow `33567068463` (`save-if: true`); the
+candidate workflow was `33568432155` on `c1fc52ec` (`save-if: false`). Both
+used the same 842 MiB restore-key-hit cache path and completed the complete
+restricted package qualification.
+
+| Metric | Baseline A.1 | Candidate B | Delta | Cache state |
+| --- | ---: | ---: | ---: | --- |
+| Packaged job | 10m18s | 6m17s | -4m01s | both restore-key hit; host restore/build noise remains |
+| Cache restore | about 35s | about 32s | -3s | about 842 MiB restored in both |
+| Upload completed | 22:44:17Z | 23:00:05Z | n/a | qualification and upload unchanged |
+| Post Rust cache | 22:44:18–22:46:43Z (145s) | no save phase | about -145s | `save-if=false` on PR |
+| Workflow creation to completion | 11m12s | 10m11s | -1m01s | validation was slower in candidate B |
+
+The package-job reduction is consistent with removing the observed post-job
+save and the candidate log explicitly reports `save-if: false`; no cache
+save/cleanup follows artifact upload. The end-to-end workflow delta is not
+attributed to this candidate because the validation job took 9m17s versus
+6m54s in the baseline. Cold-cache behavior was not separately sampled; this
+policy changes only PR saving, not restore or compilation, while push/manual
+runs retain saving.
+
+### Candidate B qualification and artifact
+
+All five required jobs in workflow `33568432155` passed. The candidate
+packaged job retained restricted `python`/`python3`/`py`/`uv` absence, `dist`,
+`verify-dist`, metadata observations, normal/restricted shell and GUI smoke,
+updater qualification, and artifact upload.
+
+The uploaded artifact was independently inspected:
+
+| Field | Value |
+| --- | --- |
+| Artifact ID | `9824206104` |
+| Upload size | 9,239,383 bytes |
+| Upload digest | `sha256:a7f9607ad1653efb27bc8f6b9a7561c6daf8c214376235d230040fe0e6b48379` |
+| Inner ZIP size / SHA-256 | 4,531,748 bytes / `5a719a8bcf55123921bd9c4bd3e5866382f9607868d0ce04c53355d265e86d6c` |
+| MANIFEST SHA-256 | `c74bee8fc8af21931897d8d6f5223e9c110a4215aef879f6722c32920a0e10b5` |
+| Portable / managed entries | 102 / 101 |
+
+The release tree and ZIP each contain the expected 102 files; 101 managed
+entries have zero missing/unexpected/hash/size mismatches. The runtime/test
+negative scan is zero. Observed desktop/calibration provenance and the
+manifest/provenance commit are all
+`c1fc52eccccbde5b9e0826f4291150427e87c5e5`; the native source fingerprint
+is unchanged at
+`6aa3f9d6f05f1c1778d3cdfba1e7cf2a5ba8867d7259501fefc9d42bd11c56d9`.
+
+### Candidate B decision
+
+`ADOPTED`. Pull-request packaged jobs are restore-only; main/manual package
+runs still populate the cache. The change preserves the exact artifact and
+all required gates while eliminating the measured PR post-job save. The
+workflow and p50/p95 claims remain provisional.
+
 ## Other candidates
 
 These candidates were not changed before Lane A was measured. They remain
@@ -157,6 +288,7 @@ explicitly unattempted rather than being forced into the same experiment:
 | --- | --- | --- |
 | Browser path-awareness | `NOT_ATTEMPTED` | audit and Lane A validation first; no evidence yet that browser work can be safely skipped for each path class |
 | Static tooling cache | `NOT_ATTEMPTED` | no measured installation bottleneck or isolated A/B yet |
+| Packaged Rust cache save policy | `ADOPTED` | PR restore-only A/B removed the measured post-upload save; main/manual runs still save |
 | Tauri feature pruning | `NOT_ATTEMPTED` | no feature graph A/B; preserve `wry`/`custom-protocol` and capability semantics |
 | `sccache` | `NOT_ATTEMPTED` | no compile-dominant measurement or cache overhead study yet |
 | `profile.dist` | `NOT_ATTEMPTED` | highest runtime risk; no optimized-profile RT comparison mechanism added |
@@ -166,11 +298,11 @@ explicitly unattempted rather than being forced into the same experiment:
 
 ## Runtime and safety
 
-Candidate A changes only required-job topology and classifier routing. It does
-not alter the compiler profile, Tauri features, production binaries, player,
+Candidates A, A.1, and B change only CI routing/setup/cache policy. They do not
+alter the compiler profile, Tauri features, production binaries, player,
 calibration, updater, or artifact layout. Existing Wave 6 authoritative
-security, architecture, realtime/no-allocation, focus/release-all,
-updater, provenance, and exact artifact suites remain green.
+security, architecture, realtime/no-allocation, focus/release-all, updater,
+provenance, and exact artifact suites remain green.
 
 Therefore no new timing number is fabricated:
 
