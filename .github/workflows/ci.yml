@@ -261,6 +261,7 @@ jobs:
             if ($LASTEXITCODE -eq 0 -and $found) { throw "$name remains discoverable in restricted PATH: $found" }
             Write-Host "${name}: not found"
           }
+          $global:LASTEXITCODE = 0
           foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
             Remove-Item "Env:$name" -ErrorAction SilentlyContinue
           }
