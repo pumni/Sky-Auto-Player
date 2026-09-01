@@ -531,6 +531,11 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .arg("--restart")
         .current_dir(&install)
         .env("SKY_DESKTOP_RESTART_SELFTEST", "1")
+        // The restarted packaged shell runs the same deterministic safe
+        // seams as the portable selftest.  Propagate those seams through the
+        // updater so the child does not attempt live GitHub/calibration I/O.
+        .env("SKY_PACKAGED_SAFE_CALIBRATION", "1")
+        .env("SKY_PACKAGED_SAFE_UPDATE", "1")
         .env("SKY_DESKTOP_RESTART_MARKER", &restart_marker);
     no_window(&mut updater);
     let mut updater = ChildGuard(updater.spawn()?);
