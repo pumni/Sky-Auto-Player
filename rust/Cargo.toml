@@ -7,6 +7,7 @@ members = [
     "crates/sky_native_adapters",
     "crates/sky_player",
     "crates/sky_updater",
+    "xtask",
     "../desktop/src-tauri",
 ]
 

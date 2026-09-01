@@ -1,0 +1,1486 @@
+use crate::{Result, process, repo};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::fs;
+use std::path::Path;
+use walkdir::WalkDir;
+
+const FORBIDDEN_SECURITY_APIS: &[&str] = &[
+    "SetWindowsHookEx",
+    "SetWindowsHookExA",
+    "SetWindowsHookExW",
+    "SetWinEventHook",
+    "ReadProcessMemory",
+    "WriteProcessMemory",
+    "NtReadVirtualMemory",
+    "NtWriteVirtualMemory",
+    "VirtualAllocEx",
+    "VirtualFreeEx",
+    "VirtualProtectEx",
+    "VirtualQueryEx",
+    "CreateRemoteThread",
+    "CreateRemoteThreadEx",
+    "NtCreateThreadEx",
+    "RtlCreateUserThread",
+    "QueueUserAPC",
+    "GetThreadContext",
+    "SetThreadContext",
+    "SuspendThread",
+    "DebugActiveProcess",
+    "DebugActiveProcessStop",
+    "ContinueDebugEvent",
+    "WaitForDebugEvent",
+    "NtQueryInformationProcess",
+    "keybd_event",
+    "mouse_event",
+];
+const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
+    "Win32::Foundation",
+    "Win32::Media",
+    "Win32::UI::Input",
+    "Win32::System::Performance",
+    "Win32::System::LibraryLoader",
+    "Win32::System::SystemInformation",
+    "Win32::System::Threading",
+    "Win32::UI::Input::KeyboardAndMouse",
+    "Win32::UI::Controls",
+    "Win32::UI::WindowsAndMessaging",
+    "Win32::Networking::WinHttp",
+    "Win32::Storage::FileSystem",
+];
+const FORBIDDEN_DLLS: &[&str] = &["ntdll.dll"];
+const RETIRED_ACTIVE_TOKENS: &[&str] = &[
+    "pyo3",
+    "maturin",
+    "PyInstaller",
+    "sky_player_rs",
+    "desktop_ipc",
+    "Sky-Auto-Player-Core.exe",
+    "build_rust_wheel.py",
+    "scripts/check.py",
+    "scripts/build_portable_release.py",
+    "scripts/verify_release_manifest.py",
+];
+
+fn rust_manifest(root: &Path) -> Result<String> {
+    Ok(fs::read_to_string(root.join("rust/Cargo.toml"))?)
+}
+
+fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
+    [
+        root.join("rust/Cargo.toml"),
+        root.join("rust/Cargo.lock"),
+        root.join("desktop/src-tauri/Cargo.toml"),
+        root.join("desktop/package.json"),
+        root.join(".github/workflows/ci.yml"),
+        root.join(".github/workflows/release.yml"),
+    ]
+    .into_iter()
+}
+
+fn walk_source(root: &Path, prefix: &str) -> Result<Vec<std::path::PathBuf>> {
+    let directory = root.join(prefix);
+    let mut files = Vec::new();
+    for entry in WalkDir::new(directory).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_file()
+            && matches!(
+                entry.path().extension().and_then(|e| e.to_str()),
+                Some("rs" | "toml" | "yml" | "yaml" | "json")
+            )
+        {
+            files.push(entry.into_path());
+        }
+    }
+    Ok(files)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Finding {
+    path: String,
+    line: usize,
+    rule: String,
+    detail: String,
+}
+
+impl fmt::Display for Finding {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            output,
+            "{}:{} {}: {}",
+            self.path, self.line, self.rule, self.detail
+        )
+    }
+}
+
+fn strip_rust_comments(source: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    let mut block_depth = 0usize;
+    while index < bytes.len() {
+        if block_depth > 0 {
+            if bytes.get(index..index + 2) == Some(b"/*") {
+                block_depth += 1;
+                result.push(' ');
+                result.push(' ');
+                index += 2;
+            } else if bytes.get(index..index + 2) == Some(b"*/") {
+                block_depth -= 1;
+                result.push(' ');
+                result.push(' ');
+                index += 2;
+            } else {
+                if bytes[index] == b'\n' {
+                    result.push('\n');
+                } else {
+                    result.push(' ');
+                }
+                index += 1;
+            }
+        } else if bytes.get(index..index + 2) == Some(b"//") {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                result.push(' ');
+                index += 1;
+            }
+        } else if bytes.get(index..index + 2) == Some(b"/*") {
+            block_depth = 1;
+            result.push(' ');
+            result.push(' ');
+            index += 2;
+        } else {
+            result.push(bytes[index] as char);
+            index += 1;
+        }
+    }
+    result
+}
+
+fn windows_sys_paths(line: &str) -> Vec<String> {
+    let marker = "windows_sys::";
+    let mut paths = Vec::new();
+    let mut start = 0;
+    while let Some(relative) = line[start..].find(marker) {
+        let begin = start + relative + marker.len();
+        let end = line[begin..]
+            .find(|character: char| {
+                !(character.is_ascii_alphanumeric() || character == '_' || character == ':')
+            })
+            .map_or(line.len(), |offset| begin + offset);
+        paths.push(line[begin..end].trim_end_matches(':').to_owned());
+        start = end.max(begin + 1);
+    }
+    paths
+}
+
+fn approved_windows_sys(path: &str) -> bool {
+    ALLOWED_WINDOWS_SYS_MODULES
+        .iter()
+        .any(|allowed| path == *allowed || path.starts_with(&format!("{allowed}::")))
+}
+
+fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
+    let clean = strip_rust_comments(source);
+    let relative = path.to_string_lossy().replace('\\', "/");
+    let mut findings = Vec::new();
+    for (line_number, line) in clean.lines().enumerate() {
+        for token in FORBIDDEN_SECURITY_APIS {
+            if line
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .any(|word| word == *token)
+            {
+                findings.push(Finding {
+                    path: relative.clone(),
+                    line: line_number + 1,
+                    rule: format!("forbidden-call:{token}"),
+                    detail: format!("`{token}` violates SECURITY.md"),
+                });
+            }
+        }
+        let lower = line.to_ascii_lowercase();
+        for dll in FORBIDDEN_DLLS {
+            if lower.contains(dll) {
+                findings.push(Finding {
+                    path: relative.clone(),
+                    line: line_number + 1,
+                    rule: "forbidden-dll-load".into(),
+                    detail: format!("Rust reference to `{dll}` is forbidden"),
+                });
+            }
+        }
+        for module in windows_sys_paths(line) {
+            if !approved_windows_sys(&module) {
+                findings.push(Finding {
+                    path: relative.clone(),
+                    line: line_number + 1,
+                    rule: "disallowed-windows-sys-module".into(),
+                    detail: format!("`windows_sys::{module}` is outside the approved allowlist"),
+                });
+            }
+        }
+    }
+    findings
+}
+
+fn security_findings(root: &Path) -> Result<Vec<Finding>> {
+    let mut findings = Vec::new();
+    for prefix in ["rust/crates", "desktop/src-tauri"] {
+        for path in walk_source(root, prefix)? {
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            findings.extend(scan_rust_text(relative, &fs::read_to_string(&path)?));
+        }
+    }
+    Ok(findings)
+}
+
+fn security_baseline(root: &Path) -> Result<BTreeSet<(String, usize, String)>> {
+    let path = root.join(".config/security_audit_baseline.json");
+    if !path.is_file() {
+        return Ok(BTreeSet::new());
+    }
+    let payload: Value = serde_json::from_slice(&fs::read(path)?)?;
+    let mut entries = BTreeSet::new();
+    for entry in payload
+        .get("exceptions")
+        .and_then(Value::as_array)
+        .ok_or("security baseline exceptions must be an array")?
+    {
+        let object = entry
+            .as_object()
+            .ok_or("security baseline entry must be an object")?;
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("security baseline path missing")?;
+        let line = object
+            .get("line")
+            .and_then(Value::as_u64)
+            .ok_or("security baseline line missing")? as usize;
+        let rule = object
+            .get("rule")
+            .and_then(Value::as_str)
+            .ok_or("security baseline rule missing")?;
+        entries.insert((path.replace('\\', "/"), line, rule.to_owned()));
+    }
+    Ok(entries)
+}
+
+fn security(root: &Path) -> Result<()> {
+    let baseline = security_baseline(root)?;
+    let findings = security_findings(root)?;
+    let mut fresh = Vec::new();
+    for finding in findings {
+        let key = (finding.path.clone(), finding.line, finding.rule.clone());
+        if !baseline.contains(&key) {
+            fresh.push(finding);
+        }
+    }
+    if let Some(finding) = fresh.first() {
+        return Err(format!("security audit failed: {finding}").into());
+    }
+    println!(
+        "[xtask] security checks: PASS ({} baseline-covered finding(s))",
+        baseline.len()
+    );
+    Ok(())
+}
+
+const FACADE_HARD_LIMIT: usize = 250;
+const REGULAR_SOFT_LIMIT: usize = 700;
+const REGULAR_HARD_LIMIT: usize = 900;
+const WORKER_FUNCTION_HARD_LIMIT: usize = 350;
+const CONTEXT_FIELD_HARD_LIMIT: usize = 12;
+const DISPATCH_FUNCTION_HARD_LIMIT: usize = 180;
+const WORKER_SCHEDULE_CLONE_PATTERNS: &[&str] = &[
+    "schedule.clone()",
+    "Clone::clone(&schedule",
+    "Clone::clone(&config.schedule",
+];
+const FACADES: &[&str] = &["engine.rs", "input.rs", "wait.rs", "lib.rs"];
+const LEGACY_DISPATCH_PATHS: &[&str] = &[
+    "rust/crates/sky_player/src/engine/worker/downs.rs",
+    "rust/crates/sky_player/src/engine/worker/down_outcome.rs",
+    "rust/crates/sky_player/src/engine/worker/releases.rs",
+];
+const CANONICAL_DISPATCH_FILES: &[&str] = &[
+    "authored.rs",
+    "mod.rs",
+    "observation.rs",
+    "observer.rs",
+    "recovery.rs",
+    "timing.rs",
+    "hold_forensics.rs",
+    "observer_wake.rs",
+];
+const ALLOWED_UNSAFE_MODULES: &[&str] = &[
+    "rust/crates/sky_dispatch_win32/src/calibration.rs",
+    "rust/crates/sky_dispatch_win32/src/clock.rs",
+    "rust/crates/sky_dispatch_win32/src/cpu.rs",
+    "rust/crates/sky_dispatch_win32/src/event.rs",
+    "rust/crates/sky_dispatch_win32/src/focus.rs",
+    "rust/crates/sky_dispatch_win32/src/input.rs",
+    "rust/crates/sky_dispatch_win32/src/input/physical.rs",
+    "rust/crates/sky_dispatch_win32/src/input/raw.rs",
+    "rust/crates/sky_dispatch_win32/src/mmcss.rs",
+    "rust/crates/sky_dispatch_win32/src/power.rs",
+    "rust/crates/sky_dispatch_win32/src/timer.rs",
+    "rust/crates/sky_dispatch_win32/src/wait.rs",
+    "rust/crates/sky_dispatch_win32/src/wait/timer.rs",
+];
+
+fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String), String>> {
+    let path = root.join(".config/rust_architecture_allowlist.json");
+    if !path.is_file() {
+        return Err(format!("architecture allowlist is missing: {}", path.display()).into());
+    }
+    let payload: Value = serde_json::from_slice(&fs::read(path)?)?;
+    let entries = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or("architecture allowlist entries must be an array")?;
+    let mut result = BTreeMap::new();
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .ok_or("architecture allowlist entry must be an object")?;
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("architecture allowlist path missing")?;
+        let rule = object
+            .get("rule")
+            .and_then(Value::as_str)
+            .ok_or("architecture allowlist rule missing")?;
+        let reason = object
+            .get("reason")
+            .and_then(Value::as_str)
+            .ok_or("architecture allowlist reason missing")?;
+        let expires = object
+            .get("expires_phase")
+            .and_then(Value::as_str)
+            .ok_or("architecture allowlist expiry missing")?;
+        if !root.join(path).is_file() {
+            return Err(format!("architecture allowlist path does not exist: {path}").into());
+        }
+        result.insert(
+            (path.replace('\\', "/"), rule.to_owned()),
+            format!("{reason} (expires {expires})"),
+        );
+    }
+    Ok(result)
+}
+
+fn architecture_record(
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+    allowlist: &BTreeMap<(String, String), String>,
+    path: &str,
+    rule: &str,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    if let Some(debt) = allowlist.get(&(path.to_owned(), rule.to_owned())) {
+        warnings.push(format!(
+            "[{rule}] {path}: {message}; temporary allowlist: {debt}"
+        ));
+    } else {
+        errors.push(format!("[{rule}] {path}: {message}"));
+    }
+}
+
+fn clean_lines(source: &str) -> Vec<String> {
+    strip_rust_comments(source)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn brace_end(lines: &[String], start: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut opened = false;
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        opened |= line.contains('{');
+        if opened && depth <= 0 {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn context_violations(lines: &[String]) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(struct_position) = trimmed.find("struct ") else {
+            continue;
+        };
+        let name = trimmed[struct_position + "struct ".len()..]
+            .split(['<', '{'])
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !(name.ends_with("Context")
+            || name.ends_with("Inputs")
+            || name.ends_with("Config")
+            || name.ends_with("Options")
+            || name.ends_with("Shared"))
+        {
+            continue;
+        }
+        let Some(end) = brace_end(lines, index) else {
+            continue;
+        };
+        let fields = lines[index + 1..end]
+            .iter()
+            .filter(|field| {
+                let field = field.trim();
+                !field.starts_with("fn ") && field.contains(':') && !field.starts_with("#")
+            })
+            .count();
+        if fields > CONTEXT_FIELD_HARD_LIMIT {
+            result.push((name.to_owned(), fields.to_string()));
+        }
+    }
+    result
+}
+
+fn function_line_violations(lines: &[String], hard_limit: usize) -> Vec<(String, usize)> {
+    let mut result = Vec::new();
+    for (start, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(position) = trimmed.find("fn ") else {
+            continue;
+        };
+        let name = trimmed[position + 3..]
+            .split(['(', '<', ' '])
+            .next()
+            .unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let Some(end) = brace_end(lines, start) else {
+            continue;
+        };
+        let count = end - start + 1;
+        if count > hard_limit {
+            result.push((name.to_owned(), count));
+        }
+    }
+    result
+}
+
+fn top_level_glob_import(lines: &[String]) -> bool {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty() && !line.starts_with("#![") && !line.starts_with("#["))
+        == Some("use super::*;")
+}
+
+fn gated_test_support(lines: &[String], path: &str) -> bool {
+    if !path.contains("/test_support/") && !path.ends_with("/test_support.rs") {
+        return true;
+    }
+    lines
+        .iter()
+        .any(|line| line.contains("cfg(any(test, feature = \"test-support\"))"))
+}
+
+fn line_is_gated(lines: &[String], index: usize) -> bool {
+    lines[..=index]
+        .iter()
+        .rev()
+        .take(3)
+        .any(|line| line.contains("cfg(any(test, feature = \"test-support\"))"))
+}
+
+fn contains_unsafe_code(source: &str) -> bool {
+    let source = source.replace("#![forbid(unsafe_code)]", "");
+    source
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|word| word == "unsafe")
+}
+
+fn architecture(root: &Path) -> Result<()> {
+    let allowlist = load_architecture_allowlist(root)?;
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let manifest = rust_manifest(root)?;
+    let app_core_manifest = root.join("rust/crates/sky_app_core/Cargo.toml");
+    let app_core: toml::Value = toml::from_str(&fs::read_to_string(&app_core_manifest)?)?;
+    if let Some(dependencies) = app_core.get("dependencies").and_then(toml::Value::as_table) {
+        for forbidden in [
+            "tauri",
+            "pyo3",
+            "windows-sys",
+            "sky_desktop_shell",
+            "sky_player",
+            "sky_native_adapters",
+        ] {
+            if dependencies.contains_key(forbidden) {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    "rust/crates/sky_app_core/Cargo.toml",
+                    "app_core_dependency",
+                    format!("sky_app_core must not depend directly on {forbidden}"),
+                );
+            }
+        }
+    }
+    let app_core_source = root.join("rust/crates/sky_app_core/src");
+    if app_core_source.is_dir() {
+        for path in WalkDir::new(&app_core_source).follow_links(false) {
+            let path = path?;
+            if !path.file_type().is_file()
+                || path
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("rs")
+            {
+                continue;
+            }
+            let relative = path
+                .path()
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
+            if [
+                "tauri",
+                "pyo3",
+                "windows-sys",
+                "windows_sys",
+                "sky_desktop_shell",
+                "sky_player",
+            ]
+            .iter()
+            .any(|marker| joined.contains(marker))
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "app_core_dependency",
+                    "sky_app_core source references a forbidden delivery/platform/player dependency",
+                );
+            }
+        }
+    }
+    if manifest.contains("sky_player_rs") || manifest.contains("pyo3") {
+        errors.push("[retired_bridge] rust/Cargo.toml: production workspace contains a retired Python/player bridge".into());
+    }
+
+    let dispatch_dir = root.join("rust/crates/sky_player/src/engine/worker/dispatch");
+    if dispatch_dir.is_dir() {
+        let actual: BTreeSet<String> = fs::read_dir(&dispatch_dir)?
+            .filter_map(std::result::Result::ok)
+            .filter_map(|entry| {
+                (entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("rs"))
+                .then(|| entry.file_name().to_string_lossy().into_owned())
+            })
+            .filter(|name| !name.ends_with("_tests.rs"))
+            .collect();
+        let expected: BTreeSet<String> = CANONICAL_DISPATCH_FILES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        for name in actual.difference(&expected) {
+            errors.push(format!(
+                "[unexpected_dispatch_module] {name}: dispatch module is not canonical"
+            ));
+        }
+        for name in expected.difference(&actual) {
+            errors.push(format!(
+                "[missing_dispatch_module] {name}: canonical dispatch module is missing"
+            ));
+        }
+    }
+
+    for crate_name in [
+        "sky_dispatch_core",
+        "sky_dispatch_win32",
+        "sky_app_core",
+        "sky_player",
+    ] {
+        let source_root = root.join("rust/crates").join(crate_name).join("src");
+        if !source_root.is_dir() {
+            continue;
+        }
+        for path in WalkDir::new(&source_root).follow_links(false) {
+            let path = path?;
+            if !path.file_type().is_file()
+                || path
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("rs")
+            {
+                continue;
+            }
+            let absolute = path.path();
+            let relative = absolute
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = fs::read_to_string(absolute)?;
+            let lines = source
+                .lines()
+                .map(|line| format!("{line}\n"))
+                .collect::<Vec<_>>();
+            let clean = clean_lines(&source);
+            let joined = clean.join("");
+            if LEGACY_DISPATCH_PATHS.contains(&relative.as_str()) {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "legacy_dispatch_path",
+                    "legacy dispatch path must be removed",
+                );
+                continue;
+            }
+            let limit = if FACADES.contains(
+                &absolute
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(""),
+            ) {
+                FACADE_HARD_LIMIT
+            } else {
+                REGULAR_HARD_LIMIT
+            };
+            if clean.len() > limit {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    if limit == FACADE_HARD_LIMIT {
+                        "facade_lines"
+                    } else {
+                        "regular_module_lines"
+                    },
+                    format!("{} lines (> {limit})", clean.len()),
+                );
+            }
+            if limit == REGULAR_HARD_LIMIT
+                && clean.len() > REGULAR_SOFT_LIMIT
+                && clean.len() <= REGULAR_HARD_LIMIT
+            {
+                warnings.push(format!(
+                    "[regular_module_soft_lines] {relative}: {} lines (> {REGULAR_SOFT_LIMIT})",
+                    clean.len()
+                ));
+            }
+            if crate_name == "sky_player"
+                && relative == "rust/crates/sky_player/src/engine/worker/orchestration.rs"
+            {
+                for (name, count) in function_line_violations(&clean, WORKER_FUNCTION_HARD_LIMIT) {
+                    architecture_record(
+                        &mut errors,
+                        &mut warnings,
+                        &allowlist,
+                        &relative,
+                        "worker_function_lines",
+                        format!("{name} has {count} lines (> {WORKER_FUNCTION_HARD_LIMIT})"),
+                    );
+                }
+            }
+            if relative.starts_with("rust/crates/sky_player/src/engine/worker/dispatch/") {
+                for (name, count) in function_line_violations(&clean, DISPATCH_FUNCTION_HARD_LIMIT)
+                {
+                    architecture_record(
+                        &mut errors,
+                        &mut warnings,
+                        &allowlist,
+                        &relative,
+                        "dispatch_function_lines",
+                        format!("{name} has {count} lines (> {DISPATCH_FUNCTION_HARD_LIMIT})"),
+                    );
+                }
+            }
+            if contains_unsafe_code(&joined) && !ALLOWED_UNSAFE_MODULES.contains(&relative.as_str())
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "unsafe_boundary",
+                    "unsafe code outside allowlist",
+                );
+            }
+            if crate_name == "sky_dispatch_core"
+                && (joined.contains("sky_dispatch_win32::")
+                    || joined.contains("use sky_dispatch_win32"))
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "dependency_direction",
+                    "core imports sky_dispatch_win32",
+                );
+            }
+            if ["sky_dispatch_core", "sky_dispatch_win32"].contains(&crate_name)
+                && (joined.contains("sky_player::") || joined.contains("use sky_player"))
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "dependency_direction",
+                    "lower crate imports sky_player",
+                );
+            }
+            if top_level_glob_import(&clean)
+                && !relative.ends_with("/tests.rs")
+                && !relative.contains("/tests/")
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "production_glob_import",
+                    "top-level use super::* in production module",
+                );
+            }
+            for (index, line) in clean.iter().enumerate() {
+                if line.contains("Box<dyn Fn") && !line_is_gated(&lines, index) {
+                    architecture_record(
+                        &mut errors,
+                        &mut warnings,
+                        &allowlist,
+                        &relative,
+                        "production_dynamic_emitter",
+                        "dynamic emitter in production source",
+                    );
+                }
+            }
+            if (relative == "rust/crates/sky_player/src/engine/worker.rs"
+                || relative.starts_with("rust/crates/sky_player/src/engine/worker/"))
+                && WORKER_SCHEDULE_CLONE_PATTERNS
+                    .iter()
+                    .any(|pattern| joined.contains(pattern))
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "runtime_schedule_clone",
+                    "production worker must move RuntimeSchedule into the coordinator; cloning the schedule is forbidden",
+                );
+            }
+            if !gated_test_support(&clean, &relative) {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "test_support_cfg",
+                    "test-support source is not cfg-gated",
+                );
+            }
+            for (name, fields) in context_violations(&clean) {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "context_fields",
+                    format!("{name} has {fields} fields (> {CONTEXT_FIELD_HARD_LIMIT})"),
+                );
+            }
+            if (relative == "rust/crates/sky_player/src/engine.rs")
+                && clean.iter().enumerate().any(|(index, line)| {
+                    line.trim() == "mod test_support;" && !line_is_gated(&clean, index)
+                })
+            {
+                architecture_record(
+                    &mut errors,
+                    &mut warnings,
+                    &allowlist,
+                    &relative,
+                    "test_support_cfg",
+                    "test_support module is not cfg-gated",
+                );
+            }
+        }
+    }
+    if !warnings.is_empty() {
+        for warning in &warnings {
+            println!("[xtask] architecture warning: {warning}");
+        }
+    }
+    if let Some(error) = errors.first() {
+        return Err(format!(
+            "architecture audit failed: {error} ({} error(s))",
+            errors.len()
+        )
+        .into());
+    }
+    println!(
+        "[xtask] architecture checks: PASS ({} allowlisted warning(s))",
+        warnings.len()
+    );
+    Ok(())
+}
+
+fn retirement(root: &Path) -> Result<()> {
+    let mut files = active_files(root).collect::<Vec<_>>();
+    files.extend(walk_source(root, "desktop/src")?);
+    files.extend(walk_source(root, "rust/crates")?);
+    for path in files {
+        if !path.is_file() {
+            continue;
+        }
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        for token in RETIRED_ACTIVE_TOKENS {
+            if content.contains(token) {
+                return Err(format!(
+                    "retired token {token} remains in active file {}",
+                    path.display()
+                )
+                .into());
+            }
+        }
+    }
+    validate_tooling_ledger(root)?;
+    validate_xtask_process_surface(root)?;
+    println!("[xtask] retirement checks: PASS");
+    Ok(())
+}
+
+fn strip_retirement_inventory(source: &str) -> String {
+    let marker = "const RETIRED_ACTIVE_TOKENS";
+    let Some(start) = source.find(marker) else {
+        return source.to_owned();
+    };
+    let Some(end_relative) = source[start..].find("];") else {
+        return source.to_owned();
+    };
+    let end = start + end_relative + 2;
+    format!("{}{}", &source[..start], &source[end..])
+}
+
+fn xtask_process_violation(source: &str) -> Option<String> {
+    let compact = strip_rust_comments(source)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for call in [
+        "Command::new(",
+        "process::run(",
+        "process::capture(",
+        "process::run_owned(",
+        "process::capture_owned(",
+    ] {
+        let mut offset = 0;
+        while let Some(relative) = compact[offset..].find(call) {
+            let call_position = offset + relative;
+            if is_inside_rust_string(&compact, call_position) {
+                offset = call_position + call.len();
+                continue;
+            }
+            let start = call_position + call.len();
+            let end = (start + 160).min(compact.len());
+            let arguments = &compact[start..end];
+            for program in ["python", "python3", "py", "uv"] {
+                if arguments.starts_with(&format!("\"{program}\""))
+                    || arguments.contains(&format!("\"{program}\""))
+                {
+                    return Some(format!(
+                        "xtask invokes forbidden repository runtime: {program}"
+                    ));
+                }
+            }
+            offset = end;
+        }
+    }
+    None
+}
+
+fn is_inside_rust_string(source: &str, position: usize) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in source.char_indices() {
+        if index >= position {
+            break;
+        }
+        if escaped {
+            escaped = false;
+        } else if character == '\\' && quoted {
+            escaped = true;
+        } else if character == '"' {
+            quoted = !quoted;
+        }
+    }
+    quoted
+}
+
+fn validate_xtask_process_surface(root: &Path) -> Result<()> {
+    let directory = root.join("rust/xtask/src");
+    for entry in WalkDir::new(&directory).follow_links(false) {
+        let entry = entry?;
+        if !entry.file_type().is_file()
+            || entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let source = fs::read_to_string(path)?;
+        if let Some(violation) = xtask_process_violation(&source) {
+            return Err(format!("{violation} in {}", path.display()).into());
+        }
+        let scan_source = if path.file_name().and_then(|name| name.to_str()) == Some("checks.rs") {
+            strip_retirement_inventory(&source)
+        } else {
+            source
+        };
+        for token in [
+            "build_rust_wheel.py",
+            "scripts/check.py",
+            "scripts/classify_ci_changes.py",
+            "scripts/build_portable_release.py",
+            "scripts/verify_release_manifest.py",
+        ] {
+            if strip_rust_comments(&scan_source).contains(token) {
+                return Err(format!(
+                    "retired canonical script {token} is invoked/referenced by {}",
+                    path.display()
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_tooling_ledger(root: &Path) -> Result<()> {
+    let ledger_path = root.join("docs/migration/wave6-tooling-retirement-ledger.json");
+    let payload: Value = serde_json::from_slice(&fs::read(&ledger_path)?)?;
+    let baseline = payload
+        .get("baseline")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            value.len() == 40 && value.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .ok_or("Wave 6 ledger baseline must be a full commit SHA")?;
+    let entries = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or("Wave 6 ledger entries must be an array")?;
+    let evidence_classes = [
+        "MIGRATED_XTASK",
+        "MIGRATED_RUST",
+        "MIGRATED_TYPESCRIPT",
+        "DUPLICATE",
+        "FIXTURE_FROZEN",
+    ];
+    let placeholders = [
+        "generic evidence",
+        "native covers",
+        "named native/frontend/updater tests",
+        "direct Rust/native build evidence is stronger",
+        "native Rust/Tauri services now own",
+    ];
+    let mut ledger_paths = std::collections::BTreeSet::new();
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .ok_or("Wave 6 ledger entry must be an object")?;
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("Wave 6 ledger path missing")?;
+        if !ledger_paths.insert(path.to_owned()) {
+            return Err(format!("Wave 6 ledger contains duplicate path: {path}").into());
+        }
+        let classification = object
+            .get("classification")
+            .and_then(Value::as_str)
+            .ok_or("Wave 6 ledger classification missing")?;
+        let exists = root.join(path).exists();
+        if classification == "NONCANONICAL_RETAINED" && !exists {
+            return Err(format!("retained ledger path does not exist: {path}").into());
+        }
+        if evidence_classes.contains(&classification) {
+            validate_evidence_entry(root, path, classification, object, &placeholders)?;
+        } else if matches!(
+            classification,
+            "OBSOLETE" | "TRANSPORT_ONLY" | "TOOLING_RETAINED" | "NONCANONICAL_RETAINED"
+        ) {
+            if !exists && classification != "OBSOLETE" && classification != "TRANSPORT_ONLY" {
+                return Err(format!("{path}: retained tooling entry does not exist").into());
+            }
+        } else {
+            return Err(
+                format!("{path}: unknown Wave 6 ledger classification {classification}").into(),
+            );
+        }
+    }
+    let tracked_python = process::capture_text("git", &["ls-files", "--", "*.py"], root, &[])?;
+    for path in tracked_python
+        .lines()
+        .filter(|path| root.join(path).is_file())
+    {
+        if !ledger_paths.contains(path) {
+            return Err(format!("Python file is missing from Wave 6 ledger: {path}").into());
+        }
+    }
+    let baseline_python = process::capture_text(
+        "git",
+        &[
+            "ls-tree",
+            "-r",
+            "--name-only",
+            baseline,
+            "--",
+            "branding",
+            "scripts",
+            "src",
+            "tests",
+        ],
+        root,
+        &[],
+    )?;
+    let baseline_paths = baseline_python
+        .lines()
+        .filter(|path| path.ends_with(".py"))
+        .collect::<BTreeSet<_>>();
+    for path in &baseline_paths {
+        if !ledger_paths.contains(*path) {
+            return Err(format!(
+                "deleted baseline Python file is missing from Wave 6 ledger: {path}"
+            )
+            .into());
+        }
+    }
+    if ledger_paths
+        .iter()
+        .any(|path| !baseline_paths.contains(path.as_str()))
+    {
+        return Err("Wave 6 ledger contains a path outside the baseline Python inventory".into());
+    }
+    Ok(())
+}
+
+fn validate_evidence_entry(
+    root: &Path,
+    path: &str,
+    classification: &str,
+    object: &serde_json::Map<String, Value>,
+    placeholders: &[&str],
+) -> Result<()> {
+    let invariants = object
+        .get("invariants")
+        .and_then(Value::as_array)
+        .ok_or(format!("{path}: invariants must be a non-empty array"))?;
+    let evidence = object
+        .get("evidence")
+        .and_then(Value::as_array)
+        .ok_or(format!("{path}: evidence must be a non-empty array"))?;
+    if invariants.is_empty()
+        || evidence.is_empty()
+        || invariants.iter().any(|value| {
+            let Some(value) = value.as_str() else {
+                return true;
+            };
+            value.trim().is_empty()
+                || placeholders.iter().any(|placeholder| {
+                    value
+                        .to_ascii_lowercase()
+                        .contains(&placeholder.to_ascii_lowercase())
+                })
+        })
+    {
+        return Err(format!("{path}: {classification} needs concrete invariants/evidence").into());
+    }
+    for item in evidence {
+        let target = item
+            .as_str()
+            .ok_or(format!("{path}: evidence target must be a string"))?;
+        if placeholders.iter().any(|placeholder| {
+            target
+                .to_ascii_lowercase()
+                .contains(&placeholder.to_ascii_lowercase())
+        }) {
+            return Err(format!("{path}: placeholder evidence is not permitted: {target}").into());
+        }
+        let (file, symbol) = target
+            .split_once("::")
+            .ok_or(format!("{path}: evidence must use path::symbol: {target}"))?;
+        let candidate = Path::new(file);
+        if candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|component| component.as_os_str() == "..")
+        {
+            return Err(format!("{path}: evidence path escapes repository: {file}").into());
+        }
+        let evidence_path = root.join(candidate);
+        if !evidence_path.is_file() {
+            return Err(format!("{path}: evidence file does not exist: {file}").into());
+        }
+        let source = fs::read_to_string(&evidence_path)?;
+        if symbol.trim().is_empty() || !source.contains(symbol) {
+            return Err(format!("{path}: evidence symbol is absent: {target}").into());
+        }
+    }
+    Ok(())
+}
+
+pub fn bindings() -> Result<()> {
+    let root = repo::root();
+    let export_dir = prepare_binding_export_dir(&root)?;
+    let export_dir = export_dir
+        .to_str()
+        .ok_or("binding export directory is not valid UTF-8")?
+        .to_owned();
+    let export_env = [("TS_RS_EXPORT_DIR", export_dir.as_str())];
+    process::run(
+        "cargo",
+        &[
+            "test",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "sky_desktop_shell",
+            "--lib",
+            "--all-features",
+            "--locked",
+        ],
+        &root,
+        &export_env,
+    )?;
+    compare_generated_bindings(&root, Path::new(&export_dir))?;
+    Ok(())
+}
+
+fn prepare_binding_export_dir(root: &Path) -> Result<std::path::PathBuf> {
+    let export_dir = root.join("rust/target/xtask-bindings");
+    if export_dir.exists() {
+        if fs::symlink_metadata(&export_dir)?.file_type().is_symlink() {
+            return Err("binding export directory must not be a symlink".into());
+        }
+        fs::remove_dir_all(&export_dir)?;
+    }
+    fs::create_dir_all(&export_dir)?;
+    Ok(export_dir)
+}
+
+fn collect_binding_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    if !root.is_dir() {
+        return Err(format!("binding export directory is missing: {}", root.display()).into());
+    }
+    let mut files = BTreeMap::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "binding export contains a symlink: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.insert(relative, normalized_text_bytes(fs::read(entry.path())?));
+    }
+    Ok(files)
+}
+
+fn normalized_text_bytes(bytes: Vec<u8>) -> Vec<u8> {
+    String::from_utf8(bytes.clone())
+        .map(|text| text.replace("\r\n", "\n").into_bytes())
+        .unwrap_or(bytes)
+}
+
+fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
+    let checked_in_dir = root.join("desktop/src/bridge/generated");
+    let mut expected = collect_binding_files(&checked_in_dir)?;
+    // These are maintained frontend support files rather than ts-rs exports.
+    expected.remove("index.ts");
+    expected.remove("serde_json/JsonValue.ts");
+    let actual = collect_binding_files(export_dir)?;
+    if expected != actual {
+        let expected_paths = expected.keys().cloned().collect::<Vec<_>>();
+        let actual_paths = actual.keys().cloned().collect::<Vec<_>>();
+        let changed = expected_paths
+            .iter()
+            .chain(actual_paths.iter())
+            .filter(|path| expected.get(*path) != actual.get(*path))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        return Err(format!(
+            "generated Tauri bindings differ from committed output: {}",
+            changed.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .into());
+    }
+    Ok(())
+}
+
+pub fn run(group: &str) -> Result<()> {
+    let root = repo::root();
+    match group {
+        "static" => {
+            architecture(&root)?;
+            security(&root)?;
+            retirement(&root)?;
+        }
+        "rust" => {
+            // The canonical Windows qualification runs workspace tests in a
+            // restricted environment.  Keep process-global test fixtures
+            // deterministic there; this does not change product concurrency.
+            let export_dir = prepare_binding_export_dir(&root)?;
+            let export_dir = export_dir
+                .to_str()
+                .ok_or("binding export directory is not valid UTF-8")?
+                .to_owned();
+            let test_env = [
+                ("RUST_TEST_THREADS", "1"),
+                ("TS_RS_EXPORT_DIR", export_dir.as_str()),
+            ];
+            process::run(
+                "cargo",
+                &[
+                    "fmt",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "--all",
+                    "--",
+                    "--check",
+                ],
+                &root,
+                &[],
+            )?;
+            process::run(
+                "cargo",
+                &[
+                    "clippy",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "--workspace",
+                    "--all-targets",
+                    "--all-features",
+                    "--locked",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+                &root,
+                &[],
+            )?;
+            process::run(
+                "cargo",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "--workspace",
+                    "--all-features",
+                    "--locked",
+                ],
+                &root,
+                &test_env,
+            )?;
+        }
+        "desktop" => {
+            process::run(
+                "bun",
+                &["install", "--frozen-lockfile"],
+                &root.join("desktop"),
+                &[],
+            )?;
+            process::run("bun", &["run", "check"], &root.join("desktop"), &[])?;
+            process::run("bun", &["run", "test:e2e"], &root.join("desktop"), &[])?;
+            process::run(
+                "cargo",
+                &[
+                    "check",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "-p",
+                    "sky_desktop_shell",
+                    "--all-features",
+                    "--locked",
+                ],
+                &root,
+                &[],
+            )?;
+            bindings()?;
+        }
+        "all" => {
+            run("static")?;
+            run("rust")?;
+            run("desktop")?;
+        }
+        other => return Err(format!("unknown check group: {other}").into()),
+    }
+    println!("[xtask] check {group}: PASS");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_ignores_comments_but_flags_the_complete_forbidden_set() {
+        let source = "// NtReadVirtualMemory and ntdll.dll are documentation only\n/* SetWindowsHookExW */\nunsafe { NtReadVirtualMemory(); DebugActiveProcessStop(); ContinueDebugEvent(); WaitForDebugEvent(); NtQueryInformationProcess(); keybd_event(); mouse_event(); }\n";
+        let findings = scan_rust_text(Path::new("fixture.rs"), source);
+        let rules = findings
+            .iter()
+            .map(|finding| finding.rule.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(rules.contains("forbidden-call:NtReadVirtualMemory"));
+        assert!(rules.contains("forbidden-call:DebugActiveProcessStop"));
+        assert!(rules.contains("forbidden-call:ContinueDebugEvent"));
+        assert!(rules.contains("forbidden-call:WaitForDebugEvent"));
+        assert!(rules.contains("forbidden-call:NtQueryInformationProcess"));
+        assert!(rules.contains("forbidden-call:keybd_event"));
+        assert!(rules.contains("forbidden-call:mouse_event"));
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.rule == "forbidden-call:SetWindowsHookExW")
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.rule == "forbidden-dll-load")
+        );
+    }
+
+    #[test]
+    fn security_allows_sendinput_and_approved_windows_modules() {
+        let source = "unsafe { SendInput(1, inputs, size); }\nuse windows_sys::Win32::Foundation::HANDLE;\nuse windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\nuse windows_sys::Win32::System::Threading::CloseHandle;\n";
+        assert!(scan_rust_text(Path::new("fixture.rs"), source).is_empty());
+    }
+
+    #[test]
+    fn security_rejects_unapproved_windows_diagnostics_module_and_ntdll() {
+        let source = "use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;\nlet name = \"ntdll.dll\";\n";
+        let findings = scan_rust_text(Path::new("fixture.rs"), source);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "disallowed-windows-sys-module")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "forbidden-dll-load")
+        );
+    }
+
+    #[test]
+    fn architecture_allowlist_is_loaded_and_current_tree_passes() {
+        let root = repo::root();
+        let allowlist = load_architecture_allowlist(&root).unwrap();
+        assert!(allowlist.contains_key(&(
+            "rust/crates/sky_player/src/engine/tests.rs".into(),
+            "regular_module_lines".into()
+        )));
+        architecture(&root).unwrap();
+    }
+
+    #[test]
+    fn architecture_helpers_cover_context_function_glob_and_schedule_rules() {
+        let context = (0..13)
+            .map(|index| format!("    field_{index}: u8,\n"))
+            .collect::<String>();
+        let context = format!("struct WorkerContext {{\n{context}}}\n");
+        assert_eq!(context_violations(&clean_lines(&context)).len(), 1);
+        let function = std::iter::once("fn oversized() {\n".to_owned())
+            .chain((0..181).map(|_| "    let _value = 1;\n".to_owned()))
+            .chain(std::iter::once("}\n".to_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(function_line_violations(&function, 180).len(), 1);
+        assert!(top_level_glob_import(&clean_lines(
+            "use super::*;\nfn f() {}\n"
+        )));
+        assert!(contains_unsafe_code("unsafe { value(); }"));
+        assert!(
+            WORKER_SCHEDULE_CLONE_PATTERNS
+                .iter()
+                .any(|pattern| "schedule.clone()".contains(pattern))
+        );
+    }
+
+    #[test]
+    fn xtask_process_guard_rejects_python_and_allows_native_tools() {
+        let forbidden = format!("process::run({:?}, &[], root, &[])", "python");
+        assert!(xtask_process_violation(&forbidden).is_some());
+        assert!(xtask_process_violation("Command::new(\"cargo\")").is_none());
+    }
+
+    #[test]
+    fn ledger_evidence_rejects_missing_targets_and_placeholders() {
+        let root = repo::root();
+        let missing = serde_json::json!({
+            "invariants": ["concrete invariant"],
+            "evidence": ["rust/no_such_file.rs::missing"]
+        });
+        assert!(
+            validate_evidence_entry(
+                &root,
+                "tests/deleted.py",
+                "MIGRATED_XTASK",
+                missing.as_object().unwrap(),
+                &["generic evidence"]
+            )
+            .is_err()
+        );
+        let placeholder = serde_json::json!({
+            "invariants": ["concrete invariant"],
+            "evidence": ["generic evidence"]
+        });
+        assert!(
+            validate_evidence_entry(
+                &root,
+                "tests/deleted.py",
+                "DUPLICATE",
+                placeholder.as_object().unwrap(),
+                &["generic evidence"]
+            )
+            .is_err()
+        );
+    }
+}

@@ -3092,6 +3092,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky_xtask"
+version = "0.1.0"
+dependencies = [
+ "pep440_rs",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "toml 0.9.12+spec-1.1.0",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

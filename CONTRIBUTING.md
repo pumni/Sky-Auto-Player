@@ -30,7 +30,7 @@ or contract; update the active documentation in the same change when that happen
 - Game/process tampering, memory reads/writes, hooks, injection, debugger attach, anti-cheat evasion,
   or a gameplay-input mechanism other than Windows `SendInput`.
 - Dependencies such as `python-keyboard`, `pynput`, `SetWindowsHookEx`, or another keyboard-injection
-  mechanism. `scripts/audit_security_mandates.py` enforces this boundary.
+  mechanism. `cargo xtask check static` enforces this boundary.
 - macOS/Linux ports in the current product scope.
 - Broad unrelated rewrites without evidence that they are necessary for the stated outcome.
 
@@ -52,13 +52,13 @@ direct tests, active docs, and repository checks as the evidence system.
 2. During development, run the smallest relevant repository verification group:
 
    ```powershell
-   uv run python scripts/check.py static
-   uv run python scripts/check.py tests
-   uv run python scripts/check.py rust
+   cargo xtask check static
+   cargo xtask check rust
+   cargo xtask check desktop
    ```
 
-3. Before completion, run `uv run python scripts/check.py` when your environment supports the full
-   normal gate. Run specialized Windows timing, package, updater, release, or benchmark evidence when
+3. Before completion, run `cargo xtask check all` for the normal gate. Run specialized Windows timing,
+   package, updater, release, or benchmark evidence when
    the changed boundary requires it.
 4. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
    to make a change pass.
@@ -69,8 +69,8 @@ outcome and the tests make the behavior change explicit. Avoid unrelated cleanup
 
 ## Dependency management
 
-Use `uv sync`, `uv add`, or `uv add --dev`; do not use ad-hoc `pip install` for repository-tooling
-dependency changes. Python is temporary repository tooling, not a supported product runtime.
+Use the pinned Rust toolchain and Bun lockfile for canonical product checks. Optional Python tooling
+is noncanonical repository support and must not become a product or required-CI dependency.
 
 ## Commit messages
 
