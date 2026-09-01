@@ -175,6 +175,7 @@ jobs:
           cache-on-failure: true
 
       - name: Repository verification — Rust
+        if: needs.changes.outputs.package_required != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check rust
@@ -188,7 +189,49 @@ jobs:
         working-directory: desktop
         run: bunx playwright install chromium
 
+      - name: Construct Python-unavailable validation environment
+        if: needs.changes.outputs.package_required == 'true'
+        run: |
+          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $toolDirectories = foreach ($name in $required) {
+            $command = Get-Command $name -ErrorAction SilentlyContinue
+            if ($command) { Split-Path -Parent $command.Source }
+          }
+          $systemRoot = if ($env:SystemRoot) { $env:SystemRoot } else { "C:\Windows" }
+          $restricted = @(
+            $toolDirectories
+            (Join-Path $systemRoot "System32")
+            (Join-Path $systemRoot "System32\Wbem")
+          ) | Where-Object { $_ } | Select-Object -Unique
+          $env:PATH = $restricted -join ";"
+          foreach ($name in @("python", "python3", "py", "uv")) {
+            $found = where.exe $name 2>$null
+            if ($LASTEXITCODE -eq 0 -and $found) { throw "$name remains discoverable in restricted PATH: $found" }
+            Write-Host "${name}: not found"
+          }
+          $global:LASTEXITCODE = 0
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          "PATH=$env:PATH" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          }
+
+      - name: Restricted repository verification without Python
+        if: needs.changes.outputs.package_required == 'true'
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          cargo xtask check static
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check static failed with exit code $LASTEXITCODE" }
+          cargo xtask check rust
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check rust failed with exit code $LASTEXITCODE" }
+          cargo xtask check desktop
+          if ($LASTEXITCODE -ne 0) { throw "cargo xtask check desktop failed with exit code $LASTEXITCODE" }
+
       - name: Repository verification — desktop
+        if: needs.changes.outputs.package_required != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check desktop
@@ -236,15 +279,15 @@ jobs:
         with:
           workspaces: "rust -> target"
           cache-on-failure: true
+          # Pull-request package jobs restore the shared cache but do not spend
+          # the required-job critical path writing a duplicate package cache.
+          # Main/manual runs remain the cache population path.
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Set up Bun for production frontend build
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
-
-      - name: Install Chromium for packaged desktop verification
-        working-directory: desktop
-        run: bunx playwright install chromium
 
       - name: Construct Python-unavailable canonical environment
         run: |
@@ -273,14 +316,6 @@ jobs:
           foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
             "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           }
-
-      - name: Canonical checks without Python
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          cargo xtask check static
-          cargo xtask check rust
-          cargo xtask check desktop
 
       - name: Build and qualify exact portable artifact
         env:

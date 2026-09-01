@@ -55,16 +55,17 @@ pub fn classify(paths: &[String], full: bool) -> (bool, bool, bool, String) {
     if paths.is_empty() {
         return (false, false, false, "no changed paths".into());
     }
-    let package: Vec<&str> = paths
-        .iter()
-        .filter(|path| package_sensitive(path))
-        .map(String::as_str)
-        .collect();
+    let package_required = paths.iter().any(|path| package_sensitive(path));
     let code = paths.iter().any(|path| {
         CODE_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
             || PACKAGE_FILES.contains(&path.as_str())
-    });
-    let reason = if !package.is_empty() {
+    }) || package_required;
+    let reason = if package_required {
+        let package = paths
+            .iter()
+            .filter(|path| package_sensitive(path))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         format!(
             "package-sensitive: {}",
             package.into_iter().take(3).collect::<Vec<_>>().join(", ")
@@ -77,12 +78,7 @@ pub fn classify(paths: &[String], full: bool) -> (bool, bool, bool, String) {
     } else {
         "static/site/docs only".into()
     };
-    (
-        true,
-        code,
-        !paths.is_empty() && paths.iter().any(|path| package_sensitive(path)),
-        reason,
-    )
+    (true, code, package_required, reason)
 }
 
 fn changed_paths(
@@ -148,7 +144,16 @@ mod tests {
     fn classifies_native_and_package_changes() {
         let result = values(&["rust/crates/sky_player/src/lib.rs"]);
         assert!(result.0 && result.1 && !result.2);
+        assert!(values(&["rust/xtask/src/main.rs"]).1);
         assert!(values(&["rust/xtask/src/main.rs"]).2);
+    }
+
+    #[test]
+    fn package_sensitive_changes_require_code_validation() {
+        let result = values(&[".github/workflows/ci.yml"]);
+        assert!(result.0);
+        assert!(result.1);
+        assert!(result.2);
     }
 
     #[test]
