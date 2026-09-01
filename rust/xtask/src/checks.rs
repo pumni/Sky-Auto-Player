@@ -291,6 +291,10 @@ pub fn run(group: &str) -> Result<()> {
             retirement(&root)?;
         }
         "rust" => {
+            // The canonical Windows qualification runs workspace tests in a
+            // restricted environment.  Keep process-global test fixtures
+            // deterministic there; this does not change product concurrency.
+            let test_env = [("RUST_TEST_THREADS", "1")];
             process::run(
                 "cargo",
                 &[
@@ -332,7 +336,7 @@ pub fn run(group: &str) -> Result<()> {
                     "--locked",
                 ],
                 &root,
-                &[],
+                &test_env,
             )?;
         }
         "desktop" => {
