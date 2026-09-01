@@ -213,6 +213,32 @@ pub fn selftest_packaged_shell() -> i32 {
             return 2;
         }
     };
+    if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
+        // The updater restart qualification must verify that the newly
+        // installed application can bootstrap without mutating preserved
+        // user state.  The ordinary packaged selftest below exercises all
+        // mutating command paths; this restart seam is intentionally
+        // read-only apart from the external marker.
+        let result = match runtime.bootstrap() {
+            Ok(bootstrap) if !bootstrap.native_build.native_build_commit.is_empty() => 0,
+            Ok(_) => {
+                eprintln!("packaged restart selftest omitted native build identity");
+                1
+            }
+            Err(error) => {
+                eprintln!("packaged restart selftest bootstrap failed: {error}");
+                1
+            }
+        };
+        runtime.shutdown();
+        if result == 0 {
+            if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
+                let _ = std::fs::write(marker, b"bootstrap-ready\n");
+            }
+            println!("Packaged restart bootstrap selftest: PASS");
+        }
+        return result;
+    }
     let result = (|| -> Result<(), String> {
         let bootstrap = runtime.bootstrap()?;
         if bootstrap.native_build.native_build_commit.is_empty() {

@@ -147,6 +147,16 @@ fn assert_preserved_config(install: &Path, expected_config: &[u8]) {
     );
 }
 
+fn assert_preserved_config_semantics(install: &Path, expected_config: &[u8]) {
+    let actual: serde_json::Value = serde_json::from_slice(
+        &fs::read(install.join("config.json")).expect("config"),
+    )
+    .expect("actual config JSON");
+    let expected: serde_json::Value =
+        serde_json::from_slice(expected_config).expect("expected config JSON");
+    assert_eq!(actual, expected, "user configuration values changed");
+}
+
 fn stop_child(child: &mut Child) {
     if child.try_wait().expect("child status").is_none() {
         let _ = child.kill();
@@ -555,7 +565,10 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         "canonical Tauri restart did not bootstrap the new native desktop"
     );
     verify_installed_managed(&install, &target)?;
-    assert_preserved_config(&install, &user_config);
+    // Native bootstrap may normalize persisted JSON formatting on read; the
+    // updater contract is preservation of user state, not incidental key
+    // ordering or whitespace.
+    assert_preserved_config_semantics(&install, &user_config);
     assert!(!install.join("Sky-Player.exe").exists());
     assert!(!install.join("Sky-Auto-Player-Core.exe").exists());
     assert!(!install.join("_internal").exists());
