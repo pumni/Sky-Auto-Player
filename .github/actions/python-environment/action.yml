@@ -1,7 +1,6 @@
 name: Sky Auto Player Python tooling environment
 description: Install the pinned Python tooling interpreter and sync repository-only dependencies.
 
-inputs:
 runs:
   using: composite
   steps:
