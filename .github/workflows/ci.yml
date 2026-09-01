@@ -279,6 +279,10 @@ jobs:
         with:
           workspaces: "rust -> target"
           cache-on-failure: true
+          # Pull-request package jobs restore the shared cache but do not spend
+          # the required-job critical path writing a duplicate package cache.
+          # Main/manual runs remain the cache population path.
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Set up Bun for production frontend build
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
