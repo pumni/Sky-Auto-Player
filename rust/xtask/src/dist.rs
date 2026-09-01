@@ -21,7 +21,7 @@ fn safe_output(root: &Path, output: &Path) -> Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(output)
     };
-    if absolute.exists() && fs::symlink_metadata(&absolute)?.file_type().is_symlink() {
+    if has_reparse_component(&absolute)? {
         return Err("refusing to clean a symlink/reparse output root".into());
     }
     let candidate = if absolute.exists() {
@@ -46,6 +46,33 @@ fn safe_output(root: &Path, output: &Path) -> Result<PathBuf> {
         return Err("refusing to clean an empty output path".into());
     }
     Ok(candidate)
+}
+
+fn has_reparse_component(path: &Path) -> Result<bool> {
+    let mut current = path.to_path_buf();
+    loop {
+        if let Ok(metadata) = fs::symlink_metadata(&current)
+            && (metadata.file_type().is_symlink() || is_windows_reparse(&metadata))
+        {
+            return Ok(true);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn is_windows_reparse(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_windows_reparse(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn copy_file(source: &Path, destination: &Path) -> Result<()> {
@@ -260,6 +287,9 @@ pub fn build(output: &Path) -> Result<()> {
     let root = repo::root();
     let output = safe_output(&root, output)?;
     if output.exists() {
+        if has_reparse_component(&output)? {
+            return Err("refusing to clean a symlink/reparse output root".into());
+        }
         fs::remove_dir_all(&output)?;
     }
     fs::create_dir_all(&output)?;
@@ -578,5 +608,23 @@ mod tests {
         assert!(safe_output(&root, &root).is_err());
         assert!(safe_output(&root, &root.join(".")).is_err());
         assert!(safe_output(&root, Path::new("")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn output_safety_rejects_windows_reparse_root() {
+        let root = std::env::temp_dir().join(format!("sky-xtask-reparse-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        let link = root.join("link");
+        let fake_repository = root.join("repo");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("must-survive.txt"), b"sentinel").unwrap();
+        fs::create_dir_all(&fake_repository).unwrap();
+        if std::os::windows::fs::symlink_dir(&target, &link).is_ok() {
+            assert!(safe_output(&fake_repository, &link.join("release")).is_err());
+            assert!(target.join("must-survive.txt").is_file());
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }

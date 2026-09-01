@@ -59,28 +59,45 @@
     },
     {
       "path": "tests/test_ci_change_classifier.py",
-      "classification": "OBSOLETE",
-      "rationale": "The Python classifier is deleted; xtask classifier unit tests are canonical."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["changed-path classification and required-gate policy remain deterministic"],
+      "evidence": ["rust/xtask/src/classifier.rs::classify", "rust/xtask/src/classifier.rs::full_and_empty_modes_are_stable"]
+    },
+    {
+      "path": "tests/test_ci_phase0_contract.py",
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["full-history checkout supports changed-path classification", "required gate policy preserves pinned Rust cache and frontend checks"],
+      "evidence": ["rust/xtask/src/classifier.rs::run", ".github/workflows/ci.yml::fetch-depth: 0", ".github/workflows/ci.yml::Swatinem/rust-cache"]
+    },
+    {
+      "path": "tests/test_dist_profile_contract.py",
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["shipping binaries use the dist Cargo profile", "desktop build retains the production custom protocol feature"],
+      "evidence": ["rust/xtask/src/dist.rs::cargo_build", "rust/Cargo.toml::dist", "desktop/package.json::tauri:build"]
     },
     {
       "path": "tests/test_native_build_provenance.py",
-      "classification": "OBSOLETE",
-      "rationale": "Observed binary provenance is qualified by the Rust dist pipeline and native tests."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["desktop and calibration provenance is observed from the exact built binaries", "mismatched or malformed native metadata fails closed"],
+      "evidence": ["rust/xtask/src/dist.rs::validate_observed", "rust/xtask/src/dist.rs::observed_metadata_requires_exact_commit_and_fingerprint"]
     },
     {
       "path": "tests/test_unsigned_release_contract.py",
-      "classification": "OBSOLETE",
-      "rationale": "Manifest/package contract assertions moved to xtask and existing Rust updater tests."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["public release trees reject legacy executables, scripts, caches and Python runtime files", "manifest paths and hashes are fail-closed"],
+      "evidence": ["rust/xtask/src/manifest.rs::forbidden_paths", "rust/xtask/src/manifest.rs::verify_release"]
     },
     {
       "path": "tests/test_wave5_retirement_guard.py",
-      "classification": "OBSOLETE",
-      "rationale": "Wave 5 Python guard was replaced by the Rust active-surface retirement check."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["retired product and build tokens cannot return to active product surfaces"],
+      "evidence": ["rust/xtask/src/checks.rs::retirement", "rust/xtask/src/checks.rs::validate_tooling_ledger"]
     },
     {
       "path": "tests/test_write_release_manifest.py",
-      "classification": "OBSOLETE",
-      "rationale": "Manifest generation and verification are now Rust xtask responsibilities."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["schema-2 manifest generation records deterministic build time and managed file hashes", "manifest verification rejects git/native provenance drift"],
+      "evidence": ["rust/xtask/src/manifest.rs::write", "rust/xtask/src/manifest.rs::writes_and_verifies_schema_two_manifest"]
     },
     {
       "path": "scripts/audit_agent_context.py",

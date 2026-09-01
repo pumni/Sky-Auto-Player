@@ -30,7 +30,7 @@ or contract; update the active documentation in the same change when that happen
 - Game/process tampering, memory reads/writes, hooks, injection, debugger attach, anti-cheat evasion,
   or a gameplay-input mechanism other than Windows `SendInput`.
 - Dependencies such as `python-keyboard`, `pynput`, `SetWindowsHookEx`, or another keyboard-injection
-  mechanism. `scripts/audit_security_mandates.py` enforces this boundary.
+  mechanism. `cargo xtask check static` enforces this boundary.
 - macOS/Linux ports in the current product scope.
 - Broad unrelated rewrites without evidence that they are necessary for the stated outcome.
 

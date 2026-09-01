@@ -4,7 +4,7 @@
 
 This file is the source of truth for Sky Auto Player's security boundary. Agent guidance may
 summarize these rules, but it does not own or redefine them. The executable enforcement gate is
-`scripts/audit_security_mandates.py`.
+`cargo xtask check static`.
 
 Sky Auto Player is a Windows 11 desktop tool that reads music-sheet files and simulates keyboard
 keypresses through the public Windows `SendInput` API so users can play music sheets in
@@ -43,9 +43,10 @@ silently coerced into a permissive behavior.
 
 ## Auditing
 
-The mandates above are enforced by review and by `scripts/audit_security_mandates.py`, which scans
-Python under `src/` and Rust under `rust/`. New references to forbidden hooks, process-memory APIs,
-remote-thread/debug tooling, legacy input APIs, or disallowed Win32 surfaces fail the audit.
+The mandates above are enforced by review and by the Rust xtask security audit, which scans the
+native product source for forbidden hooks, process-memory APIs, remote-thread/debug tooling,
+legacy input APIs, and disallowed Win32 surfaces. It also enforces the explicit approved
+`windows_sys` module boundary. New references fail the audit.
 Historical exceptions, if any, are recorded in `.config/security_audit_baseline.json` with their
 justification and tracking reference.
 

@@ -34,6 +34,13 @@ schema 2, runtime-Python negative scanning, deterministic file ordering and
 the accepted public executable layout. The disposable updater E2E runner is
 used only for qualification and is never copied into the public tree.
 
+The static gate retains the accepted security API/module allowlist, baseline
+exceptions, architecture allowlist rules, and retired-product guard. The
+release verifier remains fail-closed for legacy scripts, test artifacts,
+runtime-Python paths, and provenance drift. `build_time_utc` is the UTC
+conversion of the current commit timestamp, so it is deterministic for a
+commit without using an epoch placeholder.
+
 Required CI and release workflows do not set up Python, uv, or a virtual
 environment. Bun remains the frontend package/build/test tool and Rust remains
 the native/compiler/check/release tool. The repository may still contain
@@ -43,7 +50,9 @@ manifest verification, updater qualification, or tag release.
 
 The canonical version is the native Cargo package version. `cargo xtask
 version check` uses the accepted PEP-440-compatible Rust parser and emits
-structured `version=` and `is_prerelease=` fields for workflows.
+structured `version=` and `is_prerelease=` fields for workflows. A release tag
+must also equal the exact literal `v` plus the Cargo version before parser
+normalization is considered.
 
 Wave 6 intentionally does not change product DTOs, event names, updater
 transaction formats, calibration cache schema, portable layout, realtime

@@ -42,7 +42,7 @@ fn relative_files(root: &Path) -> Result<Vec<(String, PathBuf)>> {
 
 pub fn forbidden_paths(root: &Path) -> Result<Vec<String>> {
     let mut forbidden = Vec::new();
-    for (relative, path) in relative_files(root)? {
+    for (relative, _path) in relative_files(root)? {
         let folded = relative.to_ascii_lowercase();
         let name = Path::new(&relative)
             .file_name()
@@ -54,16 +54,23 @@ pub fn forbidden_paths(root: &Path) -> Result<Vec<String>> {
             .and_then(|value| value.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        let components = folded.split('/').collect::<Vec<_>>();
         if folded == "sky-auto-player-core.exe"
+            || name == "sky-player.exe"
             || folded.starts_with("_internal/")
             || name.starts_with("python")
             || name.starts_with("base_library")
             || matches!(extension.as_str(), "pyd" | "py" | "pyc")
             || folded.contains("sky_player_rs")
-            || folded.starts_with("sky_updater_e2e")
-            || path
-                .file_name()
-                .is_some_and(|value| value == "updater.bat" || value == "updater.ps1")
+            || name.starts_with("sky_updater_e2e")
+            || components.contains(&"installer")
+            || components.contains(&".pytest_cache")
+            || components.contains(&"__pycache__")
+            || name == "updater.bat"
+            || name == "updater.ps1"
+            || extension == "bat"
+            || extension == "ps1"
+            || name == "testresults.xml"
         {
             forbidden.push(relative);
         }
@@ -88,6 +95,7 @@ pub fn write(
             }))
         })
         .collect::<Result<Vec<_>>>()?;
+    let build_time_utc = repo::commit_time_utc(&repo::root())?;
     let manifest = json!({
         "schema_version": 2,
         "app": APP_NAME,
@@ -96,7 +104,7 @@ pub fn write(
         "git_head": head,
         "dirty_worktree": false,
         "native_build_commit": native_build_commit,
-        "build_time_utc": "1970-01-01T00:00:00Z",
+        "build_time_utc": build_time_utc,
         "files": files,
     });
     std::fs::write(
@@ -163,6 +171,9 @@ pub fn verify_release(release_dir: &Path) -> Result<()> {
             return Err(format!("manifest {key} is not a full commit SHA").into());
         }
     }
+    if manifest.get("git_head") != manifest.get("native_build_commit") {
+        return Err("manifest git_head and native_build_commit must match".into());
+    }
     if manifest
         .get("build_time_utc")
         .and_then(Value::as_str)
@@ -205,11 +216,15 @@ pub fn verify_release(release_dir: &Path) -> Result<()> {
         if relative.is_empty()
             || relative.contains('\\')
             || relative.starts_with('/')
+            || relative.as_bytes().get(1) == Some(&b':')
             || relative
                 .split('/')
                 .any(|part| part == ".." || part.is_empty())
             || relative == "MANIFEST.json"
             || digest.len() != 64
+            || !digest
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
         {
             return Err(format!("unsafe manifest entry: {relative}").into());
         }
@@ -296,8 +311,66 @@ mod tests {
             fs::write(temp.path().join(name), name.as_bytes()).unwrap();
         }
         write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+        let written: Value =
+            serde_json::from_slice(&fs::read(temp.path().join("MANIFEST.json")).unwrap()).unwrap();
+        assert_ne!(
+            written.get("build_time_utc").and_then(Value::as_str),
+            Some("1970-01-01T00:00:00Z")
+        );
         verify_release(temp.path()).unwrap();
         fs::write(temp.path().join(PRIMARY_EXE), b"tampered").unwrap();
+        assert!(verify_release(temp.path()).is_err());
+    }
+
+    #[test]
+    fn rejects_legacy_and_test_artifacts_anywhere_in_tree() {
+        for relative in [
+            "nested/Sky-Player.exe",
+            "songs/installer/payload.txt",
+            "songs/cleanup.ps1",
+            "songs/cleanup.bat",
+            "songs/TestResults.xml",
+            ".pytest_cache/state",
+            "songs/__pycache__/state",
+            "songs/sky_updater_e2e-helper.exe",
+        ] {
+            let temp = fixture();
+            for name in [
+                PRIMARY_EXE,
+                "native_calibration.exe",
+                "Sky-Auto-Player-Updater.exe",
+            ] {
+                fs::write(temp.path().join(name), name.as_bytes()).unwrap();
+            }
+            write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+            let path = temp.path().join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, b"forbidden").unwrap();
+            assert!(verify_release(temp.path()).is_err(), "{relative}");
+        }
+    }
+
+    #[test]
+    fn rejects_manifest_provenance_drift() {
+        let temp = fixture();
+        for name in [
+            PRIMARY_EXE,
+            "native_calibration.exe",
+            "Sky-Auto-Player-Updater.exe",
+        ] {
+            fs::write(temp.path().join(name), name.as_bytes()).unwrap();
+        }
+        write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(temp.path().join("MANIFEST.json")).unwrap()).unwrap();
+        manifest["native_build_commit"] = json!("b".repeat(40));
+        fs::write(
+            temp.path().join("MANIFEST.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
         assert!(verify_release(temp.path()).is_err());
     }
 
