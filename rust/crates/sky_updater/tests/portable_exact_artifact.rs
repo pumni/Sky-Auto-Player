@@ -148,10 +148,9 @@ fn assert_preserved_config(install: &Path, expected_config: &[u8]) {
 }
 
 fn assert_preserved_config_semantics(install: &Path, expected_config: &[u8]) {
-    let actual: serde_json::Value = serde_json::from_slice(
-        &fs::read(install.join("config.json")).expect("config"),
-    )
-    .expect("actual config JSON");
+    let actual: serde_json::Value =
+        serde_json::from_slice(&fs::read(install.join("config.json")).expect("config"))
+            .expect("actual config JSON");
     let expected: serde_json::Value =
         serde_json::from_slice(expected_config).expect("expected config JSON");
     assert_eq!(actual, expected, "user configuration values changed");
