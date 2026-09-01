@@ -1,3 +1,6 @@
 [env]
 TS_RS_EXPORT_DIR = { value = "desktop/src/bridge/generated", relative = true }
 TS_RS_LARGE_INT = "number"
+
+[alias]
+xtask = "run --locked --manifest-path rust/xtask/Cargo.toml --"

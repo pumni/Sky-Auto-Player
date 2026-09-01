@@ -70,9 +70,17 @@ mandatory.
 Production parity is proven by direct Rust/TypeScript tests and committed
 fixtures. Python oracle outputs and updater fixtures may remain in the
 repository as explicitly classified evidence; they are not importable product
-code. Temporary Python release/check scripts are repository tooling and are
-scheduled for replacement by `cargo xtask` in Wave 6.
+code. The canonical release/check tooling is now `cargo xtask`; any remaining
+Python scripts are optional, noncanonical repository tooling.
 
-Use `uv run python scripts/check.py` for the current repository verification
-groups. Use `scripts/check_wave5_retirement.py` for the Wave 5 product-graph
-and package-boundary guard.
+Use the Rust repository tool for current verification groups:
+
+```powershell
+cargo xtask check static
+cargo xtask check rust
+cargo xtask check desktop
+cargo xtask check all
+```
+
+The Wave 6 `xtask` retirement/architecture/security checks are canonical; retained Python scripts
+are optional repository tooling only.

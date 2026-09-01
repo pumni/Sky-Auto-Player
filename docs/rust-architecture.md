@@ -54,8 +54,7 @@ variable alone. Production package qualification composes safe seams
 explicitly while the normal runtime uses disabled seams. Run:
 
 ```powershell
-uv run python scripts/check_rust_architecture.py --enforce
-uv run python scripts/check_wave5_retirement.py
+cargo xtask check static
 ```
 
 There is no foreign-language extension crate, wheel build, or Python player

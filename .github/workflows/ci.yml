@@ -49,6 +49,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Install pinned Rust toolchain for classifier
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Verify classifier toolchain
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          set -euo pipefail
+          rustc --version | grep -E '^rustc 1\.98\.0 '
+
       - name: Classify changed paths
         id: filter
         env:
@@ -60,16 +70,13 @@ jobs:
           set -euo pipefail
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
-            classification="$(printf '\n' | python scripts/classify_ci_changes.py --full)"
+            classification="$(cargo xtask ci classify --full)"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            changed_files="$(git diff --name-only "$PR_BASE_SHA" "$CURRENT_SHA")"
-            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
+            classification="$(cargo xtask ci classify --base "$PR_BASE_SHA" --head "$CURRENT_SHA")"
           elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
-            changed_files="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA")"
-            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
+            classification="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA" | cargo xtask ci classify)"
           else
-            changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
-            classification="$(printf '%s\n' "$changed_files" | python scripts/classify_ci_changes.py)"
+            classification="$(cargo xtask ci classify --base "$BEFORE_SHA" --head "$CURRENT_SHA")"
           fi
 
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
@@ -109,11 +116,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Set up Python environment
-        uses: ./.github/actions/python-environment
-
-      - name: Python dependency audit
-        run: uv audit --frozen
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
 
       - name: RustSec dependency audit
         env:
@@ -123,7 +127,9 @@ jobs:
           cargo audit --file rust/Cargo.lock
 
       - name: Repository verification — static
-        run: uv run python scripts/check.py static
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: cargo xtask check static
 
       - name: Report CI timing
         if: always()
@@ -149,9 +155,6 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Set up Python environment
-        uses: ./.github/actions/python-environment
-
       - name: Rust — install pinned stable toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
@@ -174,11 +177,7 @@ jobs:
       - name: Repository verification — Rust
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run python scripts/check.py rust
-
-      - name: Repository verification — Python tests
-        # Run windows-marked tests when present; skip only wall-clock `slow`.
-        run: uv run python scripts/check.py tests
+        run: cargo xtask check rust
 
       - name: Set up Bun for desktop verification
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -192,7 +191,7 @@ jobs:
       - name: Repository verification — desktop
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run python scripts/check.py desktop
+        run: cargo xtask check desktop
 
       - name: Report CI timing
         if: always()
@@ -216,9 +215,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Set up Python environment
-        uses: ./.github/actions/python-environment
 
       - name: Rust — install pinned stable toolchain for packaged build
         env:
@@ -246,20 +242,54 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Construct Python-unavailable canonical environment
+        run: |
+          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $toolDirectories = foreach ($name in $required) {
+            $command = Get-Command $name -ErrorAction SilentlyContinue
+            if ($command) { Split-Path -Parent $command.Source }
+          }
+          $systemRoot = if ($env:SystemRoot) { $env:SystemRoot } else { "C:\Windows" }
+          $restricted = @(
+            $toolDirectories
+            (Join-Path $systemRoot "System32")
+            (Join-Path $systemRoot "System32\Wbem")
+            $systemRoot
+          ) | Where-Object { $_ } | Select-Object -Unique
+          $env:PATH = $restricted -join ";"
+          foreach ($name in @("python", "python3", "py", "uv")) {
+            $found = where.exe $name 2>$null
+            if ($LASTEXITCODE -eq 0 -and $found) { throw "$name remains discoverable in restricted PATH: $found" }
+            Write-Host "${name}: not found"
+          }
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          "PATH=$env:PATH" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          foreach ($name in @("PYTHONHOME", "PYTHONPATH", "PYTHONUTF8", "VIRTUAL_ENV", "UV_PYTHON", "UV_PROJECT_ENVIRONMENT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")) {
+            "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          }
+
+      - name: Canonical checks without Python
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          cargo xtask check static
+          cargo xtask check rust
+          cargo xtask check desktop
+
       - name: Build and qualify exact portable artifact
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-          SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player portable"
-          uv run --env-file .env python scripts/build_portable_release.py --output-root $output
+          cargo xtask dist --profile dist --output $output
           "SKY_PORTABLE_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify packaged release tree
         run: |
-          $version = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('desktop/src-tauri/Cargo.toml').read_text(encoding='utf-8'))['package']['version'])"
-          uv run --env-file .env python scripts/verify_release_manifest.py `
-            --release-dir (Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$version") --version $version
+          $version = (cargo xtask version check | Select-String '^version=').ToString().Substring(8)
+          cargo xtask verify-dist --release-dir (Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$version")
 
       - name: Report exact portable artifact identity
         shell: pwsh
@@ -279,7 +309,7 @@ jobs:
       - name: Upload exact portable release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sky-auto-player-portable-v${{ hashFiles('pyproject.toml') }}
+          name: sky-auto-player-portable-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/Sky Auto Player portable
           if-no-files-found: error
           retention-days: 14

@@ -28,7 +28,7 @@ def test_historical_benchmark_names_remain_explicitly_allowed() -> None:
     audit = _load()
     assert audit._is_historical("scripts/bench_phase6_native_diagnostics.py")
     assert audit._is_historical("tests/test_phase9_gui_canonical.py")
-    assert not audit._is_historical("scripts/build_portable_release.py")
+    assert not audit._is_historical("rust/xtask/src/dist.rs")
 
 
 @pytest.mark.parametrize(

@@ -89,15 +89,15 @@ system. `scripts/audit_agent_context.py` guards the size and shape of these cont
 The normal repository-owned verification entry point is:
 
 ```powershell
-uv run python scripts/check.py
+cargo xtask check all
 ```
 
 During development, run the narrowest relevant group first:
 
 ```powershell
-uv run python scripts/check.py static
-uv run python scripts/check.py tests
-uv run python scripts/check.py rust
+cargo xtask check static
+cargo xtask check rust
+cargo xtask check desktop
 ```
 
 Packaging, Windows timing/latency acceptance, release, and benchmark workflows remain specialized

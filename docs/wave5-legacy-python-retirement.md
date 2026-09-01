@@ -79,9 +79,9 @@ Phase 11 xtask/build orchestration: PENDING Wave 6
 Phase 12 optimization:           PENDING later
 ```
 
-The temporary canonical release assembler is
+The temporary canonical release assembler during Wave 5 was
 `scripts/build_portable_release.py`, supported by
-`scripts/release_common.py`. It invokes native Cargo/Bun builds directly and
-does not build a wheel, invoke maturin or PyInstaller, import the old product
-package, or ship Python runtime files. Its Python interpreter is a Wave 5
-tooling exception, not a product requirement.
+`scripts/release_common.py`. Those scripts invoked native Cargo/Bun builds
+directly and did not build a wheel, invoke maturin or PyInstaller, import the
+old product package, or ship Python runtime files. Wave 6 retired these
+historical canonical scripts in favor of `cargo xtask`.

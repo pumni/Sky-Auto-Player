@@ -16,12 +16,11 @@ def test_native_package_is_the_version_source() -> None:
     assert version == "3.5.0"
 
 
-def test_repository_tooling_does_not_import_deleted_product_metadata() -> None:
-    for relative in ("scripts/release_common.py", "scripts/build_portable_release.py"):
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert "import sky_music" not in source
-        assert "from sky_music" not in source
-        assert "build_app" not in source
+def test_rust_xtask_is_the_repository_release_tool() -> None:
+    source = (ROOT / "rust" / "xtask" / "src" / "main.rs").read_text(encoding="utf-8")
+    assert '"dist"' in source
+    assert '"verify-dist"' in source
+    assert "python" not in source.casefold()
 
 
 def test_website_version_uses_native_package_metadata() -> None:

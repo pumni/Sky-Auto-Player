@@ -43,17 +43,19 @@ not open every architecture page by default.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 - [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — Product/runtime Python
   retirement boundary and temporarily retained repository tooling.
+- [wave6-rust-xtask-release-ci.md](wave6-rust-xtask-release-ci.md) — Rust xtask commands and the
+  Python-free canonical check/release boundary.
 
-Build and release implementation details live in `scripts/build_portable_release.py`,
-`scripts/release_common.py`, `desktop/`, `.github/workflows/`, and their direct tests. The release
-assembler is temporary repository tooling; it does not build a Python product or extension.
+Build and release implementation details live in `rust/xtask/`, `desktop/`, `.github/workflows/`,
+and their direct tests. `cargo xtask dist` is the canonical release assembler and does not build a
+Python product or extension. Historical release scripts are not canonical.
 
 ## Development and verification
 
 The repository-level verification entry point is:
 
 ```powershell
-uv run python scripts/check.py
+cargo xtask check all
 ```
 
 Use `static`, `tests`, or `rust` as an optional group during focused development. Packaging,

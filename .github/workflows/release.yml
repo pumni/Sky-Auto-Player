@@ -36,12 +36,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python environment
-        uses: ./.github/actions/python-environment
-
-      - name: Repository verification — static
-        run: uv run python scripts/check.py static
-
       - name: Rust — install and verify pinned stable toolchain
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
@@ -51,6 +45,11 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
+
+      - name: Repository verification — static
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: cargo xtask check static
 
       - name: Rust cache
         id: rust-cache
@@ -62,35 +61,22 @@ jobs:
       - name: Repository verification — Rust
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: uv run python scripts/check.py rust
-
-      - name: Repository verification — full Python tests
-        run: uv run python scripts/check.py tests-full
+        run: cargo xtask check rust
 
       - name: Assert tag version equals native Cargo package
         id: verlock
         run: |
           $tag = $env:GITHUB_REF_NAME
-          if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
-          $tagVer = $Matches[1]
-          $nativeVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('desktop/src-tauri/Cargo.toml').read_text(encoding='utf-8'))['package']['version'])"
-          if ($tagVer -ne $nativeVer) {
-            throw "I48 fail: tag version '$tagVer' != native Cargo version '$nativeVer'. Bump desktop/src-tauri/Cargo.toml before tagging."
-          }
-          Write-Host "Version lock OK: $tagVer"
-          # Compute the prerelease flag with the repository tooling parser.
-          # The previous substring match
-          # (`contains(github.ref_name, '-rc') || contains('-beta')`)
-          # missed `-alpha` / `-dev` / `-a` / `-b` — packaging would have
-          # flagged those as prerelease, so they would have been silently
-          # could silently promote a prerelease to the stable channel.
-          $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
-          Write-Host "is_prerelease: $isPre"
-          "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
-          # `Add-Content` (not `Set-Content -Append`) — `Set-Content` has no
-          # `-Append` parameter in PowerShell 7; the previous form failed the
-          # v2.4.0 release run (29657111725) at this step.
-          "is_prerelease=$isPre"  | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
+          $lines = @(cargo xtask version check --tag $tag)
+          if ($LASTEXITCODE -ne 0) { throw "Rust version qualification failed for tag $tag" }
+          $versionLine = $lines | Where-Object { $_ -match '^version=' } | Select-Object -Last 1
+          $preLine = $lines | Where-Object { $_ -match '^is_prerelease=' } | Select-Object -Last 1
+          if (-not $versionLine -or -not $preLine) { throw "xtask did not emit structured version output" }
+          $tagVer = $versionLine -replace '^version=', ''
+          $isPre = $preLine -replace '^is_prerelease=', ''
+          Write-Host "Version lock OK: $tagVer (is_prerelease=$isPre)"
+          "version=$tagVer" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+          "is_prerelease=$isPre" | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
       - name: Set up Bun for production frontend build
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -102,15 +88,14 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player portable"
-          uv run --env-file .env python scripts/build_portable_release.py --output-root $output
+          cargo xtask dist --profile dist --output $output
           "SKY_PORTABLE_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify exact release tree and manifest
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
           $rel = Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$ver"
-          uv run --env-file .env python scripts/verify_release_manifest.py `
-            --release-dir $rel --version $ver
+          cargo xtask verify-dist --release-dir $rel
           $e2e = Get-ChildItem $rel -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like "sky_updater_e2e*" }
           if ($e2e) { throw "E2E updater artifacts must never enter the public release tree: $($e2e.FullName -join ', ')" }

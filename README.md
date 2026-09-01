@@ -107,21 +107,23 @@ No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for 
 <details>
 <summary><b>Can I build it from source?</b></summary>
 
-Yes. Prerequisites: Windows 10/11, [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). Python is used only to run temporary repository tooling during this wave; it is not a product runtime dependency.
+Yes. Prerequisites: Windows 10/11, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and portable build use Rust and Bun only.
 
 ```powershell
 # 1. Clone repository
 git clone https://github.com/pumni/Sky-Auto-Player.git
 cd Sky-Auto-Player
 
-# 2. Set up the temporary repository-tooling environment
-uv sync
+# 2. Install frontend dependencies
+cd desktop
+bun install --frozen-lockfile
+cd ..
 
 # 3. Run repository verification
-uv run python scripts/check.py
+cargo xtask check all
 
 # 4. Build the portable native desktop package
-uv run python scripts/build_portable_release.py --output-root dist
+cargo xtask dist --profile dist --output dist
 ```
 </details>
 

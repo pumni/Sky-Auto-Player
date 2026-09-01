@@ -52,10 +52,10 @@ justification and tracking reference.
 Run the security gate locally with:
 
 ```powershell
-uv run --env-file .env python scripts/audit_security_mandates.py
+cargo xtask check static
 ```
 
-The normal repository verification entry point (`uv run python scripts/check.py`) includes this
+The normal repository verification entry point (`cargo xtask check static`) includes this
 audit in its `static` group.
 
 ## Update and release integrity
