@@ -13,7 +13,7 @@
       "path": "scripts/classify_ci_changes.py",
       "classification": "MIGRATED_XTASK",
       "invariants": ["changed-path classification and required-gate policy"],
-      "evidence": ["rust/xtask/src/classifier.rs::classify"]
+      "evidence": ["rust/tools/sky_ci_classifier/src/lib.rs::classify"]
     },
     {
       "path": "scripts/build_portable_release.py",
@@ -61,13 +61,13 @@
       "path": "tests/test_ci_change_classifier.py",
       "classification": "MIGRATED_XTASK",
       "invariants": ["changed-path classification and required-gate policy remain deterministic"],
-      "evidence": ["rust/xtask/src/classifier.rs::classify", "rust/xtask/src/classifier.rs::full_and_empty_modes_are_stable"]
+      "evidence": ["rust/tools/sky_ci_classifier/src/lib.rs::classify", "rust/tools/sky_ci_classifier/src/lib.rs::full_and_empty_modes_are_stable"]
     },
     {
       "path": "tests/test_ci_phase0_contract.py",
       "classification": "MIGRATED_XTASK",
-      "invariants": ["full-history checkout supports changed-path classification", "required gate policy preserves pinned Rust cache and frontend checks"],
-      "evidence": ["rust/xtask/src/classifier.rs::run", ".github/workflows/ci.yml::fetch-depth: 0", ".github/workflows/ci.yml::Swatinem/rust-cache"]
+      "invariants": ["targeted shallow checkout supports changed-path classification", "required gate policy preserves pinned Rust cache and frontend checks"],
+      "evidence": ["rust/tools/sky_ci_classifier/src/lib.rs::run", ".github/workflows/ci.yml::fetch-depth", ".github/workflows/ci.yml::Swatinem/rust-cache"]
     },
     {
       "path": "tests/test_dist_profile_contract.py",
