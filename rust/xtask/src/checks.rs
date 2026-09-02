@@ -1503,8 +1503,10 @@ fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run(group: &str) -> Result<()> {
+pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
     let root = repo::root();
+    let skip_supply_chain =
+        skip_supply_chain || std::env::var_os("SKY_CHECK_SKIP_SUPPLY_CHAIN").is_some();
     match group {
         "static" => {
             audits::agent_context::run(&root)?;
@@ -1513,7 +1515,13 @@ pub fn run(group: &str) -> Result<()> {
             audits::security::run(&root)?;
             audits::zero_python::run(&root)?;
             tauri_feature_contract(&root)?;
-            supply_chain::run(None)?;
+            if !skip_supply_chain {
+                supply_chain::run(None)?;
+            } else {
+                println!(
+                    "[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)"
+                );
+            }
             branding::validate(&root)?;
             retirement(&root)?;
         }
@@ -1637,9 +1645,9 @@ pub fn run(group: &str) -> Result<()> {
             bindings()?;
         }
         "all" => {
-            run("static")?;
-            run("rust")?;
-            run("desktop")?;
+            run("static", skip_supply_chain)?;
+            run("rust", skip_supply_chain)?;
+            run("desktop", skip_supply_chain)?;
         }
         other => return Err(format!("unknown check group: {other}").into()),
     }

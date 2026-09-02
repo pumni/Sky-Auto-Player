@@ -184,3 +184,18 @@ To qualify the short-circuit optimization for manual dispatch and main push:
 - **Investigation of Run #552 `validate` Failure**:
   - Root cause: In `desktop/scripts/run-e2e.mjs:28`, `waitForServer()` has a fixed 15-second deadline (`60 * 250ms`) for Vite dev server initialization. Under heavy load on Windows runner after running the entire Rust test suite, cold Vite initialization took slightly longer than 15s, triggering `Error: Vite did not become ready within 15 seconds`.
   - All preceding steps passed cleanly: `check static` PASS, `check rust` PASS, `bun run check` PASS. Rerun #554 triggered to observe qualification.
+
+---
+
+## 4. CI-FAST-2: Static Checks and Supply-Chain Audits Separation
+
+### 4.1 Architectural Changes
+1. **Dedicated Parallel Jobs in CI**:
+   - `static` (`Static and security gates`): Pure repository static invariants (`cargo xtask check static --skip-supply-chain`). Completely offline, zero network access, no `cargo-audit` advisory DB downloading, no `cargo-vet` tool setup/restore.
+   - `supply_chain` (`Supply-chain and advisory security`): Dedicated job on `ubuntu-latest` running in parallel with `static`. Restores and caches pinned `cargo-audit` (v0.22.2) and `cargo-vet` (v0.10.2). Executes `cargo audit --file rust/Cargo.lock` and `cargo vet --manifest-path rust/Cargo.toml --locked`.
+2. **Offline Local Contract Preservation**:
+   - Running `cargo xtask check static` locally without flags continues to execute all checks including `supply_chain::run(None)` by default.
+   - Flag `--skip-supply-chain` or environment variable `SKY_CHECK_SKIP_SUPPLY_CHAIN=1` safely bypasses the redundant `cargo vet` step when executed under dedicated CI pipelines.
+   - Preserves all security invariants from `SECURITY.md` and zero-Python audit rules from `AGENTS.md`.
+3. **Gate Convergence**:
+   - Updated `status` required CI gate to depend on `[changes, static, supply_chain, validate, packaged]`, failing closed if either `static` or `supply_chain` fails.

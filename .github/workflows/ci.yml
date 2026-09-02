@@ -124,7 +124,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.static_required == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     defaults:
       run:
         shell: bash
@@ -151,6 +151,49 @@ jobs:
           fi
           git fetch --no-tags --depth=1 origin "$baseline"
           git cat-file -e "$baseline^{commit}"
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Repository verification — static
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: cargo xtask check static --skip-supply-chain
+
+      - name: Report CI timing
+        if: always()
+        run: |
+          start_time="${SKY_CI_JOB_STARTED_STATIC:-}"
+          if [ -n "$start_time" ]; then
+            elapsed=$(( $(date +%s) - start_time ))
+            {
+              echo "## CI job timing"
+              echo "- Job: \`static\`"
+              echo "- Elapsed seconds: \`$elapsed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  supply_chain:
+    name: Supply-chain and advisory security
+    needs: changes
+    if: needs.changes.outputs.static_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Start CI timing
+        run: echo "SKY_CI_JOB_STARTED_SUPPLY_CHAIN=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
@@ -211,20 +254,15 @@ jobs:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
 
-      - name: Repository verification — static
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo xtask check static
-
       - name: Report CI timing
         if: always()
         run: |
-          start_time="${SKY_CI_JOB_STARTED_STATIC:-}"
+          start_time="${SKY_CI_JOB_STARTED_SUPPLY_CHAIN:-}"
           if [ -n "$start_time" ]; then
             elapsed=$(( $(date +%s) - start_time ))
             {
               echo "## CI job timing"
-              echo "- Job: \`static\`"
+              echo "- Job: \`supply_chain\`"
               echo "- Elapsed seconds: \`$elapsed\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -508,7 +546,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, validate, packaged]
+    needs: [changes, static, supply_chain, validate, packaged]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -526,12 +564,19 @@ jobs:
           CODE_REQUIRED: ${{ needs.changes.outputs.code_required }}
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           STATIC_RESULT: ${{ needs.static.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
-          if [[ "$STATIC_REQUIRED" == "true" ]]; then [[ "$STATIC_RESULT" == "success" ]]; else [[ "$STATIC_RESULT" == "skipped" ]]; fi
+          if [[ "$STATIC_REQUIRED" == "true" ]]; then
+            [[ "$STATIC_RESULT" == "success" ]]
+            [[ "$SUPPLY_CHAIN_RESULT" == "success" ]]
+          else
+            [[ "$STATIC_RESULT" == "skipped" ]]
+            [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
+          fi
           if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$PACKAGE_REQUIRED" == "true" ]]; then [[ "$PACKAGED_RESULT" == "success" ]]; else [[ "$PACKAGED_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
