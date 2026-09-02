@@ -79,7 +79,7 @@ báo này cho bất kỳ tệp unsigned nào tải từ internet.
 Sky Auto Player kiểm tra GitHub để tìm bản phát hành mới khi khởi động và hiển thị banner
 khi có bản mới. Chọn **Open GitHub Releases** để tải bản cập nhật thủ công:
 
-1. Tải ZIP tương ứng, `.zip.sha256` và `MANIFEST.json` từ
+1. Tải ZIP tương ứng, `.zip.sha256`, `MANIFEST.json` và `MANIFEST.json.sig` từ
    [trang GitHub Releases chính thức](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Khi cần, xác minh SHA256 của ZIP và manifest chính xác.
 3. Giải nén ZIP vào thư mục mới rồi chép `config.json`, `.env`, `songs/` và `logs/` của bạn

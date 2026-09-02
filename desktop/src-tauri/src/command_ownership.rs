@@ -12,78 +12,141 @@ pub(crate) enum CommandOwner {
 }
 
 pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
-    ("app.bootstrap", CommandOwner::Native),
-    ("app.shutdown", CommandOwner::Native),
-    ("catalog.search", CommandOwner::Native),
-    ("catalog.detail", CommandOwner::Native),
-    ("catalog.reload", CommandOwner::Native),
-    ("catalog.set_viewport", CommandOwner::Native),
-    ("settings.get", CommandOwner::Native),
-    ("settings.patch", CommandOwner::Native),
-    ("update.check", CommandOwner::Native),
-    ("update.preferences.get", CommandOwner::Native),
-    ("update.preferences.patch", CommandOwner::Native),
-    ("update.begin_handoff", CommandOwner::Native),
-    ("playback.prepare", CommandOwner::Native),
-    ("playback.start", CommandOwner::Native),
-    ("playback.stop", CommandOwner::Native),
-    ("playback.pause", CommandOwner::Native),
-    ("playback.resume", CommandOwner::Native),
-    ("playback.skip", CommandOwner::Native),
-    ("diagnostics.set_enabled", CommandOwner::Native),
-    ("calibration.start", CommandOwner::Native),
-    ("calibration.cancel", CommandOwner::Native),
+    (
+        crate::ipc_contract::COMMANDS[0].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[1].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[2].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[3].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[4].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[5].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[6].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[7].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[8].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[9].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[10].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[11].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[12].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[13].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[14].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[15].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[16].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[17].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[18].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[19].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[20].method,
+        CommandOwner::Native,
+    ),
 ];
 
 /// Native handlers are enumerated separately from policy so the matrix cannot
 /// claim a route is native merely because a lifecycle helper happens to call
 /// an internal cleanup function.
 pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
-    "app.bootstrap",
-    "app.shutdown",
-    "catalog.search",
-    "catalog.detail",
-    "catalog.reload",
-    "catalog.set_viewport",
-    "settings.get",
-    "settings.patch",
-    "update.check",
-    "update.preferences.get",
-    "update.preferences.patch",
-    "update.begin_handoff",
-    "playback.prepare",
-    "playback.start",
-    "playback.stop",
-    "playback.pause",
-    "playback.resume",
-    "playback.skip",
-    "diagnostics.set_enabled",
-    "calibration.start",
-    "calibration.cancel",
+    crate::ipc_contract::COMMANDS[0].method,
+    crate::ipc_contract::COMMANDS[1].method,
+    crate::ipc_contract::COMMANDS[2].method,
+    crate::ipc_contract::COMMANDS[3].method,
+    crate::ipc_contract::COMMANDS[4].method,
+    crate::ipc_contract::COMMANDS[5].method,
+    crate::ipc_contract::COMMANDS[6].method,
+    crate::ipc_contract::COMMANDS[7].method,
+    crate::ipc_contract::COMMANDS[8].method,
+    crate::ipc_contract::COMMANDS[9].method,
+    crate::ipc_contract::COMMANDS[10].method,
+    crate::ipc_contract::COMMANDS[11].method,
+    crate::ipc_contract::COMMANDS[12].method,
+    crate::ipc_contract::COMMANDS[13].method,
+    crate::ipc_contract::COMMANDS[14].method,
+    crate::ipc_contract::COMMANDS[15].method,
+    crate::ipc_contract::COMMANDS[16].method,
+    crate::ipc_contract::COMMANDS[17].method,
+    crate::ipc_contract::COMMANDS[18].method,
+    crate::ipc_contract::COMMANDS[19].method,
+    crate::ipc_contract::COMMANDS[20].method,
 ];
 
 const REQUIRED_COMMANDS: [&str; 21] = [
-    "app.bootstrap",
-    "app.shutdown",
-    "catalog.search",
-    "catalog.detail",
-    "catalog.reload",
-    "catalog.set_viewport",
-    "settings.get",
-    "settings.patch",
-    "update.check",
-    "update.preferences.get",
-    "update.preferences.patch",
-    "update.begin_handoff",
-    "playback.prepare",
-    "playback.start",
-    "playback.stop",
-    "playback.pause",
-    "playback.resume",
-    "playback.skip",
-    "diagnostics.set_enabled",
-    "calibration.start",
-    "calibration.cancel",
+    crate::ipc_contract::COMMANDS[0].method,
+    crate::ipc_contract::COMMANDS[1].method,
+    crate::ipc_contract::COMMANDS[2].method,
+    crate::ipc_contract::COMMANDS[3].method,
+    crate::ipc_contract::COMMANDS[4].method,
+    crate::ipc_contract::COMMANDS[5].method,
+    crate::ipc_contract::COMMANDS[6].method,
+    crate::ipc_contract::COMMANDS[7].method,
+    crate::ipc_contract::COMMANDS[8].method,
+    crate::ipc_contract::COMMANDS[9].method,
+    crate::ipc_contract::COMMANDS[10].method,
+    crate::ipc_contract::COMMANDS[11].method,
+    crate::ipc_contract::COMMANDS[12].method,
+    crate::ipc_contract::COMMANDS[13].method,
+    crate::ipc_contract::COMMANDS[14].method,
+    crate::ipc_contract::COMMANDS[15].method,
+    crate::ipc_contract::COMMANDS[16].method,
+    crate::ipc_contract::COMMANDS[17].method,
+    crate::ipc_contract::COMMANDS[18].method,
+    crate::ipc_contract::COMMANDS[19].method,
+    crate::ipc_contract::COMMANDS[20].method,
 ];
 
 pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
@@ -95,7 +158,8 @@ pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
 pub(crate) fn matrix_is_complete() -> bool {
     // This list is executable evidence that every Native policy entry has a
     // corresponding runtime dispatch branch.
-    COMMAND_OWNERS.len() == REQUIRED_COMMANDS.len()
+    crate::ipc_contract::is_complete()
+        && COMMAND_OWNERS.len() == REQUIRED_COMMANDS.len()
         && REQUIRED_COMMANDS.iter().all(|method| {
             COMMAND_OWNERS
                 .iter()

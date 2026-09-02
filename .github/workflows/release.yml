@@ -100,6 +100,17 @@ jobs:
             Where-Object { $_.Name -like "sky_updater_e2e*" }
           if ($e2e) { throw "E2E updater artifacts must never enter the public release tree: $($e2e.FullName -join ', ')" }
 
+      - name: Sign exact release manifest
+        env:
+          SKY_UPDATE_SIGNING_KEY_HEX: ${{ secrets.SKY_UPDATE_SIGNING_KEY_HEX }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SKY_UPDATE_SIGNING_KEY_HEX)) {
+            throw "SKY_UPDATE_SIGNING_KEY_HEX repository secret is required"
+          }
+          $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
+          $signature = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json.sig"
+          cargo xtask manifest sign --manifest $manifest --output $signature --key-id release-2026
+
       - name: Stage release assets
         id: stage
         run: |
@@ -107,13 +118,15 @@ jobs:
           $artifact = Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$ver.zip"
           $sidecar = "$artifact.sha256"
           $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
+          $signature = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json.sig"
           $provenance = Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json"
-          foreach ($path in @($artifact, $sidecar, $manifest, $provenance)) {
+          foreach ($path in @($artifact, $sidecar, $manifest, $signature, $provenance)) {
             if (-not (Test-Path $path)) { throw "Missing exact portable release asset: $path" }
           }
           Copy-Item $artifact "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip"
           Copy-Item $sidecar "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256"
           Copy-Item $manifest "$env:RUNNER_TEMP\MANIFEST.json"
+          Copy-Item $signature "$env:RUNNER_TEMP\MANIFEST.json.sig"
           Copy-Item $provenance "$env:RUNNER_TEMP\PROVENANCE.json"
 
           "version=$ver" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
@@ -125,6 +138,7 @@ jobs:
             "Sky-Auto-Player-v$ver.zip",
             "Sky-Auto-Player-v$ver.zip.sha256",
             "MANIFEST.json",
+            "MANIFEST.json.sig",
             "PROVENANCE.json"
           )
           foreach ($file in $required) {
@@ -141,6 +155,7 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
+            ${{ runner.temp }}/MANIFEST.json.sig
             ${{ runner.temp }}/PROVENANCE.json
 
       - name: Create draft GitHub Release
@@ -150,6 +165,7 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
+            ${{ runner.temp }}/MANIFEST.json.sig
             ${{ runner.temp }}/PROVENANCE.json
           body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
           generate_release_notes: false

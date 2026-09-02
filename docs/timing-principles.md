@@ -38,7 +38,7 @@ described as having the same latency as `require_focus=false`.
 
 ## 2. Hold and release contract
 
-Python validates `hold_frames` as one of `1.0`, `1.25`, or `1.5`, computes the
+The native application validates `hold_frames` as one of `1.0`, `1.25`, or `1.5`, computes the
 requested hold, and passes:
 
 ```text
@@ -491,7 +491,7 @@ an absolute value. It is observation/benchmark output, not controller
 feedback: no EMA, PID, adaptive lead, or start-error compensation is allowed.
 
 The serialized `send_started_ticks`, `send_completed_ticks`, and
-`send_duration_us` names remain compatibility aliases for older Python/API
+`send_duration_us` names remain compatibility aliases for older API
 callers. They map to the true sender `pre_call_qpc`,
 `sendinput_completion_qpc`, and `pre_call_to_completion`; the separate
 `final_policy_qpc` remains policy evidence and is not used as the sender start.

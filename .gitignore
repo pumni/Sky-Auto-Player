@@ -1,14 +1,11 @@
-# Byte-compiled / optimized / DLL files
+# Local interpreter/test caches are ignored even though the product no longer
+# uses Python; old worktrees can leave these artifacts behind.
 __pycache__/
 *.py[cod]
-*$py.class
 *.pyd
-
-# Virtual Environments
-.venv/
-venv/
-env/
-ENV/
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
 
 # Project Logs (tránh commit các file log debug timing sinh ra khi chơi nhạc)
 logs/
@@ -31,7 +28,7 @@ $RECYCLE.BIN/
 # Local User Configurations
 config.json
 
-# PyInstaller Build Artifacts
+# Build Artifacts
 build/
 dist/
 *.spec
@@ -47,20 +44,8 @@ windows_version_info.txt
 
 # Cache Files
 .cache/
-.pytest_cache/
-.uv-cache/
-# pytest transient artifacts (regenerated on every run; never source)
-.pytest_tmp/
-# pytest-benchmark storage (transient before/after measurements); committed
-# perf baselines live under docs/perf-baselines/ instead.
 .benchmarks/
 .tmp/
-.ruff_cache/
-
-# Build-generated version file (rewritten by build_app.py)
-src/sky_music/_version.py
-# Build-generated native extension provenance (rewritten by build_app.py)
-src/sky_music/_native_build.py
 
 # Local uv environment overrides (copy from .env.example)
 .env

@@ -13,10 +13,6 @@ desktop-runtime = [
     "tauri/wry",
     "tauri/custom-protocol",
     "tauri/compression",
-    "tauri/common-controls-v6",
-    "tauri/dynamic-acl",
-    "tauri/x11",
-    "tauri/dbus",
 ]
 tauri-test = ["tauri/test", "sky_player/test-support"]
 

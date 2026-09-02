@@ -2,6 +2,7 @@ mod app_state;
 mod bindings;
 mod command_ownership;
 mod commands;
+mod ipc_contract;
 mod lifecycle;
 mod native_runtime;
 mod native_update;

@@ -1,10 +1,158 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::Deserialize;
+
 use crate::archive::sha256_file;
 use crate::error::{Result, UpdaterError, io_context};
 use crate::manifest::Manifest;
 use crate::{PRIMARY_EXE, UPDATER_EXE};
+
+const RELEASE_KEY_ID: &str = "release-2026";
+#[cfg(not(test))]
+const RELEASE_PUBLIC_KEY: [u8; 32] = [
+    0xf2, 0x91, 0x25, 0xc7, 0x1b, 0xdc, 0xb3, 0x21, 0xdd, 0xd3, 0x67, 0x22, 0x01, 0x68, 0x93, 0xf9,
+    0x1b, 0x0b, 0xcb, 0x68, 0x4e, 0x7a, 0x04, 0x99, 0xb4, 0xbd, 0x53, 0x53, 0xbe, 0x35, 0x4c, 0xca,
+];
+
+#[cfg(test)]
+const RELEASE_PUBLIC_KEY: [u8; 32] = [
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetachedManifestSignature {
+    key_id: String,
+    signature: String,
+}
+
+/// Verify the detached signature over the exact bytes downloaded as MANIFEST.json.
+///
+/// The trusted key set is compiled into the updater. A release may identify a
+/// key, but it cannot replace or extend this set through remote metadata.
+pub fn verify_manifest_signature(manifest_bytes: &[u8], signature_bytes: &[u8]) -> Result<String> {
+    if signature_bytes.len() > 16 * 1024 {
+        return Err(UpdaterError::ManifestSignatureInvalid(
+            "signature exceeds size bound".into(),
+        ));
+    }
+    let detached: DetachedManifestSignature =
+        serde_json::from_slice(signature_bytes).map_err(|_| {
+            UpdaterError::ManifestSignatureInvalid("signature envelope is not valid JSON".into())
+        })?;
+    if detached.key_id != RELEASE_KEY_ID {
+        return Err(UpdaterError::ManifestSignatureInvalid(format!(
+            "untrusted key id: {}",
+            detached.key_id
+        )));
+    }
+    let signature = decode_hex::<64>(&detached.signature).ok_or_else(|| {
+        UpdaterError::ManifestSignatureInvalid("signature must be exactly 64 hex bytes".into())
+    })?;
+    let verifying_key = VerifyingKey::from_bytes(&RELEASE_PUBLIC_KEY).map_err(|_| {
+        UpdaterError::ManifestSignatureInvalid("embedded public key is invalid".into())
+    })?;
+    verifying_key
+        .verify(manifest_bytes, &Signature::from_bytes(&signature))
+        .map_err(|_| {
+            UpdaterError::ManifestSignatureInvalid(
+                "signature does not match the exact manifest bytes".into(),
+            )
+        })?;
+    Ok(detached.key_id)
+}
+
+fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2 {
+        return None;
+    }
+    let mut output = [0u8; N];
+    let bytes = value.as_bytes();
+    for (index, output_byte) in output.iter_mut().enumerate() {
+        let offset = index * 2;
+        *output_byte = (hex_digit(bytes[offset])? << 4) | hex_digit(bytes[offset + 1])?;
+    }
+    Some(output)
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod signed_manifest_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use serde_json::json;
+
+    const TEST_SEED: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c,
+        0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae,
+        0x7f, 0x60,
+    ];
+
+    fn detached(message: &[u8]) -> Vec<u8> {
+        let signature = SigningKey::from_bytes(&TEST_SEED).sign(message);
+        serde_json::to_vec(&json!({
+            "key_id": RELEASE_KEY_ID,
+            "signature": signature.to_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        }))
+        .expect("signature envelope")
+    }
+
+    #[test]
+    fn valid_signature_is_accepted() {
+        assert_eq!(
+            verify_manifest_signature(b"canonical manifest", &detached(b"canonical manifest"))
+                .expect("valid signature"),
+            RELEASE_KEY_ID
+        );
+    }
+
+    #[test]
+    fn modified_manifest_is_rejected() {
+        let signature = detached(b"canonical manifest");
+        assert!(matches!(
+            verify_manifest_signature(b"modified manifest", &signature),
+            Err(UpdaterError::ManifestSignatureInvalid(message))
+                if message.contains("exact manifest bytes")
+        ));
+    }
+
+    #[test]
+    fn wrong_key_truncated_signature_and_unknown_id_are_rejected() {
+        let mut wrong_key = serde_json::from_slice::<serde_json::Value>(&detached(b"message"))
+            .expect("signature JSON");
+        wrong_key["signature"] = json!("00".repeat(64));
+        assert!(
+            verify_manifest_signature(b"message", &serde_json::to_vec(&wrong_key).unwrap())
+                .is_err()
+        );
+
+        let truncated = json!({"key_id": RELEASE_KEY_ID, "signature": "00"});
+        assert!(
+            verify_manifest_signature(b"message", &serde_json::to_vec(&truncated).unwrap())
+                .is_err()
+        );
+
+        let unknown = json!({
+            "key_id": "future-key",
+            "signature": serde_json::from_slice::<serde_json::Value>(&detached(b"message"))
+                .unwrap()["signature"]
+        });
+        assert!(
+            verify_manifest_signature(b"message", &serde_json::to_vec(&unknown).unwrap()).is_err()
+        );
+    }
+}
 
 pub fn project_owned_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();

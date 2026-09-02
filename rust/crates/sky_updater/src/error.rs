@@ -27,6 +27,8 @@ pub enum UpdaterError {
     ArchiveUnsafe(String),
     #[error("manifest invalid: {0}")]
     ManifestInvalid(String),
+    #[error("manifest signature invalid: {0}")]
+    ManifestSignatureInvalid(String),
     #[error("manifest hash mismatch: {0}")]
     ManifestHashMismatch(String),
     #[error("install root invalid: {0}")]

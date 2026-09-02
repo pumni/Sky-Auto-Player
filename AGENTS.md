@@ -23,8 +23,8 @@ Do not inventory the repository or load broad documentation by default.
   `pynput`, `SetWindowsHookEx`, legacy `keybd_event`/`mouse_event`, or another injection mechanism.
 - Validate bounded external/user input and fail closed at ambiguous security-sensitive boundaries.
 
-`SECURITY.md` is canonical. `scripts/audit_security_mandates.py` mechanically enforces the relevant
-Win32/input boundary; this guide only carries the minimum facts needed at task start.
+`SECURITY.md` is canonical. `cargo xtask check static` mechanically enforces the relevant Win32/input
+boundary; this guide only carries the minimum facts needed at task start.
 
 ## Working model
 
@@ -51,15 +51,17 @@ machinery improves outcomes.
 
 ## Repository map
 
-- `src/sky_music/domain/` — pure domain models and deterministic policy logic.
-- `src/sky_music/orchestration/` — application/runtime orchestration; keep platform effects behind
-  explicit boundaries.
-- `src/sky_music/infrastructure/` — platform-adjacent glue.
-- `src/sky_music/platform/` — Windows-specific boundary, including Win32 interaction.
-- `src/sky_music/ui/` and `src/sky_music/cli/` — Textual UI and command-line plumbing.
-- `rust/` — native dispatch, calibration, and updater components.
-- `tests/` — Python regression/golden/Windows tests; direct tests are executable behavior evidence.
-- `scripts/` — audits, build helpers, benchmarks, and repository verification.
+- `desktop/src/` — React/TypeScript UI and bridge projections.
+- `desktop/src-tauri/` — Tauri shell, commands, and composition root.
+- `rust/crates/sky_app_core/` — pure application/domain policy.
+- `rust/crates/sky_native_adapters/` — concrete OS/filesystem/process adapters.
+- `rust/crates/sky_player/` — playback application and realtime runtime.
+- `rust/crates/sky_dispatch_core/` — platform-independent dispatch logic.
+- `rust/crates/sky_dispatch_win32/` — Windows `SendInput` and native dispatch boundary.
+- `rust/crates/sky_updater/` — update transaction and recovery boundary.
+- `rust/xtask/` — canonical repository, build, and release verification tooling.
+- `tests/` — direct regression/golden/Windows behavior evidence.
+- `scripts/` — narrow host/evidence scripts only where Rust is not a better fit.
 - `site/` — marketing/GitHub Pages surface.
 - `docs/` — focused current docs, ADRs, release evidence, and named performance baselines.
 
@@ -68,7 +70,9 @@ machinery improves outcomes.
 - Domain and orchestration stay independent of Win32 implementation details, `ctypes`, and direct
   `SendInput`; use current architecture docs and boundary tests for exact ownership.
 - Windows/native input remains isolated behind the documented boundary and the security contract.
-- `.python-version` and `pyproject.toml` Python compatibility remain aligned.
+- The supported product and canonical repository verification are Rust/Bun native. Python must not
+  be reintroduced into the product runtime or repository tooling; the Rust zero-Python audit is the
+  enforced guard.
 - The native updater and public release integrity model follow
   `docs/distribution-and-update.md`; security or release behavior changes require direct evidence.
 - Source and tests win over stale explanatory prose. Update active docs when an intentional behavior
@@ -82,7 +86,8 @@ is genuinely needed. `docs/releases/` and `docs/perf-baselines/` are bounded on-
 startup context.
 
 Vendor-specific adapters such as `CLAUDE.md` must remain thin and may not create a second authority
-system. `scripts/audit_agent_context.py` guards the size and shape of these context surfaces.
+system. The Rust agent-context audit in `cargo xtask check static` guards the size and shape of
+these context surfaces.
 
 ## Verification
 

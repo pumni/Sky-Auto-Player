@@ -268,6 +268,7 @@ pub fn error_code(error: &UpdaterError) -> &'static str {
         UpdaterError::ChecksumMismatch => "CHECKSUM_MISMATCH",
         UpdaterError::ArchiveUnsafe(_) => "ARCHIVE_UNSAFE",
         UpdaterError::ManifestInvalid(_) => "MANIFEST_INVALID",
+        UpdaterError::ManifestSignatureInvalid(_) => "MANIFEST_SIGNATURE_INVALID",
         UpdaterError::ManifestHashMismatch(_) => "MANIFEST_HASH_MISMATCH",
         UpdaterError::InstallRootInvalid(_) => "INSTALL_ROOT_INVALID",
         UpdaterError::TransactionRecoveryRequired(_) => "TRANSACTION_RECOVERY_REQUIRED",

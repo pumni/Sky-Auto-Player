@@ -660,6 +660,7 @@ pub async fn subscribe_ui_events(
     state: State<'_, AppState>,
     channel: Channel<UiEvent>,
 ) -> Result<(), String> {
+    let _command_name = crate::ipc_contract::UI_EVENTS_COMMAND;
     let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let native = app_state.ensure_native_blocking()?;

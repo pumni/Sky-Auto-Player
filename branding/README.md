@@ -37,11 +37,11 @@ bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <tiny-ou
 bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <favicon-16-output> --png 16
 bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <favicon-32-output> --png 32
 cd ..
-uv run python branding/scripts/build_ico.py --large-dir <large-output> --small-dir <small-output> --tiny-dir <tiny-output> --output branding/exports/windows/sky-auto-player.ico
+cargo xtask branding build-ico --large-dir <large-output> --small-dir <small-output> --tiny-dir <tiny-output> --output branding/exports/windows/sky-auto-player.ico
 ```
 
-`branding/scripts/build_ico.py` is a build-time standard-library assembler. It preserves the PNG
-payloads and writes the seven ICO layers `16, 24, 32, 48, 64, 128, 256`; `16` comes from the dedicated
+`cargo xtask branding build-ico` is the canonical build-time assembler. It preserves the PNG payloads
+and writes the seven ICO layers `16, 24, 32, 48, 64, 128, 256`; `16` comes from the dedicated
 16px master, `24` comes from the small optical master, and the remaining layers come from the large
 master. Copy the resulting ICO byte-for-byte to `site/public/favicon.ico` and
 `desktop/src-tauri/icons/icon.ico`.

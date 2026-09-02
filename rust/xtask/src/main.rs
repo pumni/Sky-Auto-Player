@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod audits;
+mod branding;
 mod checks;
 mod classifier;
 mod dist;
@@ -9,11 +11,12 @@ mod repo;
 mod version;
 
 use std::env;
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all>\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings check\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-dist --release-dir <dir>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all>\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path> --key-id <id>\n  cargo xtask branding build-ico --large-dir <dir> --small-dir <dir> --tiny-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-dist --release-dir <dir>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -72,7 +75,54 @@ fn main() -> Result<()> {
             }
             version::check(tag.as_deref())
         }
-        "bindings" if args.get(1).map(String::as_str) == Some("check") => checks::bindings(),
+        "bindings" => match args.get(1).map(String::as_str) {
+            Some("check") => checks::bindings(),
+            Some("generate") => checks::bindings_generate(),
+            _ => Err("bindings requires generate or check".into()),
+        },
+        "branding" if args.get(1).map(String::as_str) == Some("build-ico") => {
+            let mut large = None;
+            let mut small = None;
+            let mut tiny = None;
+            let mut output = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--large-dir" => large = Some(required_value(&args, &mut i, "--large-dir")?),
+                    "--small-dir" => small = Some(required_value(&args, &mut i, "--small-dir")?),
+                    "--tiny-dir" => tiny = Some(required_value(&args, &mut i, "--tiny-dir")?),
+                    "--output" => output = Some(required_value(&args, &mut i, "--output")?),
+                    option => return Err(format!("unknown branding option: {option}").into()),
+                }
+                i += 1;
+            }
+            branding::write_ico(
+                Path::new(&large.ok_or("branding requires --large-dir")?),
+                Path::new(&small.ok_or("branding requires --small-dir")?),
+                Path::new(&tiny.ok_or("branding requires --tiny-dir")?),
+                Path::new(&output.ok_or("branding requires --output")?),
+            )
+        }
+        "manifest" if args.get(1).map(String::as_str) == Some("sign") => {
+            let mut manifest = None;
+            let mut output = None;
+            let mut key_id = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--manifest" => manifest = Some(required_value(&args, &mut i, "--manifest")?),
+                    "--output" => output = Some(required_value(&args, &mut i, "--output")?),
+                    "--key-id" => key_id = Some(required_value(&args, &mut i, "--key-id")?),
+                    option => return Err(format!("unknown manifest option: {option}").into()),
+                }
+                i += 1;
+            }
+            manifest::sign(
+                Path::new(&manifest.ok_or("manifest sign requires --manifest <path>")?),
+                Path::new(&output.ok_or("manifest sign requires --output <path>")?),
+                &key_id.ok_or("manifest sign requires --key-id <id>")?,
+            )
+        }
         "dist" => {
             let mut profile = None;
             let mut output = None;

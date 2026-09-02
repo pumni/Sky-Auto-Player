@@ -25,7 +25,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md
   - category: security
     label: Script kiểm tra bảo mật (CI gate)
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/scripts/audit_security_mandates.py
+    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/xtask
   - category: implementation
     label: Lớp platform Windows — nơi duy nhất SendInput được phép tồn tại
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
@@ -67,16 +67,15 @@ bị từ chối với thông báo lỗi rõ ràng — không bị coerce im l�
 
 ## Thực thi trên CI
 
-Script kiểm tra tự động (`scripts/audit_security_mandates.py`) quét cả source Python dưới
-`src/` và source Rust dưới `rust/` ở mỗi lần push và pull request. Bất kỳ commit nào đưa
-vào lệnh gọi API bị cấm (hook, đọc bộ nhớ, remote thread, debug attach) đều fail CI ngay.
-Các ngoại lệ lịch sử, nếu có, được liệt kê trong `.config/security_audit_baseline.json`
+Rust audit trong `cargo xtask check static` quét native product ở mỗi lần push và pull request.
+Bất kỳ commit nào đưa vào lệnh gọi API bị cấm (hook, đọc bộ nhớ, remote thread, debug attach)
+đều fail CI ngay. Các ngoại lệ lịch sử, nếu có, được liệt kê trong `.config/security_audit_baseline.json`
 với lý do giải thích và tham chiếu tracking.
 
 Để chạy kiểm tra cục bộ:
 
 ```powershell
-uv run --env-file .env python scripts/audit_security_mandates.py
+cargo xtask check static
 ```
 
 ## Mã nguồn
@@ -87,11 +86,13 @@ có thể kiểm tra code, build từ source, hoặc xác minh binary release kh
 
 ## Xác minh bản phát hành
 
-Mỗi bản phát hành tạo ra ba file:
+Mỗi bản phát hành tạo ra năm file:
 
 - `Sky-Auto-Player-v<phiên bản>.zip` — archive ứng dụng
 - `Sky-Auto-Player-v<phiên bản>.zip.sha256` — checksum SHA256
 - `MANIFEST.json` — manifest liệt kê checksum của mọi asset
+- `MANIFEST.json.sig` — chữ ký Ed25519 detached cho đúng byte của manifest
+- `PROVENANCE.json` — metadata provenance của build
 
 Xác minh archive trước khi giải nén:
 
@@ -102,21 +103,21 @@ Xác minh archive trước khi giải nén:
 
 ## Ranh giới cập nhật công khai
 
-Binary Windows công khai được cố ý để unsigned và gói phát hành có native updater.
-Updater chỉ chạy sau lựa chọn của người dùng, xác minh ZIP, SHA256 và `MANIFEST.json` chính xác
-trước khi thay thế theo transaction; đường thủ công chỉ mở trang GitHub Releases chính thức.
+Binary Windows công khai vẫn intentionally unsigned cho Authenticode và gói phát hành có native
+updater. Updater chỉ chạy sau lựa chọn của người dùng, xác minh chữ ký Ed25519 detached trên đúng
+byte `MANIFEST.json` trước khi tin các hash trong đó, sau đó xác minh ZIP và SHA256 trước khi thay
+thế theo transaction; đường thủ công chỉ mở trang GitHub Releases chính thức.
 Authenticode là **N/A — intentionally unsigned**.
 
 Bằng chứng integrity/provenance của gói vẫn gồm:
 
-- ZIP canonical, `.zip.sha256` và `MANIFEST.json`
+- ZIP canonical, `.zip.sha256`, `MANIFEST.json` và `MANIFEST.json.sig`
 - manifest băm đúng các byte unsigned được đóng gói
 - build provenance/attestation của GitHub
 
 Binary Rust `sky_updater` được đóng gói và chỉ được gọi từ thao tác update do người dùng chọn.
-Nó vẫn là security component fail-closed và được test riêng về HTTPS, archive, manifest và transaction; không có
-AuthentiCode requirement hay signature bypass thay vì thêm
-bypass chữ ký.
+Nó vẫn là security component fail-closed và được test riêng về HTTPS, archive, signed manifest và
+transaction; không có AuthentiCode requirement hay signature bypass.
 
 ## Thông báo Điều khoản Dịch vụ
 

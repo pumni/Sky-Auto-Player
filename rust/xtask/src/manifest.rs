@@ -1,6 +1,8 @@
 use crate::{Result, repo};
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -12,6 +14,76 @@ const REQUIRED: &[&str] = &[
     "Sky-Auto-Player-Updater.exe",
     "MANIFEST.json",
 ];
+
+#[derive(serde::Serialize)]
+struct DetachedManifestSignature<'a> {
+    key_id: &'a str,
+    signature: String,
+}
+
+pub fn sign(manifest_path: &Path, output_path: &Path, key_id: &str) -> Result<()> {
+    if key_id.is_empty()
+        || key_id.len() > 64
+        || !key_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err("manifest signing key id is unsafe".into());
+    }
+    let key_hex = env::var("SKY_UPDATE_SIGNING_KEY_HEX")
+        .map_err(|_| "SKY_UPDATE_SIGNING_KEY_HEX is required for manifest signing")?;
+    let key_bytes = decode_hex::<32>(&key_hex)
+        .ok_or("SKY_UPDATE_SIGNING_KEY_HEX must be exactly 32 bytes of hex")?;
+    let signing_key = SigningKey::from_bytes(&key_bytes);
+    let manifest = std::fs::read(manifest_path)?;
+    let signature = signing_key.sign(&manifest);
+    let envelope = DetachedManifestSignature {
+        key_id,
+        signature: encode_hex(signature.to_bytes()),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&envelope)?;
+    bytes.push(b'\n');
+    std::fs::write(output_path, bytes)?;
+    println!(
+        "[xtask] signed {} with key {} -> {}",
+        manifest_path.display(),
+        key_id,
+        output_path.display()
+    );
+    Ok(())
+}
+
+fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2 {
+        return None;
+    }
+    let mut output = [0u8; N];
+    let bytes = value.as_bytes();
+    for (index, output_byte) in output.iter_mut().enumerate() {
+        let offset = index * 2;
+        *output_byte = (hex_digit(bytes[offset])? << 4) | hex_digit(bytes[offset + 1])?;
+    }
+    Some(output)
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn encode_hex<const N: usize>(bytes: [u8; N]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(N * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
 
 pub fn sha256(path: &Path) -> Result<String> {
     let mut digest = Sha256::new();
