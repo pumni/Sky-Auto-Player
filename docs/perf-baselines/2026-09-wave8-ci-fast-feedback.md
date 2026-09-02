@@ -41,44 +41,116 @@ These targets are performance goals; they must never be achieved by removing val
 
 ## 2. Wave 8 Execution Matrix & Phased Comparison
 
-| Metric | Post-#95 Baseline (`6a6155df`)<br/>True Job Wall-Clock | Post-#95 Baseline<br/>Productive Step | CI-FAST-1 (Candidate)<br/>Hosted PR Run | CI-FAST-2<br/>(Static / Supply-Chain) | CI-FAST-3<br/>(Cache Architecture) | Final Wave 8 |
+| Metric | Post-#95 Baseline (`6a6155df`)<br/>True Job Wall-Clock | Post-#95 Baseline<br/>Productive Step | CI-FAST-1 (Hosted PR #96)<br/>Run `33665614053` | CI-FAST-2<br/>(Static / Supply-Chain) | CI-FAST-3<br/>(Cache Architecture) | Final Wave 8 |
 | :--- | ---: | ---: | :---: | :---: | :---: | :---: |
-| `changes` (PR) | 59s | 59s | *pending hosted run* | — | — | TBD |
-| `changes` (Main / dispatch) | 59s | 59s | *pending hosted run* | — | — | TBD |
-| `static` (or `static-source`) | 50s | 50s | *pending hosted run* | target <= 35–40s | — | TBD |
-| `supply_chain` | (in static) | (in static) | — | parallel job | — | TBD |
-| `validate` (total wall-clock) | 15m17s | ~7m30s | *pending hosted run* | — | TBD | TBD |
-| `validate` Rust-cache restore | ~60s | ~60s | *pending hosted run* | — | TBD | TBD |
-| `validate` Post Rust cache | 6m27s | — | *restore-only on PR* | — | TBD | TBD |
-| `packaged` (total wall-clock) | 10m33s | ~6m45s | *pending hosted run* | — | TBD | TBD |
-| `packaged` Rust-cache restore | ~32s | ~32s | *pending hosted run* | — | TBD | TBD |
-| `packaged` Post Rust cache | 2m40s | — | *restore-only on PR* | — | TBD | TBD |
-| `status` (Required CI gate) | ~9s | ~9s | *pending hosted run* | <= 5s | <= 5s | TBD |
-| **Total Workflow Wall-Clock** | **16m38s** | — | *pending hosted run* | TBD | TBD | TBD |
+| `changes` (PR) | 59s | 59s | **17s** (compile: 1.12s) | — | — | TBD |
+| `changes` (Main / dispatch) | 59s | 59s | target <= 2s (no checkout) | — | — | TBD |
+| `static` (or `static-source`) | 50s | 50s | **46s** | target <= 35–40s | — | TBD |
+| `supply_chain` | (in static) | (in static) | (in static) | parallel job | — | TBD |
+| `validate` (total wall-clock) | 15m17s | ~7m30s | **7m53s** | — | TBD | TBD |
+| `validate` Rust-cache restore | ~60s | ~60s | **51s** | — | TBD | TBD |
+| `validate` Post Rust cache | 6m27s | — | **0s** (skipped on PR) | — | TBD | TBD |
+| `packaged` (total wall-clock) | 10m33s | ~6m45s | **7m22s** | — | TBD | TBD |
+| `packaged` Rust-cache restore | ~32s | ~32s | **26s** | — | TBD | TBD |
+| `packaged` Post Rust cache | 2m40s | — | **0s** (skipped on PR) | — | TBD | TBD |
+| `status` (Required CI gate) | ~9s | ~9s | **3s** | <= 5s | <= 5s | TBD |
+| **Total Workflow Wall-Clock** | **16m38s** | — | **8m24s** | TBD | TBD | TBD |
 
 ---
 
-## 3. Candidate CI-FAST-1 — Eliminate Classifier / Bootstrap Tax
+## 3. CI-FAST-1 Hosted Validation Evidence
 
-### 3.1 Hypothesis
-1. Replace monolithic `sky_xtask` invocation in `changes` with a dedicated, zero-dependency Rust crate `sky_ci_classifier` (`std`-only).
-2. Short-circuit `--full` on `push` / `workflow_dispatch` without checking out git or running `rustup`/Cargo.
-3. Replace full-history `fetch-depth: 0` with shallow `fetch-depth: 1` + targeted base commit fetch on PR.
-4. Eliminate PowerShell timing bootstrap overhead on Ubuntu runners (use native Bash `date +%s`).
-5. Read historical Wave-6 baseline SHA directly from `docs/migration/wave6-tooling-retirement-ledger.json` instead of hard-coding.
-6. Refine concurrency to isolate `workflow_dispatch` manual qualifications from automatic branch cancellation.
-7. Upgrade pinned GitHub Actions dependencies (reconcile PR #94: `actions/cache` v6.1.0, `upload-artifact` v7.0.1, `action-gh-release` v3.0.3).
+### 3.1 Candidate Execution Metadata
+- **Pull Request**: [#96](https://github.com/pumni/Sky-Auto-Player/pull/96)
+- **Candidate Branch**: `perf/ci-fast-1-bootstrap`
+- **Candidate HEAD SHA**: `1ca1ada4abb97a4cbefcb737dd78717e225db161`
+- **Workflow Run**: [CI Run #33665614053](https://github.com/pumni/Sky-Auto-Player/actions/runs/33665614053)
+- **Workflow Lifecycle**: Started `2026-09-02T18:10:42Z` $\rightarrow$ Completed `2026-09-02T18:19:06Z` (Total Wall-Clock: **8m24s**)
+- **Final Result**: **100% PASS** (all required gates green)
+- **Adoption Status**: `ADOPTED` (Candidate verified on hosted GitHub Actions runners)
 
-### 3.2 Candidate Specification & Implementation
-- Candidate branch: `perf/ci-fast-1-bootstrap`
-- Candidate commits:
-  - `perf(ci): add zero-dependency Rust path classifier`
-  - `perf(ci): eliminate classifier bootstrap tax, shallow checkout, and reconcile action pins`
-  - `docs(perf): record Wave 8 fast-bootstrap baseline and plan`
-  - *corrections commit pending*
+### 3.2 Individual Job Breakdown & Authoritative Timestamps
 
-### 3.3 Hosted CI Verification Evidence
-- Candidate PR: *to be opened upon push*
-- Workflow Run ID: *pending*
-- Candidate Status: `IN_PROGRESS`
-*(Status will be updated to ADOPTED only after all hosted gates pass and exact hosted timestamps/evidence are recorded.)*
+#### Job 1: `changes` (`Classify validation layers`)
+- **Job ID**: `100366483302`
+- **Runner**: `ubuntu-latest` (`GitHub Actions 1000003282`)
+- **Lifecycle**: `18:10:46Z` $\rightarrow$ `18:11:03Z` (**17s** wall-clock)
+- **Step Durations**:
+  - Set up job: 1s
+  - Start CI timing: <1s
+  - Emit full qualification matrix: skipped (PR trigger)
+  - Checkout PR head (`fetch-depth: 1`): 2s
+  - Fetch PR base commit (`--depth=1`): <1s
+  - Install pinned Rust toolchain (1.98.0 minimal): 8s
+  - Verify classifier toolchain (`RUSTUP_TOOLCHAIN: 1.98.0`): <1s
+  - Classify PR changed paths (`sky_ci_classifier`): **1.12s compilation + execution**
+  - Report CI timing (native Bash): <1s
+- **Classification Output**:
+  ```text
+  static_required=true
+  code_required=true
+  package_required=true
+  browser_required=false
+  classification_reason=package-sensitive: .github/workflows/ci.yml, .github/workflows/release.yml, rust/Cargo.lock
+  ```
+- **Evaluation against target**: Job wall-clock **17s** meets target $\le 20\text{s}$. Classifier compilation was **1.12s**, resolving the previous ~20s `xtask` bootstrap tax.
+
+#### Job 2: `static` (`Static and security gates`)
+- **Job ID**: `100366597794`
+- **Runner**: `ubuntu-latest` (`GitHub Actions 1000003285`)
+- **Lifecycle**: `18:11:06Z` $\rightarrow$ `18:11:52Z` (**46s** wall-clock)
+- **Step Durations**:
+  - Checkout (`fetch-depth: 1`): 2s
+  - Fetch Wave-6 retirement baseline (dynamic resolution from ledger JSON + `git cat-file -e`): 1s
+  - Install toolchain: 8s
+  - Restore cargo-audit (`actions/cache/restore@v6.1.0`): 2s
+  - Restore cargo-vet (`actions/cache/restore@v6.1.0`): 2s
+  - Cargo audit & Cargo vet: 7s
+  - Repository verification — static: 18s
+  - Report CI timing (native Bash): <1s
+- **Conclusion**: `success`
+
+#### Job 3: `validate` (`Windows compatibility and unit tests`)
+- **Job ID**: `100366597848`
+- **Runner**: `windows-latest` (`GitHub Actions 1000003283`)
+- **Lifecycle**: `18:11:06Z` $\rightarrow$ `18:18:59Z` (**7m53s** wall-clock)
+- **Step Durations**:
+  - Checkout (`fetch-depth: 1`): 6s
+  - Fetch Wave-6 retirement baseline (dynamic PowerShell from ledger + `git cat-file -e`): 1s
+  - Install & verify stable Rust: 13s
+  - Rust cache restore (`Swatinem/rust-cache`): 51s
+  - Restore & verify cargo-vet (`actions/cache/restore@v6.1.0`): 2s
+  - Bun setup: 1s
+  - Construct Python-unavailable validation environment: 2s
+  - Restricted repository verification without Python: 6m29s
+  - Post Rust cache: <1s (save skipped on PR)
+- **Conclusion**: `success`
+
+#### Job 4: `packaged` (`Packaged frozen unsigned app smoke`)
+- **Job ID**: `100366597914`
+- **Runner**: `windows-latest` (`GitHub Actions 1000003284`)
+- **Lifecycle**: `18:11:05Z` $\rightarrow$ `18:18:27Z` (**7m22s** wall-clock)
+- **Step Durations**:
+  - Checkout (`fetch-depth: 1`): 7s
+  - Install & verify Rust toolchain: 11s
+  - Rust cache restore: 26s
+  - Bun setup: 2s
+  - Construct Python-unavailable canonical environment: 1s
+  - Build and qualify exact portable artifact (`cargo xtask dist --profile dist`): 6m28s
+  - Verify packaged release tree: 1s
+  - Upload exact portable release candidate (`actions/upload-artifact@v7.0.1`): 2s
+  - Post Rust cache: <1s (save skipped on PR)
+- **Artifact Verified**:
+  - Name: `sky-auto-player-portable-1ca1ada4abb97a4cbefcb737dd78717e225db161`
+  - Artifact ID: `9860715494`
+  - File Size: `9,172,026 bytes` (107 files)
+  - SHA-256 Digest: `fcd8d29ed4f570d5700feaa260b024eaec039222eb4ecaecfb2ef5e910893a4b`
+  - URL: `https://github.com/pumni/Sky-Auto-Player/actions/runs/33665614053/artifacts/9860715494`
+- **Conclusion**: `success`
+
+#### Job 5: `status` (`Sky Auto Player — required CI gate`)
+- **Job ID**: `100369273840`
+- **Runner**: `ubuntu-latest` (`GitHub Actions 1000003286`)
+- **Lifecycle**: `18:19:03Z` $\rightarrow$ `18:19:06Z` (**3s** wall-clock)
+- **Gate Evaluation**: All upstream jobs succeeded (`changes: success`, `static: success`, `validate: success`, `packaged: success`).
+- **Conclusion**: `success`
