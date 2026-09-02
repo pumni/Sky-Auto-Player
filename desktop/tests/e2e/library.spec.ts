@@ -39,6 +39,16 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expect(page.getByRole('listbox', { name: 'Songs' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Choose a song' })).toBeVisible();
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+  const libraryPane = await page.locator('.library-workbench-pane').boundingBox();
+  const inspectorPane = await page.locator('.inspector-workbench-pane').boundingBox();
+  const playerBar = await page.getByRole('contentinfo', { name: 'Player controls' }).boundingBox();
+  expect(libraryPane).not.toBeNull();
+  expect(inspectorPane).not.toBeNull();
+  expect(playerBar).not.toBeNull();
+  if (libraryPane && inspectorPane && playerBar) {
+    expect(Math.round(inspectorPane.x - (libraryPane.x + libraryPane.width))).toBe(8);
+    expect(Math.round(playerBar.y - (libraryPane.y + libraryPane.height))).toBe(8);
+  }
   const dimensions = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
@@ -61,7 +71,8 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
-  await expect(popover.getByLabel('Dry-run')).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
+  await expect(popover.locator('input[type="checkbox"]')).toHaveCount(0);
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.keyboard.press('Tab');
@@ -98,23 +109,37 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Player Bar completes a dry-run lifecycle accessibly', async ({ page }) => {
+test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('option', { name: /Aurora Landing/ }).click();
   const progress = page.getByRole('progressbar', { name: /Playback progress/ });
   await expect(progress).toBeVisible();
   await expect(progress).toHaveAttribute('value', '0');
+  const idlePrimary = page.getByRole('button', { name: 'Play' });
+  const idleBox = await idlePrimary.boundingBox();
+  expect(idleBox).not.toBeNull();
 
-  await page.getByRole('button', { name: 'Play' }).click();
+  await idlePrimary.click();
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
   await expect(
     confirmation.getByRole('button', { name: 'Proceed with current settings' }),
   ).toBeFocused();
+  await expect(
+    confirmation.getByRole('button', { name: 'Test playback (no input)' }),
+  ).toBeVisible();
   await confirmation.getByRole('button', { name: 'Proceed with current settings' }).click();
 
-  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  const activePrimary = page.getByRole('button', { name: 'Pause' });
+  await expect(activePrimary).toBeVisible();
+  const activeBox = await activePrimary.boundingBox();
+  expect(activeBox).not.toBeNull();
+  if (idleBox && activeBox) {
+    expect(
+      Math.abs(idleBox.x + idleBox.width / 2 - (activeBox.x + activeBox.width / 2)),
+    ).toBeLessThanOrEqual(1);
+  }
   await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -140,6 +165,19 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'aria-current',
     'page',
   );
+  const initialBox = await dialog.boundingBox();
+  expect(initialBox).not.toBeNull();
+  for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Advanced', 'Playback']) {
+    await dialog.getByRole('button', { name: category, exact: true }).click();
+    const nextBox = await dialog.boundingBox();
+    expect(nextBox).not.toBeNull();
+    if (initialBox && nextBox) {
+      expect(Math.abs(nextBox.x - initialBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.y - initialBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.width - initialBox.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.height - initialBox.height)).toBeLessThanOrEqual(1);
+    }
+  }
   await expectNoSeriousAccessibilityViolations(page);
 
   const focusables = dialog.locator('button, select, input');

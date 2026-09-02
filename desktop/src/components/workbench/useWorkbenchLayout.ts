@@ -8,6 +8,7 @@ export const MIN_UTILITY_WIDTH = 300;
 export const DEFAULT_UTILITY_WIDTH = 340;
 export const MAX_UTILITY_WIDTH = 480;
 const MIN_INSPECTOR_WIDTH = 360;
+const WORKBENCH_GUTTER = 8;
 
 export interface WorkbenchLayoutState {
   libraryWidth: number;
@@ -17,8 +18,9 @@ export interface WorkbenchLayoutState {
 }
 
 export function getLibraryWidthMax(viewportWidth: number, utilityWidth = 0): number {
-  const utilitySpace = utilityWidth > 0 ? utilityWidth + 24 : 0;
-  const availableForLibrary = viewportWidth - MIN_INSPECTOR_WIDTH - 48 - utilitySpace;
+  const utilitySpace = utilityWidth > 0 ? utilityWidth + WORKBENCH_GUTTER : 0;
+  const fixedWorkspaceSpace = MIN_INSPECTOR_WIDTH + WORKBENCH_GUTTER * 3;
+  const availableForLibrary = viewportWidth - fixedWorkspaceSpace - utilitySpace;
   return Math.max(MIN_LIBRARY_WIDTH, Math.min(MAX_LIBRARY_WIDTH, availableForLibrary));
 }
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResizableSeparator } from './ResizableSeparator';
 import {
   DEFAULT_LIBRARY_WIDTH,
+  getLibraryWidthMax,
   loadWorkbenchLayout,
   WORKBENCH_STORAGE_KEY,
 } from './useWorkbenchLayout';
@@ -122,5 +123,10 @@ describe('workbench layout persistence', () => {
       JSON.stringify({ version: 2, libraryWidth: 280 }),
     );
     expect(loadWorkbenchLayout().libraryWidth).toBe(DEFAULT_LIBRARY_WIDTH);
+  });
+
+  it('accounts for the separator as the complete inter-pane gutter', () => {
+    expect(getLibraryWidthMax(900)).toBe(516);
+    expect(getLibraryWidthMax(1200, 340)).toBe(468);
   });
 });

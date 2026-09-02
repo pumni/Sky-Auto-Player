@@ -25,6 +25,10 @@ function stateLabel(state: string): string {
   return state.replaceAll('_', ' ');
 }
 
+function admissionDecisionLabel(label: string): string {
+  return label.toLowerCase().includes('dry-run') ? 'Test playback (no input)' : label;
+}
+
 export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
   const playback = useStore((store: DesktopStore) => store.playback);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
@@ -47,12 +51,11 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
   const patchSettings = useStore((store: DesktopStore) => store.patchSettings);
   const diagnosticsOpen = useStore((store: DesktopStore) => store.diagnostics.open);
   const setDiagnosticsOpen = useStore((store: DesktopStore) => store.setDiagnosticsOpen);
-  const [dryRun, setDryRun] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
 
-  const prepareAndMaybeStart = async () => {
+  const prepareAndMaybeStart = async (dryRun: boolean) => {
     await prepare({ dry_run: dryRun });
     const current = useStore.getState();
     const prepared = current.playback.prepared;
@@ -68,15 +71,18 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
     playback.prepared?.song.duration_us ?? detail.value?.duration_us ?? snapshot?.total_us ?? 0;
   const totalUs = snapshot?.total_us ?? selectedDurationUs;
   const currentUs = Math.min(Math.max(0, snapshot?.current_us ?? 0), totalUs || 0);
+  const selectedMetadata = detail.value
+    ? `${detail.value.format_label} · ${formatDuration(detail.value.duration_us)}`
+    : 'Ready';
   const trackSubtitle = !selectedSongId
     ? 'Choose a sheet from Library'
     : playback.error
       ? 'Playback error'
       : active
         ? stateLabel(playback.state)
-        : 'Ready';
+        : selectedMetadata;
   const profileSummary = defaults
-    ? `${defaults.hold_frames}f · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS${dryRun ? ' · Dry-run' : ''}`
+    ? `${defaults.hold_frames}f · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
     : 'Unavailable';
   const progressLabel = totalUs
     ? `Playback progress, ${formatDuration(currentUs)} of ${formatDuration(totalUs)}`
@@ -113,7 +119,7 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
                 ref={index === 0 ? admissionActionRef : undefined}
                 onClick={() => void start(decision.decision)}
               >
-                {decision.label}
+                {admissionDecisionLabel(decision.label)}
               </button>
             ))}
           </div>
@@ -141,21 +147,35 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
 
       <div className="player-transport">
         <div className="transport-actions">
-          {!active && !playback.prepared && (
-            <button
-              className="icon-button button-primary player-primary-action"
-              type="button"
-              aria-label="Play"
-              title="Play"
-              disabled={!selectedSongId}
-              onClick={() => void prepareAndMaybeStart()}
-            >
-              <Play size={18} aria-hidden="true" />
-            </button>
-          )}
-          {active && playback.state !== 'stopping' && (
-            <>
-              {playback.state === 'paused' ? (
+          <div className="transport-slot transport-stop-slot">
+            {active && playback.state !== 'stopping' && (
+              <button
+                className="icon-button player-secondary-action"
+                type="button"
+                aria-label="Stop"
+                title="Stop"
+                onClick={() => void stop()}
+              >
+                <CircleStop size={16} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          <div className="transport-slot transport-primary-slot">
+            {!active && !playback.prepared && (
+              <button
+                className="icon-button button-primary player-primary-action"
+                type="button"
+                aria-label="Play"
+                title="Play"
+                disabled={!selectedSongId}
+                onClick={() => void prepareAndMaybeStart(false)}
+              >
+                <Play size={18} aria-hidden="true" />
+              </button>
+            )}
+            {active &&
+              playback.state !== 'stopping' &&
+              (playback.state === 'paused' ? (
                 <button
                   className="icon-button button-primary player-primary-action"
                   type="button"
@@ -177,7 +197,10 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
                 >
                   <Pause size={18} aria-hidden="true" />
                 </button>
-              )}
+              ))}
+          </div>
+          <div className="transport-slot transport-skip-slot">
+            {active && playback.state !== 'stopping' && (
               <button
                 className="icon-button player-secondary-action"
                 type="button"
@@ -187,17 +210,8 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
               >
                 <SkipForward size={16} aria-hidden="true" />
               </button>
-              <button
-                className="icon-button player-secondary-action"
-                type="button"
-                aria-label="Stop"
-                title="Stop"
-                onClick={() => void stop()}
-              >
-                <CircleStop size={16} aria-hidden="true" />
-              </button>
-            </>
-          )}
+            )}
+          </div>
         </div>
         <div className="player-timeline" aria-label={progressLabel}>
           <div className="player-timeline-labels">
@@ -248,23 +262,22 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
                 <ProfileFields
                   defaults={defaults}
                   bootstrap={bootstrap}
-                  dryRun={dryRun}
-                  setDryRun={setDryRun}
                   patchSettings={patchSettings}
                 />
               </div>
+              <button
+                className="button profile-test-action"
+                type="button"
+                onClick={() => {
+                  setProfileOpen(false);
+                  void prepareAndMaybeStart(true);
+                }}
+              >
+                Test playback (no input)
+              </button>
             </Dialog>
           </Popover>
         </DialogTrigger>
-        <div className="profile-fields" aria-label="Playback profile">
-          <ProfileFields
-            defaults={defaults}
-            bootstrap={bootstrap}
-            dryRun={dryRun}
-            setDryRun={setDryRun}
-            patchSettings={patchSettings}
-          />
-        </div>
       </div>
 
       <button
@@ -284,18 +297,10 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
 interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
-  dryRun: boolean;
-  setDryRun: (value: boolean) => void;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({
-  defaults,
-  bootstrap,
-  dryRun,
-  setDryRun,
-  patchSettings,
-}: ProfileFieldsProps) {
+function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProps) {
   if (!defaults || !bootstrap) return <span className="muted">Profile unavailable</span>;
   return (
     <>
@@ -343,14 +348,6 @@ function ProfileFields({
             </option>
           ))}
         </select>
-      </label>
-      <label className="profile-checkbox">
-        <input
-          type="checkbox"
-          checked={dryRun}
-          onChange={(event) => setDryRun(event.target.checked)}
-        />
-        Dry-run
       </label>
     </>
   );

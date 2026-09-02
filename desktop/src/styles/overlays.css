@@ -12,8 +12,9 @@
 .settings-dialog {
   display: flex;
   flex-direction: column;
-  width: min(800px, 100%);
-  max-height: min(760px, calc(100dvh - 32px));
+  width: min(800px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 32px));
+  min-height: 0;
   overflow: hidden;
   padding: var(--space-5);
   border: 1px solid var(--border-strong);
@@ -37,6 +38,7 @@
 
 .settings-layout {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 152px minmax(0, 1fr);
   min-height: 0;
   border-top: 1px solid var(--border-subtle);

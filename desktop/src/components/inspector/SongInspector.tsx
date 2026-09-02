@@ -97,8 +97,8 @@ export function SongInspector({ useStore }: SongInspectorProps) {
         )}
       </div>
       <p className="nonphysical-note">
-        Use the Player Bar below to prepare a dry-run or request playback with the selected
-        settings.
+        Use the Player Bar below to test playback without input or request playback with the
+        selected settings.
       </p>
     </section>
   );

@@ -38,7 +38,6 @@ body {
   white-space: nowrap;
 }
 
-.identity-mark,
 .startup-mark {
   display: grid;
   place-items: center;
@@ -47,9 +46,11 @@ body {
 }
 
 .identity-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-control);
+  display: block;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
 }
 
 .identity strong {
