@@ -67,6 +67,163 @@ fn rust_manifest(root: &Path) -> Result<String> {
     Ok(fs::read_to_string(root.join("rust/Cargo.toml"))?)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct TauriFeatureResolution {
+    default: BTreeSet<String>,
+    dev: BTreeSet<String>,
+}
+
+fn feature_entries(
+    features: &toml::value::Table,
+    name: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let value = features
+        .get(name)
+        .ok_or_else(|| format!("feature `{name}` is missing"))?;
+    let entries = value
+        .as_array()
+        .ok_or_else(|| format!("feature `{name}` must be an array"))?;
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("feature `{name}` contains a non-string entry"))
+        })
+        .collect()
+}
+
+fn collect_feature_closure(
+    name: &str,
+    features: &toml::value::Table,
+    values: &mut BTreeSet<String>,
+    visiting: &mut BTreeSet<String>,
+) -> std::result::Result<(), String> {
+    if !visiting.insert(name.to_owned()) {
+        return Err(format!("feature graph contains a cycle at `{name}`"));
+    }
+    for entry in feature_entries(features, name)? {
+        values.insert(entry.clone());
+        if features.contains_key(&entry) {
+            collect_feature_closure(&entry, features, values, visiting)?;
+        }
+    }
+    visiting.remove(name);
+    Ok(())
+}
+
+fn simulate_tauri_dev_features(
+    default_entries: &[String],
+    features: &toml::value::Table,
+) -> std::result::Result<BTreeSet<String>, String> {
+    let mut dev = BTreeSet::new();
+    for feature in default_entries {
+        let entries = feature_entries(features, feature)?;
+        if !entries.iter().any(|entry| entry == "tauri/custom-protocol") {
+            dev.insert(feature.clone());
+        }
+    }
+    Ok(dev)
+}
+
+fn tauri_feature_contract_manifest(
+    source: &str,
+) -> std::result::Result<TauriFeatureResolution, String> {
+    let manifest = toml::from_str::<toml::Value>(source.trim_start())
+        .map_err(|error| format!("invalid Cargo.toml: {error}"))?;
+    let dependencies = manifest
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "Cargo.toml is missing [dependencies]".to_owned())?;
+    let tauri_dependency = dependencies
+        .get("tauri")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "tauri dependency must use an inline table".to_owned())?;
+    if tauri_dependency
+        .get("default-features")
+        .and_then(toml::Value::as_bool)
+        != Some(false)
+    {
+        return Err("tauri dependency must keep default-features = false".to_owned());
+    }
+
+    let features = manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "Cargo.toml is missing [features]".to_owned())?;
+    let default_entries = feature_entries(features, "default")?;
+    let default = default_entries.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_default = ["desktop-runtime", "packaged-assets"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if default != expected_default || default_entries.len() != default.len() {
+        return Err(format!(
+            "default features must directly contain exactly `desktop-runtime` and `packaged-assets`; found {default:?}"
+        ));
+    }
+
+    let desktop_runtime = feature_entries(features, "desktop-runtime")?;
+    if !desktop_runtime.iter().any(|entry| entry == "tauri/wry") {
+        return Err("desktop-runtime must directly contain `tauri/wry`".to_owned());
+    }
+    let forbidden_runtime_entries = [
+        "tauri/custom-protocol",
+        "tauri/x11",
+        "tauri/dbus",
+        "tauri/dynamic-acl",
+        "tauri/common-controls-v6",
+    ];
+    let mut runtime_closure = BTreeSet::new();
+    collect_feature_closure(
+        "desktop-runtime",
+        features,
+        &mut runtime_closure,
+        &mut BTreeSet::new(),
+    )?;
+    if let Some(forbidden) = forbidden_runtime_entries
+        .iter()
+        .find(|entry| runtime_closure.contains(**entry))
+    {
+        return Err(format!(
+            "desktop-runtime must not contain `{forbidden}` directly or through another feature"
+        ));
+    }
+
+    let packaged_assets = feature_entries(features, "packaged-assets")?;
+    for required in ["tauri/custom-protocol", "tauri/compression"] {
+        if !packaged_assets.iter().any(|entry| entry == required) {
+            return Err(format!(
+                "packaged-assets must directly contain `{required}`"
+            ));
+        }
+    }
+
+    let dev = simulate_tauri_dev_features(&default_entries, features)?;
+    let expected_dev = ["desktop-runtime".to_owned()]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if dev != expected_dev {
+        return Err(format!(
+            "Tauri CLI dev feature simulation must resolve to `desktop-runtime`; found {dev:?}"
+        ));
+    }
+
+    Ok(TauriFeatureResolution { default, dev })
+}
+
+fn tauri_feature_contract(root: &Path) -> Result<()> {
+    let manifest_path = root.join("desktop/src-tauri/Cargo.toml");
+    let resolution = tauri_feature_contract_manifest(&fs::read_to_string(&manifest_path)?)
+        .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
+    println!(
+        "[xtask] Tauri feature contract: PASS (default={:?}, dev={:?})",
+        resolution.default, resolution.dev
+    );
+    Ok(())
+}
+
 fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
     [
         root.join("rust/Cargo.toml"),
@@ -1260,7 +1417,9 @@ fn generate_bindings(root: &Path, export_path: &Path) -> Result<()> {
             "-p",
             "sky_desktop_shell",
             "--lib",
-            "--all-features",
+            "--no-default-features",
+            "--features",
+            "tauri-test",
             "--locked",
         ],
         root,
@@ -1352,6 +1511,7 @@ pub fn run(group: &str) -> Result<()> {
             audits::architecture::run(&root)?;
             audits::security::run(&root)?;
             audits::zero_python::run(&root)?;
+            tauri_feature_contract(&root)?;
             supply_chain::run(None)?;
             branding::validate(&root)?;
             retirement(&root)?;
@@ -1436,6 +1596,37 @@ pub fn run(group: &str) -> Result<()> {
                     "rust/Cargo.toml",
                     "-p",
                     "sky_desktop_shell",
+                    "--bin",
+                    "sky_desktop_shell",
+                    "--no-default-features",
+                    "--features",
+                    "desktop-runtime",
+                    "--locked",
+                ],
+                &root,
+                &[],
+            )?;
+            process::run(
+                "cargo",
+                &[
+                    "check",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "-p",
+                    "sky_desktop_shell",
+                    "--locked",
+                ],
+                &root,
+                &[],
+            )?;
+            process::run(
+                "cargo",
+                &[
+                    "check",
+                    "--manifest-path",
+                    "rust/Cargo.toml",
+                    "-p",
+                    "sky_desktop_shell",
                     "--all-features",
                     "--locked",
                 ],
@@ -1458,6 +1649,97 @@ pub fn run(group: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VALID_TAURI_FEATURE_MANIFEST: &str = r#"
+[dependencies]
+tauri = { version = "2.11.5", default-features = false }
+
+[features]
+default = ["desktop-runtime", "packaged-assets"]
+desktop-runtime = ["tauri/wry"]
+packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
+tauri-test = ["tauri/test"]
+"#;
+
+    fn fixture_features(source: &str) -> toml::value::Table {
+        toml::from_str::<toml::Value>(source.trim_start())
+            .unwrap()
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn tauri_feature_contract_accepts_split_runtime_and_packaged_assets() {
+        let resolution = tauri_feature_contract_manifest(VALID_TAURI_FEATURE_MANIFEST).unwrap();
+        assert_eq!(
+            resolution.default,
+            ["desktop-runtime", "packaged-assets"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        assert_eq!(
+            resolution.dev,
+            ["desktop-runtime".to_owned()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn tauri_feature_contract_rejects_the_old_combined_runtime_topology() {
+        let source = r#"
+[dependencies]
+tauri = { version = "2.11.5", default-features = false }
+
+[features]
+default = ["desktop-runtime"]
+desktop-runtime = ["tauri/wry", "tauri/custom-protocol", "tauri/compression"]
+"#;
+        let features = fixture_features(source);
+        let default = feature_entries(&features, "default").unwrap();
+        assert!(
+            simulate_tauri_dev_features(&default, &features)
+                .unwrap()
+                .is_empty()
+        );
+        let error = tauri_feature_contract_manifest(source).unwrap_err();
+        assert!(error.contains("default features must directly contain"));
+    }
+
+    #[test]
+    fn tauri_feature_contract_rejects_a_nested_production_alias() {
+        let source = r#"
+[dependencies]
+tauri = { version = "2.11.5", default-features = false }
+
+[features]
+default = ["production"]
+production = ["desktop-runtime", "packaged-assets"]
+desktop-runtime = ["tauri/wry"]
+packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
+"#;
+        let error = tauri_feature_contract_manifest(source).unwrap_err();
+        assert!(error.contains("default features must directly contain"));
+    }
+
+    #[test]
+    fn tauri_feature_contract_rejects_missing_wry() {
+        let source = VALID_TAURI_FEATURE_MANIFEST
+            .replace("desktop-runtime = [\"tauri/wry\"]", "desktop-runtime = []");
+        let error = tauri_feature_contract_manifest(&source).unwrap_err();
+        assert!(error.contains("desktop-runtime must directly contain `tauri/wry`"));
+    }
+
+    #[test]
+    fn tauri_feature_contract_rejects_protocol_inside_runtime_or_its_aliases() {
+        let source = VALID_TAURI_FEATURE_MANIFEST.replace(
+            "desktop-runtime = [\"tauri/wry\"]",
+            "desktop-runtime = [\"tauri/wry\", \"runtime-packaging\"]\nruntime-packaging = [\"tauri/custom-protocol\"]",
+        );
+        let error = tauri_feature_contract_manifest(&source).unwrap_err();
+        assert!(error.contains("desktop-runtime must not contain `tauri/custom-protocol`"));
+    }
 
     #[test]
     fn security_ignores_comments_but_flags_the_complete_forbidden_set() {

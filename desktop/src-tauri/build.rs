@@ -46,11 +46,11 @@ fn main() {
     println!("cargo:rustc-env=SKY_NATIVE_SOURCE_FINGERPRINT={source_fingerprint}");
     println!("cargo:rustc-env=SKY_RUSTC_VERSION={rustc_version}");
     if std::env::var_os("CARGO_FEATURE_TAURI_TEST").is_some() {
-        // The compile-only all-features/mock-runtime validation does not run
-        // the frontend. Override only that rustc invocation's generated
-        // context so it can use noop assets; production desktop-runtime
-        // builds still read tauri.conf.json and require frontendDist through
-        // tauri/custom-protocol.
+        // The MockRuntime-only binding/test validation does not run the
+        // frontend. Override only that rustc invocation's generated context
+        // so it can use noop assets. Production/default builds keep the real
+        // Wry runtime and obtain packaged frontend assets through the
+        // packaged-assets feature, which owns tauri/custom-protocol.
         println!("cargo:rustc-env=TAURI_CONFIG={{\"build\":{{\"frontendDist\":null}}}}");
     }
     tauri_build::build();

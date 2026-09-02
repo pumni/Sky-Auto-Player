@@ -8,13 +8,20 @@ authors.workspace = true
 build = "build.rs"
 
 [features]
-default = ["desktop-runtime"]
+default = ["desktop-runtime", "packaged-assets"]
 desktop-runtime = [
     "tauri/wry",
+]
+packaged-assets = [
     "tauri/custom-protocol",
     "tauri/compression",
 ]
 tauri-test = ["tauri/test", "sky_player/test-support"]
+
+[[bin]]
+name = "sky_desktop_shell"
+path = "src/main.rs"
+required-features = ["desktop-runtime"]
 
 [lib]
 name = "sky_desktop_shell_lib"
