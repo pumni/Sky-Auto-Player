@@ -51,6 +51,11 @@ const titles = [
   'Moonlit Village',
 ];
 
+const LONG_CONTENT_INDEX = 495;
+const LONG_CONTENT_TITLE = 'A sheet with an intentionally long title for layout verification';
+const LONG_CONTENT_REASON =
+  'This intentionally long timing-risk explanation verifies wrapping and prevents horizontal overflow in narrow layouts.';
+
 function mockId(index: number): string {
   return index.toString(16).padStart(32, '0');
 }
@@ -67,7 +72,12 @@ function row(index: number, title: string): SearchResult['items'][number] {
 }
 
 const rows = Array.from({ length: 500 }, (_, index) =>
-  row(index, titles[index] ?? `Song ${String(index + 1).padStart(3, '0')}`),
+  row(
+    index,
+    index === LONG_CONTENT_INDEX
+      ? LONG_CONTENT_TITLE
+      : (titles[index] ?? `Song ${String(index + 1).padStart(3, '0')}`),
+  ),
 );
 
 function initialSettings(): Settings {
@@ -196,7 +206,13 @@ export function createMockBridge(): DesktopBridge {
           level: found.risk_level,
           headline: found.risk_level === 'low' ? 'Low timing risk' : 'Medium timing risk',
           reasons:
-            found.risk_level === 'low' ? [] : ['Dense note transitions may need a slower tempo.'],
+            found.risk_level === 'low'
+              ? []
+              : [
+                  found.song_id === mockId(LONG_CONTENT_INDEX)
+                    ? LONG_CONTENT_REASON
+                    : 'Dense note transitions may need a slower tempo.',
+                ],
           recommendations:
             found.risk_level === 'low' ? ['Keep the selected settings.'] : ['Try 0.9× tempo.'],
         },
@@ -341,7 +357,14 @@ export function createMockBridge(): DesktopBridge {
           risk: {
             level: risk,
             headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
-            reasons: risk === 'low' ? [] : ['Dense note transitions may need a slower tempo.'],
+            reasons:
+              risk === 'low'
+                ? []
+                : [
+                    found.song_id === mockId(LONG_CONTENT_INDEX)
+                      ? LONG_CONTENT_REASON
+                      : 'Dense note transitions may need a slower tempo.',
+                  ],
             recommendations: ['Keep the selected settings.'],
           },
           recommendation: null,
@@ -351,7 +374,14 @@ export function createMockBridge(): DesktopBridge {
         risk: {
           level: risk,
           headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
-          reasons: risk === 'low' ? [] : ['Dense note transitions may need a slower tempo.'],
+          reasons:
+            risk === 'low'
+              ? []
+              : [
+                  found.song_id === mockId(LONG_CONTENT_INDEX)
+                    ? LONG_CONTENT_REASON
+                    : 'Dense note transitions may need a slower tempo.',
+                ],
           recommendations: ['Keep the selected settings.'],
         },
         decisions:

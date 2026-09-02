@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { BootstrapGate } from './BootstrapGate';
-import { LibraryPanel } from '../components/library/LibraryPanel';
 import { SettingsPanel } from '../components/settings/SettingsPanel';
-import { SongInspector } from '../components/inspector/SongInspector';
 import { Toolbar } from '../components/shell/Toolbar';
-import { PlayerDock } from '../components/player/PlayerDock';
-import { DiagnosticsDrawer } from '../components/diagnostics/DiagnosticsDrawer';
+import { PlayerBar } from '../components/player/PlayerBar';
+import { Workbench } from '../components/workbench/Workbench';
 import { CalibrationDialog } from '../components/calibration/CalibrationDialog';
 import { UpdateDialog } from '../components/updates/UpdateDialog';
 import { createDesktopStore } from '../state/store';
@@ -17,6 +15,7 @@ interface AppProps {
 
 export function App({ bridge }: AppProps) {
   const storeRef = useRef<ReturnType<typeof createDesktopStore> | null>(null);
+  const diagnosticsTriggerRef = useRef<HTMLButtonElement>(null);
   const useStore = useMemo(() => {
     if (storeRef.current === null) storeRef.current = createDesktopStore(bridge);
     return storeRef.current;
@@ -221,12 +220,8 @@ export function App({ bridge }: AppProps) {
       {bootstrap && (
         <div className="app-shell">
           <Toolbar bootstrap={bootstrap} useStore={useStore} />
-          <main className="main-layout">
-            <LibraryPanel useStore={useStore} />
-            <SongInspector useStore={useStore} />
-          </main>
-          <PlayerDock useStore={useStore} />
-          <DiagnosticsDrawer useStore={useStore} />
+          <Workbench useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
+          <PlayerBar useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
           <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
           <CalibrationDialog useStore={useStore} />
           <UpdateDialog useStore={useStore} />

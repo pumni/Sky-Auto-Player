@@ -1,7 +1,7 @@
 html,
 body {
-  background: var(--bg);
-  color: var(--text);
+  background: var(--canvas);
+  color: var(--text-primary);
 }
 body {
   font-family: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
@@ -26,7 +26,7 @@ p {
   margin: 0;
 }
 h1 {
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1.2;
 }
 h2 {
@@ -38,10 +38,10 @@ h3 {
   letter-spacing: 0.02em;
 }
 .muted {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
 }
 .eyebrow {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -58,9 +58,9 @@ h3 {
 }
 .button,
 .icon-button {
-  border: 1px solid var(--line-strong);
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  border-radius: var(--radius-control);
   min-height: 34px;
 }
 .button {
@@ -69,11 +69,16 @@ h3 {
 .button-primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
   font-weight: 700;
 }
 .button-primary:hover {
   background: var(--accent-hover);
+}
+.button:disabled,
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 .icon-button {
   display: inline-grid;
@@ -91,13 +96,13 @@ h3 {
   min-height: 30px;
   padding: 0 9px;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-raised));
   font-size: 11px;
 }
 .update-indicator:hover {
-  background: color-mix(in srgb, var(--accent) 34%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 34%, var(--surface-raised));
 }
 .update-actions {
   display: flex;
@@ -112,27 +117,27 @@ h3 {
   color: var(--text-secondary);
 }
 .update-status h3 {
-  color: var(--text);
+  color: var(--text-primary);
 }
 .update-icon {
   display: grid;
   place-items: center;
   width: 38px;
   height: 38px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  color: var(--accent-cyan);
-  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  background: var(--surface-raised);
 }
 .update-notes {
   max-height: 120px;
   overflow: auto;
   padding: 10px;
-  border-left: 2px solid var(--accent-cyan);
-  background: var(--surface-2);
+  border-left: 2px solid var(--accent);
+  background: var(--surface-raised);
   white-space: pre-wrap;
 }
-.player-dock .button {
+.player-bar .button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -154,5 +159,5 @@ h3 {
   --risk-color: var(--danger);
 }
 .risk-unknown {
-  --risk-color: var(--text-muted);
+  --risk-color: var(--text-tertiary);
 }

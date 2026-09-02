@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function expectNoSeriousAccessibilityViolations(page: Page) {
   const results = await new AxeBuilder({ page }).analyze();
@@ -24,7 +24,7 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   const list = page.locator('.virtual-list');
   await expect(page.getByText('500 songs')).toBeVisible();
   await list.evaluate((element) => {
-    element.scrollTop = 400 * 44;
+    element.scrollTop = 400 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const song = page.getByRole('option', { name: /Song 401/ });
@@ -33,11 +33,124 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Song 401' })).toBeVisible();
 });
 
-test('default Library has no serious accessibility violations', async ({ page }) => {
+test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await expect(page.getByRole('listbox', { name: 'Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Choose a song' })).toBeVisible();
+  await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+  const libraryPane = await page.locator('.library-workbench-pane').boundingBox();
+  const inspectorPane = await page.locator('.inspector-workbench-pane').boundingBox();
+  const playerBar = await page.getByRole('contentinfo', { name: 'Player controls' }).boundingBox();
+  expect(libraryPane).not.toBeNull();
+  expect(inspectorPane).not.toBeNull();
+  expect(playerBar).not.toBeNull();
+  if (libraryPane && inspectorPane && playerBar) {
+    expect(Math.round(inspectorPane.x - (libraryPane.x + libraryPane.width))).toBe(8);
+    expect(Math.round(playerBar.y - (libraryPane.y + libraryPane.height))).toBe(8);
+  }
+  const dimensions = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    documentHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+  }));
+  expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+  expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Player Bar communicates the no-selection state without actionable playback', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const primary = player.getByRole('button', { name: 'Play' });
+  const labels = player.locator('.player-timeline-labels');
+
+  await expect(primary).toBeDisabled();
+  await expect(labels).toContainText('--:--');
+  expect(await labels.textContent()).not.toContain('0:00');
+  await expect(player.getByRole('progressbar')).toHaveAttribute('aria-disabled', 'true');
+
+  await player.getByRole('button', { name: 'Configure timing profile' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Playback profile' }).getByRole('button', {
+      name: 'Test playback (no input)',
+    }),
+  ).toBeDisabled();
+  await page.keyboard.press('Escape');
+});
+
+test('Toolbar search and Player primary control share the application center axis', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/');
+  const viewportCenter = 1920 / 2;
+  const searchBox = await page.getByLabel('Search songs').boundingBox();
+  const idleBox = await page.getByRole('button', { name: 'Play' }).boundingBox();
+  expect(searchBox).not.toBeNull();
+  expect(idleBox).not.toBeNull();
+  if (searchBox && idleBox) {
+    expect(Math.abs(searchBox.x + searchBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+    expect(Math.abs(idleBox.x + idleBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+  }
+
+  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  await page.getByRole('button', { name: 'Play' }).click();
+  await page
+    .getByRole('group', { name: 'Playback confirmation' })
+    .getByRole('button', { name: 'Proceed with current settings' })
+    .click();
+  const activeBox = await page.getByRole('button', { name: 'Pause' }).boundingBox();
+  expect(activeBox).not.toBeNull();
+  if (activeBox) {
+    expect(Math.abs(activeBox.x + activeBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+  }
+});
+
+test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const trigger = page.getByRole('button', { name: 'Configure timing profile' });
+  await trigger.click();
+
+  const popover = page.getByRole('dialog', { name: 'Playback profile' });
+  await expect(popover).toBeVisible();
+  await expect(popover.getByLabel('Hold')).toBeVisible();
+  await expect(popover.getByLabel('Tempo')).toBeVisible();
+  await expect(popover.getByLabel('FPS')).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
+  await expect(popover.locator('input[type="checkbox"]')).toHaveCount(0);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.keyboard.press('Tab');
+  await expect(popover.locator(':focus')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  const separator = page.getByRole('separator', { name: 'Resize library pane' });
+  const initial = Number(await separator.getAttribute('aria-valuenow'));
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2);
+  await page.mouse.up();
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 40));
+  await page.reload();
+  await expect(page.getByRole('separator', { name: 'Resize library pane' })).toHaveAttribute(
+    'aria-valuenow',
+    String(initial + 40),
+  );
 });
 
 test('selected Song Detail has no serious accessibility violations', async ({ page }) => {
@@ -47,17 +160,37 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Player Dock completes a dry-run lifecycle accessibly', async ({ page }) => {
+test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  const progress = page.getByRole('progressbar', { name: /Playback progress/ });
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute('value', '0');
+  const idlePrimary = page.getByRole('button', { name: 'Play' });
+  const idleBox = await idlePrimary.boundingBox();
+  expect(idleBox).not.toBeNull();
 
-  await page.getByRole('button', { name: 'Play' }).click();
-  const confirmation = page.getByRole('dialog', { name: 'Playback confirmation' });
+  await idlePrimary.click();
+  const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  await expect(
+    confirmation.getByRole('button', { name: 'Proceed with current settings' }),
+  ).toBeFocused();
+  await expect(
+    confirmation.getByRole('button', { name: 'Test playback (no input)' }),
+  ).toBeVisible();
   await confirmation.getByRole('button', { name: 'Proceed with current settings' }).click();
 
-  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  const activePrimary = page.getByRole('button', { name: 'Pause' });
+  await expect(activePrimary).toBeVisible();
+  const activeBox = await activePrimary.boundingBox();
+  expect(activeBox).not.toBeNull();
+  if (idleBox && activeBox) {
+    expect(
+      Math.abs(idleBox.x + idleBox.width / 2 - (activeBox.x + activeBox.width / 2)),
+    ).toBeLessThanOrEqual(1);
+  }
   await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -79,6 +212,51 @@ test('Settings modal has no serious accessibility violations and closes accessib
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('Playback defaults');
+  await expect(dialog.getByRole('button', { name: 'Playback' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  const initialBox = await dialog.boundingBox();
+  const settingsContent = dialog.locator('.settings-content');
+  const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
+  expect(initialBox).not.toBeNull();
+  await expect(dialog.getByLabel('Hold').locator('option[value="1"]')).toHaveText('1 frame');
+  for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Advanced', 'Playback']) {
+    await dialog.getByRole('button', { name: category, exact: true }).click();
+    const nextBox = await dialog.boundingBox();
+    const nextContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
+    expect(nextBox).not.toBeNull();
+    expect(nextContentWidth).toBe(initialContentWidth);
+    if (initialBox && nextBox) {
+      expect(Math.abs(nextBox.x - initialBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.y - initialBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.width - initialBox.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(nextBox.height - initialBox.height)).toBeLessThanOrEqual(1);
+    }
+  }
+
+  const expectFocusClearance = async (control: Locator) => {
+    await control.focus();
+    const controlBox = await control.boundingBox();
+    const contentBox = await settingsContent.boundingBox();
+    expect(controlBox).not.toBeNull();
+    expect(contentBox).not.toBeNull();
+    if (controlBox && contentBox) {
+      expect(
+        contentBox.x + contentBox.width - (controlBox.x + controlBox.width),
+      ).toBeGreaterThanOrEqual(4);
+    }
+  };
+
+  await dialog.getByRole('button', { name: 'Playback', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Hold'));
+  await expectFocusClearance(dialog.getByLabel('Tempo'));
+  await expectFocusClearance(dialog.getByLabel('FPS'));
+  await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Theme'));
+  await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Channel'));
+  await expectFocusClearance(dialog.getByLabel('Skip version'));
   await expectNoSeriousAccessibilityViolations(page);
 
   const focusables = dialog.locator('button, select, input');
@@ -94,14 +272,56 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(settingsButton).toBeFocused();
 });
 
+test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const panel = page.getByRole('region', { name: 'Diagnostics' });
+  await expect(panel).toBeVisible();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const panelBox = await panel.boundingBox();
+  const playerBox = await player.boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(playerBox).not.toBeNull();
+  if (panelBox && playerBox) expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(playerBox.y);
+  await panel.getByRole('tab', { name: 'Timing' }).click();
+  await expect(panel.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+  await panel.getByRole('button', { name: 'Close diagnostics' }).click();
+  await expect(panel).toBeHidden();
+});
+
+test('Diagnostics utility separator follows pointer and keyboard direction', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const separator = page.getByRole('separator', { name: 'Resize diagnostics pane' });
+  const initial = Number(await separator.getAttribute('aria-valuenow'));
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2);
+  await page.mouse.up();
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial - 20));
+
+  await separator.press('ArrowRight');
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial - 28));
+  await separator.press('Shift+ArrowLeft');
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 4));
+});
+
 test('all supported themes round-trip through the settings surface', async ({ page }) => {
   await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
+  await page.getByRole('button', { name: 'Appearance' }).click();
   const theme = page.getByLabel('Theme');
   for (const id of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await theme.selectOption(id);
     await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    await expectNoSeriousAccessibilityViolations(page);
   }
   await page.keyboard.press('Escape');
   await expect(settingsButton).toBeFocused();
@@ -124,11 +344,21 @@ test('update indicator and typed update dialog expose safe handoff states', asyn
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const trigger = page.getByRole('button', { name: 'Open diagnostics' });
+  await trigger.click();
   const drawer = page.getByRole('dialog', { name: 'Diagnostics' });
   await expect(drawer).toBeVisible();
+  await expect(drawer).toBeFocused();
   await expect(drawer.getByRole('tab', { name: 'Performance' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
+
+  const focusables = drawer.locator('button, [tabindex]:not([tabindex="-1"])');
+  await focusables.last().focus();
+  await page.keyboard.press('Tab');
+  await expect(drawer.locator(':focus')).toHaveCount(1);
+  await focusables.first().focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(drawer.locator(':focus')).toHaveCount(1);
 
   await drawer.getByRole('tab', { name: 'Timing' }).click();
   await expect(drawer.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
@@ -137,12 +367,50 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await expectNoSeriousAccessibilityViolations(page);
   await drawer.getByRole('button', { name: 'Close diagnostics' }).click();
   await expect(drawer).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open diagnostics' })).toBeFocused();
+});
+
+test('long sheet titles remain contained in Library, Inspector, and Player Bar', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const list = page.locator('.virtual-list');
+  await list.evaluate((element) => {
+    element.scrollTop = 495 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const longTitle = /A sheet with an intentionally long title/;
+  await expect(page.getByRole('option', { name: longTitle })).toBeVisible();
+  await page.getByRole('option', { name: longTitle }).click();
+  await expect(page.getByRole('heading', { name: longTitle })).toBeVisible();
+  await expect(
+    page.getByText(/This intentionally long timing-risk explanation verifies wrapping/),
+  ).toBeVisible();
+  const overflow = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    titleOverflowHandled: [
+      ...document.querySelectorAll('.song-row-title, .player-track-copy strong'),
+    ].every((element) => {
+      if (element.scrollWidth <= element.clientWidth) return true;
+      const style = getComputedStyle(element);
+      return style.overflow === 'hidden' && style.textOverflow === 'ellipsis';
+    }),
+    inspectorReasonOverflow: [...document.querySelectorAll('.inspector-panel')].some(
+      (element) => element.scrollWidth > element.clientWidth,
+    ),
+  }));
+  expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth);
+  expect(overflow.titleOverflowHandled).toBe(true);
+  expect(overflow.inspectorReasonOverflow).toBe(false);
 });
 
 test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Advanced' }).click();
   await page.getByRole('button', { name: 'Open calibration' }).click();
   const dialog = page.getByRole('dialog', { name: 'Timing calibration' });
   await expect(dialog).toBeVisible();

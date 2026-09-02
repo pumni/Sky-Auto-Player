@@ -1,6 +1,10 @@
-import { ListRestart, Settings2, Search, Sparkles } from 'lucide-react';
+import { Download, ListRestart, Search, Settings2 } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useEffect, useState } from 'react';
+import brandMark32Url from '../../assets/brand/app-icon-32.png';
+import brandMark40Url from '../../assets/brand/app-icon-40.png';
+import brandMark48Url from '../../assets/brand/app-icon-48.png';
+import brandMark64Url from '../../assets/brand/app-icon-64.png';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
@@ -29,13 +33,17 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
   return (
     <header className="toolbar">
       <div className="identity" aria-label="Sky Auto Player">
-        <span className="identity-mark" aria-hidden="true">
-          ♪
-        </span>
-        <span>
-          <strong>Sky Auto Player</strong>
-          <small>Library</small>
-        </span>
+        <img
+          className="identity-mark"
+          src={brandMark32Url}
+          srcSet={`${brandMark32Url} 1x, ${brandMark40Url} 1.25x, ${brandMark48Url} 1.5x, ${brandMark64Url} 2x`}
+          sizes="32px"
+          alt=""
+          width="32"
+          height="32"
+          draggable={false}
+        />
+        <strong>Sky Auto Player</strong>
       </div>
       <label className="search-field">
         <Search size={16} aria-hidden="true" />
@@ -43,7 +51,7 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Search songs…"
+          placeholder="Search library…"
           type="search"
           spellCheck={false}
           aria-label="Search songs"
@@ -58,8 +66,8 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
             aria-label={`Open update ${update.availableVersion}`}
             onPress={() => setUpdateDialogOpen(true)}
           >
-            <Sparkles size={14} aria-hidden="true" />
-            Update
+            <Download size={14} aria-hidden="true" />
+            <span>Update</span>
           </Button>
         )}
         <Button className="icon-button" aria-label="Reload songs" onPress={() => void reload()}>

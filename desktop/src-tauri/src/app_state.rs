@@ -1,4 +1,5 @@
 use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -153,6 +154,8 @@ struct AppStateInner {
     coherence: Mutex<()>,
     activity: ActivityCoordinator,
     test_seams: Mutex<TestSeams>,
+    #[cfg(any(test, feature = "tauri-test"))]
+    install_root_override: Mutex<Option<PathBuf>>,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
     gui_smoke_failed: AtomicBool,
@@ -167,6 +170,8 @@ impl Default for AppState {
                 coherence: Mutex::new(()),
                 activity: ActivityCoordinator::default(),
                 test_seams: Mutex::new(TestSeams::Disabled),
+                #[cfg(any(test, feature = "tauri-test"))]
+                install_root_override: Mutex::new(None),
                 closing: AtomicBool::new(false),
                 gui_smoke_exit: AtomicBool::new(false),
                 gui_smoke_failed: AtomicBool::new(false),
@@ -190,9 +195,22 @@ impl AppState {
             .test_seams
             .lock()
             .map_err(|_| "native test-seam state poisoned".to_string())?;
+        #[cfg(any(test, feature = "tauri-test"))]
+        let install_root = self
+            .inner
+            .install_root_override
+            .lock()
+            .map_err(|_| "native install-root override state poisoned".to_string())?
+            .clone();
+        #[cfg(not(any(test, feature = "tauri-test")))]
+        let install_root = None;
+        let install_root = match install_root {
+            Some(path) => path,
+            None => crate::native_runtime::resolve_install_root()?,
+        };
         let runtime = Arc::new(
             NativeDesktopRuntime::from_install_root_with_activity_and_seams(
-                crate::native_runtime::resolve_install_root()?,
+                install_root,
                 self.activity(),
                 test_seams,
             )?,
@@ -248,6 +266,18 @@ impl AppState {
             .test_seams
             .lock()
             .expect("test-seam state poisoned") = test_seams;
+        state
+    }
+
+    #[cfg(any(test, feature = "tauri-test"))]
+    #[allow(dead_code)]
+    pub(crate) fn with_test_install_root(install_root: PathBuf) -> Self {
+        let state = Self::default();
+        *state
+            .inner
+            .install_root_override
+            .lock()
+            .expect("test install-root state poisoned") = Some(install_root);
         state
     }
 

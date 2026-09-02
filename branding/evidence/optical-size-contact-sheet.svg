@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="950" viewBox="0 0 1600 950">
+  <title>Sky Auto Player optical icon size evidence</title>
+  <rect width="1600" height="950" fill="#101722"/>
+  <text x="48" y="42" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">
+    Sky Auto Player · optical icon masters
+  </text>
+  <text x="48" y="72" fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="15">
+    True 1:1 raster output above · 8× nearest-neighbour inspection below · no interpolation in the source masters
+  </text>
+
+  <text x="48" y="108" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">
+    ACTUAL SIZE
+  </text>
+  <g fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="13" text-anchor="middle">
+    <image href="../exports/windows/raster/16.png" x="80" y="120" width="16" height="16"/>
+    <image href="../exports/windows/raster/20.png" x="290" y="118" width="20" height="20"/>
+    <image href="../exports/windows/raster/24.png" x="490" y="116" width="24" height="24"/>
+    <image href="../exports/windows/raster/32.png" x="680" y="112" width="32" height="32"/>
+    <image href="../exports/windows/raster/40.png" x="870" y="108" width="40" height="40"/>
+    <image href="../exports/windows/raster/48.png" x="1060" y="104" width="48" height="48"/>
+    <text x="88" y="166">16px</text>
+    <text x="300" y="166">20px</text>
+    <text x="502" y="166">24px</text>
+    <text x="696" y="166">32px</text>
+    <text x="890" y="166">40px</text>
+    <text x="1084" y="166">48px</text>
+  </g>
+
+  <text x="48" y="218" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">
+    8× PIXEL INSPECTION
+  </text>
+  <g image-rendering="pixelated">
+    <image href="../exports/windows/raster/16.png" x="100" y="250" width="128" height="128"/>
+    <image href="../exports/windows/raster/20.png" x="320" y="250" width="160" height="160"/>
+    <image href="../exports/windows/raster/24.png" x="580" y="250" width="192" height="192"/>
+    <image href="../exports/windows/raster/32.png" x="100" y="550" width="256" height="256"/>
+    <image href="../exports/windows/raster/40.png" x="500" y="518" width="320" height="320"/>
+    <image href="../exports/windows/raster/48.png" x="1000" y="486" width="384" height="384"/>
+  </g>
+  <g fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="13">
+    <text x="100" y="398">16px ×8</text>
+    <text x="320" y="430">20px ×8</text>
+    <text x="580" y="462">24px ×8</text>
+    <text x="100" y="824">32px ×8</text>
+    <text x="500" y="858">40px ×8</text>
+    <text x="1000" y="890">48px ×8</text>
+  </g>
+</svg>

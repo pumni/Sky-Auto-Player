@@ -1,9 +1,12 @@
 import { Activity, X } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { useEffect, useRef, type RefObject } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
-interface DiagnosticsDrawerProps {
+interface DiagnosticsPanelProps {
   useStore: DesktopStoreHook;
+  mode: 'pane' | 'overlay';
+  restoreFocusRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function number(value: number | null | undefined, digits = 2): string {
@@ -39,20 +42,60 @@ function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples
   );
 }
 
-export function DiagnosticsDrawer({ useStore }: DiagnosticsDrawerProps) {
+export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: DiagnosticsPanelProps) {
   const diagnostics = useStore((store) => store.diagnostics);
   const close = useStore((store) => store.setDiagnosticsOpen);
+  const surfaceRef = useRef<HTMLElement>(null);
+  const overlayWasOpen = useRef(false);
+  const pane = mode === 'pane';
+
+  useEffect(() => {
+    if (pane || !diagnostics.open) return;
+    overlayWasOpen.current = true;
+    const frame = window.requestAnimationFrame(() => surfaceRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (!overlayWasOpen.current) return;
+      overlayWasOpen.current = false;
+      window.queueMicrotask(() => restoreFocusRef?.current?.focus());
+    };
+  }, [diagnostics.open, pane, restoreFocusRef]);
+
   if (!diagnostics.open) return null;
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   return (
     <section
-      className="diagnostics-drawer"
-      role="dialog"
+      ref={surfaceRef}
+      className={`diagnostics-surface diagnostics-${mode}`}
+      role={pane ? 'region' : 'dialog'}
       aria-label="Diagnostics"
+      tabIndex={pane ? undefined : -1}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault();
           close(false);
+          return;
+        }
+        if (pane || event.key !== 'Tab') return;
+        const focusable = Array.from(
+          surfaceRef.current?.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          ) ?? [],
+        ).filter((element) => !element.hasAttribute('disabled'));
+        if (focusable.length === 0) {
+          event.preventDefault();
+          surfaceRef.current?.focus();
+          return;
+        }
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
+        const activeElement = document.activeElement;
+        if (event.shiftKey && (activeElement === first || activeElement === surfaceRef.current)) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && activeElement === last) {
+          event.preventDefault();
+          first.focus();
         }
       }}
     >

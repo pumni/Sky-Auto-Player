@@ -18,11 +18,12 @@ export function SongInspector({ useStore }: SongInspectorProps) {
     return (
       <section className="inspector-panel inspector-empty" aria-labelledby="inspector-title">
         <div className="empty-inspector-icon" aria-hidden="true">
-          <Music2 size={26} />
+          <Music2 size={22} />
         </div>
-        <p className="eyebrow">SONG INSPECTOR</p>
         <h2 id="inspector-title">Choose a song</h2>
-        <p className="muted">Select a row to inspect timing risk and backend recommendations.</p>
+        <p className="muted">
+          Select a sheet from Library to inspect timing risk and playback recommendations.
+        </p>
       </section>
     );
   }
@@ -30,7 +31,6 @@ export function SongInspector({ useStore }: SongInspectorProps) {
   if (detail.state === 'loading') {
     return (
       <section className="inspector-panel" aria-live="polite">
-        <p className="eyebrow">SONG INSPECTOR</p>
         <h2>Reading metadata…</h2>
       </section>
     );
@@ -39,7 +39,6 @@ export function SongInspector({ useStore }: SongInspectorProps) {
   if (detail.state === 'fatal' || !detail.value) {
     return (
       <section className="inspector-panel" role="alert">
-        <p className="eyebrow">SONG INSPECTOR</p>
         <h2>Metadata unavailable</h2>
         <p className="inline-error">{detail.error}</p>
       </section>
@@ -54,7 +53,6 @@ export function SongInspector({ useStore }: SongInspectorProps) {
           <Music2 size={28} />
         </div>
         <div>
-          <p className="eyebrow">SONG INSPECTOR</p>
           <h2 id="inspector-title">{song.title}</h2>
           <p className="muted">
             {song.format_label} · {durationLabel(song.duration_us)} · {song.note_count} notes
@@ -99,8 +97,8 @@ export function SongInspector({ useStore }: SongInspectorProps) {
         )}
       </div>
       <p className="nonphysical-note">
-        Use the Player Dock below to prepare a dry-run or request playback with the selected
-        settings.
+        Use the Player Bar below to test playback without input or request playback with the
+        selected settings.
       </p>
     </section>
   );

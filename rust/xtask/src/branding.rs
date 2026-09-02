@@ -1,12 +1,78 @@
 use crate::Result;
+use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
 use roxmltree::Document;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Cursor;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EXPECTED_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+const EXPECTED_SIZES: [u32; 10] = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+const ICO_ORDER: [u32; 10] = [32, 16, 20, 24, 40, 48, 64, 96, 128, 256];
+const APPROVED_BRAND_COMMIT: &str = "1d850a6cd4f7ace2702116159ef788b7e847acea";
+const APPROVED_BRAND_SOURCES: [(&str, &str, &str); 3] = [
+    (
+        "sky-auto-player-app-icon.svg",
+        "94f924b540c1927e84eb5aa0938dd29630c5fd55",
+        "006f235417081f3394ec458e19eb99780feecd58d1a41742df77552bc018dc6d",
+    ),
+    (
+        "sky-auto-player-app-icon-small.svg",
+        "8e0341ae2e87382471b7875a6d2100b5ab2b323f",
+        "59c422e5897e1b58637ca6e652b275d692b26f44a44eb7ad8b648c60dcc4606e",
+    ),
+    (
+        "sky-auto-player-app-icon-16.svg",
+        "e5112a89662f8eaec5e430628f721526cc01b443",
+        "cd9dc8b59ee8f448f9587e22ad855f51af6236204c85197a144ce164b714d353",
+    ),
+];
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
+const WINDOWS_RASTER_SOURCES: [(&str, &str); 10] = [
+    ("16", "sky-auto-player-app-icon-16.svg"),
+    ("20", "sky-auto-player-app-icon-small.svg"),
+    ("24", "sky-auto-player-app-icon-small.svg"),
+    ("32", "sky-auto-player-app-icon.svg"),
+    ("40", "sky-auto-player-app-icon.svg"),
+    ("48", "sky-auto-player-app-icon.svg"),
+    ("64", "sky-auto-player-app-icon.svg"),
+    ("96", "sky-auto-player-app-icon.svg"),
+    ("128", "sky-auto-player-app-icon.svg"),
+    ("256", "sky-auto-player-app-icon.svg"),
+];
+const TOOLBAR_RASTER_SOURCES: [(&str, &str); 4] = [
+    ("32", "sky-auto-player-app-icon.svg"),
+    ("40", "sky-auto-player-app-icon.svg"),
+    ("48", "sky-auto-player-app-icon.svg"),
+    ("64", "sky-auto-player-app-icon.svg"),
+];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn normalized_brand_source_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' {
+            if bytes.get(index + 1) == Some(&b'\n') {
+                index += 1;
+            }
+            normalized.push(b'\n');
+        } else {
+            normalized.push(bytes[index]);
+        }
+        index += 1;
+    }
+    normalized
+}
 
 pub fn png_dimensions(data: &[u8]) -> Result<(u32, u32)> {
     if data.len() < 24 || &data[..8] != b"\x89PNG\r\n\x1a\n" || &data[12..16] != b"IHDR" {
@@ -61,44 +127,37 @@ pub fn build_ico(layers: &BTreeMap<u32, Vec<u8>>) -> Result<Vec<u8>> {
         )
         .into());
     }
-    let header_size = 6 + EXPECTED_SIZES.len() * 16;
-    let mut entries = Vec::with_capacity(EXPECTED_SIZES.len() * 16);
-    let mut payload = Vec::new();
-    let mut offset = header_size as u32;
-    for size in EXPECTED_SIZES {
-        let image = layers.get(&size).expect("checked above");
-        entries.extend_from_slice(&[
-            if size == 256 { 0 } else { size as u8 },
-            if size == 256 { 0 } else { size as u8 },
-            0,
-            0,
-        ]);
-        entries.extend_from_slice(&1u16.to_le_bytes());
-        entries.extend_from_slice(&32u16.to_le_bytes());
-        entries.extend_from_slice(&(image.len() as u32).to_le_bytes());
-        entries.extend_from_slice(&offset.to_le_bytes());
-        payload.extend_from_slice(image);
-        offset = offset
-            .checked_add(image.len() as u32)
-            .ok_or("ICO payload is too large")?;
+    let mut directory = IconDir::new(ResourceType::Icon);
+    for size in ICO_ORDER {
+        let png = layers.get(&size).expect("checked above");
+        let image = IconImage::read_png(Cursor::new(png))?;
+        if (image.width(), image.height()) != (size, size) {
+            return Err(format!(
+                "PNG layer is {}x{}, expected {size}x{size}",
+                image.width(),
+                image.height()
+            )
+            .into());
+        }
+        let entry = if size == 256 {
+            IconDirEntry::encode_as_png(&image)?
+        } else {
+            IconDirEntry::encode_as_bmp(&image)?
+        };
+        directory.add_entry(entry);
     }
-    let mut output = Vec::with_capacity(header_size + payload.len());
-    output.extend_from_slice(&[0, 0, 1, 0]);
-    output.extend_from_slice(&(EXPECTED_SIZES.len() as u16).to_le_bytes());
-    output.extend_from_slice(&entries);
-    output.extend_from_slice(&payload);
+    let mut output = Vec::new();
+    directory.write(&mut output)?;
     Ok(output)
 }
 
-pub fn build_ico_from_dirs(large: &Path, small: &Path, tiny: &Path) -> Result<Vec<u8>> {
-    let mut layers = find_layers(large, &[32, 48, 64, 128, 256])?;
-    layers.extend(find_layers(small, &[24])?);
-    layers.extend(find_layers(tiny, &[16])?);
+pub fn build_ico_from_dir(directory: &Path) -> Result<Vec<u8>> {
+    let layers = find_layers(directory, &EXPECTED_SIZES)?;
     build_ico(&layers)
 }
 
-pub fn write_ico(large: &Path, small: &Path, tiny: &Path, output: &Path) -> Result<()> {
-    let bytes = build_ico_from_dirs(large, small, tiny)?;
+pub fn write_ico(directory: &Path, output: &Path) -> Result<()> {
+    let bytes = build_ico_from_dir(directory)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -112,6 +171,76 @@ fn parse_svg(path: &Path) -> Result<(String, Document<'static>)> {
     let document = roxmltree::Document::parse(owned)
         .map_err(|error| format!("{}: invalid SVG: {error}", path.display()))?;
     Ok((owned.to_owned(), document))
+}
+
+fn validate_brand_lock(root: &Path) -> Result<()> {
+    let lock_path = root.join("branding/approved-brand.lock.json");
+    let lock: Value = serde_json::from_slice(&fs::read(&lock_path)?)?;
+    if lock.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("approved brand lock schema changed".into());
+    }
+    if lock.get("approved_commit").and_then(Value::as_str) != Some(APPROVED_BRAND_COMMIT) {
+        return Err(format!("{}: approved commit changed", lock_path.display()).into());
+    }
+    let sources = lock
+        .get("sources")
+        .and_then(Value::as_object)
+        .ok_or("approved brand lock sources must be an object")?;
+    if sources.len() != APPROVED_BRAND_SOURCES.len() {
+        return Err("approved brand lock source set changed".into());
+    }
+    for (name, git_blob_sha1, sha256) in APPROVED_BRAND_SOURCES {
+        let entry = sources
+            .get(name)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("approved brand lock entry missing: {name}"))?;
+        if entry.get("git_blob_sha1").and_then(Value::as_str) != Some(git_blob_sha1)
+            || entry.get("sha256").and_then(Value::as_str) != Some(sha256)
+        {
+            return Err(format!("approved brand lock metadata changed: {name}").into());
+        }
+        let bytes = fs::read(root.join("branding").join(name))?;
+        let actual = sha256_hex(&normalized_brand_source_bytes(&bytes));
+        if actual != sha256 {
+            return Err(format!(
+                "{} differs from the owner-approved brand source",
+                root.join("branding").join(name).display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_raster_source_section(
+    manifest: &Value,
+    section: &str,
+    expected: &[(&str, &str)],
+) -> Result<()> {
+    let object = manifest
+        .get(section)
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("raster source manifest section missing: {section}"))?;
+    if object.len() != expected.len() {
+        return Err(format!("raster source manifest section changed: {section}").into());
+    }
+    for (size, source) in expected {
+        if object.get(*size).and_then(Value::as_str) != Some(*source) {
+            return Err(format!("raster source mapping changed: {section}/{size}").into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_raster_source_manifest(root: &Path) -> Result<()> {
+    let path = root.join("branding/raster-sources.json");
+    let manifest: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    if manifest.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("raster source manifest schema changed".into());
+    }
+    validate_raster_source_section(&manifest, "windows", &WINDOWS_RASTER_SOURCES)?;
+    validate_raster_source_section(&manifest, "toolbar", &TOOLBAR_RASTER_SOURCES)?;
+    Ok(())
 }
 
 fn validate_svg(path: &Path, view_box: &str, ids: &[&str]) -> Result<(String, Document<'static>)> {
@@ -142,36 +271,28 @@ fn validate_svg(path: &Path, view_box: &str, ids: &[&str]) -> Result<(String, Do
 
 fn validate_ico(root: &Path) -> Result<()> {
     let data = fs::read(root.join("branding/exports/windows/sky-auto-player.ico"))?;
-    if data.len() < 6
-        || data[..4] != [0, 0, 1, 0]
-        || u16::from_le_bytes(data[4..6].try_into()?) != 7
+    let directory = IconDir::read(Cursor::new(&data))?;
+    if directory.resource_type() != ResourceType::Icon
+        || directory.entries().len() != EXPECTED_SIZES.len()
     {
-        return Err("branding ICO header/layer count changed".into());
+        return Err("branding ICO resource type/layer count changed".into());
     }
     let mut seen = BTreeMap::new();
-    for index in 0..7usize {
-        let offset = 6 + index * 16;
-        let width = if data[offset] == 0 {
-            256
-        } else {
-            data[offset] as u32
-        };
-        let height = if data[offset + 1] == 0 {
-            256
-        } else {
-            data[offset + 1] as u32
-        };
-        if width != height || !EXPECTED_SIZES.contains(&width) || seen.insert(width, true).is_some()
+    for (index, entry) in directory.entries().iter().enumerate() {
+        let expected = ICO_ORDER[index];
+        if entry.width() != expected
+            || entry.height() != expected
+            || !EXPECTED_SIZES.contains(&entry.width())
+            || seen.insert(entry.width(), true).is_some()
         {
             return Err("branding ICO layer set is invalid".into());
         }
-        let size = u32::from_le_bytes(data[offset + 8..offset + 12].try_into()?) as usize;
-        let start = u32::from_le_bytes(data[offset + 12..offset + 16].try_into()?) as usize;
-        let layer = data
-            .get(start..start + size)
-            .ok_or("branding ICO layer is truncated")?;
-        if png_dimensions(layer)? != (width, height) {
-            return Err("branding ICO PNG dimensions changed".into());
+        if entry.is_png() != (expected == 256) {
+            return Err("branding ICO encoding policy changed".into());
+        }
+        let image = entry.decode()?;
+        if (image.width(), image.height()) != (expected, expected) {
+            return Err("branding ICO decoded dimensions changed".into());
         }
     }
     Ok(())
@@ -179,6 +300,8 @@ fn validate_ico(root: &Path) -> Result<()> {
 
 pub fn validate(root: &Path) -> Result<()> {
     let branding = root.join("branding");
+    validate_brand_lock(root)?;
+    validate_raster_source_manifest(root)?;
     let ids = [
         "plate",
         "edge-a-b",
@@ -202,7 +325,7 @@ pub fn validate(root: &Path) -> Result<()> {
         "0 0 128 128",
         &ids,
     )?;
-    for document in [&canonical, &small, &tiny] {
+    for document in [&small, &tiny, &canonical] {
         if document
             .descendants()
             .filter(|node| {
@@ -219,6 +342,36 @@ pub fn validate(root: &Path) -> Result<()> {
         node.attribute("id") == Some("plate") && node.attribute("fill") != Some("#07090D")
     }) {
         return Err("canonical branding plate color changed".into());
+    }
+    let toolbar = fs::read_to_string(root.join("desktop/src/components/shell/Toolbar.tsx"))?;
+    for asset in [
+        "app-icon-32.png",
+        "app-icon-40.png",
+        "app-icon-48.png",
+        "app-icon-64.png",
+    ] {
+        if !toolbar.contains(asset) {
+            return Err(format!("desktop toolbar is missing density asset {asset}").into());
+        }
+    }
+    for (name, size) in [
+        ("app-icon-32.png", 32),
+        ("app-icon-40.png", 40),
+        ("app-icon-48.png", 48),
+        ("app-icon-64.png", 64),
+    ] {
+        let toolbar_bytes = fs::read(root.join("desktop/src/assets/brand").join(name))?;
+        if png_dimensions(&toolbar_bytes)? != (size, size) {
+            return Err(format!("desktop toolbar asset {name} dimensions changed").into());
+        }
+        let raster_bytes = fs::read(
+            branding
+                .join("exports/windows/raster")
+                .join(format!("{size}.png")),
+        )?;
+        if toolbar_bytes != raster_bytes {
+            return Err(format!("desktop toolbar asset drift: {name}").into());
+        }
     }
     let no_bg = branding.join("sky-auto-player-mark-no-bg.svg");
     let (_, no_bg_doc) = validate_svg(
@@ -267,13 +420,33 @@ pub fn validate(root: &Path) -> Result<()> {
         }
     }
     validate_ico(root)?;
+    let ico = fs::read(branding.join("exports/windows/sky-auto-player.ico"))?;
+    for consumer in [
+        "site/public/favicon.ico",
+        "desktop/src-tauri/icons/icon.ico",
+    ] {
+        if fs::read(root.join(consumer))? != ico {
+            return Err(format!("branding ICO consumer drift: {consumer}").into());
+        }
+    }
     for (name, size) in [
         ("favicon-16x16.png", 16),
         ("favicon-32x32.png", 32),
         ("apple-touch-icon.png", 180),
     ] {
-        if png_dimensions(&fs::read(branding.join("exports/web").join(name))?)? != (size, size) {
+        let bytes = fs::read(branding.join("exports/web").join(name))?;
+        if png_dimensions(&bytes)? != (size, size) {
             return Err(format!("{name}: PNG dimensions changed").into());
+        }
+        if size <= 32
+            && bytes
+                != fs::read(
+                    branding
+                        .join("exports/windows/raster")
+                        .join(format!("{size}.png")),
+                )?
+        {
+            return Err(format!("{name}: raster consumer drift").into());
         }
     }
     for (left, right) in [
@@ -318,11 +491,10 @@ mod tests {
     use super::*;
 
     fn png(size: u32) -> Vec<u8> {
-        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
-        data.extend_from_slice(&13u32.to_be_bytes());
-        data.extend_from_slice(b"IHDR");
-        data.extend_from_slice(&size.to_be_bytes());
-        data.extend_from_slice(&size.to_be_bytes());
+        let image =
+            IconImage::from_rgba_data(size, size, vec![255; (size as usize) * (size as usize) * 4]);
+        let mut data = Vec::new();
+        image.write_png(&mut data).expect("PNG");
         data
     }
 
@@ -333,15 +505,42 @@ mod tests {
             .map(|size| (size, png(size)))
             .collect();
         let ico = build_ico(&layers).expect("ICO");
-        assert_eq!(&ico[..6], &[0, 0, 1, 0, 7, 0]);
-        assert_eq!(ico[6], 16);
-        assert_eq!(ico[6 + 16 * 6], 0);
-        assert_eq!(&ico[10..12], &1u16.to_le_bytes());
-        assert_eq!(&ico[12..14], &32u16.to_le_bytes());
+        let directory = IconDir::read(Cursor::new(&ico)).expect("ICO directory");
+        assert_eq!(directory.entries().len(), EXPECTED_SIZES.len());
+        assert_eq!(directory.entries()[0].width(), 32);
+        assert!(!directory.entries()[0].is_png());
+        assert_eq!(
+            directory.entries().last().expect("256px entry").width(),
+            256
+        );
+        assert!(directory.entries().last().expect("256px entry").is_png());
+        for entry in directory.entries() {
+            assert_eq!(
+                entry.decode().expect("encoded entry").width(),
+                entry.width()
+            );
+        }
     }
 
     #[test]
     fn current_branding_passes_validation() {
         validate(&crate::repo::root()).expect("branding assets");
+    }
+
+    #[test]
+    fn brand_source_hash_is_stable_across_line_endings() {
+        let lf = b"<svg>\n<path />\n</svg>\n";
+        let crlf = b"<svg>\r\n<path />\r\n</svg>\r\n";
+        let bare_cr = b"<svg>\r<path />\r</svg>\r";
+
+        assert_eq!(
+            sha256_hex(&normalized_brand_source_bytes(lf)),
+            sha256_hex(&normalized_brand_source_bytes(crlf))
+        );
+        assert_eq!(
+            sha256_hex(&normalized_brand_source_bytes(lf)),
+            sha256_hex(&normalized_brand_source_bytes(bare_cr))
+        );
+        assert_eq!(normalized_brand_source_bytes(lf), lf);
     }
 }

@@ -6,8 +6,8 @@ interface LibraryPanelProps {
   useStore: DesktopStoreHook;
 }
 
-function durationLabel(durationUs: number | null): string {
-  if (durationUs === null) return '—';
+function durationLabel(durationUs: number | null): string | null {
+  if (durationUs === null) return null;
   const seconds = Math.max(0, Math.round(durationUs / 1_000_000));
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
 }
@@ -26,7 +26,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   const virtualizer = useVirtualizer({
     count: total,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 44,
+    estimateSize: () => 46,
     overscan: 10,
   });
   const virtualItems = virtualizer.getVirtualItems();
@@ -36,10 +36,10 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
       : [
           ...Array.from({ length: Math.min(total, 20) }, (_, index) => ({
             index,
-            start: index * 44,
+            start: index * 46,
           })),
           ...(activeIndex >= 20 && activeIndex < total
-            ? [{ index: activeIndex, start: activeIndex * 44 }]
+            ? [{ index: activeIndex, start: activeIndex * 46 }]
             : []),
         ];
   const first = renderedItems[0]?.index ?? 0;
@@ -110,10 +110,7 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
   return (
     <section className="library-panel" aria-labelledby="library-title">
       <div className="panel-heading">
-        <div>
-          <p className="eyebrow">COLLECTION</p>
-          <h2 id="library-title">Library</h2>
-        </div>
+        <h2 id="library-title">Library</h2>
         <span className="count-label">{loading ? 'Updating…' : `${total} songs`}</span>
       </div>
       {error && (
@@ -176,7 +173,9 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
                 >
                   <span className="song-row-title">{row.title}</span>
                   <span className="song-row-meta">
-                    <span>{durationLabel(row.duration_us)}</span>
+                    {durationLabel(row.duration_us) && (
+                      <span>{durationLabel(row.duration_us)}</span>
+                    )}
                     <span
                       className={`risk-dot risk-${row.risk_level}`}
                       aria-label={`${row.risk_level} risk`}

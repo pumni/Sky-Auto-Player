@@ -8,6 +8,8 @@ mod native_runtime;
 mod native_update;
 mod startup_guard;
 mod ui_events;
+#[cfg(windows)]
+mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
 
@@ -111,6 +113,16 @@ fn run_inner(gui_smoke: bool) {
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .manage(app_state)
         .setup(move |app| {
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_icon::apply_native_window_icons(&window)
+                {
+                    eprintln!("failed to apply native Windows icons: {error}");
+                }
+            }
             if gui_smoke {
                 record_gui_smoke_phase("tauri.setup.enter");
                 let app_handle = app.handle().clone();
@@ -182,11 +194,22 @@ fn run_inner(gui_smoke: bool) {
             commands::subscribe_ui_events,
             commands::shutdown,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 close_window(window.clone());
             }
+            #[cfg(windows)]
+            tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                if let Err(error) = windows_icon::apply_native_window_icons(window) {
+                    eprintln!("failed to refresh native Windows icons: {error}");
+                }
+            }
+            #[cfg(windows)]
+            tauri::WindowEvent::Destroyed => {
+                windows_icon::release_native_window_icons(window);
+            }
+            _ => {}
         })
         .run(tauri::generate_context!());
     if gui_smoke {
@@ -387,6 +410,31 @@ pub fn selftest_build_info() -> i32 {
 mod ipc_tests {
     use super::app_state::AppState;
     use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestInstallRoot(PathBuf);
+
+    impl Drop for TestInstallRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_install_root() -> (PathBuf, TestInstallRoot) {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-desktop-ipc-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("test songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("test config");
+        let source_song =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..\\..\\songs\\blue.json");
+        fs::copy(source_song, root.join("songs/blue.json")).expect("test song");
+        (root.clone(), TestInstallRoot(root))
+    }
 
     fn request(
         command: &str,
@@ -412,8 +460,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_params_envelope() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![super::commands::search_songs])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
@@ -446,8 +495,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_native_playback_payloads() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
@@ -526,8 +576,9 @@ mod ipc_tests {
 
     #[test]
     fn native_settings_patch_invalidates_prepared_plan() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,

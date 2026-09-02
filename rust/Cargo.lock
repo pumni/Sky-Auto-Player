@@ -3047,6 +3047,7 @@ name = "sky_desktop_shell"
 version = "3.5.0"
 dependencies = [
  "getrandom 0.3.4",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3060,6 +3061,7 @@ dependencies = [
  "tauri-build",
  "thiserror 2.0.20",
  "ts-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3129,6 +3131,7 @@ name = "sky_xtask"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "ico",
  "pep440_rs",
  "roxmltree",
  "serde",

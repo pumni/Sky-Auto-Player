@@ -3,13 +3,19 @@
 The visual master is `sky-auto-player-app-icon.svg`: a flat `128 × 128` application icon with a
 right-facing equilateral node skeleton. The top-left node is a medium ivory-outlined gold diamond;
 the lower-left gold ring is intentionally larger than the smaller blue-gray ring on the right.
-Connections are two thin solid lines and three explicit, round-capped dash segments. Each connection
-has an optical inset so it does not weld into a node at small sizes.
+Connections are two solid lines and explicit, round-capped dash segments. These three source masters
+are owner-approved and immutable; rendering and delivery may change, but brand geometry may not:
 
-`sky-auto-player-app-icon-small.svg` is the optical master for `24px`; it uses slightly stronger
-strokes and two clearly separated dash segments. `sky-auto-player-app-icon-16.svg` is a dedicated
-16px optical master with protected ring holes and the same two-pulse rhythm. Use the large master for
-`256`, `128`, `64`, `48`, and `32px`.
+| Asset | Target | Use |
+| --- | ---: | --- |
+| `sky-auto-player-app-icon-16.svg` | 16px | dedicated tiny Windows surface |
+| `sky-auto-player-app-icon-small.svg` | 20–24px | approved small Windows surface |
+| `sky-auto-player-app-icon.svg` | 32–256px | canonical Windows, toolbar and marketing surfaces |
+
+`approved-brand.lock.json` pins all three source files to the owner-approved commit and SHA-256
+content. The SHA-256 check normalizes CRLF and legacy bare-CR line endings to LF so a Windows
+working-tree checkout cannot invalidate the lock without changing the approved SVG content. Do not
+redraw, optically reinterpret, or change these files to solve raster or native delivery problems.
 
 ## Source variants
 
@@ -24,34 +30,44 @@ glow, texture, or generated design-tool metadata.
 
 ## Export commands
 
-The Tauri CLI can rasterize one source at a time, so the Windows ICO is assembled from three raster
-sets. Run from the repository root after installing the pinned desktop dependencies:
+The Tauri CLI rasterizes the approved masters into one Windows raster directory. The source routing
+is recorded in `raster-sources.json` and is checked by `cargo xtask check static`. Run from the
+repository root after installing the pinned desktop dependencies:
 
 ```powershell
 cd desktop
 bun install --frozen-lockfile
-bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <large-output> --png 32,48,64,128,256
-bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output <small-output> --png 24
-bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <tiny-output> --png 16
-# Browser favicon PNGs: use the dedicated 16px master and large 32px master
-bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output <favicon-16-output> --png 16
-bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output <favicon-32-output> --png 32
+bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output ../branding/exports/windows/raster --png 16
+bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output ../branding/exports/windows/raster --png 20,24
+bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output ../branding/exports/windows/raster --png 32,40,48,64,96,128,256
+bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output src/assets/brand --png 32,40,48,64
 cd ..
-cargo xtask branding build-ico --large-dir <large-output> --small-dir <small-output> --tiny-dir <tiny-output> --output branding/exports/windows/sky-auto-player.ico
+cargo xtask branding build-ico --layers-dir branding/exports/windows/raster --output branding/exports/windows/sky-auto-player.ico
 ```
 
-`cargo xtask branding build-ico` is the canonical build-time assembler. It preserves the PNG payloads
-and writes the seven ICO layers `16, 24, 32, 48, 64, 128, 256`; `16` comes from the dedicated
-16px master, `24` comes from the small optical master, and the remaining layers come from the large
-master. Copy the resulting ICO byte-for-byte to `site/public/favicon.ico` and
-`desktop/src-tauri/icons/icon.ico`.
+`cargo xtask branding build-ico` is the canonical build-time assembler. It uses the `ico` crate,
+writes the defensive fallback layer `32px` first, encodes all layers below `256px` as BMP ICO
+entries, and encodes only the `256px` layer as PNG. The output has the ten layers
+`16, 20, 24, 32, 40, 48, 64, 96, 128, 256`. Copy it byte-for-byte to
+`site/public/favicon.ico` and `desktop/src-tauri/icons/icon.ico`.
 
-For browser favicon routing, also rasterize the dedicated 16px master and the large master as
-individual PNGs, then copy them byte-for-byte to `site/public/favicon-16x16.png` and
-`site/public/favicon-32x32.png` (and keep the same files under `branding/exports/web/`). The HTML
-head declares these explicit PNG candidates before the ICO fallback, so browsers that support PNG
-favicons receive the real 16px optical master. `site/public/favicon.svg` remains the 24px small
-master used by the footer and is intentionally not declared as the browser favicon.
+The running Windows window is a separate pipeline. `desktop/src-tauri/src/windows_icon.rs` obtains
+the HWND through `raw-window-handle`, reads `SM_CXSMICON/SM_CYSMICON` and
+`SM_CXICON/SM_CYICON` with `GetSystemMetricsForDpi`, loads resource `32512` with `LoadImageW`
+at those dimensions, and applies separate `WM_SETICON/ICON_SMALL` and `WM_SETICON/ICON_BIG`
+handles. It reapplies both handles after a scale-factor change; the EXE resource remains the
+Explorer/shortcut source of truth.
+
+`branding/evidence/optical-size-contact-sheet.png` records the generated `16, 20, 24, 32, 40, 48px`
+PNGs at true 1:1 size and at 8× nearest-neighbour magnification for pixel inspection.
+
+For browser favicon routing, rasterize the approved 16px and canonical 32px masters as individual
+PNGs, then
+copy them byte-for-byte to `site/public/favicon-16x16.png` and `site/public/favicon-32x32.png` (and
+keep the same files under `branding/exports/web/`). The HTML head declares these explicit PNG
+candidates before the ICO fallback, so browsers that support PNG favicons receive the real optical
+masters. `site/public/favicon.svg` remains the approved small master used by the footer and is
+intentionally not declared as the browser favicon.
 
 Generate the Apple touch icon from the large master with the same Tauri CLI using `--png 180`, then
 copy it to `branding/exports/web/apple-touch-icon.png` and `site/public/apple-touch-icon.png`.
