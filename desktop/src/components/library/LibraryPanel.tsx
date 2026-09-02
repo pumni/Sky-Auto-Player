@@ -6,8 +6,8 @@ interface LibraryPanelProps {
   useStore: DesktopStoreHook;
 }
 
-function durationLabel(durationUs: number | null): string {
-  if (durationUs === null) return '—';
+function durationLabel(durationUs: number | null): string | null {
+  if (durationUs === null) return null;
   const seconds = Math.max(0, Math.round(durationUs / 1_000_000));
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
 }
@@ -173,7 +173,9 @@ export function LibraryPanel({ useStore }: LibraryPanelProps) {
                 >
                   <span className="song-row-title">{row.title}</span>
                   <span className="song-row-meta">
-                    <span>{durationLabel(row.duration_us)}</span>
+                    {durationLabel(row.duration_us) && (
+                      <span>{durationLabel(row.duration_us)}</span>
+                    )}
                     <span
                       className={`risk-dot risk-${row.risk_level}`}
                       aria-label={`${row.risk_level} risk`}

@@ -22,6 +22,23 @@ declare module 'react-aria-components' {
     props: ButtonProps & RefAttributes<HTMLButtonElement>,
   ) => ReactElement | null;
 
+  export interface DialogTriggerProps {
+    isOpen?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?: (isOpen: boolean) => void;
+    children: ReactNode;
+  }
+
+  export const DialogTrigger: (props: DialogTriggerProps) => ReactElement | null;
+
+  export interface PopoverProps extends HTMLAttributes<HTMLDivElement> {
+    placement?: string;
+    offset?: number;
+    children?: ReactNode;
+  }
+
+  export const Popover: (props: PopoverProps & RefAttributes<HTMLElement>) => ReactElement | null;
+
   export interface ModalOverlayProps extends HTMLAttributes<HTMLDivElement> {
     isOpen?: boolean;
     isDismissable?: boolean;

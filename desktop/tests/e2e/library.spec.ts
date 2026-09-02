@@ -50,6 +50,27 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const trigger = page.getByRole('button', { name: 'Configure timing profile' });
+  await trigger.click();
+
+  const popover = page.getByRole('dialog', { name: 'Playback profile' });
+  await expect(popover).toBeVisible();
+  await expect(popover.getByLabel('Hold')).toBeVisible();
+  await expect(popover.getByLabel('Tempo')).toBeVisible();
+  await expect(popover.getByLabel('FPS')).toBeVisible();
+  await expect(popover.getByLabel('Dry-run')).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.keyboard.press('Tab');
+  await expect(popover.locator(':focus')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
@@ -81,10 +102,16 @@ test('Player Bar completes a dry-run lifecycle accessibly', async ({ page }) => 
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  const progress = page.getByRole('progressbar', { name: /Playback progress/ });
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute('value', '0');
 
   await page.getByRole('button', { name: 'Play' }).click();
-  const confirmation = page.getByRole('dialog', { name: 'Playback confirmation' });
+  const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  await expect(
+    confirmation.getByRole('button', { name: 'Proceed with current settings' }),
+  ).toBeFocused();
   await confirmation.getByRole('button', { name: 'Proceed with current settings' }).click();
 
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
@@ -147,6 +174,27 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await expect(panel).toBeHidden();
 });
 
+test('Diagnostics utility separator follows pointer and keyboard direction', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const separator = page.getByRole('separator', { name: 'Resize diagnostics pane' });
+  const initial = Number(await separator.getAttribute('aria-valuenow'));
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2);
+  await page.mouse.up();
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial - 20));
+
+  await separator.press('ArrowRight');
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial - 28));
+  await separator.press('Shift+ArrowLeft');
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 4));
+});
+
 test('all supported themes round-trip through the settings surface', async ({ page }) => {
   await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
@@ -179,11 +227,21 @@ test('update indicator and typed update dialog expose safe handoff states', asyn
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const trigger = page.getByRole('button', { name: 'Open diagnostics' });
+  await trigger.click();
   const drawer = page.getByRole('dialog', { name: 'Diagnostics' });
   await expect(drawer).toBeVisible();
+  await expect(drawer).toBeFocused();
   await expect(drawer.getByRole('tab', { name: 'Performance' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
+
+  const focusables = drawer.locator('button, [tabindex]:not([tabindex="-1"])');
+  await focusables.last().focus();
+  await page.keyboard.press('Tab');
+  await expect(drawer.locator(':focus')).toHaveCount(1);
+  await focusables.first().focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(drawer.locator(':focus')).toHaveCount(1);
 
   await drawer.getByRole('tab', { name: 'Timing' }).click();
   await expect(drawer.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
@@ -192,6 +250,43 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await expectNoSeriousAccessibilityViolations(page);
   await drawer.getByRole('button', { name: 'Close diagnostics' }).click();
   await expect(drawer).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open diagnostics' })).toBeFocused();
+});
+
+test('long sheet titles remain contained in Library, Inspector, and Player Bar', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const list = page.locator('.virtual-list');
+  await list.evaluate((element) => {
+    element.scrollTop = 495 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const longTitle = /A sheet with an intentionally long title/;
+  await expect(page.getByRole('option', { name: longTitle })).toBeVisible();
+  await page.getByRole('option', { name: longTitle }).click();
+  await expect(page.getByRole('heading', { name: longTitle })).toBeVisible();
+  await expect(
+    page.getByText(/This intentionally long timing-risk explanation verifies wrapping/),
+  ).toBeVisible();
+  const overflow = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    titleOverflowHandled: [
+      ...document.querySelectorAll('.song-row-title, .player-track-copy strong'),
+    ].every((element) => {
+      if (element.scrollWidth <= element.clientWidth) return true;
+      const style = getComputedStyle(element);
+      return style.overflow === 'hidden' && style.textOverflow === 'ellipsis';
+    }),
+    inspectorReasonOverflow: [...document.querySelectorAll('.inspector-panel')].some(
+      (element) => element.scrollWidth > element.clientWidth,
+    ),
+  }));
+  expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth);
+  expect(overflow.titleOverflowHandled).toBe(true);
+  expect(overflow.inspectorReasonOverflow).toBe(false);
 });
 
 test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {

@@ -42,7 +42,7 @@
 .resizable-separator span {
   position: absolute;
   inset: 0 3px;
-  border-left: 1px solid var(--border-subtle);
+  border-left: 1px solid transparent;
   transition: border-color 150ms ease;
 }
 
@@ -78,9 +78,16 @@ body.is-resizing * {
 }
 
 .inspector-panel {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
   overflow: auto;
   padding: var(--space-5) var(--space-6) var(--space-6);
   background: var(--canvas);
+}
+
+.inspector-panel:not(.inspector-empty) > * {
+  width: min(100%, 920px);
 }
 
 .panel-heading {
@@ -517,6 +524,56 @@ body.is-resizing * {
 
 .diagnostics-lines .log-warning {
   color: var(--warning);
+}
+
+.virtual-list,
+.inspector-panel,
+.diagnostics-scroll,
+.diagnostics-overlay {
+  scrollbar-color: color-mix(in srgb, var(--border-strong) 70%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.virtual-list::-webkit-scrollbar,
+.inspector-panel::-webkit-scrollbar,
+.diagnostics-scroll::-webkit-scrollbar,
+.diagnostics-overlay::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.virtual-list::-webkit-scrollbar-track,
+.inspector-panel::-webkit-scrollbar-track,
+.diagnostics-scroll::-webkit-scrollbar-track,
+.diagnostics-overlay::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.virtual-list::-webkit-scrollbar-thumb,
+.inspector-panel::-webkit-scrollbar-thumb,
+.diagnostics-scroll::-webkit-scrollbar-thumb,
+.diagnostics-overlay::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 70%, transparent);
+  background-clip: padding-box;
+}
+
+.virtual-list::-webkit-scrollbar-thumb:hover,
+.inspector-panel::-webkit-scrollbar-thumb:hover,
+.diagnostics-scroll::-webkit-scrollbar-thumb:hover,
+.diagnostics-overlay::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-tertiary) 72%, transparent);
+  background-clip: padding-box;
+}
+
+.virtual-list::-webkit-scrollbar-button,
+.inspector-panel::-webkit-scrollbar-button,
+.diagnostics-scroll::-webkit-scrollbar-button,
+.diagnostics-overlay::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 @media (min-width: 1280px) {

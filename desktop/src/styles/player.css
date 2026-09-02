@@ -86,9 +86,23 @@
 }
 
 .transport-actions .player-primary-action {
-  min-height: 38px;
-  padding-inline: 14px;
-  font-size: 12px;
+  width: 40px;
+  min-height: 40px;
+  border-radius: 50%;
+}
+
+.transport-actions .player-primary-action.button-primary:hover {
+  background: var(--accent-hover);
+}
+
+.player-secondary-action {
+  color: var(--text-secondary);
+}
+
+.player-transport-status {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
 }
 
 .player-timeline {
@@ -205,17 +219,24 @@
 
 .profile-popover {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
+  right: auto;
+  bottom: auto;
   z-index: 7;
   display: grid;
   gap: 10px;
   min-width: 205px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
   padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-panel);
   background: var(--surface-raised);
   box-shadow: 0 14px 38px rgb(0 0 0 / 35%);
+}
+
+.profile-popover:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .profile-popover .profile-fields {
@@ -327,7 +348,7 @@
   }
 
   .transport-actions .player-primary-action {
-    padding-inline: 10px;
+    width: 38px;
   }
 }
 

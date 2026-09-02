@@ -15,6 +15,7 @@ interface AppProps {
 
 export function App({ bridge }: AppProps) {
   const storeRef = useRef<ReturnType<typeof createDesktopStore> | null>(null);
+  const diagnosticsTriggerRef = useRef<HTMLButtonElement>(null);
   const useStore = useMemo(() => {
     if (storeRef.current === null) storeRef.current = createDesktopStore(bridge);
     return storeRef.current;
@@ -219,8 +220,8 @@ export function App({ bridge }: AppProps) {
       {bootstrap && (
         <div className="app-shell">
           <Toolbar bootstrap={bootstrap} useStore={useStore} />
-          <Workbench useStore={useStore} />
-          <PlayerBar useStore={useStore} />
+          <Workbench useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
+          <PlayerBar useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
           <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
           <CalibrationDialog useStore={useStore} />
           <UpdateDialog useStore={useStore} />

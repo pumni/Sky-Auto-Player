@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { DiagnosticsPanel } from '../diagnostics/DiagnosticsPanel';
 import { LibraryPanel } from '../library/LibraryPanel';
@@ -9,6 +9,7 @@ import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
   useStore: DesktopStoreHook;
+  diagnosticsTriggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function useViewportWidth(): number {
@@ -21,7 +22,7 @@ function useViewportWidth(): number {
   return width;
 }
 
-export function Workbench({ useStore }: WorkbenchProps) {
+export function Workbench({ useStore, diagnosticsTriggerRef }: WorkbenchProps) {
   const viewportWidth = useViewportWidth();
   const diagnosticsOpen = useStore((store) => store.diagnostics.open);
   const utilityVisible = diagnosticsOpen && viewportWidth >= 1280;
@@ -55,6 +56,7 @@ export function Workbench({ useStore }: WorkbenchProps) {
             min={300}
             max={480}
             defaultValue={340}
+            direction={-1}
             onChange={(value) => layout.setUtilityWidth(value)}
             onCommit={(value) => layout.setUtilityWidth(value, true)}
           />
@@ -67,7 +69,11 @@ export function Workbench({ useStore }: WorkbenchProps) {
         </>
       )}
       {diagnosticsOpen && !utilityVisible && (
-        <DiagnosticsPanel useStore={useStore} mode="overlay" />
+        <DiagnosticsPanel
+          useStore={useStore}
+          mode="overlay"
+          {...(diagnosticsTriggerRef ? { restoreFocusRef: diagnosticsTriggerRef } : {})}
+        />
       )}
     </main>
   );

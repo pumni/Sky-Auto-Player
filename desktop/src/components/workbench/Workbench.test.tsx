@@ -60,6 +60,42 @@ describe('ResizableSeparator', () => {
     });
     expect(onChange).toHaveBeenLastCalledWith(DEFAULT_LIBRARY_WIDTH);
   });
+
+  it('reverses pointer semantics for a pane owned after the separator', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <ResizableSeparator
+        label="Resize diagnostics pane"
+        value={340}
+        min={300}
+        max={480}
+        defaultValue={340}
+        direction={-1}
+        onChange={onChange}
+        onCommit={onCommit}
+      />,
+    );
+    const separator = screen.getByRole('separator', { name: 'Resize diagnostics pane' });
+
+    fireEvent.keyDown(separator, { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenLastCalledWith(332);
+    rerender(
+      <ResizableSeparator
+        label="Resize diagnostics pane"
+        value={332}
+        min={300}
+        max={480}
+        defaultValue={340}
+        direction={-1}
+        onChange={onChange}
+        onCommit={onCommit}
+      />,
+    );
+    fireEvent.keyDown(separator, { key: 'ArrowLeft', shiftKey: true });
+    expect(onChange).toHaveBeenLastCalledWith(364);
+    expect(onCommit).toHaveBeenLastCalledWith(364);
+  });
 });
 
 describe('workbench layout persistence', () => {

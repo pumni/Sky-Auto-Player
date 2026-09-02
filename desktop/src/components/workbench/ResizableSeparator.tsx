@@ -6,6 +6,8 @@ interface ResizableSeparatorProps {
   min: number;
   max: number;
   defaultValue: number;
+  /** Direction of the pane whose width this separator owns. */
+  direction?: 1 | -1;
   onChange: (value: number) => void;
   onCommit?: (value: number) => void;
 }
@@ -20,6 +22,7 @@ export function ResizableSeparator({
   min,
   max,
   defaultValue,
+  direction = 1,
   onChange,
   onCommit,
 }: ResizableSeparatorProps) {
@@ -53,7 +56,7 @@ export function ResizableSeparator({
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const next = clamp(drag.startValue + event.clientX - drag.startX, min, max);
+    const next = clamp(drag.startValue + direction * (event.clientX - drag.startX), min, max);
     dragValueRef.current = next;
     onChange(next);
   };
@@ -69,8 +72,8 @@ export function ResizableSeparator({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     let next: number | null = null;
     const step = event.shiftKey ? 32 : 8;
-    if (event.key === 'ArrowLeft') next = value - step;
-    if (event.key === 'ArrowRight') next = value + step;
+    if (event.key === 'ArrowLeft') next = value - direction * step;
+    if (event.key === 'ArrowRight') next = value + direction * step;
     if (event.key === 'Home') next = min;
     if (event.key === 'End') next = max;
     if (event.key === 'Enter') next = defaultValue;
