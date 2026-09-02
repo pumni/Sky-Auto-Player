@@ -40,7 +40,11 @@ jobs:
 
       - name: Fetch Wave-6 retirement baseline commit for static checks
         run: |
-          $baseline = "b9debfaab043b88423e4efbd381f08ebec726d7e"
+          $ledger = Get-Content "docs/migration/wave6-tooling-retirement-ledger.json" -Raw | ConvertFrom-Json
+          $baseline = $ledger.baseline
+          if ($baseline -notmatch '^[0-9a-f]{40}$') {
+            throw "Invalid baseline SHA in wave6 ledger: $baseline"
+          }
           git fetch --no-tags --depth=1 origin $baseline
           git cat-file -e "$baseline^{commit}"
 

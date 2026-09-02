@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   FORCE_COLOR: "1"
@@ -92,6 +92,8 @@ jobs:
       - name: Classify PR changed paths
         if: github.event_name == 'pull_request'
         id: filter-pr
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           set -euo pipefail
           classification="$(cargo run --manifest-path rust/Cargo.toml -p sky_ci_classifier --locked -- --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}")"
@@ -142,7 +144,11 @@ jobs:
       - name: Fetch Wave-6 retirement baseline commit
         run: |
           set -euo pipefail
-          baseline="b9debfaab043b88423e4efbd381f08ebec726d7e"
+          baseline="$(jq -r '.baseline' docs/migration/wave6-tooling-retirement-ledger.json)"
+          if [[ ! "$baseline" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid baseline SHA in wave6 ledger: $baseline" >&2
+            exit 1
+          fi
           git fetch --no-tags --depth=1 origin "$baseline"
           git cat-file -e "$baseline^{commit}"
 
@@ -246,7 +252,11 @@ jobs:
       - name: Fetch Wave-6 retirement baseline commit for restricted validation
         if: needs.changes.outputs.package_required == 'true'
         run: |
-          $baseline = "b9debfaab043b88423e4efbd381f08ebec726d7e"
+          $ledger = Get-Content "docs/migration/wave6-tooling-retirement-ledger.json" -Raw | ConvertFrom-Json
+          $baseline = $ledger.baseline
+          if ($baseline -notmatch '^[0-9a-f]{40}$') {
+            throw "Invalid baseline SHA in wave6 ledger: $baseline"
+          }
           git fetch --no-tags --depth=1 origin $baseline
           git cat-file -e "$baseline^{commit}"
 
