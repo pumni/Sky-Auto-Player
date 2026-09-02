@@ -46,6 +46,21 @@ jobs:
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
 
+      - name: Install and verify pinned cargo-vet
+        env:
+          CARGO_VET_VERSION: 0.10.2
+        run: |
+          $toolRoot = Join-Path $env:RUNNER_TEMP "cargo-vet"
+          $binary = Join-Path $toolRoot "bin\cargo-vet.exe"
+          if (-not (Test-Path $binary)) {
+            cargo install cargo-vet --version $env:CARGO_VET_VERSION --locked --root $toolRoot
+          }
+          $version = (& $binary --version).Trim()
+          if ($version -ne "cargo-vet $env:CARGO_VET_VERSION") {
+            throw "Expected cargo-vet $env:CARGO_VET_VERSION, got: $version"
+          }
+          (Split-Path -Parent $binary) | Add-Content $env:GITHUB_PATH -Encoding UTF8
+
       - name: Repository verification — static
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
@@ -100,6 +115,13 @@ jobs:
             Where-Object { $_.Name -like "sky_updater_e2e*" }
           if ($e2e) { throw "E2E updater artifacts must never enter the public release tree: $($e2e.FullName -join ', ')" }
 
+      - name: Generate signed dependency-policy evidence
+        run: |
+          $attestation = Join-Path $env:RUNNER_TEMP "SUPPLY_CHAIN_ATTESTATION.json"
+          cargo xtask audit supply-chain --attestation $attestation
+          if (-not (Test-Path $attestation)) { throw "cargo-vet attestation was not generated" }
+          "SKY_SUPPLY_CHAIN_ATTESTATION=$attestation" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
       - name: Sign exact release manifest
         env:
           SKY_UPDATE_SIGNING_KEY_HEX: ${{ secrets.SKY_UPDATE_SIGNING_KEY_HEX }}
@@ -109,7 +131,13 @@ jobs:
           }
           $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
           $signature = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json.sig"
-          cargo xtask manifest sign --manifest $manifest --output $signature --key-id release-2026
+          cargo xtask manifest sign --manifest $manifest --output $signature
+
+      - name: Verify exact signed release manifest
+        run: |
+          $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
+          $signature = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json.sig"
+          cargo xtask manifest verify --manifest $manifest --signature $signature
 
       - name: Stage release assets
         id: stage
@@ -120,7 +148,8 @@ jobs:
           $manifest = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json"
           $signature = Join-Path $env:SKY_PORTABLE_OUTPUT "MANIFEST.json.sig"
           $provenance = Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json"
-          foreach ($path in @($artifact, $sidecar, $manifest, $signature, $provenance)) {
+          $supplyChain = $env:SKY_SUPPLY_CHAIN_ATTESTATION
+          foreach ($path in @($artifact, $sidecar, $manifest, $signature, $provenance, $supplyChain)) {
             if (-not (Test-Path $path)) { throw "Missing exact portable release asset: $path" }
           }
           Copy-Item $artifact "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip"
@@ -139,7 +168,8 @@ jobs:
             "Sky-Auto-Player-v$ver.zip.sha256",
             "MANIFEST.json",
             "MANIFEST.json.sig",
-            "PROVENANCE.json"
+            "PROVENANCE.json",
+            "SUPPLY_CHAIN_ATTESTATION.json"
           )
           foreach ($file in $required) {
             if (-not (Test-Path "$env:RUNNER_TEMP\$file")) {
@@ -158,6 +188,11 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json.sig
             ${{ runner.temp }}/PROVENANCE.json
 
+      - name: Attest cargo-vet dependency policy
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/SUPPLY_CHAIN_ATTESTATION.json
+
       - name: Create draft GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -167,6 +202,7 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
             ${{ runner.temp }}/MANIFEST.json.sig
             ${{ runner.temp }}/PROVENANCE.json
+            ${{ runner.temp }}/SUPPLY_CHAIN_ATTESTATION.json
           body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
           generate_release_notes: false
           # Every release starts as a draft. Publish only the exact artifact that

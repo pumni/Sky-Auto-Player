@@ -1,4 +1,4 @@
-use crate::{Result, audits, branding, process, repo};
+use crate::{Result, audits, branding, process, repo, supply_chain};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -1352,6 +1352,7 @@ pub fn run(group: &str) -> Result<()> {
             audits::architecture::run(&root)?;
             audits::security::run(&root)?;
             audits::zero_python::run(&root)?;
+            supply_chain::run(None)?;
             branding::validate(&root)?;
             retirement(&root)?;
         }

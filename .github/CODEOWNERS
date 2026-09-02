@@ -3,6 +3,7 @@
 /.github/actions/ @pumni
 /.github/dependabot.yml @pumni
 /.github/CODEOWNERS @pumni
+/rust/supply-chain/ @pumni
 
 # Marketing site source and Pages workflows.
 /site/ @pumni

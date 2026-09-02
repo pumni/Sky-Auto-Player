@@ -127,6 +127,13 @@ jobs:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
 
+      - name: Restore pinned cargo-vet tool
+        id: cargo-vet-cache
+        uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.2.3
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
+
       - name: RustSec dependency audit
         env:
           CARGO_AUDIT_VERSION: 0.22.2
@@ -146,6 +153,26 @@ jobs:
         with:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
+
+      - name: Cargo-vet dependency policy
+        env:
+          CARGO_VET_VERSION: 0.10.2
+        run: |
+          tool_root="$RUNNER_TEMP/cargo-vet"
+          if [[ ! -x "$tool_root/bin/cargo-vet" ]]; then
+            cargo install cargo-vet --version "$CARGO_VET_VERSION" --locked --root "$tool_root"
+          fi
+          echo "$tool_root/bin" >> "$GITHUB_PATH"
+          version="$("$tool_root/bin/cargo-vet" --version)"
+          [[ "$version" == "cargo-vet $CARGO_VET_VERSION" ]]
+          cargo vet --manifest-path rust/Cargo.toml --locked
+
+      - name: Save pinned cargo-vet tool
+        if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.2.3
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
 
       - name: Repository verification — static
         env:
@@ -195,6 +222,35 @@ jobs:
           workspaces: "rust -> target"
           cache-on-failure: true
 
+      - name: Restore pinned cargo-vet tool
+        id: cargo-vet-cache
+        uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.2.3
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
+
+      - name: Install and verify pinned cargo-vet
+        env:
+          CARGO_VET_VERSION: 0.10.2
+        run: |
+          $toolRoot = Join-Path $env:RUNNER_TEMP "cargo-vet"
+          $binary = Join-Path $toolRoot "bin\cargo-vet.exe"
+          if (-not (Test-Path $binary)) {
+            cargo install cargo-vet --version $env:CARGO_VET_VERSION --locked --root $toolRoot
+          }
+          $version = (& $binary --version).Trim()
+          if ($version -ne "cargo-vet $env:CARGO_VET_VERSION") {
+            throw "Expected cargo-vet $env:CARGO_VET_VERSION, got: $version"
+          }
+          (Split-Path -Parent $binary) | Add-Content $env:GITHUB_PATH -Encoding UTF8
+
+      - name: Save pinned cargo-vet tool
+        if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.2.3
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
+
       - name: Repository verification — Rust
         if: needs.changes.outputs.package_required != 'true'
         env:
@@ -214,7 +270,7 @@ jobs:
       - name: Construct Python-unavailable validation environment
         if: needs.changes.outputs.package_required == 'true'
         run: |
-          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $required = @("cargo", "cargo-vet", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
           $toolDirectories = foreach ($name in $required) {
             $command = Get-Command $name -ErrorAction SilentlyContinue
             if ($command) { Split-Path -Parent $command.Source }

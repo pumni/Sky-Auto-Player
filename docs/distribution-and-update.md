@@ -36,6 +36,15 @@ The current `release-2026` public key is
 `f29125c71bdcb321ddd36722016893f91b0bcb684e7a0499b4bd5353be354cca`;
 the Actions secret must contain its matching private seed.
 
+Release jobs also publish `SUPPLY_CHAIN_ATTESTATION.json` outside the portable
+ZIP. It records the exact `rust/Cargo.lock` and `rust/supply-chain/` policy
+digests after `cargo vet --locked` succeeds. Verify the signed GitHub evidence
+with:
+
+```text
+gh attestation verify SUPPLY_CHAIN_ATTESTATION.json -R pumni/Sky-Auto-Player
+```
+
 Prerelease tags (`vX.Y.ZrcN`, `vX.Y.Z.devN`, and equivalent PEP 440 forms) are
 created as draft GitHub releases and published as prereleases for beta-channel
 validation only after qualification. Stable tags are published only after the

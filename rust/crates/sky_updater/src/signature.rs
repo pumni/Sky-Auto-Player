@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 
 use crate::archive::sha256_file;
@@ -9,18 +9,24 @@ use crate::error::{Result, UpdaterError, io_context};
 use crate::manifest::Manifest;
 use crate::{PRIMARY_EXE, UPDATER_EXE};
 
-const RELEASE_KEY_ID: &str = "release-2026";
-#[cfg(not(test))]
-const RELEASE_PUBLIC_KEY: [u8; 32] = [
-    0xf2, 0x91, 0x25, 0xc7, 0x1b, 0xdc, 0xb3, 0x21, 0xdd, 0xd3, 0x67, 0x22, 0x01, 0x68, 0x93, 0xf9,
-    0x1b, 0x0b, 0xcb, 0x68, 0x4e, 0x7a, 0x04, 0x99, 0xb4, 0xbd, 0x53, 0x53, 0xbe, 0x35, 0x4c, 0xca,
-];
+include!(concat!(env!("OUT_DIR"), "/update_trust.rs"));
 
 #[cfg(test)]
-const RELEASE_PUBLIC_KEY: [u8; 32] = [
+const TEST_PUBLIC_KEY: [u8; 32] = [
     0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
     0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
 ];
+
+fn embedded_public_key() -> [u8; 32] {
+    #[cfg(test)]
+    {
+        TEST_PUBLIC_KEY
+    }
+    #[cfg(not(test))]
+    {
+        RELEASE_PUBLIC_KEY
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,11 +58,11 @@ pub fn verify_manifest_signature(manifest_bytes: &[u8], signature_bytes: &[u8]) 
     let signature = decode_hex::<64>(&detached.signature).ok_or_else(|| {
         UpdaterError::ManifestSignatureInvalid("signature must be exactly 64 hex bytes".into())
     })?;
-    let verifying_key = VerifyingKey::from_bytes(&RELEASE_PUBLIC_KEY).map_err(|_| {
+    let verifying_key = VerifyingKey::from_bytes(&embedded_public_key()).map_err(|_| {
         UpdaterError::ManifestSignatureInvalid("embedded public key is invalid".into())
     })?;
     verifying_key
-        .verify(manifest_bytes, &Signature::from_bytes(&signature))
+        .verify_strict(manifest_bytes, &Signature::from_bytes(&signature))
         .map_err(|_| {
             UpdaterError::ManifestSignatureInvalid(
                 "signature does not match the exact manifest bytes".into(),

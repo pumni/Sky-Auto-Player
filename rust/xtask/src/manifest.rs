@@ -1,5 +1,5 @@
-use crate::{Result, repo};
-use ed25519_dalek::{Signer, SigningKey};
+use crate::{Result, repo, update_trust};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
@@ -15,30 +15,53 @@ const REQUIRED: &[&str] = &[
     "MANIFEST.json",
 ];
 
-#[derive(serde::Serialize)]
-struct DetachedManifestSignature<'a> {
-    key_id: &'a str,
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct DetachedManifestSignature {
+    key_id: String,
     signature: String,
 }
 
-pub fn sign(manifest_path: &Path, output_path: &Path, key_id: &str) -> Result<()> {
-    if key_id.is_empty()
-        || key_id.len() > 64
-        || !key_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        return Err("manifest signing key id is unsafe".into());
+fn validate_signing_key(
+    signing_key: &SigningKey,
+    key_id: &str,
+    trust: &update_trust::UpdateTrustConfig,
+) -> Result<()> {
+    if key_id != trust.key_id {
+        return Err(format!(
+            "manifest signing key id {key_id} does not match configured {}",
+            trust.key_id
+        )
+        .into());
     }
+    let derived_public_key = encode_hex(signing_key.verifying_key().to_bytes());
+    if derived_public_key != trust.public_key_hex {
+        return Err(format!(
+            "manifest signing key does not match configured public key for {}",
+            trust.key_id
+        )
+        .into());
+    }
+    Ok(())
+}
+
+pub fn sign(
+    manifest_path: &Path,
+    output_path: &Path,
+    requested_key_id: Option<&str>,
+) -> Result<()> {
+    let trust = update_trust::load(&repo::root())?;
+    let key_id = requested_key_id.unwrap_or(&trust.key_id);
     let key_hex = env::var("SKY_UPDATE_SIGNING_KEY_HEX")
         .map_err(|_| "SKY_UPDATE_SIGNING_KEY_HEX is required for manifest signing")?;
     let key_bytes = decode_hex::<32>(&key_hex)
         .ok_or("SKY_UPDATE_SIGNING_KEY_HEX must be exactly 32 bytes of hex")?;
     let signing_key = SigningKey::from_bytes(&key_bytes);
+    validate_signing_key(&signing_key, key_id, &trust)?;
     let manifest = std::fs::read(manifest_path)?;
     let signature = signing_key.sign(&manifest);
     let envelope = DetachedManifestSignature {
-        key_id,
+        key_id: key_id.to_owned(),
         signature: encode_hex(signature.to_bytes()),
     };
     let mut bytes = serde_json::to_vec_pretty(&envelope)?;
@@ -49,6 +72,30 @@ pub fn sign(manifest_path: &Path, output_path: &Path, key_id: &str) -> Result<()
         manifest_path.display(),
         key_id,
         output_path.display()
+    );
+    Ok(())
+}
+
+pub fn verify_signature(manifest_path: &Path, signature_path: &Path) -> Result<()> {
+    let trust = update_trust::load(&repo::root())?;
+    let manifest = std::fs::read(manifest_path)?;
+    let envelope: DetachedManifestSignature =
+        serde_json::from_slice(&std::fs::read(signature_path)?)?;
+    if envelope.key_id != trust.key_id {
+        return Err(format!(
+            "manifest signature key id {} does not match configured {}",
+            envelope.key_id, trust.key_id
+        )
+        .into());
+    }
+    let signature = decode_hex::<64>(&envelope.signature)
+        .ok_or("manifest signature must be exactly 64 bytes of hex")?;
+    let verifying_key = VerifyingKey::from_bytes(&trust.public_key)?;
+    verifying_key.verify_strict(&manifest, &Signature::from_bytes(&signature))?;
+    println!(
+        "[xtask] verified manifest signature {} with key {}",
+        manifest_path.display(),
+        trust.key_id
     );
     Ok(())
 }
@@ -370,6 +417,13 @@ mod tests {
                 .unwrap()
                 .contains(&"python314.dll".into())
         );
+    }
+
+    #[test]
+    fn rejects_a_valid_but_wrong_signing_key() {
+        let trust = update_trust::load(&repo::root()).expect("update trust metadata");
+        let wrong_key = SigningKey::from_bytes(&[0u8; 32]);
+        assert!(validate_signing_key(&wrong_key, &trust.key_id, &trust).is_err());
     }
 
     #[test]
