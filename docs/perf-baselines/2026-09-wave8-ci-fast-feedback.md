@@ -61,18 +61,18 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
 
 ## 2. Wave 8 Execution Matrix & Phased Comparison
 
-| Metric | Main Baseline (#549)<br/>True Wall-Clock | PR Control (#548)<br/>True Wall-Clock | CI-FAST-1 (Hosted PR #96)<br/>Run `33665614053` | CI-FAST-2<br/>(Static / Supply-Chain) | CI-FAST-3<br/>(Cache Architecture) | Final Wave 8 |
-| :--- | ---: | ---: | :---: | :---: | :---: | :---: |
-| `changes` (PR) | 59s | 33s | **17s** (Run #551: **15s**) | — | — | TBD |
-| `changes` (Dispatch/Main) | 59s | N/A | **3s** (Run #552) | — | — | TBD |
-| `static` | 50s | 43s | **46s** (Run #551: **43s**) | target <= 35–40s | — | TBD |
-| `supply_chain` | (in static) | (in static) | (in static) | parallel job | — | TBD |
-| `validate` (PR restore-only) | N/A | 8m41s | **7m53s** (Run #551: 8m44s) | — | TBD | TBD |
-| `validate` (Main with save) | 15m17s | N/A | N/A | — | TBD | TBD |
-| `packaged` (PR restore-only) | N/A | 8m06s | **7m22s** (Run #551: 8m04s) | — | TBD | TBD |
-| `packaged` (Main with save) | 10m33s | N/A | N/A | — | TBD | TBD |
-| `status` (Required gate) | ~9s | ~5s | **3s** (Run #551: **5s**) | <= 5s | <= 5s | TBD |
-| **Workflow Wall-Clock (PR)** | N/A | **9m31s** | **8m24s** | TBD | TBD | TBD |
+| Metric | Main Baseline (#549)<br/>True Wall-Clock | PR Control (#548)<br/>True Wall-Clock | CI-FAST-1 (Hosted PR #96)<br/>Run `33665614053` | CI-FAST-2 (Hosted PR #97)<br/>Run `33694232773` | CI-FAST-3<br/>(Cache Architecture) | Final Wave 8 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `changes` (PR) | 59s | 33s | **17s** (Run #551: **15s**) | **13s** | — | TBD |
+| `changes` (Dispatch/Main) | 59s | N/A | **3s** (Run #552) | **4s** (Run #559) | — | TBD |
+| `static` | 50s | 43s | **46s** (Run #551: **43s**) | **34s** (Run #559: **30s**) | — | TBD |
+| `supply_chain` | (in static) | (in static) | (in static) | **19s** (Run #559: **27s**) | — | TBD |
+| `validate` (PR restore-only) | N/A | 8m41s | **7m53s** (Run #551: 8m44s) | **7m43s** | TBD | TBD |
+| `validate` (Main with save) | 15m17s | N/A | N/A | **15m45s** (Run #559) | TBD | TBD |
+| `packaged` (PR restore-only) | N/A | 8m06s | **7m22s** (Run #551: 8m04s) | **5m39s** | TBD | TBD |
+| `packaged` (Main with save) | 10m33s | N/A | N/A | **9m45s** (Run #559) | TBD | TBD |
+| `status` (Required gate) | ~9s | ~5s | **3s** (Run #551: **5s**) | **3s** (Run #559: **2s**) | <= 5s | TBD |
+| **Workflow Wall-Clock (PR)** | N/A | **9m31s** | **8m24s** | **8m05s** | TBD | TBD |
 
 ---
 
@@ -199,3 +199,37 @@ To qualify the short-circuit optimization for manual dispatch and main push:
    - Preserves all security invariants from `SECURITY.md` and zero-Python audit rules from `AGENTS.md`.
 3. **Gate Convergence**:
    - Updated `status` required CI gate to depend on `[changes, static, supply_chain, validate, packaged]`, failing closed if either `static` or `supply_chain` fails.
+
+### 4.2 Hosted Qualification Evidence
+
+#### PR Run #558 (`33694232773`) on HEAD `e824c4c21cf3`
+- **Trigger**: `pull_request`
+- **Total Jobs**: 6/6 `SUCCESS`
+- **Timing Evidence**:
+  - `changes`: **13s** (ID `100459519681`)
+  - `static`: **34s** (ID `100459584997`) — **achieved target <= 35–40s**
+  - `supply_chain`: **19s** (ID `100459585070`) — concurrent parallel job
+  - `validate`: **7m43s** (ID `100459584973`)
+  - `packaged`: **5m39s** (ID `100459584981`)
+  - `status`: **3s** (ID `100461425486`)
+- **Authoritative Artifact**:
+  - Artifact ID: `9871324415`
+  - Name: `sky-auto-player-portable-e824c4c21cf3c7328076ca9df64f6a259b654315`
+  - Size: `9,171,940 bytes`
+  - Digest: `sha256:932cc5e1fb0c68bc353af9c5e8ffa2d460952623d7714e5f0307d0a87fdebdbb`
+
+#### Manual Dispatch Run #559 (`33694905103`) on HEAD `e824c4c21cf3`
+- **Trigger**: `workflow_dispatch`
+- **Total Jobs**: 6/6 `SUCCESS`
+- **Timing Evidence**:
+  - `changes`: **4s** (ID `100461577952`)
+  - `static`: **30s** (ID `100461603388`)
+  - `supply_chain`: **27s** (ID `100461603473`)
+  - `validate`: **15m45s** (ID `100461603580` — full browser tests + main cache save)
+  - `packaged`: **9m45s** (ID `100461603427`)
+  - `status`: **2s** (ID `100465247611`)
+- **Authoritative Artifact**:
+  - Artifact ID: `9871600003`
+  - Name: `sky-auto-player-portable-e824c4c21cf3c7328076ca9df64f6a259b654315`
+  - Size: `9,171,973 bytes`
+  - Digest: `sha256:19e43255c1f8754a52cdecbf469269c8faab5df8a7a8901bae17e066d9f4202a`
