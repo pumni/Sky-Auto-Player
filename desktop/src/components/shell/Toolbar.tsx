@@ -1,7 +1,7 @@
 import { Download, ListRestart, Search, Settings2 } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useEffect, useState } from 'react';
-import brandMarkUrl from '../../../../branding/sky-auto-player-app-icon.svg';
+import brandMarkUrl from '../../../../branding/sky-auto-player-app-icon-32.svg';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 

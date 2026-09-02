@@ -5,7 +5,12 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EXPECTED_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+const EXPECTED_SIZES: [u32; 14] = [
+    16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256,
+];
+const LARGE_SIZES: [u32; 8] = [32, 48, 60, 64, 72, 96, 128, 256];
+const SMALL_SIZES: [u32; 5] = [20, 24, 30, 36, 40];
+const TINY_SIZES: [u32; 1] = [16];
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 pub fn png_dimensions(data: &[u8]) -> Result<(u32, u32)> {
@@ -91,9 +96,9 @@ pub fn build_ico(layers: &BTreeMap<u32, Vec<u8>>) -> Result<Vec<u8>> {
 }
 
 pub fn build_ico_from_dirs(large: &Path, small: &Path, tiny: &Path) -> Result<Vec<u8>> {
-    let mut layers = find_layers(large, &[32, 48, 64, 128, 256])?;
-    layers.extend(find_layers(small, &[24])?);
-    layers.extend(find_layers(tiny, &[16])?);
+    let mut layers = find_layers(large, &LARGE_SIZES)?;
+    layers.extend(find_layers(small, &SMALL_SIZES)?);
+    layers.extend(find_layers(tiny, &TINY_SIZES)?);
     build_ico(&layers)
 }
 
@@ -144,12 +149,12 @@ fn validate_ico(root: &Path) -> Result<()> {
     let data = fs::read(root.join("branding/exports/windows/sky-auto-player.ico"))?;
     if data.len() < 6
         || data[..4] != [0, 0, 1, 0]
-        || u16::from_le_bytes(data[4..6].try_into()?) != 7
+        || u16::from_le_bytes(data[4..6].try_into()?) != EXPECTED_SIZES.len() as u16
     {
         return Err("branding ICO header/layer count changed".into());
     }
     let mut seen = BTreeMap::new();
-    for index in 0..7usize {
+    for index in 0..EXPECTED_SIZES.len() {
         let offset = 6 + index * 16;
         let width = if data[offset] == 0 {
             256
@@ -194,15 +199,28 @@ pub fn validate(root: &Path) -> Result<()> {
     )?;
     let (_, small) = validate_svg(
         &branding.join("sky-auto-player-app-icon-small.svg"),
-        "0 0 128 128",
+        "0 0 24 24",
         &ids,
     )?;
     let (_, tiny) = validate_svg(
         &branding.join("sky-auto-player-app-icon-16.svg"),
-        "0 0 128 128",
+        "0 0 16 16",
         &ids,
     )?;
-    for document in [&canonical, &small, &tiny] {
+    let mut optical_documents = vec![small, tiny];
+    for (name, view_box) in [
+        ("sky-auto-player-app-icon-20.svg", "0 0 20 20"),
+        ("sky-auto-player-app-icon-24.svg", "0 0 24 24"),
+        ("sky-auto-player-app-icon-30.svg", "0 0 30 30"),
+        ("sky-auto-player-app-icon-32.svg", "0 0 32 32"),
+        ("sky-auto-player-app-icon-36.svg", "0 0 36 36"),
+        ("sky-auto-player-app-icon-40.svg", "0 0 40 40"),
+        ("sky-auto-player-app-icon-48.svg", "0 0 48 48"),
+    ] {
+        let (_, document) = validate_svg(&branding.join(name), view_box, &ids)?;
+        optical_documents.push(document);
+    }
+    for document in optical_documents.iter().chain(std::iter::once(&canonical)) {
         if document
             .descendants()
             .filter(|node| {
@@ -219,6 +237,10 @@ pub fn validate(root: &Path) -> Result<()> {
         node.attribute("id") == Some("plate") && node.attribute("fill") != Some("#07090D")
     }) {
         return Err("canonical branding plate color changed".into());
+    }
+    let toolbar = fs::read_to_string(root.join("desktop/src/components/shell/Toolbar.tsx"))?;
+    if !toolbar.contains("sky-auto-player-app-icon-32.svg") {
+        return Err("desktop toolbar must use the dedicated 32px branding master".into());
     }
     let no_bg = branding.join("sky-auto-player-mark-no-bg.svg");
     let (_, no_bg_doc) = validate_svg(
@@ -267,6 +289,12 @@ pub fn validate(root: &Path) -> Result<()> {
         }
     }
     validate_ico(root)?;
+    let ico = fs::read(branding.join("exports/windows/sky-auto-player.ico"))?;
+    for consumer in ["site/public/favicon.ico", "desktop/src-tauri/icons/icon.ico"] {
+        if fs::read(root.join(consumer))? != ico {
+            return Err(format!("branding ICO consumer drift: {consumer}").into());
+        }
+    }
     for (name, size) in [
         ("favicon-16x16.png", 16),
         ("favicon-32x32.png", 32),
@@ -333,9 +361,9 @@ mod tests {
             .map(|size| (size, png(size)))
             .collect();
         let ico = build_ico(&layers).expect("ICO");
-        assert_eq!(&ico[..6], &[0, 0, 1, 0, 7, 0]);
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, EXPECTED_SIZES.len() as u8, 0]);
         assert_eq!(ico[6], 16);
-        assert_eq!(ico[6 + 16 * 6], 0);
+        assert_eq!(ico[6 + 16 * (EXPECTED_SIZES.len() - 1)], 0);
         assert_eq!(&ico[10..12], &1u16.to_le_bytes());
         assert_eq!(&ico[12..14], &32u16.to_le_bytes());
     }

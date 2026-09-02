@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="950" viewBox="0 0 1600 950">
+  <title>Sky Auto Player optical icon size evidence</title>
+  <rect width="1600" height="950" fill="#101722"/>
+  <text x="48" y="42" fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">
+    Sky Auto Player · optical icon masters
+  </text>
+  <text x="48" y="72" fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="15">
+    True 1:1 raster output above · 8× nearest-neighbour inspection below · no interpolation in the source masters
+  </text>
+
+  <text x="48" y="108" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">
+    ACTUAL SIZE
+  </text>
+  <g fill="#F4EFE3" font-family="Segoe UI, sans-serif" font-size="13" text-anchor="middle">
+    <image href="../exports/windows/optical/tiny/16/16x16.png" x="80" y="120" width="16" height="16"/>
+    <image href="../exports/windows/optical/small/20/20x20.png" x="240" y="118" width="20" height="20"/>
+    <image href="../exports/windows/optical/small/24/24x24.png" x="400" y="116" width="24" height="24"/>
+    <image href="../exports/windows/optical/small/30/30x30.png" x="560" y="113" width="30" height="30"/>
+    <image href="../exports/windows/optical/large/32/32x32.png" x="720" y="112" width="32" height="32"/>
+    <image href="../exports/windows/optical/small/36/36x36.png" x="880" y="110" width="36" height="36"/>
+    <image href="../exports/windows/optical/small/40/40x40.png" x="1040" y="108" width="40" height="40"/>
+    <image href="../exports/windows/optical/large/48/48x48.png" x="1200" y="104" width="48" height="48"/>
+    <text x="88" y="166">16px</text>
+    <text x="250" y="166">20px</text>
+    <text x="412" y="166">24px</text>
+    <text x="575" y="166">30px</text>
+    <text x="736" y="166">32px</text>
+    <text x="898" y="166">36px</text>
+    <text x="1060" y="166">40px</text>
+    <text x="1224" y="166">48px</text>
+  </g>
+
+  <text x="48" y="218" fill="#F7DDA2" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">
+    8× PIXEL INSPECTION
+  </text>
+  <g image-rendering="pixelated">
+    <image href="../exports/windows/optical/tiny/16/16x16.png" x="100" y="250" width="128" height="128"/>
+    <image href="../exports/windows/optical/small/20/20x20.png" x="360" y="250" width="160" height="160"/>
+    <image href="../exports/windows/optical/small/24/24x24.png" x="640" y="250" width="192" height="192"/>
+    <image href="../exports/windows/optical/small/30/30x30.png" x="940" y="250" width="240" height="240"/>
+    <image href="../exports/windows/optical/large/32/32x32.png" x="80" y="550" width="256" height="256"/>
+    <image href="../exports/windows/optical/small/36/36x36.png" x="430" y="534" width="288" height="288"/>
+    <image href="../exports/windows/optical/small/40/40x40.png" x="800" y="518" width="320" height="320"/>
+    <image href="../exports/windows/optical/large/48/48x48.png" x="1170" y="486" width="384" height="384"/>
+  </g>
+  <g fill="#B8CCD6" font-family="Segoe UI, sans-serif" font-size="13">
+    <text x="100" y="398">16px ×8</text>
+    <text x="360" y="420">20px ×8</text>
+    <text x="640" y="452">24px ×8</text>
+    <text x="940" y="500">30px ×8</text>
+    <text x="80" y="824">32px ×8</text>
+    <text x="430" y="840">36px ×8</text>
+    <text x="800" y="858">40px ×8</text>
+    <text x="1170" y="910">48px ×8</text>
+  </g>
+</svg>
