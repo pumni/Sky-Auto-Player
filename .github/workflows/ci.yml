@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   FORCE_COLOR: "1"
@@ -31,55 +31,70 @@ jobs:
         shell: bash
 
     outputs:
-      static_required: ${{ steps.filter.outputs.static_required }}
-      code_required: ${{ steps.filter.outputs.code_required }}
-      package_required: ${{ steps.filter.outputs.package_required }}
-      browser_required: ${{ steps.filter.outputs.browser_required }}
-      classification_reason: ${{ steps.filter.outputs.classification_reason }}
+      static_required: ${{ steps.filter-pr.outputs.static_required || steps.filter-full.outputs.static_required }}
+      code_required: ${{ steps.filter-pr.outputs.code_required || steps.filter-full.outputs.code_required }}
+      package_required: ${{ steps.filter-pr.outputs.package_required || steps.filter-full.outputs.package_required }}
+      browser_required: ${{ steps.filter-pr.outputs.browser_required || steps.filter-full.outputs.browser_required }}
+      classification_reason: ${{ steps.filter-pr.outputs.classification_reason || steps.filter-full.outputs.classification_reason }}
 
     steps:
       - name: Start CI timing
-        shell: pwsh
-        run: |
-          "SKY_CI_JOB_STARTED_CHANGES=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+        run: echo "SKY_CI_JOB_STARTED_CHANGES=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Checkout
+      - name: Emit full qualification matrix for main / manual dispatch
+        if: github.event_name != 'pull_request'
+        id: filter-full
+        run: |
+          {
+            echo "static_required=true"
+            echo "code_required=true"
+            echo "package_required=true"
+            echo "browser_required=true"
+            echo "classification_reason=full validation requested"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '## Validation classification'
+            echo '```text'
+            echo 'static_required=true'
+            echo 'code_required=true'
+            echo 'package_required=true'
+            echo 'browser_required=true'
+            echo 'classification_reason=full validation requested'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout PR head
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch PR base commit
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
 
       - name: Install pinned Rust toolchain for classifier
+        if: github.event_name == 'pull_request'
         run: rustup toolchain install 1.98.0 --profile minimal
 
       - name: Verify classifier toolchain
+        if: github.event_name == 'pull_request'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           set -euo pipefail
           rustc --version | grep -E '^rustc 1\.98\.0 '
 
-      - name: Classify changed paths
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          CURRENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - name: Classify PR changed paths
+        if: github.event_name == 'pull_request'
+        id: filter-pr
         run: |
           set -euo pipefail
-
-          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
-            classification="$(cargo xtask ci classify --full)"
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            classification="$(cargo xtask ci classify --base "$PR_BASE_SHA" --head "$CURRENT_SHA")"
-          elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
-            classification="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA" | cargo xtask ci classify)"
-          else
-            classification="$(cargo xtask ci classify --base "$BEFORE_SHA" --head "$CURRENT_SHA")"
-          fi
-
+          classification="$(cargo run --manifest-path rust/Cargo.toml -p sky_ci_classifier --locked -- --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}")"
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$classification"
           {
@@ -91,8 +106,16 @@ jobs:
 
       - name: Report CI timing
         if: always()
-        shell: pwsh
-        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job changes
+        run: |
+          start_time="${SKY_CI_JOB_STARTED_CHANGES:-}"
+          if [ -n "$start_time" ]; then
+            elapsed=$(( $(date +%s) - start_time ))
+            {
+              echo "## CI job timing"
+              echo "- Job: \`changes\`"
+              echo "- Elapsed seconds: \`$elapsed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   static:
     name: Static and security gates
@@ -106,30 +129,36 @@ jobs:
 
     steps:
       - name: Start CI timing
-        shell: pwsh
-        run: |
-          "SKY_CI_JOB_STARTED_STATIC=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+        run: echo "SKY_CI_JOB_STARTED_STATIC=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Fetch Wave-6 retirement baseline commit
+        run: |
+          set -euo pipefail
+          baseline="b9debfaab043b88423e4efbd381f08ebec726d7e"
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git cat-file -e "$baseline^{commit}"
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
 
       - name: Restore pinned cargo-audit tool
         id: cargo-audit-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -150,7 +179,7 @@ jobs:
 
       - name: Save pinned cargo-audit tool
         if: github.event_name != 'pull_request' && steps.cargo-audit-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
@@ -171,7 +200,7 @@ jobs:
 
       - name: Save pinned cargo-vet tool
         if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -183,8 +212,16 @@ jobs:
 
       - name: Report CI timing
         if: always()
-        shell: pwsh
-        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job static
+        run: |
+          start_time="${SKY_CI_JOB_STARTED_STATIC:-}"
+          if [ -n "$start_time" ]; then
+            elapsed=$(( $(date +%s) - start_time ))
+            {
+              echo "## CI job timing"
+              echo "- Job: \`static\`"
+              echo "- Elapsed seconds: \`$elapsed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   validate:
     name: Windows compatibility and unit tests
@@ -201,9 +238,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Fetch Wave-6 retirement baseline commit for restricted validation
+        if: needs.changes.outputs.package_required == 'true'
+        run: |
+          $baseline = "b9debfaab043b88423e4efbd381f08ebec726d7e"
+          git fetch --no-tags --depth=1 origin $baseline
+          git cat-file -e "$baseline^{commit}"
 
       - name: Rust — install pinned stable toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
@@ -227,7 +272,7 @@ jobs:
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -249,7 +294,7 @@ jobs:
 
       - name: Save pinned cargo-vet tool
         if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -347,7 +392,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -438,7 +484,7 @@ jobs:
           Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json")
 
       - name: Upload exact portable release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sky-auto-player-portable-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/Sky Auto Player portable
@@ -461,9 +507,7 @@ jobs:
 
     steps:
       - name: Start CI timing
-        shell: pwsh
-        run: |
-          "SKY_CI_JOB_STARTED_STATUS=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+        run: echo "SKY_CI_JOB_STARTED_STATUS=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Require relevant gates to pass
         env:
@@ -484,12 +528,13 @@ jobs:
 
       - name: Report CI timing
         if: always()
-        shell: pwsh
         run: |
-          $startedAt = [DateTimeOffset]::Parse($env:SKY_CI_JOB_STARTED_STATUS)
-          $elapsedSeconds = [math]::Round(([DateTimeOffset]::UtcNow - $startedAt).TotalSeconds, 2)
-          @"
-          ## CI job timing
-          - Job: ``status``
-          - Elapsed seconds: ``$elapsedSeconds``
-          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          start_time="${SKY_CI_JOB_STARTED_STATUS:-}"
+          if [ -n "$start_time" ]; then
+            elapsed=$(( $(date +%s) - start_time ))
+            {
+              echo "## CI job timing"
+              echo "- Job: \`status\`"
+              echo "- Elapsed seconds: \`$elapsed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
