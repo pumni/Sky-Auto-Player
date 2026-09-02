@@ -223,6 +223,7 @@ jobs:
         with:
           workspaces: "rust -> target"
           cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
