@@ -20,8 +20,9 @@ body {
 }
 
 .toolbar {
-  display: flex;
+  display: grid;
   align-items: center;
+  grid-template-columns: minmax(190px, 1fr) minmax(300px, 520px) minmax(190px, 1fr);
   min-width: 0;
   gap: var(--space-4);
   padding: 0 var(--space-4);
@@ -31,10 +32,12 @@ body {
 
 .identity {
   display: flex;
-  flex: 0 1 auto;
+  grid-column: 1;
+  grid-row: 1;
   align-items: center;
   min-width: 184px;
   gap: 9px;
+  justify-self: start;
   white-space: nowrap;
 }
 
@@ -47,9 +50,9 @@ body {
 
 .identity-mark {
   display: block;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   border-radius: 5px;
 }
 
@@ -60,9 +63,11 @@ body {
 
 .search-field {
   display: flex;
-  flex: 0 1 520px;
+  grid-column: 2;
+  grid-row: 1;
   align-items: center;
-  width: min(520px, 48vw);
+  width: 100%;
+  max-width: 520px;
   min-width: 180px;
   height: 32px;
   gap: 8px;
@@ -71,6 +76,7 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   background: var(--canvas);
+  justify-self: center;
 }
 
 .search-field:focus-within {
@@ -100,10 +106,12 @@ body {
 }
 
 .toolbar-actions {
+  grid-column: 3;
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-left: auto;
+  justify-self: end;
 }
 
 .version-label {
@@ -145,16 +153,13 @@ body {
 
 @media (max-width: 1049px) {
   .toolbar {
+    grid-template-columns: minmax(174px, 1fr) minmax(300px, 520px) minmax(174px, 1fr);
     gap: var(--space-3);
     padding-inline: 10px;
   }
 
   .identity {
     min-width: 174px;
-  }
-
-  .search-field {
-    width: auto;
   }
 
   .version-label {

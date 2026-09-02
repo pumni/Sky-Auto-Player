@@ -83,7 +83,7 @@ body.is-resizing * {
   flex-direction: column;
   overflow: auto;
   padding: var(--space-5) var(--space-6) var(--space-6);
-  background: var(--canvas);
+  background: var(--surface-panel);
 }
 
 .inspector-panel:not(.inspector-empty) > * {
@@ -206,19 +206,19 @@ body.is-resizing * {
   align-content: start;
   justify-items: start;
   gap: 9px;
-  padding-top: clamp(64px, 18%, 148px);
+  padding-top: clamp(48px, 12%, 104px);
   text-align: left;
 }
 
 .inspector-empty .muted {
-  max-width: 400px;
+  max-width: 340px;
 }
 
 .empty-inspector-icon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   margin-bottom: 3px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
@@ -574,6 +574,24 @@ body.is-resizing * {
   display: none;
   width: 0;
   height: 0;
+}
+
+.virtual-list::-webkit-scrollbar-button:single-button,
+.inspector-panel::-webkit-scrollbar-button:single-button,
+.diagnostics-scroll::-webkit-scrollbar-button:single-button,
+.diagnostics-overlay::-webkit-scrollbar-button:single-button,
+.virtual-list::-webkit-scrollbar-button:vertical:decrement,
+.virtual-list::-webkit-scrollbar-button:vertical:increment,
+.inspector-panel::-webkit-scrollbar-button:vertical:decrement,
+.inspector-panel::-webkit-scrollbar-button:vertical:increment,
+.diagnostics-scroll::-webkit-scrollbar-button:vertical:decrement,
+.diagnostics-scroll::-webkit-scrollbar-button:vertical:increment,
+.diagnostics-overlay::-webkit-scrollbar-button:vertical:decrement,
+.diagnostics-overlay::-webkit-scrollbar-button:vertical:increment {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
 }
 
 @media (min-width: 1280px) {

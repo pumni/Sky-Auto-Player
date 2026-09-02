@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import type { PlaybackDecisionId } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface PlayerBarProps {
@@ -22,11 +23,12 @@ function formatDuration(value: number): string {
 }
 
 function stateLabel(state: string): string {
-  return state.replaceAll('_', ' ');
+  const label = state.replaceAll('_', ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function admissionDecisionLabel(label: string): string {
-  return label.toLowerCase().includes('dry-run') ? 'Test playback (no input)' : label;
+function admissionDecisionLabel(decision: PlaybackDecisionId, label: string): string {
+  return decision === 'dry_run' ? 'Test playback (no input)' : label;
 }
 
 export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
@@ -64,6 +66,8 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
   };
 
   const active = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
+  const canPreparePlayback =
+    Boolean(selectedSongId) && !active && playback.pendingCommand === null && !playback.prepared;
   const snapshot = playback.snapshot;
   const defaults = settings?.playback_defaults;
   const admissionRequired = playback.prepared?.admission === 'confirmation_required';
@@ -84,9 +88,11 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
   const profileSummary = defaults
     ? `${defaults.hold_frames}f · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
     : 'Unavailable';
-  const progressLabel = totalUs
-    ? `Playback progress, ${formatDuration(currentUs)} of ${formatDuration(totalUs)}`
-    : 'Playback progress unavailable';
+  const progressLabel = !selectedSongId
+    ? 'Playback progress unavailable until a sheet is selected'
+    : totalUs
+      ? `Playback progress, ${formatDuration(currentUs)} of ${formatDuration(totalUs)}`
+      : 'Playback progress unavailable';
 
   useEffect(() => {
     if (!admissionRequired) return;
@@ -119,7 +125,7 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
                 ref={index === 0 ? admissionActionRef : undefined}
                 onClick={() => void start(decision.decision)}
               >
-                {admissionDecisionLabel(decision.label)}
+                {admissionDecisionLabel(decision.decision, decision.label)}
               </button>
             ))}
           </div>
@@ -213,12 +219,20 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
             )}
           </div>
         </div>
-        <div className="player-timeline" aria-label={progressLabel}>
+        <div
+          className={`player-timeline${selectedSongId ? '' : ' is-disabled'}`}
+          aria-label={progressLabel}
+        >
           <div className="player-timeline-labels">
-            <span>{formatDuration(currentUs)}</span>
-            <span>{formatDuration(totalUs)}</span>
+            <span>{selectedSongId ? formatDuration(currentUs) : '--:--'}</span>
+            <span>{selectedSongId ? formatDuration(totalUs) : '--:--'}</span>
           </div>
-          <progress value={currentUs} max={totalUs || 1} aria-label={progressLabel} />
+          <progress
+            value={selectedSongId ? currentUs : 0}
+            max={selectedSongId ? totalUs || 1 : 1}
+            aria-label={progressLabel}
+            aria-disabled={!selectedSongId}
+          />
         </div>
         {playback.prepared && !active && (
           <span className="player-transport-status" role="status">
@@ -237,59 +251,62 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
         )}
       </div>
 
-      <div className="player-profile">
-        <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
-          <AriaButton
-            ref={profileTriggerRef}
-            className="profile-summary-button"
-            type="button"
-            aria-label="Configure timing profile"
-          >
-            <SlidersHorizontal size={15} aria-hidden="true" />
-            <span>
-              <strong>Playback profile</strong>
-              <small>{profileSummary}</small>
-            </span>
-          </AriaButton>
-          <Popover
-            id="playback-profile-popover"
-            className="profile-popover"
-            placement="top end"
-            offset={8}
-          >
-            <Dialog aria-label="Playback profile">
-              <div className="profile-fields">
-                <ProfileFields
-                  defaults={defaults}
-                  bootstrap={bootstrap}
-                  patchSettings={patchSettings}
-                />
-              </div>
-              <button
-                className="button profile-test-action"
-                type="button"
-                onClick={() => {
-                  setProfileOpen(false);
-                  void prepareAndMaybeStart(true);
-                }}
-              >
-                Test playback (no input)
-              </button>
-            </Dialog>
-          </Popover>
-        </DialogTrigger>
-      </div>
+      <div className="player-tools">
+        <div className="player-profile">
+          <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
+            <AriaButton
+              ref={profileTriggerRef}
+              className="profile-summary-button"
+              type="button"
+              aria-label="Configure timing profile"
+            >
+              <SlidersHorizontal size={15} aria-hidden="true" />
+              <span>
+                <strong>Playback profile</strong>
+                <small>{profileSummary}</small>
+              </span>
+            </AriaButton>
+            <Popover
+              id="playback-profile-popover"
+              className="profile-popover"
+              placement="top end"
+              offset={8}
+            >
+              <Dialog aria-label="Playback profile">
+                <div className="profile-fields">
+                  <ProfileFields
+                    defaults={defaults}
+                    bootstrap={bootstrap}
+                    patchSettings={patchSettings}
+                  />
+                </div>
+                <button
+                  className="button profile-test-action"
+                  type="button"
+                  disabled={!canPreparePlayback}
+                  onClick={() => {
+                    setProfileOpen(false);
+                    void prepareAndMaybeStart(true);
+                  }}
+                >
+                  Test playback (no input)
+                </button>
+              </Dialog>
+            </Popover>
+          </DialogTrigger>
+        </div>
 
-      <button
-        className="icon-button player-diagnostics-button"
-        type="button"
-        aria-label={diagnosticsOpen ? 'Close diagnostics' : 'Open diagnostics'}
-        aria-pressed={diagnosticsOpen}
-        ref={diagnosticsTriggerRef}
-        onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
-      >
-        <Activity size={16} aria-hidden="true" />
-      </button>
+        <button
+          className="icon-button player-diagnostics-button"
+          type="button"
+          aria-label={diagnosticsOpen ? 'Close diagnostics' : 'Open diagnostics'}
+          aria-pressed={diagnosticsOpen}
+          ref={diagnosticsTriggerRef}
+          onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
+        >
+          <Activity size={16} aria-hidden="true" />
+        </button>
+      </div>
     </footer>
   );
 }

@@ -1,7 +1,7 @@
 import { Download, ListRestart, Search, Settings2 } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useEffect, useState } from 'react';
-import brandMarkUrl from '../../../../branding/sky-auto-player-app-icon-small.svg';
+import brandMarkUrl from '../../../../branding/sky-auto-player-app-icon.svg';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
@@ -30,7 +30,7 @@ export function Toolbar({ bootstrap, useStore }: ToolbarProps) {
   return (
     <header className="toolbar">
       <div className="identity" aria-label="Sky Auto Player">
-        <img className="identity-mark" src={brandMarkUrl} alt="" width="24" height="24" />
+        <img className="identity-mark" src={brandMarkUrl} alt="" width="32" height="32" />
         <strong>Sky Auto Player</strong>
       </div>
       <label className="search-field">

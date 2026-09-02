@@ -1,7 +1,7 @@
 .player-bar {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(320px, 1.45fr) 205px auto;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 640px) minmax(0, 1fr);
   align-items: center;
   min-width: 0;
   gap: var(--space-4);
@@ -12,6 +12,8 @@
 }
 
 .player-track-info {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -50,7 +52,6 @@
 
 .player-track-copy span {
   font-size: 11px;
-  text-transform: capitalize;
 }
 
 .player-risk {
@@ -62,7 +63,10 @@
 }
 
 .player-transport {
+  grid-column: 2;
+  grid-row: 1;
   display: grid;
+  width: 100%;
   min-width: 0;
   gap: 5px;
 }
@@ -88,8 +92,15 @@
   border-radius: 50%;
 }
 
-.transport-actions .player-primary-action.button-primary:hover {
+.transport-actions .player-primary-action.button-primary:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.transport-actions .player-primary-action:disabled {
+  opacity: 1;
+  color: var(--text-tertiary);
+  border-color: var(--border-subtle);
+  background: var(--surface-raised);
 }
 
 .player-secondary-action {
@@ -145,6 +156,20 @@
   background: var(--accent);
 }
 
+.player-timeline.is-disabled {
+  color: var(--text-tertiary);
+}
+
+.player-timeline progress[aria-disabled='true'] {
+  border-color: var(--border-subtle);
+  background: var(--surface-raised);
+}
+
+.player-timeline progress[aria-disabled='true']::-webkit-progress-value,
+.player-timeline progress[aria-disabled='true']::-moz-progress-bar {
+  background: transparent;
+}
+
 .player-message {
   display: block;
   max-height: 32px;
@@ -159,7 +184,7 @@
 
 .player-profile {
   position: relative;
-  width: 205px;
+  width: 190px;
   min-width: 0;
 }
 
@@ -270,6 +295,16 @@
   font-size: 11px;
 }
 
+.player-tools {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  min-width: 0;
+  gap: 8px;
+}
+
 .player-diagnostics-button {
   flex: 0 0 auto;
 }
@@ -332,9 +367,13 @@
 
 @media (max-width: 1100px) {
   .player-bar {
-    grid-template-columns: minmax(150px, 0.9fr) minmax(300px, 1.35fr) 205px auto;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 640px) minmax(0, 1fr);
     gap: 8px;
     padding-inline: 10px;
+  }
+
+  .player-profile {
+    width: 180px;
   }
 
   .player-admission {
@@ -345,7 +384,7 @@
 
 @media (max-width: 960px) {
   .player-bar {
-    grid-template-columns: minmax(140px, 0.85fr) minmax(285px, 1.35fr) 205px auto;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 640px) minmax(0, 1fr);
   }
 
   .player-track-icon {

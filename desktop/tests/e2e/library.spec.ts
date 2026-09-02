@@ -60,6 +60,57 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Player Bar communicates the no-selection state without actionable playback', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const primary = player.getByRole('button', { name: 'Play' });
+  const labels = player.locator('.player-timeline-labels');
+
+  await expect(primary).toBeDisabled();
+  await expect(labels).toContainText('--:--');
+  expect(await labels.textContent()).not.toContain('0:00');
+  await expect(player.getByRole('progressbar')).toHaveAttribute('aria-disabled', 'true');
+
+  await player.getByRole('button', { name: 'Configure timing profile' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Playback profile' }).getByRole('button', {
+      name: 'Test playback (no input)',
+    }),
+  ).toBeDisabled();
+  await page.keyboard.press('Escape');
+});
+
+test('Toolbar search and Player primary control share the application center axis', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/');
+  const viewportCenter = 1920 / 2;
+  const searchBox = await page.getByLabel('Search songs').boundingBox();
+  const idleBox = await page.getByRole('button', { name: 'Play' }).boundingBox();
+  expect(searchBox).not.toBeNull();
+  expect(idleBox).not.toBeNull();
+  if (searchBox && idleBox) {
+    expect(Math.abs(searchBox.x + searchBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+    expect(Math.abs(idleBox.x + idleBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+  }
+
+  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  await page.getByRole('button', { name: 'Play' }).click();
+  await page
+    .getByRole('group', { name: 'Playback confirmation' })
+    .getByRole('button', { name: 'Proceed with current settings' })
+    .click();
+  const activeBox = await page.getByRole('button', { name: 'Pause' }).boundingBox();
+  expect(activeBox).not.toBeNull();
+  if (activeBox) {
+    expect(Math.abs(activeBox.x + activeBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+  }
+});
+
 test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');

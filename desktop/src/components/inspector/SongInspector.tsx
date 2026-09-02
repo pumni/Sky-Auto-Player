@@ -18,7 +18,7 @@ export function SongInspector({ useStore }: SongInspectorProps) {
     return (
       <section className="inspector-panel inspector-empty" aria-labelledby="inspector-title">
         <div className="empty-inspector-icon" aria-hidden="true">
-          <Music2 size={26} />
+          <Music2 size={22} />
         </div>
         <h2 id="inspector-title">Choose a song</h2>
         <p className="muted">
