@@ -568,6 +568,23 @@ mod tests {
 
     static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[test]
+    fn ready_handoff_keeps_starting_state_before_execute_without_fallible_write() {
+        let source = include_str!("runner.rs");
+        let starting = "last_persisted_phase: Mutex::new(Some(UpdatePhase::Starting))";
+        let ready = "handoff::write_ready(&run_root, &args.target_version)?;";
+        let execute = "let outcome = execute_update(args, source, &progress, &run_root);";
+        let starting_index = source
+            .find(starting)
+            .expect("starting state initialization");
+        let ready_index = source.find(ready).expect("READY handoff write");
+        let execute_index = source.find(execute).expect("execute_update call");
+        assert!(starting_index < ready_index && ready_index < execute_index);
+        let between = &source[ready_index + ready.len()..execute_index];
+        assert!(!between.contains("progress.publish"));
+        assert!(!between.contains('?'));
+    }
+
     struct LocalAppDataGuard {
         previous: Option<OsString>,
     }

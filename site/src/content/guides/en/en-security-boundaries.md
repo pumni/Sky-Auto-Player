@@ -25,7 +25,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md
   - category: security
     label: Security audit script (CI gate)
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/scripts/audit_security_mandates.py
+    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/xtask
   - category: implementation
     label: Windows platform layer — only place SendInput lives
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
@@ -67,16 +67,15 @@ inputs are rejected with a clear error — not silently coerced.
 
 ## CI enforcement
 
-An automated audit script (`scripts/audit_security_mandates.py`) scans both the Python
-source under `src/` and the Rust source under `rust/` on every push and pull request.
-Any commit that introduces a forbidden API call (hook, memory read, remote thread, debug
-attach) fails CI immediately. Historical exceptions, if any, are listed in
+The Rust audit included in `cargo xtask check static` scans the native product source on
+every push and pull request. Any commit that introduces a forbidden API call (hook, memory
+read, remote thread, debug attach) fails CI immediately. Historical exceptions, if any, are listed in
 `.config/security_audit_baseline.json` with a justification and a tracking reference.
 
 To run the audit locally:
 
 ```powershell
-uv run --env-file .env python scripts/audit_security_mandates.py
+cargo xtask check static
 ```
 
 ## Source code
@@ -88,11 +87,13 @@ the source.
 
 ## Release verification
 
-Every release produces three files:
+Every release produces five files:
 
 - `Sky-Auto-Player-v<version>.zip` — the application archive
 - `Sky-Auto-Player-v<version>.zip.sha256` — the SHA256 checksum
 - `MANIFEST.json` — a manifest listing all asset checksums
+- `MANIFEST.json.sig` — a detached Ed25519 signature for the exact manifest bytes
+- `PROVENANCE.json` — build provenance metadata
 
 Verify the archive before extracting:
 
@@ -103,19 +104,21 @@ Verify the archive before extracting:
 
 ## Public update boundary
 
-Public Windows binaries are intentionally unsigned and the package includes the native updater.
-The user-triggered updater verifies the exact release ZIP, SHA256, and `MANIFEST.json` before
-transactional replacement; the manual fallback opens only the official GitHub Releases page.
+Public Windows binaries remain intentionally unsigned for Authenticode and the package includes
+the native updater. The user-triggered updater verifies the detached Ed25519 signature over the
+exact `MANIFEST.json` bytes before trusting its hashes, then verifies the exact release ZIP and
+SHA256 before transactional replacement; the manual fallback opens only the official GitHub
+Releases page.
 Authenticode is **N/A — intentionally unsigned**.
 
 The public integrity/provenance evidence remains:
 
-- canonical ZIP, `.zip.sha256`, and `MANIFEST.json`
+- canonical ZIP, `.zip.sha256`, `MANIFEST.json`, and `MANIFEST.json.sig`
 - exact unsigned bytes hashed by the manifest
 - GitHub build provenance/attestation
 
 The Rust `sky_updater` binary is shipped and reachable only from the user-triggered update
-action. It remains separately tested and fail-closed on HTTPS, archive, manifest, and
+action. It remains separately tested and fail-closed on HTTPS, archive, signed manifest, and
 transaction integrity; it has no Authenticode requirement or signature bypass.
 
 ## Terms of Service notice

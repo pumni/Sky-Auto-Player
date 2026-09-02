@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sky_updater::archive::{extract_zip_file, sha256_bytes, sha256_file};
 use sky_updater::error::Result;
@@ -27,6 +27,9 @@ use sky_updater::{
 
 const PREVIOUS_VERSION: &str = "3.4.5";
 const TARGET_VERSION: &str = "3.5.0";
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const UPDATER_COMPLETION_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
 struct EnvGuard {
     key: &'static str,
@@ -157,7 +160,7 @@ fn assert_preserved_config_semantics(install: &Path, expected_config: &[u8]) {
 }
 
 fn stop_child(child: &mut Child) {
-    if child.try_wait().expect("child status").is_none() {
+    if child.try_wait().map_or(true, |status| status.is_none()) {
         let _ = child.kill();
     }
     let _ = child.wait();
@@ -174,8 +177,32 @@ impl ChildGuard {
         stop_child(&mut self.0);
     }
 
-    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.0.wait()
+    fn wait_timeout(
+        &mut self,
+        timeout: Duration,
+        phase: &str,
+        local_app_data: &Path,
+        run_root: &Path,
+        install: &Path,
+    ) -> Result<std::process::ExitStatus> {
+        let pid = self.id();
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.0.try_wait()? {
+                return Ok(status);
+            }
+            if started.elapsed() >= timeout {
+                self.stop();
+                let diagnostics = updater_diagnostics(local_app_data, run_root, install);
+                return Err(sky_updater::error::UpdaterError::Io(std::io::Error::other(
+                    format!(
+                        "updater process {pid} did not exit during {phase} within {}ms; child was killed and reaped\n{diagnostics}",
+                        timeout.as_millis()
+                    ),
+                )));
+            }
+            std::thread::sleep(CHILD_POLL_INTERVAL);
+        }
     }
 }
 
@@ -183,6 +210,57 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         stop_child(&mut self.0);
     }
+}
+
+fn diagnostic_file(label: &str, path: &Path) -> String {
+    let contents = match fs::read(path) {
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(MAX_DIAGNOSTIC_BYTES);
+            let prefix = if start > 0 {
+                "<truncated prefix>\n"
+            } else {
+                ""
+            };
+            format!("{prefix}{}", String::from_utf8_lossy(&bytes[start..]))
+        }
+        Err(error) => format!("<unavailable: {error}>"),
+    };
+    format!("{label} ({}):\n{contents}", path.display())
+}
+
+fn updater_diagnostics(local_app_data: &Path, run_root: &Path, install: &Path) -> String {
+    [
+        ("handoff", run_root.join("handoff.json")),
+        (
+            "active-update",
+            local_app_data
+                .join(APP_NAME)
+                .join("update-state")
+                .join("active-update.json"),
+        ),
+        (
+            "last-result",
+            local_app_data
+                .join(APP_NAME)
+                .join("update-state")
+                .join("last-result.json"),
+        ),
+        (
+            "updater-log",
+            local_app_data
+                .join(APP_NAME)
+                .join("update-state")
+                .join("updater.log"),
+        ),
+        (
+            "transaction-journal",
+            install.join(".sky-update-transaction").join("journal.json"),
+        ),
+    ]
+    .iter()
+    .map(|(label, path)| diagnostic_file(label, path))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn wait_for_ready_handoff(local_app_data: &Path, updater_pid: u32) -> PathBuf {
@@ -208,6 +286,43 @@ fn wait_for_ready_handoff(local_app_data: &Path, updater_pid: u32) -> PathBuf {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panic!("native updater did not publish READY within the bounded handoff budget");
+}
+
+#[test]
+fn child_wait_timeout_kills_and_reaps_child() -> Result<()> {
+    let root = temp_root("child-timeout");
+    let run_root = root.join("run-0123456789abcdef0123456789abcdef");
+    let install = root.join("install");
+    fs::create_dir_all(&run_root).expect("run root");
+    fs::create_dir_all(&install).expect("install");
+
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("ping.exe");
+        command.args(["-n", "10", "127.0.0.1"]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10"]);
+        command
+    };
+    no_window(&mut command);
+    let mut child = ChildGuard(command.spawn()?);
+    let started = Instant::now();
+    let error = child
+        .wait_timeout(
+            Duration::from_millis(100),
+            "regression timeout",
+            &root,
+            &run_root,
+            &install,
+        )
+        .expect_err("long-running child must hit the timeout");
+
+    assert!(error.to_string().contains("child was killed and reaped"));
+    assert!(child.0.try_wait()?.is_some(), "timed-out child was reaped");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let _ = fs::remove_dir_all(root);
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -548,9 +663,15 @@ fn exact_packaged_updater_handoff_transaction_and_restart() -> Result<()> {
         .env("SKY_DESKTOP_RESTART_MARKER", &restart_marker);
     no_window(&mut updater);
     let mut updater = ChildGuard(updater.spawn()?);
-    let _run_root = wait_for_ready_handoff(&local_app_data, updater.id());
+    let run_root = wait_for_ready_handoff(&local_app_data, updater.id());
     parent.stop();
-    let status = updater.wait()?;
+    let status = updater.wait_timeout(
+        UPDATER_COMPLETION_TIMEOUT,
+        "exact artifact transaction and restart",
+        &local_app_data,
+        &run_root,
+        &install,
+    )?;
     assert!(
         status.success(),
         "local-source native updater failed: {status}"

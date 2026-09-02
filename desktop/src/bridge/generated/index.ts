@@ -61,3 +61,5 @@ export type { UpdateHandoffReadyPayload } from './UpdateHandoffReadyPayload';
 export type { UpdatePreferencesPatch } from './UpdatePreferencesPatch';
 export type { UpdateResultPayload } from './UpdateResultPayload';
 export type { UpdateState } from './UpdateState';
+export * from './commands';
+export * from './command_names';

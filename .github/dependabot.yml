@@ -1,19 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: uv
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      python-tooling:
-        patterns:
-          - packaging
-          - pyrefly
-          - pyright
-          - pytest
-          - pytest-benchmark
-          - ruff
-
   - package-ecosystem: cargo
     directory: /rust
     schedule:

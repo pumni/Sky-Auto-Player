@@ -80,7 +80,7 @@ for any unsigned executable downloaded from the internet.
 Sky Auto Player checks GitHub for new releases when it starts and shows a banner when one
 is available. Select **Open GitHub Releases** to download the update manually:
 
-1. Download the matching ZIP, `.zip.sha256`, and `MANIFEST.json` from the official
+1. Download the matching ZIP, `.zip.sha256`, `MANIFEST.json`, and `MANIFEST.json.sig` from the official
    [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Verify the ZIP SHA256 and exact manifest when desired.
 3. Extract the ZIP into a new folder and copy your `config.json`, `.env`, `songs/`, and
@@ -95,5 +95,4 @@ unsigned**; Windows SmartScreen may show an unrecognized-app warning.
 ## Uninstalling
 
 Delete the installation folder. Sky Auto Player does not write to the registry or any
-location outside its own folder (except the user-level `%LOCALAPPDATA%\uv` cache if
-you built from source with `uv`).
+location outside its own folder.

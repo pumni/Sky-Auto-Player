@@ -1,9 +1,8 @@
 # System Architecture
 
 The Tauri/React desktop is the only supported user-facing product. Its
-commands are handled by the native Rust composition root; the repository's
-retained Python files are tooling, frozen-oracle, migration-fixture, or
-historical material and are not part of the product runtime.
+commands are handled by the native Rust composition root; the repository has
+no tracked Python runtime or tooling surface.
 
 ## Layers
 
@@ -65,13 +64,12 @@ validation, reparse-point protection, writable preflight, single-flight ready
 handoff, transactional apply, rollback, and interrupted recovery remain
 mandatory.
 
-## Evidence and retained repository tooling
+## Evidence and repository tooling
 
 Production parity is proven by direct Rust/TypeScript tests and committed
-fixtures. Python oracle outputs and updater fixtures may remain in the
-repository as explicitly classified evidence; they are not importable product
-code. The canonical release/check tooling is now `cargo xtask`; any remaining
-Python scripts are optional, noncanonical repository tooling.
+fixtures. Historical words and frozen fixture data may remain as evidence, but
+they are not executable tooling. The canonical release/check tooling is
+`cargo xtask` and Bun.
 
 Use the Rust repository tool for current verification groups:
 
@@ -82,5 +80,4 @@ cargo xtask check desktop
 cargo xtask check all
 ```
 
-The Wave 6 `xtask` retirement/architecture/security checks are canonical; retained Python scripts
-are optional repository tooling only.
+The `xtask` retirement, architecture, security, branding, and zero-Python checks are canonical.

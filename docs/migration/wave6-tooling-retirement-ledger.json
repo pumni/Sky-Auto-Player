@@ -101,81 +101,91 @@
     },
     {
       "path": "scripts/audit_agent_context.py",
-      "classification": "NONCANONICAL_RETAINED",
+      "classification": "MIGRATED_XTASK",
       "invariants": ["vendor-neutral agent context shape remains auditable"],
-      "evidence": ["AGENTS.md::Context boundary"]
+      "evidence": ["rust/xtask/src/audits/agent_context.rs::run"]
     },
     {
       "path": "scripts/audit_durable_phase_names.py",
-      "classification": "NONCANONICAL_RETAINED",
+      "classification": "MIGRATED_XTASK",
       "invariants": ["historical migration phase names remain consistent in repository documentation"],
-      "evidence": ["docs/migration/wave5-python-retirement-ledger.md::Phase"]
+      "evidence": ["rust/xtask/src/audits/durable_names.rs::run"]
     },
     {
       "path": "scripts/report_production_python_boundary.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "invariants": ["optional historical production-boundary reporting remains available outside canonical checks"],
-      "evidence": ["docs/wave5-legacy-python-retirement.md::Evidence"]
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["the tracked repository has no executable Python or Python toolchain surface"],
+      "evidence": ["rust/xtask/src/audits/zero_python.rs::run"]
     },
     {
       "path": "branding/scripts/build_ico.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Manual branding asset tooling is not invoked by product checks or release assembly."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["ICO generation preserves the seven ordered PNG layers and Windows header fields"],
+      "evidence": ["rust/xtask/src/branding.rs::build_ico"]
     },
     {
       "path": "scripts/bench_mmcss.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Manual performance evidence tooling is outside the canonical Wave 6 path."
+      "classification": "OBSOLETE",
+      "rationale": "The benchmark invoked a retired native benchmark and was deleted rather than recreated."
     },
     {
       "path": "scripts/native_acceptance_sink.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional local benchmark/reporting support is not required by CI or release."
+      "classification": "DUPLICATE",
+      "invariants": ["native acceptance uses the receive-only PowerShell sink"],
+      "evidence": ["scripts/native_acceptance_sink.ps1::native_acceptance_sink.ps1"]
     },
     {
       "path": "tests/conftest.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Retained optional Python test harness; canonical product tests run through Cargo/Bun."
+      "classification": "OBSOLETE",
+      "rationale": "The Python test harness is retired; direct repository tests run through Cargo and Bun."
     },
     {
       "path": "tests/test_branding_assets.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional repository asset test; not part of required product qualification."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["branding SVG, ICO, PNG, geometry, and consumer exports remain structurally valid"],
+      "evidence": ["rust/xtask/src/branding.rs::validate"]
     },
     {
       "path": "tests/test_command_ownership.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Historical Python report test retained as optional evidence; Native ownership is enforced in Rust."
+      "classification": "MIGRATED_RUST",
+      "invariants": ["all 21 stable desktop methods have exactly one Native owner"],
+      "evidence": ["desktop/src-tauri/src/command_ownership.rs::every_current_desktop_method_has_exactly_one_native_owner"]
     },
     {
       "path": "tests/test_durable_phase_names.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional documentation policy test; it is not a product or release prerequisite."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["durable runtime and release paths reject migration-phase identifiers while historical paths remain allowed"],
+      "evidence": ["rust/xtask/src/audits/durable_names.rs::phase_boundary_semantics_match_python_contract"]
     },
     {
       "path": "tests/test_production_python_boundary.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Historical boundary-report test retained for migration evidence only."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["no tracked executable or tooling surface invokes Python"],
+      "evidence": ["rust/xtask/src/audits/zero_python.rs::executable_surface_detection_allows_historical_words_and_rejects_commands"]
     },
     {
       "path": "tests/test_security_audit.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Historical Python audit regression coverage; canonical static security checks run in xtask."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["forbidden Win32 APIs and modules fail the native security audit while comments are ignored"],
+      "evidence": ["rust/xtask/src/checks.rs::security_ignores_comments_but_flags_the_complete_forbidden_set"]
     },
     {
       "path": "tests/test_sky_app_core_contract.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional compatibility test; workspace architecture is enforced by xtask and Cargo."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["sky_app_core remains independent of Tauri, Win32, player, adapters, filesystem, and network effects"],
+      "evidence": ["rust/xtask/src/audits/architecture.rs::current_core_boundary_passes"]
     },
     {
       "path": "tests/test_updater_lifecycle_contract.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional historical lifecycle report; authoritative updater tests are Rust."
+      "classification": "MIGRATED_RUST",
+      "invariants": ["Starting state is persisted before READY and no fallible progress write occurs before execute_update"],
+      "evidence": ["rust/crates/sky_updater/src/runner.rs::ready_handoff_keeps_starting_state_before_execute_without_fallible_write"]
     },
     {
       "path": "tests/test_version_consistency.py",
-      "classification": "NONCANONICAL_RETAINED",
-      "rationale": "Optional Python compatibility test; canonical version qualification is xtask."
+      "classification": "MIGRATED_XTASK",
+      "invariants": ["native Cargo metadata is the version source and release tags must match exactly"],
+      "evidence": ["rust/xtask/src/version.rs::release_tag_requires_exact_cargo_text"]
     }
   ]
 }

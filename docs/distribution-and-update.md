@@ -1,6 +1,6 @@
 # Distribution and Update Model
 
-This is the normative contract for the unsigned, portable Windows package and
+This is the normative contract for the unsigned-binary, portable Windows package and
 its user-triggered native updater. It tracks the native desktop Cargo version
 and is independent of the Rust playback dispatcher.
 
@@ -12,6 +12,7 @@ Sky Auto Player has one canonical portable release package:
 Sky-Auto-Player-v<version>.zip
 Sky-Auto-Player-v<version>.zip.sha256
 MANIFEST.json
+MANIFEST.json.sig
 ```
 
 The ZIP expands to one folder containing the native Tauri application,
@@ -20,15 +21,29 @@ There are no BAT/PowerShell updater scripts, system installer, legacy
 executable name, bridge ZIP, or second bundle. Runtime-owned paths are kept
 outside the public package when they are not part of the application itself.
 
-Public binaries are intentionally unsigned. Authenticode is recorded as
+Public binaries remain intentionally unsigned for Authenticode. Authenticode is recorded as
 `N/A — intentionally unsigned`; no PFX, certificate secret, signing step, or
 verified-publisher claim is required. The exact ZIP SHA256, exact manifest,
-clean-worktree/native provenance, and GitHub build attestation are the release
-integrity/provenance evidence.
+detached Ed25519 manifest signature, clean-worktree/native provenance, and
+GitHub build attestation are the release integrity/provenance evidence.
 
-The GitHub repository and its release pipeline are the runtime trust root.
-SHA256 and `MANIFEST.json` verify the bytes and file set delivered by that
-release; they are integrity checks, not independent publisher authentication.
+The updater embeds the trusted Ed25519 public-key set and accepts only the
+allow-listed `key_id` (`release-2026` currently). The release workflow keeps
+the private key in `SKY_UPDATE_SIGNING_KEY_HEX`; it is never committed or
+printed. SHA256 verifies payload bytes, while the detached signature
+authenticates the exact manifest bytes before their hashes are trusted.
+The current `release-2026` public key is
+`f29125c71bdcb321ddd36722016893f91b0bcb684e7a0499b4bd5353be354cca`;
+the Actions secret must contain its matching private seed.
+
+Release jobs also publish `SUPPLY_CHAIN_ATTESTATION.json` outside the portable
+ZIP. It records the exact `rust/Cargo.lock` and `rust/supply-chain/` policy
+digests after `cargo vet --locked` succeeds. Verify the signed GitHub evidence
+with:
+
+```text
+gh attestation verify SUPPLY_CHAIN_ATTESTATION.json -R pumni/Sky-Auto-Player
+```
 
 Prerelease tags (`vX.Y.ZrcN`, `vX.Y.Z.devN`, and equivalent PEP 440 forms) are
 created as draft GitHub releases and published as prereleases for beta-channel
@@ -38,7 +53,7 @@ qualification gates pass. Published tags and assets are immutable; fixes
 require a new version.
 
 Release publication is draft-first. A version tag runs the release workflow,
-which builds and attests the exact ZIP and manifest, then creates a
+which builds, signs, and attests the exact ZIP, manifest, and signature, then creates a
 draft GitHub Release. The draft is the qualification input: it is published
 as a prerelease or stable release only after exact-artifact and platform
 qualification pass. Assets are not replaced and the tag is not moved between
@@ -66,8 +81,9 @@ app running. The Rust updater then:
 2. reports `Fetching`, `Verifying`, `Extracting`, `Preflight`, `Backing up`,
    `Installing`, `Cleaning up`, and `Restarting` through the native progress UI;
 3. fetches the exact target release over the GitHub HTTPS allow-list;
-4. verifies the ZIP sidecar, release `MANIFEST.json`, archive paths, and every
-   staged file before mutation;
+4. downloads the release manifest and detached signature, verifies the exact
+   manifest bytes and target metadata, then verifies the ZIP sidecar, archive
+   paths, and every staged file before mutation;
 5. prepares and applies a transactional managed-file update while preserving
    user-owned paths; and
 6. writes a durable result and restarts the canonical app only after a verified
@@ -135,6 +151,7 @@ compatible, and contain exactly these canonical assets:
 Sky-Auto-Player-v<target>.zip
 Sky-Auto-Player-v<target>.zip.sha256
 MANIFEST.json
+MANIFEST.json.sig
 ```
 
 The native updater uses HTTPS only and checks redirects against:
@@ -152,7 +169,7 @@ file/directory collision, reserved-device, and trailing-dot/space paths.
 Windows case-insensitive path identity is used throughout. Explicit directory
 entries are valid parents for files; a file used as a parent is not valid.
 
-Release and updater version ordering uses the same PEP 440 semantics as Python
+Release and updater version ordering uses the same PEP 440-compatible semantics as
 `packaging.version`, including development, prerelease, post, padding, and
 local versions.
 

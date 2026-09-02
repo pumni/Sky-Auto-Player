@@ -41,10 +41,10 @@ not open every architecture page by default.
 - [distribution-and-update.md](distribution-and-update.md) — public package, native updater,
   integrity/provenance, rollback, and release contract.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
-- [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — Product/runtime Python
-  retirement boundary and temporarily retained repository tooling.
+- [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — historical evidence for
+  the completed product/runtime Python retirement; not a tooling instruction.
 - [wave6-rust-xtask-release-ci.md](wave6-rust-xtask-release-ci.md) — Rust xtask commands and the
-  Python-free canonical check/release boundary.
+  Rust/Bun canonical check/release boundary and zero-Python guard.
 
 Build and release implementation details live in `rust/xtask/`, `desktop/`, `.github/workflows/`,
 and their direct tests. `cargo xtask dist` is the canonical release assembler and does not build a

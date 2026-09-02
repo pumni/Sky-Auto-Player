@@ -11,7 +11,7 @@ that the game sampled the transition. `require_focus=true` is a safety profile
 with a final foreground-verification cost, so the two focus modes are not
 promised identical latency.
 
-For a physical boundary, Python/native preparation materializes and validates
+For a physical boundary, native preparation materializes and validates
 one immutable packet before the direct target wait. The worker's single
 interruptible hybrid wait and bounded QPC spin cross the absolute authored
 target, then run the final
@@ -24,7 +24,7 @@ an overlapping Up/Down mask is rejected during preparation. A partial Up is
 reported with partial-progress evidence but is never silently retried by this
 single-send primitive.
 
-For a selected ratio and FPS, Python first materializes the requested hold:
+For a selected ratio and FPS, the native planner first materializes the requested hold:
 
 ```text
 frame_us = ceil(1_000_000 / fps)

@@ -69,8 +69,8 @@ outcome and the tests make the behavior change explicit. Avoid unrelated cleanup
 
 ## Dependency management
 
-Use the pinned Rust toolchain and Bun lockfile for canonical product checks. Optional Python tooling
-is noncanonical repository support and must not become a product or required-CI dependency.
+Use the pinned Rust toolchain and Bun lockfile for canonical product checks. Rust and Bun are the
+only required repository toolchains.
 
 ## Commit messages
 

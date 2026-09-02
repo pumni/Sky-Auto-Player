@@ -2,6 +2,7 @@ mod app_state;
 mod bindings;
 mod command_ownership;
 mod commands;
+mod ipc_contract;
 mod lifecycle;
 mod native_runtime;
 mod native_update;
@@ -41,6 +42,12 @@ pub(crate) fn record_gui_smoke_phase(phase: &str) {
 type ShellRuntime = tauri::Wry;
 #[cfg(all(not(feature = "desktop-runtime"), feature = "tauri-test"))]
 type ShellRuntime = tauri::test::MockRuntime;
+#[cfg(all(not(feature = "desktop-runtime"), not(feature = "tauri-test")))]
+compile_error!(
+    "sky_desktop_shell requires either `desktop-runtime` for the real Tauri shell or `tauri-test` for MockRuntime"
+);
+#[cfg(all(feature = "packaged-assets", not(feature = "desktop-runtime")))]
+compile_error!("`packaged-assets` requires `desktop-runtime`");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -1,6 +1,8 @@
-use crate::{Result, repo};
+use crate::{Result, repo, update_trust};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -12,6 +14,123 @@ const REQUIRED: &[&str] = &[
     "Sky-Auto-Player-Updater.exe",
     "MANIFEST.json",
 ];
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct DetachedManifestSignature {
+    key_id: String,
+    signature: String,
+}
+
+fn validate_signing_key(
+    signing_key: &SigningKey,
+    key_id: &str,
+    trust: &update_trust::UpdateTrustConfig,
+) -> Result<()> {
+    if key_id != trust.key_id {
+        return Err(format!(
+            "manifest signing key id {key_id} does not match configured {}",
+            trust.key_id
+        )
+        .into());
+    }
+    let derived_public_key = encode_hex(signing_key.verifying_key().to_bytes());
+    if derived_public_key != trust.public_key_hex {
+        return Err(format!(
+            "manifest signing key does not match configured public key for {}",
+            trust.key_id
+        )
+        .into());
+    }
+    Ok(())
+}
+
+pub fn sign(
+    manifest_path: &Path,
+    output_path: &Path,
+    requested_key_id: Option<&str>,
+) -> Result<()> {
+    let trust = update_trust::load(&repo::root())?;
+    let key_id = requested_key_id.unwrap_or(&trust.key_id);
+    let key_hex = env::var("SKY_UPDATE_SIGNING_KEY_HEX")
+        .map_err(|_| "SKY_UPDATE_SIGNING_KEY_HEX is required for manifest signing")?;
+    let key_bytes = decode_hex::<32>(&key_hex)
+        .ok_or("SKY_UPDATE_SIGNING_KEY_HEX must be exactly 32 bytes of hex")?;
+    let signing_key = SigningKey::from_bytes(&key_bytes);
+    validate_signing_key(&signing_key, key_id, &trust)?;
+    let manifest = std::fs::read(manifest_path)?;
+    let signature = signing_key.sign(&manifest);
+    let envelope = DetachedManifestSignature {
+        key_id: key_id.to_owned(),
+        signature: encode_hex(signature.to_bytes()),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&envelope)?;
+    bytes.push(b'\n');
+    std::fs::write(output_path, bytes)?;
+    println!(
+        "[xtask] signed {} with key {} -> {}",
+        manifest_path.display(),
+        key_id,
+        output_path.display()
+    );
+    Ok(())
+}
+
+pub fn verify_signature(manifest_path: &Path, signature_path: &Path) -> Result<()> {
+    let trust = update_trust::load(&repo::root())?;
+    let manifest = std::fs::read(manifest_path)?;
+    let envelope: DetachedManifestSignature =
+        serde_json::from_slice(&std::fs::read(signature_path)?)?;
+    if envelope.key_id != trust.key_id {
+        return Err(format!(
+            "manifest signature key id {} does not match configured {}",
+            envelope.key_id, trust.key_id
+        )
+        .into());
+    }
+    let signature = decode_hex::<64>(&envelope.signature)
+        .ok_or("manifest signature must be exactly 64 bytes of hex")?;
+    let verifying_key = VerifyingKey::from_bytes(&trust.public_key)?;
+    verifying_key.verify_strict(&manifest, &Signature::from_bytes(&signature))?;
+    println!(
+        "[xtask] verified manifest signature {} with key {}",
+        manifest_path.display(),
+        trust.key_id
+    );
+    Ok(())
+}
+
+fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2 {
+        return None;
+    }
+    let mut output = [0u8; N];
+    let bytes = value.as_bytes();
+    for (index, output_byte) in output.iter_mut().enumerate() {
+        let offset = index * 2;
+        *output_byte = (hex_digit(bytes[offset])? << 4) | hex_digit(bytes[offset + 1])?;
+    }
+    Some(output)
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn encode_hex<const N: usize>(bytes: [u8; N]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(N * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
 
 pub fn sha256(path: &Path) -> Result<String> {
     let mut digest = Sha256::new();
@@ -298,6 +417,13 @@ mod tests {
                 .unwrap()
                 .contains(&"python314.dll".into())
         );
+    }
+
+    #[test]
+    fn rejects_a_valid_but_wrong_signing_key() {
+        let trust = update_trust::load(&repo::root()).expect("update trust metadata");
+        let wrong_key = SigningKey::from_bytes(&[0u8; 32]);
+        assert!(validate_signing_key(&wrong_key, &trust.key_id, &trust).is_err());
     }
 
     #[test]

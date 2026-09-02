@@ -23,10 +23,6 @@ The production invariants remain fixed:
 
 ## Release and runtime checks
 
-The temporary release tooling is documented in
-[`docs/wave5-legacy-python-retirement.md`](wave5-legacy-python-retirement.md).
-It may use Python as repository tooling until Wave 6 replaces it with
-`cargo xtask`; the packaged application itself has no Python runtime.
-
-Historical Textual/free-threaded/PyInstaller tuning notes are retained only in
-archived migration records and are not supported product instructions.
+Release and repository verification use the Rust `cargo xtask` tooling.
+Historical Textual/free-threaded/PyInstaller tuning notes are retained only as
+evidence in historical records and are not supported product instructions.

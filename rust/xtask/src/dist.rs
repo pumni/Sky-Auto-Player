@@ -13,6 +13,7 @@ const CALIBRATION: &str = "native_calibration.exe";
 const UPDATER: &str = "Sky-Auto-Player-Updater.exe";
 const NATIVE_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 const PACKAGED_SMOKE_TIMEOUT: Duration = Duration::from_secs(60);
+const PORTABLE_UPDATER_E2E_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_PHASE_LOG_BYTES: usize = 64 * 1024;
 
 fn safe_output(root: &Path, output: &Path) -> Result<PathBuf> {
@@ -431,7 +432,7 @@ pub fn build(output: &Path) -> Result<()> {
         ),
         ("SKY_PORTABLE_E2E_UPDATER".into(), e2e.display().to_string()),
     ];
-    process::run_owned(
+    process::run_owned_timeout(
         &PathBuf::from("cargo"),
         &[
             "test".into(),
@@ -445,9 +446,11 @@ pub fn build(output: &Path) -> Result<()> {
             "--locked".into(),
             "--".into(),
             "--test-threads=1".into(),
+            "--nocapture".into(),
         ],
         &root,
         &updater_env,
+        PORTABLE_UPDATER_E2E_TIMEOUT,
     )?;
     println!("[xtask] dist: PASS {}", release_dir.display());
     Ok(())

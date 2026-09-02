@@ -26,6 +26,25 @@ const PACKAGE_PREFIXES: &[&str] = &[
     "rust/xtask/",
 ];
 const CODE_PREFIXES: &[&str] = &["src/", "desktop/", "rust/", "tests/", "scripts/", ".cargo/"];
+const BROWSER_PREFIXES: &[&str] = &[
+    "desktop/src/",
+    "desktop/src-tauri/src/commands.rs",
+    "desktop/src-tauri/src/ipc_contract.rs",
+    "desktop/src-tauri/src/ui_events.rs",
+    "desktop/src/bridge/generated/",
+];
+const BROWSER_FILES: &[&str] = &[
+    "desktop/index.html",
+    "desktop/package.json",
+    "desktop/bun.lock",
+    "desktop/vite.config.ts",
+    "desktop/vite.config.js",
+    "desktop/vitest.config.ts",
+    "desktop/vitest.config.js",
+    "desktop/playwright.config.ts",
+    "desktop/playwright.config.js",
+    "desktop/scripts/run-e2e.mjs",
+];
 
 fn normalize(value: &str) -> String {
     value
@@ -43,23 +62,29 @@ fn package_sensitive(path: &str) -> bool {
             .any(|prefix| path.starts_with(prefix))
 }
 
-pub fn classify(paths: &[String], full: bool) -> (bool, bool, bool, String) {
+pub fn classify(paths: &[String], full: bool) -> (bool, bool, bool, bool, String) {
     let paths: Vec<String> = paths
         .iter()
         .map(|path| normalize(path))
         .filter(|p| !p.is_empty())
         .collect();
     if full {
-        return (true, true, true, "full validation requested".into());
+        return (true, true, true, true, "full validation requested".into());
     }
     if paths.is_empty() {
-        return (false, false, false, "no changed paths".into());
+        return (false, false, false, false, "no changed paths".into());
     }
     let package_required = paths.iter().any(|path| package_sensitive(path));
     let code = paths.iter().any(|path| {
         CODE_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
             || PACKAGE_FILES.contains(&path.as_str())
     }) || package_required;
+    let browser_required = paths.iter().any(|path| {
+        BROWSER_FILES.contains(&path.as_str())
+            || BROWSER_PREFIXES
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+    });
     let reason = if package_required {
         let package = paths
             .iter()
@@ -78,7 +103,7 @@ pub fn classify(paths: &[String], full: bool) -> (bool, bool, bool, String) {
     } else {
         "static/site/docs only".into()
     };
-    (true, code, package_required, reason)
+    (true, code, package_required, browser_required, reason)
 }
 
 fn changed_paths(
@@ -113,10 +138,12 @@ pub fn run(
     }
     let root = repo::root();
     let paths = changed_paths(&root, base, head, paths_file)?;
-    let (static_required, code_required, package_required, reason) = classify(&paths, full);
+    let (static_required, code_required, package_required, browser_required, reason) =
+        classify(&paths, full);
     println!("static_required={}", static_required);
     println!("code_required={}", code_required);
     println!("package_required={}", package_required);
+    println!("browser_required={}", browser_required);
     println!("classification_reason={reason}");
     Ok(())
 }
@@ -125,7 +152,7 @@ pub fn run(
 mod tests {
     use super::*;
 
-    fn values(paths: &[&str]) -> (bool, bool, bool, String) {
+    fn values(paths: &[&str]) -> (bool, bool, bool, bool, String) {
         classify(
             &paths.iter().map(|p| (*p).into()).collect::<Vec<_>>(),
             false,
@@ -136,14 +163,14 @@ mod tests {
     fn classifies_docs_without_expensive_jobs() {
         assert_eq!(
             values(&["docs/guide.md"]),
-            (true, false, false, "static/site/docs only".into())
+            (true, false, false, false, "static/site/docs only".into())
         );
     }
 
     #[test]
     fn classifies_native_and_package_changes() {
         let result = values(&["rust/crates/sky_player/src/lib.rs"]);
-        assert!(result.0 && result.1 && !result.2);
+        assert!(result.0 && result.1 && !result.2 && !result.3);
         assert!(values(&["rust/xtask/src/main.rs"]).1);
         assert!(values(&["rust/xtask/src/main.rs"]).2);
     }
@@ -154,17 +181,27 @@ mod tests {
         assert!(result.0);
         assert!(result.1);
         assert!(result.2);
+        assert!(!result.3);
     }
 
     #[test]
     fn full_and_empty_modes_are_stable() {
         assert_eq!(
             classify(&[], true),
-            (true, true, true, "full validation requested".into())
+            (true, true, true, true, "full validation requested".into())
         );
         assert_eq!(
             values(&[]),
-            (false, false, false, "no changed paths".into())
+            (false, false, false, false, "no changed paths".into())
         );
+    }
+
+    #[test]
+    fn browser_classification_is_path_aware() {
+        assert!(values(&["desktop/src/components/App.tsx"]).3);
+        assert!(values(&["desktop/src-tauri/src/commands.rs"]).3);
+        assert!(!values(&["rust/crates/sky_player/src/lib.rs"]).3);
+        assert!(!values(&["docs/architecture.md"]).3);
+        assert!(values(&["desktop/package.json"]).3);
     }
 }

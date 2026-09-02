@@ -67,9 +67,10 @@ the harness capable of the requested matrix. Real `SendInput` runs still
 require an isolated project-owned target HWND and explicit operator approval;
 they must never use an arbitrary foreground window.
 
-The controlled sink is `scripts/native_acceptance_sink.py`. On the isolated
-Windows host, start it with `uv run --env-file .env python
-scripts/native_acceptance_sink.py --ready-file .benchmarks/sink.json`, copy its
+The controlled sink is the receive-only PowerShell WinForms helper
+`scripts/native_acceptance_sink.ps1`. On the isolated Windows host, start it with
+`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -ReadyFile
+.benchmarks/sink.json -EventLog .benchmarks/sink-events.json`, copy its
 printed `hwnd` into `SKY_NATIVE_TARGET_HWND`, and keep that project-owned
 window as the intended foreground target for the explicit
 `--backend sendinput --allow-real-input` command. The harness now requires
@@ -77,12 +78,6 @@ that HWND for both focus modes: `--require-focus` verifies it stays focused;
 `--no-require-focus` disables that timing guard for the matrix but does not
 authorize an unspecified foreground window. The sink records ordinary window
 key events only and never emits input.
-
-If the tooling environment does not provide the receive-only Python sink, use
-the equivalent WinForms sink with `pwsh -NoProfile -File
-scripts/native_acceptance_sink.ps1 -ReadyFile .benchmarks/sink.json -EventLog
-.benchmarks/sink-events.json`. The two sinks have the same receive-only
-contract.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch

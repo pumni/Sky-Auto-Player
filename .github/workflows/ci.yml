@@ -34,6 +34,7 @@ jobs:
       static_required: ${{ steps.filter.outputs.static_required }}
       code_required: ${{ steps.filter.outputs.code_required }}
       package_required: ${{ steps.filter.outputs.package_required }}
+      browser_required: ${{ steps.filter.outputs.browser_required }}
       classification_reason: ${{ steps.filter.outputs.classification_reason }}
 
     steps:
@@ -119,12 +120,61 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
 
+      - name: Restore pinned cargo-audit tool
+        id: cargo-audit-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
+
+      - name: Restore pinned cargo-vet tool
+        id: cargo-vet-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
+
       - name: RustSec dependency audit
         env:
           CARGO_AUDIT_VERSION: 0.22.2
         run: |
-          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          tool_root="$RUNNER_TEMP/cargo-audit"
+          if [[ ! -x "$tool_root/bin/cargo-audit" ]]; then
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --root "$tool_root"
+          fi
+          export PATH="$tool_root/bin:$PATH"
+          echo "$tool_root/bin" >> "$GITHUB_PATH"
+          version="$("$tool_root/bin/cargo-audit" --version)"
+          [[ "$version" == "cargo-audit $CARGO_AUDIT_VERSION" ]]
           cargo audit --file rust/Cargo.lock
+
+      - name: Save pinned cargo-audit tool
+        if: github.event_name != 'pull_request' && steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
+
+      - name: Cargo-vet dependency policy
+        env:
+          CARGO_VET_VERSION: 0.10.2
+        run: |
+          tool_root="$RUNNER_TEMP/cargo-vet"
+          if [[ ! -x "$tool_root/bin/cargo-vet" ]]; then
+            cargo install cargo-vet --version "$CARGO_VET_VERSION" --locked --root "$tool_root"
+          fi
+          export PATH="$tool_root/bin:$PATH"
+          echo "$tool_root/bin" >> "$GITHUB_PATH"
+          version="$("$tool_root/bin/cargo-vet" --version)"
+          [[ "$version" == "cargo-vet $CARGO_VET_VERSION" ]]
+          cargo vet --manifest-path rust/Cargo.toml --locked
+
+      - name: Save pinned cargo-vet tool
+        if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
 
       - name: Repository verification — static
         env:
@@ -173,6 +223,36 @@ jobs:
         with:
           workspaces: "rust -> target"
           cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Restore pinned cargo-vet tool
+        id: cargo-vet-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
+
+      - name: Install and verify pinned cargo-vet
+        env:
+          CARGO_VET_VERSION: 0.10.2
+        run: |
+          $toolRoot = Join-Path $env:RUNNER_TEMP "cargo-vet"
+          $binary = Join-Path $toolRoot "bin\cargo-vet.exe"
+          if (-not (Test-Path $binary)) {
+            cargo install cargo-vet --version $env:CARGO_VET_VERSION --locked --root $toolRoot
+          }
+          $version = (& $binary --version).Trim()
+          if ($version -ne "cargo-vet $env:CARGO_VET_VERSION") {
+            throw "Expected cargo-vet $env:CARGO_VET_VERSION, got: $version"
+          }
+          (Split-Path -Parent $binary) | Add-Content $env:GITHUB_PATH -Encoding UTF8
+
+      - name: Save pinned cargo-vet tool
+        if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/cargo-vet
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
 
       - name: Repository verification — Rust
         if: needs.changes.outputs.package_required != 'true'
@@ -186,13 +266,14 @@ jobs:
           bun-version: 1.4.0
 
       - name: Install Chromium for desktop browser smoke
+        if: needs.changes.outputs.browser_required == 'true'
         working-directory: desktop
         run: bunx playwright install chromium
 
       - name: Construct Python-unavailable validation environment
         if: needs.changes.outputs.package_required == 'true'
         run: |
-          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $required = @("cargo", "cargo-vet", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
           $toolDirectories = foreach ($name in $required) {
             $command = Get-Command $name -ErrorAction SilentlyContinue
             if ($command) { Split-Path -Parent $command.Source }
@@ -227,14 +308,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo xtask check static failed with exit code $LASTEXITCODE" }
           cargo xtask check rust
           if ($LASTEXITCODE -ne 0) { throw "cargo xtask check rust failed with exit code $LASTEXITCODE" }
-          cargo xtask check desktop
+          if ("${{ needs.changes.outputs.browser_required }}" -eq "true") {
+            cargo xtask check desktop
+          } else {
+            $env:SKY_DESKTOP_SKIP_BROWSER = "1"
+            cargo xtask check desktop
+          }
           if ($LASTEXITCODE -ne 0) { throw "cargo xtask check desktop failed with exit code $LASTEXITCODE" }
 
       - name: Repository verification — desktop
         if: needs.changes.outputs.package_required != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
-        run: cargo xtask check desktop
+        run: |
+          if ("${{ needs.changes.outputs.browser_required }}" -eq "true") {
+            cargo xtask check desktop
+          } else {
+            $env:SKY_DESKTOP_SKIP_BROWSER = "1"
+            cargo xtask check desktop
+          }
 
       - name: Report CI timing
         if: always()

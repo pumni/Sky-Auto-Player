@@ -7,9 +7,10 @@ use crate::cli::Channel;
 use crate::error::{Result, UpdaterError, io_context};
 use crate::http::{HttpClient, validate_https_url};
 use crate::manifest::Manifest;
+use crate::signature::verify_manifest_signature;
 use crate::{
-    API_MAX_BYTES, APP_NAME, MANIFEST_MAX_BYTES, MANIFEST_NAME, SIDECAR_MAX_BYTES,
-    ZIP_MAX_COMPRESSED_BYTES,
+    API_MAX_BYTES, APP_NAME, MANIFEST_MAX_BYTES, MANIFEST_NAME, MANIFEST_SIGNATURE_NAME,
+    SIDECAR_MAX_BYTES, ZIP_MAX_COMPRESSED_BYTES,
 };
 
 #[derive(Clone, Debug)]
@@ -96,11 +97,18 @@ pub fn fetch_exact_release<C: HttpClient>(
     let zip_url = exact_asset_url(&release.assets, &zip_name)?;
     let sidecar_url = exact_asset_url(&release.assets, &sidecar_name)?;
     let manifest_url = exact_asset_url(&release.assets, MANIFEST_NAME)?;
+    let signature_url = exact_asset_url(&release.assets, MANIFEST_SIGNATURE_NAME)?;
     if !zip_destination.is_absolute() {
         return Err(UpdaterError::InstallRootInvalid(
             "ZIP staging path must be absolute".into(),
         ));
     }
+    let external_manifest = client.get(manifest_url, MANIFEST_MAX_BYTES)?;
+    let detached_signature = client.get(signature_url, SIDECAR_MAX_BYTES)?;
+    verify_manifest_signature(&external_manifest, &detached_signature)?;
+    let manifest = Manifest::parse(&external_manifest)?;
+    manifest.validate(Some(target_version))?;
+
     client.download_to(zip_url, ZIP_MAX_COMPRESSED_BYTES as usize, zip_destination)?;
     let zip_size = std::fs::metadata(zip_destination)
         .map_err(|error| io_context("download", "inspect release file", zip_destination, error))?;
@@ -123,9 +131,6 @@ pub fn fetch_exact_release<C: HttpClient>(
     if actual_hash != expected_hash {
         return Err(UpdaterError::ChecksumMismatch);
     }
-    let external_manifest = client.get(manifest_url, MANIFEST_MAX_BYTES)?;
-    let manifest = Manifest::parse(&external_manifest)?;
-    manifest.validate(Some(target_version))?;
     Ok(ReleasePayload {
         version: target_version.into(),
         zip_name,
@@ -187,6 +192,8 @@ mod tests {
         let zip_url = "https://objects.githubusercontent.com/sky-player.zip";
         let sidecar_url = "https://objects.githubusercontent.com/sky-player.sha256";
         let manifest_url = "https://release-assets.githubusercontent.com/sky-player-manifest";
+        let signature_url =
+            "https://release-assets.githubusercontent.com/sky-player-manifest-signature";
         let zip_bytes = b"valid enough for the fetch-layer test".to_vec();
         let manifest = Manifest {
             schema_version: crate::SCHEMA_VERSION,
@@ -204,6 +211,7 @@ mod tests {
             }],
         };
         let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest JSON");
+        let signature_bytes = sign_fixture_manifest(&manifest_bytes);
         let zip_hash = crate::archive::sha256_bytes(&zip_bytes);
         let metadata = json!({
             "tag_name": "v2.0.0",
@@ -212,7 +220,8 @@ mod tests {
             "assets": [
                 {"name": zip_name, "browser_download_url": zip_url},
                 {"name": format!("{zip_name}.sha256"), "browser_download_url": sidecar_url},
-                {"name": crate::MANIFEST_NAME, "browser_download_url": manifest_url}
+                {"name": crate::MANIFEST_NAME, "browser_download_url": manifest_url},
+                {"name": crate::MANIFEST_SIGNATURE_NAME, "browser_download_url": signature_url}
             ]
         });
         let mut responses = HashMap::new();
@@ -222,6 +231,7 @@ mod tests {
             format!("{zip_hash}  {zip_name}\n").into_bytes(),
         );
         responses.insert(manifest_url.into(), manifest_bytes.clone());
+        responses.insert(signature_url.into(), signature_bytes);
         Fixture {
             client: FakeHttpClient { responses },
             metadata,
@@ -229,6 +239,22 @@ mod tests {
             manifest_url: manifest_url.into(),
             manifest_bytes,
         }
+    }
+
+    fn sign_fixture_manifest(manifest_bytes: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let seed = [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0x7f, 0x60,
+        ];
+        let signature = SigningKey::from_bytes(&seed).sign(manifest_bytes);
+        serde_json::to_vec(&json!({
+            "key_id": "release-2026",
+            "signature": signature.to_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        }))
+        .expect("signature JSON")
     }
 
     fn fetch_fixture(mut fixture: Fixture, channel: Channel) -> Result<ReleasePayload> {
@@ -301,7 +327,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_duplicate_canonical_assets() {
-        for index in 0..3 {
+        for index in 0..4 {
             let mut missing = fixture();
             assets(&mut missing.metadata).remove(index);
             assert_rejected(missing, Channel::Stable, "asset missing");
@@ -347,6 +373,10 @@ mod tests {
         fixture.client.responses.insert(
             fixture.manifest_url.clone(),
             serde_json::to_vec(&manifest).expect("manifest JSON"),
+        );
+        fixture.client.responses.insert(
+            "https://release-assets.githubusercontent.com/sky-player-manifest-signature".into(),
+            sign_fixture_manifest(fixture.client.responses.get(&fixture.manifest_url).unwrap()),
         );
         assert_rejected(
             fixture,

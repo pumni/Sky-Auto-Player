@@ -37,6 +37,7 @@ pub const APP_NAME: &str = "Sky-Auto-Player";
 pub const PRIMARY_EXE: &str = "Sky-Auto-Player.exe";
 pub const UPDATER_EXE: &str = "Sky-Auto-Player-Updater.exe";
 pub const MANIFEST_NAME: &str = "MANIFEST.json";
+pub const MANIFEST_SIGNATURE_NAME: &str = "MANIFEST.json.sig";
 pub const CALIBRATION_EXE: &str = "native_calibration.exe";
 pub const SCHEMA_VERSION: u32 = 2;
 
