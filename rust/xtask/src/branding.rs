@@ -1,16 +1,14 @@
 use crate::Result;
+use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
 use roxmltree::Document;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Cursor;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EXPECTED_SIZES: [u32; 14] = [
-    16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256,
-];
-const LARGE_SIZES: [u32; 8] = [32, 48, 60, 64, 72, 96, 128, 256];
-const SMALL_SIZES: [u32; 5] = [20, 24, 30, 36, 40];
-const TINY_SIZES: [u32; 1] = [16];
+const EXPECTED_SIZES: [u32; 14] = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256];
+const ICO_ORDER: [u32; 14] = [32, 16, 20, 24, 30, 36, 40, 48, 60, 64, 72, 96, 128, 256];
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 pub fn png_dimensions(data: &[u8]) -> Result<(u32, u32)> {
@@ -66,44 +64,37 @@ pub fn build_ico(layers: &BTreeMap<u32, Vec<u8>>) -> Result<Vec<u8>> {
         )
         .into());
     }
-    let header_size = 6 + EXPECTED_SIZES.len() * 16;
-    let mut entries = Vec::with_capacity(EXPECTED_SIZES.len() * 16);
-    let mut payload = Vec::new();
-    let mut offset = header_size as u32;
-    for size in EXPECTED_SIZES {
-        let image = layers.get(&size).expect("checked above");
-        entries.extend_from_slice(&[
-            if size == 256 { 0 } else { size as u8 },
-            if size == 256 { 0 } else { size as u8 },
-            0,
-            0,
-        ]);
-        entries.extend_from_slice(&1u16.to_le_bytes());
-        entries.extend_from_slice(&32u16.to_le_bytes());
-        entries.extend_from_slice(&(image.len() as u32).to_le_bytes());
-        entries.extend_from_slice(&offset.to_le_bytes());
-        payload.extend_from_slice(image);
-        offset = offset
-            .checked_add(image.len() as u32)
-            .ok_or("ICO payload is too large")?;
+    let mut directory = IconDir::new(ResourceType::Icon);
+    for size in ICO_ORDER {
+        let png = layers.get(&size).expect("checked above");
+        let image = IconImage::read_png(Cursor::new(png))?;
+        if (image.width(), image.height()) != (size, size) {
+            return Err(format!(
+                "PNG layer is {}x{}, expected {size}x{size}",
+                image.width(),
+                image.height()
+            )
+            .into());
+        }
+        let entry = if size == 256 {
+            IconDirEntry::encode_as_png(&image)?
+        } else {
+            IconDirEntry::encode_as_bmp(&image)?
+        };
+        directory.add_entry(entry);
     }
-    let mut output = Vec::with_capacity(header_size + payload.len());
-    output.extend_from_slice(&[0, 0, 1, 0]);
-    output.extend_from_slice(&(EXPECTED_SIZES.len() as u16).to_le_bytes());
-    output.extend_from_slice(&entries);
-    output.extend_from_slice(&payload);
+    let mut output = Vec::new();
+    directory.write(&mut output)?;
     Ok(output)
 }
 
-pub fn build_ico_from_dirs(large: &Path, small: &Path, tiny: &Path) -> Result<Vec<u8>> {
-    let mut layers = find_layers(large, &LARGE_SIZES)?;
-    layers.extend(find_layers(small, &SMALL_SIZES)?);
-    layers.extend(find_layers(tiny, &TINY_SIZES)?);
+pub fn build_ico_from_dir(directory: &Path) -> Result<Vec<u8>> {
+    let layers = find_layers(directory, &EXPECTED_SIZES)?;
     build_ico(&layers)
 }
 
-pub fn write_ico(large: &Path, small: &Path, tiny: &Path, output: &Path) -> Result<()> {
-    let bytes = build_ico_from_dirs(large, small, tiny)?;
+pub fn write_ico(directory: &Path, output: &Path) -> Result<()> {
+    let bytes = build_ico_from_dir(directory)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -147,36 +138,28 @@ fn validate_svg(path: &Path, view_box: &str, ids: &[&str]) -> Result<(String, Do
 
 fn validate_ico(root: &Path) -> Result<()> {
     let data = fs::read(root.join("branding/exports/windows/sky-auto-player.ico"))?;
-    if data.len() < 6
-        || data[..4] != [0, 0, 1, 0]
-        || u16::from_le_bytes(data[4..6].try_into()?) != EXPECTED_SIZES.len() as u16
+    let directory = IconDir::read(Cursor::new(&data))?;
+    if directory.resource_type() != ResourceType::Icon
+        || directory.entries().len() != EXPECTED_SIZES.len()
     {
-        return Err("branding ICO header/layer count changed".into());
+        return Err("branding ICO resource type/layer count changed".into());
     }
     let mut seen = BTreeMap::new();
-    for index in 0..EXPECTED_SIZES.len() {
-        let offset = 6 + index * 16;
-        let width = if data[offset] == 0 {
-            256
-        } else {
-            data[offset] as u32
-        };
-        let height = if data[offset + 1] == 0 {
-            256
-        } else {
-            data[offset + 1] as u32
-        };
-        if width != height || !EXPECTED_SIZES.contains(&width) || seen.insert(width, true).is_some()
+    for (index, entry) in directory.entries().iter().enumerate() {
+        let expected = ICO_ORDER[index];
+        if entry.width() != expected
+            || entry.height() != expected
+            || !EXPECTED_SIZES.contains(&entry.width())
+            || seen.insert(entry.width(), true).is_some()
         {
             return Err("branding ICO layer set is invalid".into());
         }
-        let size = u32::from_le_bytes(data[offset + 8..offset + 12].try_into()?) as usize;
-        let start = u32::from_le_bytes(data[offset + 12..offset + 16].try_into()?) as usize;
-        let layer = data
-            .get(start..start + size)
-            .ok_or("branding ICO layer is truncated")?;
-        if png_dimensions(layer)? != (width, height) {
-            return Err("branding ICO PNG dimensions changed".into());
+        if entry.is_png() != (expected == 256) {
+            return Err("branding ICO encoding policy changed".into());
+        }
+        let image = entry.decode()?;
+        if (image.width(), image.height()) != (expected, expected) {
+            return Err("branding ICO decoded dimensions changed".into());
         }
     }
     Ok(())
@@ -199,28 +182,15 @@ pub fn validate(root: &Path) -> Result<()> {
     )?;
     let (_, small) = validate_svg(
         &branding.join("sky-auto-player-app-icon-small.svg"),
-        "0 0 24 24",
+        "0 0 48 48",
         &ids,
     )?;
     let (_, tiny) = validate_svg(
         &branding.join("sky-auto-player-app-icon-16.svg"),
-        "0 0 16 16",
+        "0 0 24 24",
         &ids,
     )?;
-    let mut optical_documents = vec![small, tiny];
-    for (name, view_box) in [
-        ("sky-auto-player-app-icon-20.svg", "0 0 20 20"),
-        ("sky-auto-player-app-icon-24.svg", "0 0 24 24"),
-        ("sky-auto-player-app-icon-30.svg", "0 0 30 30"),
-        ("sky-auto-player-app-icon-32.svg", "0 0 32 32"),
-        ("sky-auto-player-app-icon-36.svg", "0 0 36 36"),
-        ("sky-auto-player-app-icon-40.svg", "0 0 40 40"),
-        ("sky-auto-player-app-icon-48.svg", "0 0 48 48"),
-    ] {
-        let (_, document) = validate_svg(&branding.join(name), view_box, &ids)?;
-        optical_documents.push(document);
-    }
-    for document in optical_documents.iter().chain(std::iter::once(&canonical)) {
+    for document in [&small, &tiny, &canonical] {
         if document
             .descendants()
             .filter(|node| {
@@ -239,8 +209,27 @@ pub fn validate(root: &Path) -> Result<()> {
         return Err("canonical branding plate color changed".into());
     }
     let toolbar = fs::read_to_string(root.join("desktop/src/components/shell/Toolbar.tsx"))?;
-    if !toolbar.contains("sky-auto-player-app-icon-32.svg") {
-        return Err("desktop toolbar must use the dedicated 32px branding master".into());
+    for asset in [
+        "app-icon-32.png",
+        "app-icon-40.png",
+        "app-icon-48.png",
+        "app-icon-64.png",
+    ] {
+        if !toolbar.contains(asset) {
+            return Err(format!("desktop toolbar is missing density asset {asset}").into());
+        }
+    }
+    for (name, size) in [
+        ("app-icon-32.png", 32),
+        ("app-icon-40.png", 40),
+        ("app-icon-48.png", 48),
+        ("app-icon-64.png", 64),
+    ] {
+        if png_dimensions(&fs::read(root.join("desktop/src/assets/brand").join(name))?)?
+            != (size, size)
+        {
+            return Err(format!("desktop toolbar asset {name} dimensions changed").into());
+        }
     }
     let no_bg = branding.join("sky-auto-player-mark-no-bg.svg");
     let (_, no_bg_doc) = validate_svg(
@@ -290,7 +279,10 @@ pub fn validate(root: &Path) -> Result<()> {
     }
     validate_ico(root)?;
     let ico = fs::read(branding.join("exports/windows/sky-auto-player.ico"))?;
-    for consumer in ["site/public/favicon.ico", "desktop/src-tauri/icons/icon.ico"] {
+    for consumer in [
+        "site/public/favicon.ico",
+        "desktop/src-tauri/icons/icon.ico",
+    ] {
         if fs::read(root.join(consumer))? != ico {
             return Err(format!("branding ICO consumer drift: {consumer}").into());
         }
@@ -346,11 +338,10 @@ mod tests {
     use super::*;
 
     fn png(size: u32) -> Vec<u8> {
-        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
-        data.extend_from_slice(&13u32.to_be_bytes());
-        data.extend_from_slice(b"IHDR");
-        data.extend_from_slice(&size.to_be_bytes());
-        data.extend_from_slice(&size.to_be_bytes());
+        let image =
+            IconImage::from_rgba_data(size, size, vec![255; (size as usize) * (size as usize) * 4]);
+        let mut data = Vec::new();
+        image.write_png(&mut data).expect("PNG");
         data
     }
 
@@ -361,11 +352,21 @@ mod tests {
             .map(|size| (size, png(size)))
             .collect();
         let ico = build_ico(&layers).expect("ICO");
-        assert_eq!(&ico[..6], &[0, 0, 1, 0, EXPECTED_SIZES.len() as u8, 0]);
-        assert_eq!(ico[6], 16);
-        assert_eq!(ico[6 + 16 * (EXPECTED_SIZES.len() - 1)], 0);
-        assert_eq!(&ico[10..12], &1u16.to_le_bytes());
-        assert_eq!(&ico[12..14], &32u16.to_le_bytes());
+        let directory = IconDir::read(Cursor::new(&ico)).expect("ICO directory");
+        assert_eq!(directory.entries().len(), EXPECTED_SIZES.len());
+        assert_eq!(directory.entries()[0].width(), 32);
+        assert!(!directory.entries()[0].is_png());
+        assert_eq!(
+            directory.entries().last().expect("256px entry").width(),
+            256
+        );
+        assert!(directory.entries().last().expect("256px entry").is_png());
+        for entry in directory.entries() {
+            assert_eq!(
+                entry.decode().expect("encoded entry").width(),
+                entry.width()
+            );
+        }
     }
 
     #[test]

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
+ico = "0.5"
 pep440_rs = "0.7.3"
 roxmltree = "0.20.0"
 serde = { version = "1", features = ["derive"] }

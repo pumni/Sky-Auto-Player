@@ -8,6 +8,8 @@ mod native_runtime;
 mod native_update;
 mod startup_guard;
 mod ui_events;
+#[cfg(windows)]
+mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
 
@@ -111,6 +113,16 @@ fn run_inner(gui_smoke: bool) {
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .manage(app_state)
         .setup(move |app| {
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(error) = windows_icon::apply_native_window_icons(&window) {
+                        eprintln!("failed to apply native Windows icons: {error}");
+                    }
+                }
+            }
             if gui_smoke {
                 record_gui_smoke_phase("tauri.setup.enter");
                 let app_handle = app.handle().clone();
@@ -182,11 +194,22 @@ fn run_inner(gui_smoke: bool) {
             commands::subscribe_ui_events,
             commands::shutdown,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 close_window(window.clone());
             }
+            #[cfg(windows)]
+            tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                if let Err(error) = windows_icon::apply_native_window_icons(window) {
+                    eprintln!("failed to refresh native Windows icons: {error}");
+                }
+            }
+            #[cfg(windows)]
+            tauri::WindowEvent::Destroyed => {
+                windows_icon::release_native_window_icons(window);
+            }
+            _ => {}
         })
         .run(tauri::generate_context!());
     if gui_smoke {

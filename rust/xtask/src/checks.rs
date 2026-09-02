@@ -45,6 +45,7 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::System::Threading",
     "Win32::UI::Input::KeyboardAndMouse",
     "Win32::UI::Controls",
+    "Win32::UI::HiDpi",
     "Win32::UI::WindowsAndMessaging",
     "Win32::Networking::WinHttp",
     "Win32::Storage::FileSystem",
