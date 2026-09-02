@@ -22,11 +22,14 @@ struct NativeWindowIcons {
 
 static NATIVE_WINDOW_ICONS: OnceLock<Mutex<HashMap<isize, NativeWindowIcons>>> = OnceLock::new();
 
+type IconDimensions = (i32, i32);
+type SystemIconDimensions = (IconDimensions, IconDimensions);
+
 fn native_window_icons() -> &'static Mutex<HashMap<isize, NativeWindowIcons>> {
     NATIVE_WINDOW_ICONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn system_icon_dimensions(dpi: u32) -> Result<((i32, i32), (i32, i32)), String> {
+fn system_icon_dimensions(dpi: u32) -> Result<SystemIconDimensions, String> {
     let dpi = if dpi == 0 { DPI_BASE } else { dpi };
     let small = unsafe {
         (

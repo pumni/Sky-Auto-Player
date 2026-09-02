@@ -117,10 +117,10 @@ fn run_inner(gui_smoke: bool) {
             {
                 use tauri::Manager;
 
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Err(error) = windows_icon::apply_native_window_icons(&window) {
-                        eprintln!("failed to apply native Windows icons: {error}");
-                    }
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_icon::apply_native_window_icons(&window)
+                {
+                    eprintln!("failed to apply native Windows icons: {error}");
                 }
             }
             if gui_smoke {
