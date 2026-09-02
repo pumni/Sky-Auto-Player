@@ -57,6 +57,23 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn normalized_brand_source_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' {
+            if bytes.get(index + 1) == Some(&b'\n') {
+                index += 1;
+            }
+            normalized.push(b'\n');
+        } else {
+            normalized.push(bytes[index]);
+        }
+        index += 1;
+    }
+    normalized
+}
+
 pub fn png_dimensions(data: &[u8]) -> Result<(u32, u32)> {
     if data.len() < 24 || &data[..8] != b"\x89PNG\r\n\x1a\n" || &data[12..16] != b"IHDR" {
         return Err("expected a PNG file with an IHDR chunk".into());
@@ -183,7 +200,7 @@ fn validate_brand_lock(root: &Path) -> Result<()> {
             return Err(format!("approved brand lock metadata changed: {name}").into());
         }
         let bytes = fs::read(root.join("branding").join(name))?;
-        let actual = sha256_hex(&bytes);
+        let actual = sha256_hex(&normalized_brand_source_bytes(&bytes));
         if actual != sha256 {
             return Err(format!(
                 "{} differs from the owner-approved brand source",
@@ -508,5 +525,22 @@ mod tests {
     #[test]
     fn current_branding_passes_validation() {
         validate(&crate::repo::root()).expect("branding assets");
+    }
+
+    #[test]
+    fn brand_source_hash_is_stable_across_line_endings() {
+        let lf = b"<svg>\n<path />\n</svg>\n";
+        let crlf = b"<svg>\r\n<path />\r\n</svg>\r\n";
+        let bare_cr = b"<svg>\r<path />\r</svg>\r";
+
+        assert_eq!(
+            sha256_hex(&normalized_brand_source_bytes(lf)),
+            sha256_hex(&normalized_brand_source_bytes(crlf))
+        );
+        assert_eq!(
+            sha256_hex(&normalized_brand_source_bytes(lf)),
+            sha256_hex(&normalized_brand_source_bytes(bare_cr))
+        );
+        assert_eq!(normalized_brand_source_bytes(lf), lf);
     }
 }

@@ -13,8 +13,9 @@ are owner-approved and immutable; rendering and delivery may change, but brand g
 | `sky-auto-player-app-icon.svg` | 32–256px | canonical Windows, toolbar and marketing surfaces |
 
 `approved-brand.lock.json` pins all three source files to the owner-approved commit and SHA-256
-content. Do not redraw, optically reinterpret, or change these files to solve raster or native
-delivery problems.
+content. The SHA-256 check normalizes CRLF and legacy bare-CR line endings to LF so a Windows
+working-tree checkout cannot invalidate the lock without changing the approved SVG content. Do not
+redraw, optically reinterpret, or change these files to solve raster or native delivery problems.
 
 ## Source variants
 
