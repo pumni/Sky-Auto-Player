@@ -270,6 +270,7 @@ impl AppState {
     }
 
     #[cfg(any(test, feature = "tauri-test"))]
+    #[allow(dead_code)]
     pub(crate) fn with_test_install_root(install_root: PathBuf) -> Self {
         let state = Self::default();
         *state
