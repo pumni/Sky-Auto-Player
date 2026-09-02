@@ -3,7 +3,7 @@
 Date recorded: 2026-09-03
 Baseline commit: `main@6a6155df83294d0defe35f6ef4f774e2405c5a45` (PR #95 merge)
 Main post-#95 workflow: `CI run #549 / 33659228830`
-PR control workflow: `PR #95 run #548 / 33658514930`
+PR control workflow: `PR #95 run #548 / 33658064660`
 
 ---
 
@@ -84,14 +84,26 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Run #550** | `33665614053` | `pull_request` | `1ca1ada4abb9` | 18:10:42 $\rightarrow$ 18:19:06Z | **8m24s** | **100% GREEN** |
 | **Run #551** | `33666573656` | `pull_request` | `36c781efe245` | 18:20:15 $\rightarrow$ 18:29:43Z | **9m28s** | **100% GREEN** |
-| **Run #552** | `33667547040` | `workflow_dispatch` | `36c781efe245` | 18:29:51Z $\rightarrow$ *active* | `changes` **3s** | **IN_PROGRESS** |
+| **Run #553** | `33667667515` | `pull_request` | `700e9439da1c` | 18:30:56 $\rightarrow$ 18:40:36Z | **9m40s** | **100% GREEN** |
+| **Run #552** | `33667547040` | `workflow_dispatch` | `36c781efe245` | 18:29:51 $\rightarrow$ 18:48:02Z | `changes` **3s** | Partial fail: `test:e2e` (Vite 15s cold readiness timeout) |
+| **Run #554** | `33669521385` | `workflow_dispatch` | `700e9439da1c` | 18:48:53Z $\rightarrow$ *active* | `changes` **3s** | In progress (manual dispatch qualification) |
 
 * **Candidate PR**: [#96](https://github.com/pumni/Sky-Auto-Player/pull/96)
 * **Adoption Status**: `ADOPTED`
 
 ---
 
-### 3.2 Detailed Timestamps for Run #550 (`1ca1ada4abb9`)
+### 3.2 Authoritative Artifact Evidence for Current PR HEAD (`700e9439da1c`) — Run #553
+
+- **Artifact ID**: `9861533057`
+- **Name**: `sky-auto-player-portable-700e9439da1cf72ca5b4e25451d10920a21920d0`
+- **Size**: `9,171,983 bytes`
+- **SHA-256 Digest**: `sha256:1f2677fe3ae5cb1ed3f05a471115d88557c1176a1b91b414e9b25f6a29f026c6`
+- **URL**: `https://github.com/pumni/Sky-Auto-Player/actions/runs/33667667515/artifacts/9861533057`
+
+---
+
+### 3.3 Detailed Timestamps for Run #550 (`1ca1ada4abb9`)
 
 #### Job 1: `changes` (ID `100366483302`)
 - **Runner**: `ubuntu-latest` (`GitHub Actions 1000003282`)
@@ -139,11 +151,6 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
   - Rust cache restore: 26s
   - Dist build (`cargo xtask dist --profile dist`): 6m28s
   - Upload exact portable release candidate (`actions/upload-artifact@v7.0.1`): 2s
-- **Artifact Verified**:
-  - Name: `sky-auto-player-portable-1ca1ada4abb97a4cbefcb737dd78717e225db161`
-  - Artifact ID: `9860715494`
-  - Size: `9,172,026 bytes`
-  - SHA-256 Digest: `fcd8d29ed4f570d5700feaa260b024eaec039222eb4ecaecfb2ef5e910893a4b`
 
 #### Job 5: `status` (ID `100369273840`)
 - **Runner**: `ubuntu-latest` (`GitHub Actions 1000003286`)
@@ -152,13 +159,12 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
 
 ---
 
-### 3.3 Hosted `workflow_dispatch` Qualification (Run #552 / `33667547040`)
+### 3.4 Hosted `workflow_dispatch` Qualification (Run #552 & #554)
 
 To qualify the short-circuit optimization for manual dispatch and main push:
 - **Trigger**: `workflow_dispatch` on `perf/ci-fast-1-bootstrap`
-- **Job**: `Classify validation layers` (ID `100372902296`)
-- **Job Lifecycle**: Started `18:29:53Z` $\rightarrow$ Completed `18:29:56Z`
-- **Job Wall-Clock**: **3 SECONDS** (down from 59s on main)
+- **Job**: `Classify validation layers` (ID `100372902296` in #552; ID `100379382020` in #554)
+- **Job Lifecycle**: **3 SECONDS** wall-clock (down from 59s on main)
 - **Execution Path**:
   - `Emit full qualification matrix for main / manual dispatch`: executed in <1s
   - `Checkout PR head`: skipped
@@ -174,5 +180,7 @@ To qualify the short-circuit optimization for manual dispatch and main push:
   browser_required=true
   classification_reason=full validation requested
   ```
-  *(Verified by downstream trigger of `validate` ID 100372938063, `static` ID 100372938225, and `packaged` ID 100372938298).*
-- **Concurrency Isolation**: The run executed under dedicated group `CI-33667547040` with `cancel-in-progress: false`, operating concurrently without being cancelled by preceding PR runs or cancelling them.
+- **Concurrency Isolation**: The run executed under dedicated group `CI-<run_id>` with `cancel-in-progress: false`, operating concurrently without cancelling or being cancelled by concurrent PR runs.
+- **Investigation of Run #552 `validate` Failure**:
+  - Root cause: In `desktop/scripts/run-e2e.mjs:28`, `waitForServer()` has a fixed 15-second deadline (`60 * 250ms`) for Vite dev server initialization. Under heavy load on Windows runner after running the entire Rust test suite, cold Vite initialization took slightly longer than 15s, triggering `Error: Vite did not become ready within 15 seconds`.
+  - All preceding steps passed cleanly: `check static` PASS, `check rust` PASS, `bun run check` PASS. Rerun #554 triggered to observe qualification.
