@@ -110,7 +110,7 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
                       >
                         {bootstrap.option_sets.hold_frames.map((value) => (
                           <option key={value} value={value}>
-                            {value} frames
+                            {value} {value === 1 ? 'frame' : 'frames'}
                           </option>
                         ))}
                       </select>

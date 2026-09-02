@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function expectNoSeriousAccessibilityViolations(page: Page) {
   const results = await new AxeBuilder({ page }).analyze();
@@ -217,11 +217,16 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'page',
   );
   const initialBox = await dialog.boundingBox();
+  const settingsContent = dialog.locator('.settings-content');
+  const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
   expect(initialBox).not.toBeNull();
+  await expect(dialog.getByLabel('Hold').locator('option[value="1"]')).toHaveText('1 frame');
   for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Advanced', 'Playback']) {
     await dialog.getByRole('button', { name: category, exact: true }).click();
     const nextBox = await dialog.boundingBox();
+    const nextContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
     expect(nextBox).not.toBeNull();
+    expect(nextContentWidth).toBe(initialContentWidth);
     if (initialBox && nextBox) {
       expect(Math.abs(nextBox.x - initialBox.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(nextBox.y - initialBox.y)).toBeLessThanOrEqual(1);
@@ -229,6 +234,29 @@ test('Settings modal has no serious accessibility violations and closes accessib
       expect(Math.abs(nextBox.height - initialBox.height)).toBeLessThanOrEqual(1);
     }
   }
+
+  const expectFocusClearance = async (control: Locator) => {
+    await control.focus();
+    const controlBox = await control.boundingBox();
+    const contentBox = await settingsContent.boundingBox();
+    expect(controlBox).not.toBeNull();
+    expect(contentBox).not.toBeNull();
+    if (controlBox && contentBox) {
+      expect(
+        contentBox.x + contentBox.width - (controlBox.x + controlBox.width),
+      ).toBeGreaterThanOrEqual(4);
+    }
+  };
+
+  await dialog.getByRole('button', { name: 'Playback', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Hold'));
+  await expectFocusClearance(dialog.getByLabel('Tempo'));
+  await expectFocusClearance(dialog.getByLabel('FPS'));
+  await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Theme'));
+  await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
+  await expectFocusClearance(dialog.getByLabel('Channel'));
+  await expectFocusClearance(dialog.getByLabel('Skip version'));
   await expectNoSeriousAccessibilityViolations(page);
 
   const focusables = dialog.locator('button, select, input');
