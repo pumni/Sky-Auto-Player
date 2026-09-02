@@ -142,6 +142,7 @@ jobs:
           if [[ ! -x "$tool_root/bin/cargo-audit" ]]; then
             cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --root "$tool_root"
           fi
+          export PATH="$tool_root/bin:$PATH"
           echo "$tool_root/bin" >> "$GITHUB_PATH"
           version="$("$tool_root/bin/cargo-audit" --version)"
           [[ "$version" == "cargo-audit $CARGO_AUDIT_VERSION" ]]
@@ -162,6 +163,7 @@ jobs:
           if [[ ! -x "$tool_root/bin/cargo-vet" ]]; then
             cargo install cargo-vet --version "$CARGO_VET_VERSION" --locked --root "$tool_root"
           fi
+          export PATH="$tool_root/bin:$PATH"
           echo "$tool_root/bin" >> "$GITHUB_PATH"
           version="$("$tool_root/bin/cargo-vet" --version)"
           [[ "$version" == "cargo-vet $CARGO_VET_VERSION" ]]

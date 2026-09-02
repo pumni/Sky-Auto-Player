@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+rust/supply-chain/*.toml text eol=lf
+rust/supply-chain/*.lock text eol=lf
