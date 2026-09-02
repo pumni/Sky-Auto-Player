@@ -410,6 +410,31 @@ pub fn selftest_build_info() -> i32 {
 mod ipc_tests {
     use super::app_state::AppState;
     use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestInstallRoot(PathBuf);
+
+    impl Drop for TestInstallRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_install_root() -> (PathBuf, TestInstallRoot) {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-desktop-ipc-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("test songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("test config");
+        let source_song =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..\\..\\songs\\blue.json");
+        fs::copy(source_song, root.join("songs/blue.json")).expect("test song");
+        (root.clone(), TestInstallRoot(root))
+    }
 
     fn request(
         command: &str,
@@ -435,8 +460,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_params_envelope() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![super::commands::search_songs])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
@@ -469,8 +495,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_native_playback_payloads() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
@@ -549,8 +576,9 @@ mod ipc_tests {
 
     #[test]
     fn native_settings_patch_invalidates_prepared_plan() {
+        let (install_root, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::default())
+            .manage(AppState::with_test_install_root(install_root))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
