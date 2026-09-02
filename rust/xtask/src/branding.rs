@@ -1,15 +1,61 @@
 use crate::Result;
 use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
 use roxmltree::Document;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EXPECTED_SIZES: [u32; 14] = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256];
-const ICO_ORDER: [u32; 14] = [32, 16, 20, 24, 30, 36, 40, 48, 60, 64, 72, 96, 128, 256];
+const EXPECTED_SIZES: [u32; 10] = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+const ICO_ORDER: [u32; 10] = [32, 16, 20, 24, 40, 48, 64, 96, 128, 256];
+const APPROVED_BRAND_COMMIT: &str = "1d850a6cd4f7ace2702116159ef788b7e847acea";
+const APPROVED_BRAND_SOURCES: [(&str, &str, &str); 3] = [
+    (
+        "sky-auto-player-app-icon.svg",
+        "94f924b540c1927e84eb5aa0938dd29630c5fd55",
+        "006f235417081f3394ec458e19eb99780feecd58d1a41742df77552bc018dc6d",
+    ),
+    (
+        "sky-auto-player-app-icon-small.svg",
+        "8e0341ae2e87382471b7875a6d2100b5ab2b323f",
+        "59c422e5897e1b58637ca6e652b275d692b26f44a44eb7ad8b648c60dcc4606e",
+    ),
+    (
+        "sky-auto-player-app-icon-16.svg",
+        "e5112a89662f8eaec5e430628f721526cc01b443",
+        "cd9dc8b59ee8f448f9587e22ad855f51af6236204c85197a144ce164b714d353",
+    ),
+];
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
+const WINDOWS_RASTER_SOURCES: [(&str, &str); 10] = [
+    ("16", "sky-auto-player-app-icon-16.svg"),
+    ("20", "sky-auto-player-app-icon-small.svg"),
+    ("24", "sky-auto-player-app-icon-small.svg"),
+    ("32", "sky-auto-player-app-icon.svg"),
+    ("40", "sky-auto-player-app-icon.svg"),
+    ("48", "sky-auto-player-app-icon.svg"),
+    ("64", "sky-auto-player-app-icon.svg"),
+    ("96", "sky-auto-player-app-icon.svg"),
+    ("128", "sky-auto-player-app-icon.svg"),
+    ("256", "sky-auto-player-app-icon.svg"),
+];
+const TOOLBAR_RASTER_SOURCES: [(&str, &str); 4] = [
+    ("32", "sky-auto-player-app-icon.svg"),
+    ("40", "sky-auto-player-app-icon.svg"),
+    ("48", "sky-auto-player-app-icon.svg"),
+    ("64", "sky-auto-player-app-icon.svg"),
+];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 pub fn png_dimensions(data: &[u8]) -> Result<(u32, u32)> {
     if data.len() < 24 || &data[..8] != b"\x89PNG\r\n\x1a\n" || &data[12..16] != b"IHDR" {
@@ -110,6 +156,76 @@ fn parse_svg(path: &Path) -> Result<(String, Document<'static>)> {
     Ok((owned.to_owned(), document))
 }
 
+fn validate_brand_lock(root: &Path) -> Result<()> {
+    let lock_path = root.join("branding/approved-brand.lock.json");
+    let lock: Value = serde_json::from_slice(&fs::read(&lock_path)?)?;
+    if lock.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("approved brand lock schema changed".into());
+    }
+    if lock.get("approved_commit").and_then(Value::as_str) != Some(APPROVED_BRAND_COMMIT) {
+        return Err(format!("{}: approved commit changed", lock_path.display()).into());
+    }
+    let sources = lock
+        .get("sources")
+        .and_then(Value::as_object)
+        .ok_or("approved brand lock sources must be an object")?;
+    if sources.len() != APPROVED_BRAND_SOURCES.len() {
+        return Err("approved brand lock source set changed".into());
+    }
+    for (name, git_blob_sha1, sha256) in APPROVED_BRAND_SOURCES {
+        let entry = sources
+            .get(name)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("approved brand lock entry missing: {name}"))?;
+        if entry.get("git_blob_sha1").and_then(Value::as_str) != Some(git_blob_sha1)
+            || entry.get("sha256").and_then(Value::as_str) != Some(sha256)
+        {
+            return Err(format!("approved brand lock metadata changed: {name}").into());
+        }
+        let bytes = fs::read(root.join("branding").join(name))?;
+        let actual = sha256_hex(&bytes);
+        if actual != sha256 {
+            return Err(format!(
+                "{} differs from the owner-approved brand source",
+                root.join("branding").join(name).display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_raster_source_section(
+    manifest: &Value,
+    section: &str,
+    expected: &[(&str, &str)],
+) -> Result<()> {
+    let object = manifest
+        .get(section)
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("raster source manifest section missing: {section}"))?;
+    if object.len() != expected.len() {
+        return Err(format!("raster source manifest section changed: {section}").into());
+    }
+    for (size, source) in expected {
+        if object.get(*size).and_then(Value::as_str) != Some(*source) {
+            return Err(format!("raster source mapping changed: {section}/{size}").into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_raster_source_manifest(root: &Path) -> Result<()> {
+    let path = root.join("branding/raster-sources.json");
+    let manifest: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    if manifest.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("raster source manifest schema changed".into());
+    }
+    validate_raster_source_section(&manifest, "windows", &WINDOWS_RASTER_SOURCES)?;
+    validate_raster_source_section(&manifest, "toolbar", &TOOLBAR_RASTER_SOURCES)?;
+    Ok(())
+}
+
 fn validate_svg(path: &Path, view_box: &str, ids: &[&str]) -> Result<(String, Document<'static>)> {
     let (text, document) = parse_svg(path)?;
     let root = document.root_element();
@@ -167,6 +283,8 @@ fn validate_ico(root: &Path) -> Result<()> {
 
 pub fn validate(root: &Path) -> Result<()> {
     let branding = root.join("branding");
+    validate_brand_lock(root)?;
+    validate_raster_source_manifest(root)?;
     let ids = [
         "plate",
         "edge-a-b",
@@ -182,12 +300,12 @@ pub fn validate(root: &Path) -> Result<()> {
     )?;
     let (_, small) = validate_svg(
         &branding.join("sky-auto-player-app-icon-small.svg"),
-        "0 0 48 48",
+        "0 0 128 128",
         &ids,
     )?;
     let (_, tiny) = validate_svg(
         &branding.join("sky-auto-player-app-icon-16.svg"),
-        "0 0 24 24",
+        "0 0 128 128",
         &ids,
     )?;
     for document in [&small, &tiny, &canonical] {
@@ -225,10 +343,17 @@ pub fn validate(root: &Path) -> Result<()> {
         ("app-icon-48.png", 48),
         ("app-icon-64.png", 64),
     ] {
-        if png_dimensions(&fs::read(root.join("desktop/src/assets/brand").join(name))?)?
-            != (size, size)
-        {
+        let toolbar_bytes = fs::read(root.join("desktop/src/assets/brand").join(name))?;
+        if png_dimensions(&toolbar_bytes)? != (size, size) {
             return Err(format!("desktop toolbar asset {name} dimensions changed").into());
+        }
+        let raster_bytes = fs::read(
+            branding
+                .join("exports/windows/raster")
+                .join(format!("{size}.png")),
+        )?;
+        if toolbar_bytes != raster_bytes {
+            return Err(format!("desktop toolbar asset drift: {name}").into());
         }
     }
     let no_bg = branding.join("sky-auto-player-mark-no-bg.svg");
@@ -292,8 +417,19 @@ pub fn validate(root: &Path) -> Result<()> {
         ("favicon-32x32.png", 32),
         ("apple-touch-icon.png", 180),
     ] {
-        if png_dimensions(&fs::read(branding.join("exports/web").join(name))?)? != (size, size) {
+        let bytes = fs::read(branding.join("exports/web").join(name))?;
+        if png_dimensions(&bytes)? != (size, size) {
             return Err(format!("{name}: PNG dimensions changed").into());
+        }
+        if size <= 32
+            && bytes
+                != fs::read(
+                    branding
+                        .join("exports/windows/raster")
+                        .join(format!("{size}.png")),
+                )?
+        {
+            return Err(format!("{name}: raster consumer drift").into());
         }
     }
     for (left, right) in [

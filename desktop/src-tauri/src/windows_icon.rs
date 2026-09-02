@@ -5,15 +5,14 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LoadImageW, SendMessageW, WM_SETICON,
+    DestroyIcon, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LoadImageW, SM_CXICON, SM_CXSMICON,
+    SM_CYICON, SM_CYSMICON, SendMessageW, WM_SETICON,
 };
 
 const TAURI_APP_ICON_RESOURCE_ID: usize = 32512;
 const DPI_BASE: u32 = 96;
-const TITLEBAR_BASE_PX: u32 = 16;
-const TASKBAR_BASE_PX: u32 = 24;
 
 #[derive(Clone, Copy)]
 struct NativeWindowIcons {
@@ -27,11 +26,27 @@ fn native_window_icons() -> &'static Mutex<HashMap<isize, NativeWindowIcons>> {
     NATIVE_WINDOW_ICONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn scaled(base_px: u32, dpi: u32) -> i32 {
+fn system_icon_dimensions(dpi: u32) -> Result<((i32, i32), (i32, i32)), String> {
     let dpi = if dpi == 0 { DPI_BASE } else { dpi };
-    let physical_px =
-        (u64::from(base_px) * u64::from(dpi) + u64::from(DPI_BASE / 2)) / u64::from(DPI_BASE);
-    physical_px.clamp(1, i32::MAX as u64) as i32
+    let small = unsafe {
+        (
+            GetSystemMetricsForDpi(SM_CXSMICON, dpi),
+            GetSystemMetricsForDpi(SM_CYSMICON, dpi),
+        )
+    };
+    let large = unsafe {
+        (
+            GetSystemMetricsForDpi(SM_CXICON, dpi),
+            GetSystemMetricsForDpi(SM_CYICON, dpi),
+        )
+    };
+    if small.0 <= 0 || small.1 <= 0 || large.0 <= 0 || large.1 <= 0 {
+        return Err(format!(
+            "GetSystemMetricsForDpi returned invalid icon dimensions: dpi={dpi}, small={}x{}, large={}x{}",
+            small.0, small.1, large.0, large.1
+        ));
+    }
+    Ok((small, large))
 }
 
 fn window_hwnd<W>(window: &W) -> Result<HWND, String>
@@ -47,7 +62,7 @@ where
     }
 }
 
-fn load_resource_icon(module: HINSTANCE, size: i32) -> Result<HICON, String> {
+fn load_resource_icon(module: HINSTANCE, width: i32, height: i32) -> Result<HICON, String> {
     // Passing explicit dimensions makes LoadImageW select the closest native
     // image from the embedded ICO resource instead of using the first image.
     let icon = unsafe {
@@ -55,13 +70,15 @@ fn load_resource_icon(module: HINSTANCE, size: i32) -> Result<HICON, String> {
             module,
             TAURI_APP_ICON_RESOURCE_ID as *const u16,
             IMAGE_ICON,
-            size,
-            size,
+            width,
+            height,
             0,
         )
     };
     if icon.is_null() {
-        Err(format!("LoadImageW failed for {size}x{size} resource icon"))
+        Err(format!(
+            "LoadImageW failed for {width}x{height} resource icon"
+        ))
     } else {
         Ok(icon as HICON)
     }
@@ -78,8 +95,9 @@ where
         return Err("GetModuleHandleW failed".into());
     }
 
-    let small = load_resource_icon(module, scaled(TITLEBAR_BASE_PX, dpi))?;
-    let big = match load_resource_icon(module, scaled(TASKBAR_BASE_PX, dpi)) {
+    let (small_dimensions, large_dimensions) = system_icon_dimensions(dpi)?;
+    let small = load_resource_icon(module, small_dimensions.0, small_dimensions.1)?;
+    let big = match load_resource_icon(module, large_dimensions.0, large_dimensions.1) {
         Ok(icon) => icon,
         Err(error) => {
             unsafe { DestroyIcon(small) };
@@ -132,23 +150,5 @@ where
             DestroyIcon(previous.small as HICON);
             DestroyIcon(previous.big as HICON);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scaled;
-
-    #[test]
-    fn scaled_icon_targets_round_to_common_windows_dpi_sizes() {
-        assert_eq!(scaled(16, 96), 16);
-        assert_eq!(scaled(16, 120), 20);
-        assert_eq!(scaled(16, 144), 24);
-        assert_eq!(scaled(16, 192), 32);
-        assert_eq!(scaled(24, 96), 24);
-        assert_eq!(scaled(24, 120), 30);
-        assert_eq!(scaled(24, 144), 36);
-        assert_eq!(scaled(24, 192), 48);
-        assert_eq!(scaled(16, 0), 16);
     }
 }

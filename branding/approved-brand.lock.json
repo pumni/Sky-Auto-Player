@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "approved_commit": "1d850a6cd4f7ace2702116159ef788b7e847acea",
+  "sources": {
+    "sky-auto-player-app-icon.svg": {
+      "git_blob_sha1": "94f924b540c1927e84eb5aa0938dd29630c5fd55",
+      "sha256": "006f235417081f3394ec458e19eb99780feecd58d1a41742df77552bc018dc6d"
+    },
+    "sky-auto-player-app-icon-small.svg": {
+      "git_blob_sha1": "8e0341ae2e87382471b7875a6d2100b5ab2b323f",
+      "sha256": "59c422e5897e1b58637ca6e652b275d692b26f44a44eb7ad8b648c60dcc4606e"
+    },
+    "sky-auto-player-app-icon-16.svg": {
+      "git_blob_sha1": "e5112a89662f8eaec5e430628f721526cc01b443",
+      "sha256": "cd9dc8b59ee8f448f9587e22ad855f51af6236204c85197a144ce164b714d353"
+    }
+  }
+}

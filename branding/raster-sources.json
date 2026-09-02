@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "windows": {
+    "16": "sky-auto-player-app-icon-16.svg",
+    "20": "sky-auto-player-app-icon-small.svg",
+    "24": "sky-auto-player-app-icon-small.svg",
+    "32": "sky-auto-player-app-icon.svg",
+    "40": "sky-auto-player-app-icon.svg",
+    "48": "sky-auto-player-app-icon.svg",
+    "64": "sky-auto-player-app-icon.svg",
+    "96": "sky-auto-player-app-icon.svg",
+    "128": "sky-auto-player-app-icon.svg",
+    "256": "sky-auto-player-app-icon.svg"
+  },
+  "toolbar": {
+    "32": "sky-auto-player-app-icon.svg",
+    "40": "sky-auto-player-app-icon.svg",
+    "48": "sky-auto-player-app-icon.svg",
+    "64": "sky-auto-player-app-icon.svg"
+  }
+}
