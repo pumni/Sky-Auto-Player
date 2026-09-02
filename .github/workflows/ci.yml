@@ -122,14 +122,14 @@ jobs:
 
       - name: Restore pinned cargo-audit tool
         id: cargo-audit-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -150,7 +150,7 @@ jobs:
 
       - name: Save pinned cargo-audit tool
         if: github.event_name != 'pull_request' && steps.cargo-audit-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
@@ -171,7 +171,7 @@ jobs:
 
       - name: Save pinned cargo-vet tool
         if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -227,7 +227,7 @@ jobs:
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -249,7 +249,7 @@ jobs:
 
       - name: Save pinned cargo-vet tool
         if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
           key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
@@ -438,7 +438,7 @@ jobs:
           Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json")
 
       - name: Upload exact portable release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sky-auto-player-portable-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/Sky Auto Player portable
