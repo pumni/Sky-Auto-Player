@@ -1,0 +1,338 @@
+.player-bar {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(320px, 1.45fr) minmax(210px, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-4);
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+}
+
+.player-track-info {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.player-track-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+
+.player-track-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.player-track-copy strong,
+.player-track-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-track-copy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.player-track-copy span {
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.player-risk {
+  flex: 0 0 auto;
+  color: var(--risk-color);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.player-transport {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.transport-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.transport-actions .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding-inline: 10px;
+  font-size: 11px;
+}
+
+.transport-actions .player-primary-action {
+  min-height: 38px;
+  padding-inline: 14px;
+  font-size: 12px;
+}
+
+.player-timeline {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.player-timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-tertiary);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.player-timeline progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  accent-color: var(--accent);
+}
+
+.player-message {
+  display: block;
+  max-height: 32px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.player-message-danger {
+  color: var(--danger);
+}
+
+.player-profile {
+  position: relative;
+  min-width: 0;
+}
+
+.profile-fields {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 8px;
+}
+
+.profile-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.profile-fields select {
+  min-width: 46px;
+  min-height: 27px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+.profile-checkbox {
+  gap: 4px !important;
+}
+
+.profile-summary-button {
+  display: none;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+  padding: 5px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+}
+
+.profile-summary-button:hover {
+  background: var(--surface-hover);
+}
+
+.profile-summary-button > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.profile-summary-button strong,
+.profile-summary-button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-summary-button strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.profile-summary-button small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.profile-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 7;
+  display: grid;
+  gap: 10px;
+  min-width: 205px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 35%);
+}
+
+.profile-popover .profile-fields {
+  display: grid;
+  justify-content: stretch;
+  gap: 9px;
+}
+
+.profile-popover .profile-fields label {
+  justify-content: space-between;
+}
+
+.player-diagnostics-button {
+  flex: 0 0 auto;
+}
+
+.player-admission {
+  position: absolute;
+  right: 16px;
+  bottom: calc(100% + 8px);
+  left: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: var(--space-4);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border-strong));
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+}
+
+.admission-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.admission-copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.admission-copy span {
+  overflow: hidden;
+  color: var(--warning);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admission-copy .muted {
+  color: var(--text-tertiary);
+}
+
+.admission-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.admission-actions .button {
+  min-height: 30px;
+  padding-inline: 9px;
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .player-bar {
+    grid-template-columns: minmax(150px, 0.9fr) minmax(300px, 1.35fr) minmax(170px, 0.8fr) auto;
+    gap: 8px;
+    padding-inline: 10px;
+  }
+
+  .profile-fields {
+    display: none;
+  }
+
+  .profile-summary-button {
+    display: flex;
+  }
+
+  .player-admission {
+    right: 10px;
+    left: 10px;
+  }
+}
+
+@media (max-width: 960px) {
+  .player-bar {
+    grid-template-columns: minmax(140px, 0.85fr) minmax(285px, 1.35fr) minmax(155px, 0.8fr) auto;
+  }
+
+  .player-track-icon {
+    display: none;
+  }
+
+  .transport-actions {
+    gap: 5px;
+  }
+
+  .transport-actions .button {
+    padding-inline: 7px;
+  }
+
+  .transport-actions .player-primary-action {
+    padding-inline: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resizable-separator span {
+    transition: none;
+  }
+}

@@ -24,7 +24,7 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   const list = page.locator('.virtual-list');
   await expect(page.getByText('500 songs')).toBeVisible();
   await list.evaluate((element) => {
-    element.scrollTop = 400 * 44;
+    element.scrollTop = 400 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const song = page.getByRole('option', { name: /Song 401/ });
@@ -33,11 +33,41 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Song 401' })).toBeVisible();
 });
 
-test('default Library has no serious accessibility violations', async ({ page }) => {
+test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await expect(page.getByRole('listbox', { name: 'Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Choose a song' })).toBeVisible();
+  await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+  const dimensions = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    documentHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+  }));
+  expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+  expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  const separator = page.getByRole('separator', { name: 'Resize library pane' });
+  const initial = Number(await separator.getAttribute('aria-valuenow'));
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2);
+  await page.mouse.up();
+  await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 40));
+  await page.reload();
+  await expect(page.getByRole('separator', { name: 'Resize library pane' })).toHaveAttribute(
+    'aria-valuenow',
+    String(initial + 40),
+  );
 });
 
 test('selected Song Detail has no serious accessibility violations', async ({ page }) => {
@@ -47,7 +77,7 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Player Dock completes a dry-run lifecycle accessibly', async ({ page }) => {
+test('Player Bar completes a dry-run lifecycle accessibly', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('option', { name: /Aurora Landing/ }).click();
@@ -79,6 +109,10 @@ test('Settings modal has no serious accessibility violations and closes accessib
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('Playback defaults');
+  await expect(dialog.getByRole('button', { name: 'Playback' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
   await expectNoSeriousAccessibilityViolations(page);
 
   const focusables = dialog.locator('button, select, input');
@@ -94,14 +128,35 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(settingsButton).toBeFocused();
 });
 
+test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  const panel = page.getByRole('region', { name: 'Diagnostics' });
+  await expect(panel).toBeVisible();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const panelBox = await panel.boundingBox();
+  const playerBox = await player.boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(playerBox).not.toBeNull();
+  if (panelBox && playerBox) expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(playerBox.y);
+  await panel.getByRole('tab', { name: 'Timing' }).click();
+  await expect(panel.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+  await panel.getByRole('button', { name: 'Close diagnostics' }).click();
+  await expect(panel).toBeHidden();
+});
+
 test('all supported themes round-trip through the settings surface', async ({ page }) => {
   await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
+  await page.getByRole('button', { name: 'Appearance' }).click();
   const theme = page.getByLabel('Theme');
   for (const id of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await theme.selectOption(id);
     await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    await expectNoSeriousAccessibilityViolations(page);
   }
   await page.keyboard.press('Escape');
   await expect(settingsButton).toBeFocused();
@@ -143,6 +198,7 @@ test('Calibration dialog exposes safe running and terminal states', async ({ pag
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Advanced' }).click();
   await page.getByRole('button', { name: 'Open calibration' }).click();
   const dialog = page.getByRole('dialog', { name: 'Timing calibration' });
   await expect(dialog).toBeVisible();

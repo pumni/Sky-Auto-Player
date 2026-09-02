@@ -7,6 +7,9 @@ import './styles/tokens.css';
 import './styles/reset.css';
 import './styles/base.css';
 import './styles/layout.css';
+import './styles/workbench.css';
+import './styles/player.css';
+import './styles/overlays.css';
 import './styles/themes.css';
 
 // Tauri's bundled API uses the internal bridge, while the Windows WebView2

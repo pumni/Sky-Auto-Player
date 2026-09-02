@@ -21,6 +21,7 @@ describe('desktop application shell', () => {
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     fireEvent.click(settingsButton);
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByLabelText('Theme')).toHaveValue('aurora');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(
       document.activeElement as HTMLElement,
@@ -93,6 +94,7 @@ describe('desktop application shell', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Diagnostics' })).toBeNull());
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open calibration' }));
     expect(await screen.findByRole('dialog', { name: 'Timing calibration' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start quick calibration' }));

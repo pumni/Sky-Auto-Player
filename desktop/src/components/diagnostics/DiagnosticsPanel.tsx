@@ -2,8 +2,9 @@ import { Activity, X } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
-interface DiagnosticsDrawerProps {
+interface DiagnosticsPanelProps {
   useStore: DesktopStoreHook;
+  mode: 'pane' | 'overlay';
 }
 
 function number(value: number | null | undefined, digits = 2): string {
@@ -39,15 +40,16 @@ function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples
   );
 }
 
-export function DiagnosticsDrawer({ useStore }: DiagnosticsDrawerProps) {
+export function DiagnosticsPanel({ useStore, mode }: DiagnosticsPanelProps) {
   const diagnostics = useStore((store) => store.diagnostics);
   const close = useStore((store) => store.setDiagnosticsOpen);
   if (!diagnostics.open) return null;
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
+  const pane = mode === 'pane';
   return (
     <section
-      className="diagnostics-drawer"
-      role="dialog"
+      className={`diagnostics-surface diagnostics-${mode}`}
+      role={pane ? 'region' : 'dialog'}
       aria-label="Diagnostics"
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
