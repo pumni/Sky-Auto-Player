@@ -233,3 +233,54 @@ To qualify the short-circuit optimization for manual dispatch and main push:
   - Name: `sky-auto-player-portable-e824c4c21cf3c7328076ca9df64f6a259b654315`
   - Size: `9,171,973 bytes`
   - Digest: `sha256:19e43255c1f8754a52cdecbf469269c8faab5df8a7a8901bae17e066d9f4202a`
+
+#### Exact-Head PR Qualification Run #561 (`33697726794`) on HEAD `c8e6fc2875f1`
+- **Trigger**: `pull_request` (PR #97)
+- **Total Jobs**: 6/6 `SUCCESS`
+- **Timing Evidence**:
+  - `changes`: **16s** (ID `100470149626`)
+  - `static`: **34s** (ID `100470225379`)
+  - `supply_chain`: **26s** (ID `100470225358`)
+  - `validate`: **7m45s** (ID `100470225323`)
+  - `packaged`: **8m27s** (ID `100470225290`)
+  - `status`: **2s** (ID `100472124981`)
+- **Authoritative Artifact**:
+  - Artifact ID: `9872596392`
+  - Name: `sky-auto-player-portable-c8e6fc2875f1f4c0cb31901b360e5e661ca2d618`
+  - Size: `9,172,001 bytes`
+  - Digest: `sha256:990533d8ff1b51e11022b33d97598a42c5e77cac82270802e4aad654c2493250`
+- **Merge Provenance**:
+  - PR #97 merged into `main` at commit `81bb7c2f1dff152e38fe1f721dae549bf442266b`.
+
+---
+
+## 5. CI-FAST-3: Rust Cache Architecture & Target Pruning
+
+### 5.1 Problem Statement & Hypothesis
+In Control A (`cache-targets: true`), caching the whole `rust/target` directory imposes:
+- **Save Tax on Main / Dispatch**: ~6m27s compressing and uploading ~1.5 GB in `validate`, plus ~2m40s in `packaged`.
+- **Restore Tax on Windows Runners**: ~36s–60s per job unpacking target caches, with frequent lock contention and cache eviction.
+- **Variant B Hypothesis**: Disabling target caching (`cache-targets: false`) retains Cargo registry, git index, and tool binaries (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, `$CARGO_HOME/bin`), but skips `rust/target`. This should eliminate the 6m+ post-save tax and reduce restore time, while evaluating whether clean crate compilation against cached dependencies produces a net win in required-gate critical path.
+
+### 5.2 Variant B Configuration
+Applied to both `validate` and `packaged` in `.github/workflows/ci.yml`:
+```yaml
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-targets: false
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+```
+
+### 5.3 Benchmark & Measurement Framework
+For each candidate run, record:
+1. `Rust cache restore — validate`
+2. `Rust cache restore — packaged`
+3. `Productive compile/test — validate`
+4. `Dist build — packaged`
+5. `Post Rust-cache save — validate` (main/dispatch)
+6. `Post Rust-cache save — packaged` (main/dispatch)
+7. `Required-gate wall clock` (adoption decider)
