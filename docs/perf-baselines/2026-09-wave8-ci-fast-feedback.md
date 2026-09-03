@@ -350,3 +350,44 @@ Variant C preserves the benefits of Variant B while restoring object-level compi
 - Save-enabled path: Maintains clear advantage over Control A 15m40s (around or below Variant B $\sim 13\text{m}$).
 - Sccache upload overhead: Must not create a multi-minute critical path tail.
 - Hit statistics: Directly observe and report compile requests, cache hits, misses, and hit rate from `sccache --show-stats`.
+
+### 6.3 Empirical Measurements: Variant C (`sccache` + Target Pruning)
+
+| Metric | Control A (Main #562) | Variant B (Manual #564) | Variant C (Cold Dispatch #567) | Variant C (Warm Dispatch #568) | Impact / Delta (Variant C Warm) |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Commit SHA** | `81bb7c2f1dff` | `f6ca8063e810` | `8cc535bf2595` | `8cc535bf2595` | Exact candidate HEAD |
+| **Trigger** | `push` (main) | `workflow_dispatch` | `workflow_dispatch` | `workflow_dispatch` | Branch ref cache isolation |
+| **Sccache hits / hit rate — `packaged`** | N/A | N/A | 4 hits (1%) | **402 hits (79%)** | **79% object reuse** |
+| **Sccache hits / hit rate — `validate`** | N/A | N/A | 70 hits (9%) | **582 hits (79%)** | **79% object reuse** |
+| **Dist build — `packaged`** | 8m00s | 10m22s | 10m24s | **7m02s** | **-3m20s vs B / -58s vs A** |
+| **Restricted tests — `validate`** | 7m03s | 11m13s | 11m15s | **8m00s** | **-3m13s vs B (-28%)** |
+| **Post-save — `validate`** | 6m31s (391s) | 15s | 51s | **52s** | **-5m39s vs Control A** |
+| **Post-save — `packaged`** | ~2m19s (139s) | 32s | 33s | **33s** | **-1m46s vs Control A** |
+| **Post Set up sccache overhead** | N/A | N/A | 1s | **1s** | Negligible overhead |
+| **Job total — `packaged`** | 9m37s | 11m52s | 12m00s | **8m36s** | **-3m16s vs B / -1m01s vs A** |
+| **Job total — `validate`** | 15m35s | 12m32s | 14m40s | **10m49s** | **-4m46s vs A / -1m43s vs B** |
+| **Required-gate Wall-Clock** | **15m40s** | **13m00s** | **15m03s** | **11m11s** | **-4m29s vs A (-29%)** |
+
+#### Authoritative Artifacts for CI-FAST-3 Variant C:
+- **PR Run #566 (`33705285415`)**:
+  - Artifact ID: `9875629211`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,171,984 bytes`
+  - Digest: `sha256:1385086a543c645e2b3dfbdf7d12251c357cbac5d6944940a40998a25e8f4ea5`
+- **Manual Cold Run #567 (`33705309353`)**:
+  - Artifact ID: `9875245555`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,172,041 bytes`
+  - Digest: `sha256:4e2ec43be3a26ce271591077e283224cf9adda78c67c12c95a182e9d4d1ef78e`
+- **Manual Warm Run #568 (`33707301987`)**:
+  - Artifact ID: `9875840231`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,172,017 bytes`
+  - Digest: `sha256:fe2f011a78bdd1d47c6d1bc70390dcaa20c404ed57ac81d0cde7f1c2bdb0e224`
+
+#### Analysis of PR Branch Lookup Semantics vs Main
+Under the GitHub Actions cache security model:
+1. Workflows on `pull_request` (`refs/pull/XX/merge`) only have access to caches stored on the current pull request ref or on the base branch (`refs/heads/main`).
+2. Pull requests do not have read access to caches stored under feature/topic branch refs (`refs/heads/perf/ci-fast-3-rust-cache`).
+3. Since Variant C is currently under review on branch `perf/ci-fast-3-rust-cache`, `main` has not yet had `sccache` enabled and does not yet host a `sky-ci-v1` cache on `refs/heads/main`.
+4. Run #568 empirically verified that once the cache is present on the ref (as will occur on `main` post-merge), `sccache` achieves a **79% hit rate** (402 hits in packaged, 582 hits in validate), slashing packaged build time to **7m02s** and required-gate qualification time to **11m11s** (a 29% total wall-clock reduction).
