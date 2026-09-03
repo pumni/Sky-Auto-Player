@@ -565,9 +565,11 @@ jobs:
             }
             $bundleDir = Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis'
             "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-            $summary = Get-Content (Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/TAURI_ARTIFACT_SUMMARY.json') -Raw | ConvertFrom-Json
-            $installer = Join-Path $bundleDir $summary.installer
-            pwsh scripts/ci_tauri_update_e2e.ps1 -PreviousInstaller $installer -UpdaterConfigPath $configPath
+            $installers = @(Get-ChildItem -LiteralPath $bundleDir -Filter '*-setup.exe' -File)
+            if ($installers.Count -ne 1) {
+              throw "Expected exactly one freshly built Tauri NSIS installer, found $($installers.Count)"
+            }
+            pwsh scripts/ci_tauri_update_e2e.ps1 -PreviousInstaller $installers[0].FullName -UpdaterConfigPath $configPath
           } finally {
             Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
