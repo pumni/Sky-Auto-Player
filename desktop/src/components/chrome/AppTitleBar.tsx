@@ -1,4 +1,4 @@
-import { Download, ListRestart, Settings2 } from 'lucide-react';
+import { Download, ListRestart, Settings } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useMemo, type RefObject } from 'react';
 import brandMark32Url from '../../assets/brand/app-icon-32.png';
@@ -74,7 +74,7 @@ export function AppTitleBar({
           title="Open settings"
           onPress={() => setSettingsOpen(true)}
         >
-          <Settings2 size={17} aria-hidden="true" />
+          <Settings size={17} aria-hidden="true" />
         </Button>
       </div>
       <WindowCaptionControls controls={controls} />

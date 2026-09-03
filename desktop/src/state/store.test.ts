@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SettingsPatch } from '../bridge/DesktopBridge';
+import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
 import { createDesktopStore, selectRowAtIndex, selectSelectedDetail } from './store';
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
@@ -187,6 +187,121 @@ describe('desktop store', () => {
     expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'liked' });
     expect(store.getState().library.resultTotal).toBe(1);
     expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+  });
+
+  it('loads playlist navigation summaries and keeps membership out of catalog pages', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+
+    expect(store.getState().libraryNavigation.loadState).toBe('ready');
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
+
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)).toMatchObject({
+      name: 'Practice',
+      song_count: 0,
+    });
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    const pagesBeforeMembership = store.getState().library.pages;
+    await act(async () => store.getState().addSongToPlaylist(playlistId, first.song_id));
+    expect(store.getState().library.pages).toBe(pagesBeforeMembership);
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.song_count).toBe(1);
+
+    await act(async () =>
+      store.getState().selectLibrarySource({ kind: 'playlist', id: playlistId }),
+    );
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+    await act(async () => store.getState().removeSongFromPlaylist(playlistId, first.song_id));
+    expect(store.getState().library.resultTotal).toBe(0);
+
+    await act(async () => store.getState().renamePlaylist(playlistId, 'Morning'));
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Morning');
+    await act(async () => store.getState().deletePlaylist(playlistId));
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
+  });
+
+  it('imports local songs directly into a target playlist without exposing paths', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    await act(async () => store.getState().importLocalFolderToPlaylist(playlistId));
+
+    const navigationJson = JSON.stringify({
+      playlists: [...store.getState().libraryNavigation.playlistsById.values()],
+    });
+    expect(navigationJson).not.toContain('C:\\');
+    expect(navigationJson).not.toContain('D:\\');
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(2);
+    expect(rowAt(store, 0)?.title).toBe('Local Song B');
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    expect(store.getState().library.resultTotal).toBe(500);
+    expect(rowAt(store, 0)?.title).not.toBe('Local Song B');
+  });
+
+  it('keeps the playlist selected while browsing All Songs to add', async () => {
+    const bridge = createMockBridge();
+    const requests: SearchRequest[] = [];
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    const firstSongId = rowAt(store, 0)?.song_id;
+    expect(firstSongId).toBeDefined();
+    await act(async () => store.getState().setSongLiked(firstSongId!, true));
+    requests.length = 0;
+
+    await act(async () => store.getState().openPlaylistAdd(playlistId));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.resultTotal).toBe(500);
+
+    requests.length = 0;
+    await act(async () => store.getState().search('Song 1'));
+    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'all' });
+
+    await act(async () => store.getState().exitPlaylistAdd());
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.playlistAddMode).toBeNull();
+    expect(store.getState().library.searchSource).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(0);
+  });
+
+  it('treats a playlist import cancellation as a no-op', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    bridge.importLocalFolderToPlaylist = async () => ({
+      playlist: { id: playlistId, name: 'Practice', song_count: 0 },
+      imported_song_count: 0,
+      catalog_generation: 1,
+    });
+    await act(async () => store.getState().importLocalFolderToPlaylist(playlistId));
+
+    expect(store.getState().library.generation).toBe(1);
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(1);
+    expect(store.getState().libraryNavigation.lastError).toBeNull();
   });
 
   it('serializes settings mutations in user-intent order and preserves fields', async () => {

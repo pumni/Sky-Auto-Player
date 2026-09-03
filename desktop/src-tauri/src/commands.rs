@@ -2,7 +2,6 @@ use crate::app_state::AppState;
 use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sky_app_core::library::ImportedSourceKind;
 use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
@@ -34,7 +33,7 @@ pub enum CatalogSourceId {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LibrarySource {
     Smart { id: CatalogSourceId },
-    Collection { id: String },
+    Playlist { id: String },
 }
 
 impl Default for LibrarySource {
@@ -443,51 +442,23 @@ pub struct CatalogSetLikedDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct LibraryCollectionDto {
+pub struct LibraryPlaylistSummaryDto {
     pub id: String,
     pub name: String,
-    pub song_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-pub enum LibraryImportedSourceKind {
-    File,
-    Folder,
-}
-
-impl From<ImportedSourceKind> for LibraryImportedSourceKind {
-    fn from(kind: ImportedSourceKind) -> Self {
-        match kind {
-            ImportedSourceKind::File => Self::File,
-            ImportedSourceKind::Folder => Self::Folder,
-        }
-    }
+    pub song_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct LibraryImportedSourceDto {
-    pub id: String,
-    pub kind: LibraryImportedSourceKind,
-    pub display_name: String,
-    pub available: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct LibraryCollectionsDto {
-    pub collections: Vec<LibraryCollectionDto>,
-    pub imported_source_count: u64,
-    pub imported_sources: Vec<LibraryImportedSourceDto>,
+pub struct LibraryNavigationDto {
+    pub playlists: Vec<LibraryPlaylistSummaryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct LibraryCreateCollectionRequest {
+pub struct LibraryCreatePlaylistRequest {
     pub name: String,
 }
 
@@ -495,8 +466,8 @@ pub struct LibraryCreateCollectionRequest {
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct LibraryRenameCollectionRequest {
-    pub collection_id: String,
+pub struct LibraryRenamePlaylistRequest {
+    pub playlist_id: String,
     pub name: String,
 }
 
@@ -504,8 +475,8 @@ pub struct LibraryRenameCollectionRequest {
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct LibraryCollectionSongsRequest {
-    pub collection_id: String,
+pub struct LibraryPlaylistSongsRequest {
+    pub playlist_id: String,
     pub song_ids: Vec<String>,
 }
 
@@ -513,23 +484,15 @@ pub struct LibraryCollectionSongsRequest {
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct LibraryCollectionIdRequest {
-    pub collection_id: String,
+pub struct LibraryPlaylistIdRequest {
+    pub playlist_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub struct LibraryRemoveImportRequest {
-    pub source_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct LibraryImportDto {
-    pub source_ids: Vec<String>,
-    pub imported_count: u64,
+pub struct LibraryPlaylistImportResultDto {
+    pub playlist: LibraryPlaylistSummaryDto,
+    pub imported_song_count: u64,
     pub catalog_generation: u64,
 }
 
@@ -686,59 +649,61 @@ pub async fn set_song_liked(
 }
 
 #[tauri::command]
-pub async fn library_list_collections(
+pub async fn library_list_playlists(
     state: State<'_, AppState>,
-) -> Result<LibraryCollectionsDto, String> {
-    blocking_request(state, "library.list_collections", serde_json::json!({})).await
+) -> Result<LibraryNavigationDto, String> {
+    blocking_request(state, "library.list_playlists", serde_json::json!({})).await
 }
 
 #[tauri::command]
-pub async fn library_create_collection(
+pub async fn library_create_playlist(
     state: State<'_, AppState>,
-    params: LibraryCreateCollectionRequest,
-) -> Result<LibraryCollectionDto, String> {
-    blocking_request(state, "library.create_collection", params).await
+    params: LibraryCreatePlaylistRequest,
+) -> Result<LibraryPlaylistSummaryDto, String> {
+    blocking_request(state, "library.create_playlist", params).await
 }
 
 #[tauri::command]
-pub async fn library_rename_collection(
+pub async fn library_rename_playlist(
     state: State<'_, AppState>,
-    params: LibraryRenameCollectionRequest,
-) -> Result<LibraryCollectionDto, String> {
-    blocking_request(state, "library.rename_collection", params).await
+    params: LibraryRenamePlaylistRequest,
+) -> Result<LibraryPlaylistSummaryDto, String> {
+    blocking_request(state, "library.rename_playlist", params).await
 }
 
 #[tauri::command]
-pub async fn library_delete_collection(
+pub async fn library_delete_playlist(
     state: State<'_, AppState>,
-    params: LibraryCollectionIdRequest,
+    params: LibraryPlaylistIdRequest,
 ) -> Result<bool, String> {
-    blocking_request(state, "library.delete_collection", params).await
+    blocking_request(state, "library.delete_playlist", params).await
 }
 
 #[tauri::command]
 pub async fn library_add_songs(
     state: State<'_, AppState>,
-    params: LibraryCollectionSongsRequest,
-) -> Result<LibraryCollectionDto, String> {
+    params: LibraryPlaylistSongsRequest,
+) -> Result<LibraryPlaylistSummaryDto, String> {
     blocking_request(state, "library.add_songs", params).await
 }
 
 #[tauri::command]
 pub async fn library_remove_songs(
     state: State<'_, AppState>,
-    params: LibraryCollectionSongsRequest,
-) -> Result<LibraryCollectionDto, String> {
+    params: LibraryPlaylistSongsRequest,
+) -> Result<LibraryPlaylistSummaryDto, String> {
     blocking_request(state, "library.remove_songs", params).await
 }
 
 #[tauri::command]
-pub async fn library_import_local_files(
+pub async fn library_import_local_files_to_playlist(
     app: tauri::AppHandle<super::ShellRuntime>,
     state: State<'_, AppState>,
-) -> Result<LibraryImportDto, String> {
+    params: LibraryPlaylistIdRequest,
+) -> Result<LibraryPlaylistImportResultDto, String> {
     use tauri_plugin_dialog::DialogExt;
 
+    let playlist_id = params.playlist_id;
     let paths = tauri::async_runtime::spawn_blocking(move || {
         let selected = app
             .dialog()
@@ -759,19 +724,21 @@ pub async fn library_import_local_files(
     .map_err(|error| format!("Native dialog worker failed: {error}"))??;
     blocking_request(
         state,
-        "library.import_local_files",
-        serde_json::json!({ "paths": paths }),
+        "library.import_local_files_to_playlist",
+        serde_json::json!({ "playlistId": playlist_id, "paths": paths }),
     )
     .await
 }
 
 #[tauri::command]
-pub async fn library_import_local_folder(
+pub async fn library_import_local_folder_to_playlist(
     app: tauri::AppHandle<super::ShellRuntime>,
     state: State<'_, AppState>,
-) -> Result<LibraryImportDto, String> {
+    params: LibraryPlaylistIdRequest,
+) -> Result<LibraryPlaylistImportResultDto, String> {
     use tauri_plugin_dialog::DialogExt;
 
+    let playlist_id = params.playlist_id;
     let path = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -787,18 +754,13 @@ pub async fn library_import_local_folder(
     .map_err(|error| format!("Native dialog worker failed: {error}"))??;
     blocking_request(
         state,
-        "library.import_local_folder",
-        serde_json::json!({ "paths": path.into_iter().collect::<Vec<_>>() }),
+        "library.import_local_folder_to_playlist",
+        serde_json::json!({
+            "playlistId": playlist_id,
+            "paths": path.into_iter().collect::<Vec<_>>(),
+        }),
     )
     .await
-}
-
-#[tauri::command]
-pub async fn library_remove_import(
-    state: State<'_, AppState>,
-    params: LibraryRemoveImportRequest,
-) -> Result<LibraryImportDto, String> {
-    blocking_request(state, "library.remove_import", params).await
 }
 
 #[tauri::command]

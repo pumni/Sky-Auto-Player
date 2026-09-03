@@ -30,7 +30,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       } · ${selectedRow.note_count === null ? '…' : selectedRow.note_count} notes`
     : 'Preparing metadata…';
   const trackSubtitle = !selectedSongId
-    ? 'Choose a sheet from Library'
+    ? 'Select a song from your Library'
     : playbackError
       ? 'Playback error'
       : active

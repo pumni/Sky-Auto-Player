@@ -31,6 +31,28 @@ declare module 'react-aria-components' {
 
   export const DialogTrigger: (props: DialogTriggerProps) => ReactElement | null;
 
+  export interface MenuTriggerProps {
+    isOpen?: boolean;
+    onOpenChange?: (isOpen: boolean) => void;
+    children: ReactNode;
+  }
+
+  export const MenuTrigger: (props: MenuTriggerProps) => ReactElement | null;
+
+  export interface MenuProps extends HTMLAttributes<HTMLElement> {
+    onAction?: (key: string) => void;
+  }
+
+  export const Menu: (props: MenuProps & RefAttributes<HTMLElement>) => ReactElement | null;
+
+  export interface MenuItemProps extends HTMLAttributes<HTMLElement> {
+    id: string;
+    isDisabled?: boolean;
+    onAction?: () => void;
+  }
+
+  export const MenuItem: (props: MenuItemProps & RefAttributes<HTMLElement>) => ReactElement | null;
+
   export interface PopoverProps extends HTMLAttributes<HTMLDivElement> {
     placement?: string;
     offset?: number;

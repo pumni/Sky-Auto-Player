@@ -22,6 +22,8 @@ import type {
   UpdateCheck,
   UpdateChannelId,
   LibrarySource,
+  LibraryPlaylistSummary,
+  LibraryNavigation,
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 
@@ -53,6 +55,8 @@ export interface DiagnosticsLogLine {
 
 export interface LibraryState {
   source: LibrarySource;
+  searchSource: LibrarySource;
+  playlistAddMode: { playlistId: string } | null;
   query: string;
   generation: number;
   catalogTotal: number;
@@ -67,6 +71,14 @@ export interface LibraryState {
   error: string | null;
 }
 
+export interface LibraryNavigationState {
+  loadState: 'idle' | 'loading' | 'ready' | 'error';
+  playlistOrder: string[];
+  playlistsById: Map<string, LibraryPlaylistSummary>;
+  pendingMutations: Set<string>;
+  lastError: string | null;
+}
+
 export interface DetailEntry {
   state: LoadState;
   value: SongDetail | null;
@@ -78,6 +90,7 @@ export interface DesktopStore {
   bootstrap: Bootstrap | null;
   fatal: string | null;
   library: LibraryState;
+  libraryNavigation: LibraryNavigationState;
   details: { bySongId: Map<string, DetailEntry> };
   settings: Settings | null;
   settingsState: LoadState;
@@ -130,6 +143,16 @@ export interface DesktopStore {
   selectSong: (songId: string) => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
   selectLibrarySource: (source: LibrarySource) => Promise<void>;
+  openPlaylistAdd: (playlistId: string) => Promise<void>;
+  exitPlaylistAdd: () => Promise<void>;
+  loadLibraryNavigation: () => Promise<void>;
+  createPlaylist: (name: string) => Promise<void>;
+  renamePlaylist: (playlistId: string, name: string) => Promise<void>;
+  deletePlaylist: (playlistId: string) => Promise<void>;
+  importLocalFilesToPlaylist: (playlistId: string) => Promise<void>;
+  importLocalFolderToPlaylist: (playlistId: string) => Promise<void>;
+  addSongToPlaylist: (playlistId: string, songId: string) => Promise<void>;
+  removeSongFromPlaylist: (playlistId: string, songId: string) => Promise<void>;
   setSongLiked: (songId: string, liked: boolean) => Promise<void>;
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<void>;
@@ -216,6 +239,34 @@ function cacheDetail(
   return next;
 }
 
+function navigationFromDto(navigation: LibraryNavigation): LibraryNavigationState {
+  const playlistsById = new Map(
+    navigation.playlists.map((playlist) => [playlist.id, { ...playlist }]),
+  );
+  return {
+    loadState: 'ready',
+    playlistOrder: navigation.playlists.map((playlist) => playlist.id),
+    playlistsById,
+    pendingMutations: new Set(),
+    lastError: null,
+  };
+}
+
+function updatePlaylistSummary(
+  state: LibraryNavigationState,
+  summary: LibraryPlaylistSummary,
+): LibraryNavigationState {
+  const playlistsById = new Map(state.playlistsById);
+  playlistsById.set(summary.id, { ...summary });
+  return {
+    ...state,
+    playlistsById,
+    playlistOrder: state.playlistOrder.includes(summary.id)
+      ? state.playlistOrder
+      : [...state.playlistOrder, summary.id],
+  };
+}
+
 export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
   let prepareRequestEpoch = 0;
@@ -238,6 +289,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
   const sourceKey = (source: LibrarySource) => JSON.stringify(source);
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
+  const invalidateSourceCache = (source: LibrarySource): void => {
+    const marker = `\u0000${sourceKey(source)}\u0000`;
+    for (const key of pageCache.keys()) {
+      if (key.includes(marker)) pageCache.delete(key);
+    }
+    for (const key of pageRequests.keys()) {
+      if (key.includes(marker)) pageRequests.delete(key);
+    }
+  };
 
   const boundedText = (value: string): string => {
     const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
@@ -285,6 +345,63 @@ export function createDesktopStore(bridge: DesktopBridge) {
   };
 
   return create<DesktopStore>((set, get) => {
+    const setLibraryMutationPending = (key: string, pending: boolean): boolean => {
+      const current = get().libraryNavigation;
+      if (pending && current.pendingMutations.has(key)) return false;
+      const nextPending = new Set(current.pendingMutations);
+      if (pending) nextPending.add(key);
+      else nextPending.delete(key);
+      set({
+        libraryNavigation: {
+          ...current,
+          pendingMutations: nextPending,
+          lastError: current.lastError,
+        },
+      });
+      return true;
+    };
+
+    const setLibraryError = (message: string | null) => {
+      set({
+        libraryNavigation: { ...get().libraryNavigation, lastError: message },
+      });
+    };
+
+    const updateNavigation = (navigation: LibraryNavigation) => {
+      const pendingMutations = get().libraryNavigation.pendingMutations;
+      set({
+        libraryNavigation: {
+          ...navigationFromDto(navigation),
+          pendingMutations: new Set(pendingMutations),
+        },
+      });
+    };
+
+    const syncCatalogGeneration = async (generation: number): Promise<void> => {
+      const current = get().library;
+      if (generation <= current.generation) return;
+      detailRequestToken += 1;
+      prepareRequestEpoch += 1;
+      set({
+        library: {
+          ...current,
+          generation,
+          pages: new Map(),
+          indexById: new Map(),
+          selectedSongId: null,
+          resultTotal: 0,
+          loading: true,
+          error: null,
+        },
+        details: { bySongId: new Map() },
+        playback: { ...get().playback, prepared: null },
+      });
+      await get().search();
+    };
+
+    const errorMessage = (error: unknown): string =>
+      error instanceof Error ? error.message : String(error);
+
     const acceptsSessionEvent = (sessionId: string, songId: string): boolean => {
       const current = get().playback;
       if (retiredSessionIds.has(sessionId)) return false;
@@ -326,8 +443,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
           pages,
           indexById,
           catalogTotal:
-            current.source.kind === 'smart' &&
-            current.source.id === 'all' &&
+            current.searchSource.kind === 'smart' &&
+            current.searchSource.id === 'all' &&
             current.query.trim() === ''
               ? result.total
               : current.catalogTotal,
@@ -389,7 +506,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       try {
         await Promise.all(
           offsets.map((offset) =>
-            loadPage(current.query, current.source, offset, current.generation, token),
+            loadPage(current.query, current.searchSource, offset, current.generation, token),
           ),
         );
       } catch (error) {
@@ -405,6 +522,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
       fatal: null,
       library: {
         source: { kind: 'smart', id: 'all' },
+        searchSource: { kind: 'smart', id: 'all' },
+        playlistAddMode: null,
         query: '',
         generation: 0,
         catalogTotal: 0,
@@ -418,6 +537,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
         loading: false,
         searchRequestGeneration: 0,
         error: null,
+      },
+      libraryNavigation: {
+        loadState: 'idle',
+        playlistOrder: [],
+        playlistsById: new Map(),
+        pendingMutations: new Set(),
+        lastError: null,
       },
       details: { bySongId: new Map() },
       settings: null,
@@ -481,6 +607,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: { ...get().library, generation: bootstrap.catalog_generation },
           });
           await get().search();
+          await get().loadLibraryNavigation();
           if (bootstrap.update_preferences.auto_check) void get().checkForUpdate();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -554,6 +681,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
           set({ details: { bySongId: new Map() } });
           void get().search();
+          void get().loadLibraryNavigation();
         }
         if (event.name === 'playback.state_changed') {
           const current = get().playback;
@@ -721,11 +849,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const current = get().library;
         const nextQuery = query ?? current.query;
         const nextSource = source ?? current.source;
+        const nextSearchSource: LibrarySource =
+          nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
+            ? { kind: 'smart', id: 'all' }
+            : nextSource;
         const token = current.searchRequestGeneration + 1;
         set({
           library: {
             ...current,
             source: nextSource,
+            searchSource: nextSearchSource,
             query: nextQuery,
             pages: new Map(),
             indexById: new Map(),
@@ -736,13 +869,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
           },
         });
         try {
-          const result = await loadPage(nextQuery, nextSource, 0, current.generation, token);
+          const result = await loadPage(nextQuery, nextSearchSource, 0, current.generation, token);
           if (get().library.searchRequestGeneration !== token) return;
           set({
             library: {
               ...get().library,
               catalogTotal:
-                nextSource.kind === 'smart' && nextSource.id === 'all' && nextQuery.trim() === ''
+                nextSearchSource.kind === 'smart' &&
+                nextSearchSource.id === 'all' &&
+                nextQuery.trim() === ''
                   ? result.total
                   : get().library.catalogTotal,
               likedTotal: result.liked_total,
@@ -852,7 +987,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (result.items.length === 0) return;
           const latest = get().library;
           const cachedPages = pageCache.get(
-            cacheKey(latest.source, latest.query, latest.generation),
+            cacheKey(latest.searchSource, latest.query, latest.generation),
           );
           if (cachedPages) {
             const updatesByPage = new Map<number, SongRow[]>();
@@ -883,17 +1018,220 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
+      async loadLibraryNavigation() {
+        const current = get().libraryNavigation;
+        set({
+          libraryNavigation: { ...current, loadState: 'loading', lastError: null },
+        });
+        try {
+          const navigation = await bridge.listLibraryNavigation();
+          updateNavigation(navigation);
+        } catch (error) {
+          set({
+            libraryNavigation: {
+              ...get().libraryNavigation,
+              loadState: 'error',
+              lastError: errorMessage(error),
+            },
+          });
+        }
+      },
+
+      async createPlaylist(name) {
+        const key = 'playlist:create';
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const summary = await bridge.createPlaylist(name.trim());
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
+          });
+          await get().selectLibrarySource({ kind: 'playlist', id: summary.id });
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async renamePlaylist(playlistId, name) {
+        const key = `playlist:${playlistId}:rename`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const summary = await bridge.renamePlaylist(playlistId, name.trim());
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
+          });
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async deletePlaylist(playlistId) {
+        const key = `playlist:${playlistId}:delete`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        const active = get().library.source;
+        try {
+          const removed = await bridge.deletePlaylist(playlistId);
+          if (removed) {
+            const current = get().libraryNavigation;
+            const playlistsById = new Map(current.playlistsById);
+            playlistsById.delete(playlistId);
+            set({
+              libraryNavigation: {
+                ...current,
+                playlistsById,
+                playlistOrder: current.playlistOrder.filter((id) => id !== playlistId),
+              },
+            });
+            if (active.kind === 'playlist' && active.id === playlistId) {
+              await get().selectLibrarySource({ kind: 'smart', id: 'all' });
+            }
+          }
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async importLocalFilesToPlaylist(playlistId) {
+        const key = `playlist:${playlistId}:import:file`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const result = await bridge.importLocalFilesToPlaylist(playlistId);
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, result.playlist),
+          });
+          if (result.imported_song_count > 0)
+            await syncCatalogGeneration(result.catalog_generation);
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async importLocalFolderToPlaylist(playlistId) {
+        const key = `playlist:${playlistId}:import:folder`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const result = await bridge.importLocalFolderToPlaylist(playlistId);
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, result.playlist),
+          });
+          if (result.imported_song_count > 0)
+            await syncCatalogGeneration(result.catalog_generation);
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async addSongToPlaylist(playlistId, songId) {
+        const key = `playlist:${playlistId}:song:${songId}:add`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const summary = await bridge.addSongsToPlaylist(playlistId, [songId]);
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
+          });
+          invalidateSourceCache({ kind: 'playlist', id: playlistId });
+          const active = get().library.source;
+          if (active.kind === 'playlist' && active.id === playlistId) await get().search();
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
+      async removeSongFromPlaylist(playlistId, songId) {
+        const key = `playlist:${playlistId}:song:${songId}:remove`;
+        if (!setLibraryMutationPending(key, true)) return;
+        setLibraryError(null);
+        try {
+          const summary = await bridge.removeSongsFromPlaylist(playlistId, [songId]);
+          set({
+            libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
+          });
+          invalidateSourceCache({ kind: 'playlist', id: playlistId });
+          const active = get().library.source;
+          if (active.kind === 'playlist' && active.id === playlistId) {
+            await get().search();
+          }
+        } catch (error) {
+          setLibraryError(errorMessage(error));
+          throw error;
+        } finally {
+          setLibraryMutationPending(key, false);
+        }
+      },
+
       async selectLibrarySource(source) {
-        if (sourceKey(get().library.source) !== sourceKey(source)) {
+        const current = get().library;
+        if (sourceKey(current.source) !== sourceKey(source) || current.playlistAddMode !== null) {
           detailRequestToken += 1;
           prepareRequestEpoch += 1;
           set({
-            library: { ...get().library, selectedSongId: null },
+            library: { ...get().library, selectedSongId: null, playlistAddMode: null },
             details: { bySongId: new Map() },
             playback: { ...get().playback, prepared: null },
           });
         }
         await get().search('', source);
+      },
+
+      async openPlaylistAdd(playlistId) {
+        const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
+        detailRequestToken += 1;
+        prepareRequestEpoch += 1;
+        const current = get().library;
+        set({
+          library: {
+            ...current,
+            source: playlistSource,
+            playlistAddMode: { playlistId },
+            selectedSongId: null,
+          },
+          details: { bySongId: new Map() },
+          playback: { ...get().playback, prepared: null },
+        });
+        await get().search('', playlistSource);
+      },
+
+      async exitPlaylistAdd() {
+        const current = get().library;
+        const playlistId = current.playlistAddMode?.playlistId;
+        if (!playlistId) return;
+        detailRequestToken += 1;
+        prepareRequestEpoch += 1;
+        const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
+        set({
+          library: {
+            ...current,
+            source: playlistSource,
+            playlistAddMode: null,
+            selectedSongId: null,
+          },
+          details: { bySongId: new Map() },
+          playback: { ...get().playback, prepared: null },
+        });
+        await get().search('', playlistSource);
       },
 
       async setSongLiked(songId, liked) {
@@ -950,6 +1288,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         set({ library: { ...get().library, loading: true, error: null } });
         try {
           await bridge.reloadLibrary();
+          await get().loadLibraryNavigation();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ library: { ...get().library, loading: false, error: message } });

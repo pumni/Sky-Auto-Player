@@ -5,7 +5,9 @@
 //! playback, or updater transaction logic.
 
 use serde_json::{Map, Value};
-use sky_app_core::catalog::{CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource};
+use sky_app_core::catalog::{
+    CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource, song_id_for_canonical_path,
+};
 use sky_app_core::library::{
     ImportedSourceKind, ImportedSourceRef, LIBRARY_MANIFEST_VERSION, LibraryError,
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
@@ -16,6 +18,7 @@ use sky_app_core::settings::{
     SafetySettings, SettingsError, SettingsStore, UpdateChannel, UpdatePreferences, VALID_FPS,
     normalize_settings,
 };
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -513,12 +516,116 @@ pub struct FileCatalogSource {
     root: PathBuf,
 }
 
+/// Native-only catalog composition. The entries retain canonical paths for
+/// local file access, while the membership/status projections are safe to
+/// summarize across the IPC boundary.
+#[derive(Debug, Clone, Default)]
+pub struct CatalogComposition {
+    pub entries: Vec<CatalogSourceEntry>,
+    pub primary_membership: BTreeSet<String>,
+    pub imported_membership: HashMap<String, BTreeSet<String>>,
+    pub imported_status: Vec<ImportedSourceCatalogStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedSourceCatalogStatus {
+    pub source_id: String,
+    pub kind: ImportedSourceKind,
+    pub display_name: String,
+    pub song_count: usize,
+    pub available: bool,
+}
+
 impl FileCatalogSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn catalog_composition_with_imports(
+        &self,
+        imports: &[ImportedSourceRef],
+    ) -> Result<CatalogComposition, CatalogError> {
+        let mut composition = CatalogComposition {
+            entries: self.entries()?,
+            ..Default::default()
+        };
+        composition.primary_membership = composition
+            .entries
+            .iter()
+            .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
+            .collect();
+
+        for import in imports {
+            let path = PathBuf::from(&import.canonical_path);
+            let display_name = import_display_name(&path, import.kind);
+            if !path.exists() {
+                composition
+                    .imported_status
+                    .push(ImportedSourceCatalogStatus {
+                        source_id: import.source_id.clone(),
+                        kind: import.kind,
+                        display_name,
+                        song_count: 0,
+                        available: false,
+                    });
+                composition
+                    .imported_membership
+                    .insert(import.source_id.clone(), BTreeSet::new());
+                continue;
+            }
+
+            let imported = match import.kind {
+                ImportedSourceKind::File => entries_from_file(&path),
+                ImportedSourceKind::Folder => entries_from_directory(&path, true),
+            };
+            let imported = match imported {
+                Ok(entries) => entries,
+                Err(_) => {
+                    composition
+                        .imported_status
+                        .push(ImportedSourceCatalogStatus {
+                            source_id: import.source_id.clone(),
+                            kind: import.kind,
+                            display_name,
+                            song_count: 0,
+                            available: false,
+                        });
+                    composition
+                        .imported_membership
+                        .insert(import.source_id.clone(), BTreeSet::new());
+                    continue;
+                }
+            };
+            let membership = imported
+                .iter()
+                .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
+                .collect::<BTreeSet<_>>();
+            composition
+                .imported_status
+                .push(ImportedSourceCatalogStatus {
+                    source_id: import.source_id.clone(),
+                    kind: import.kind,
+                    display_name,
+                    song_count: membership.len(),
+                    available: true,
+                });
+            composition
+                .imported_membership
+                .insert(import.source_id.clone(), membership);
+            composition.entries.extend(imported);
+        }
+
+        composition
+            .entries
+            .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+        composition.entries.dedup_by(|left, right| {
+            left.canonical_path
+                .eq_ignore_ascii_case(&right.canonical_path)
+        });
+        Ok(composition)
     }
 
     /// Compose the primary songs directory with explicit native-owned import
@@ -528,24 +635,7 @@ impl FileCatalogSource {
         &self,
         imports: &[ImportedSourceRef],
     ) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
-        let mut entries = self.entries()?;
-        for import in imports {
-            let path = PathBuf::from(&import.canonical_path);
-            if !path.exists() {
-                continue;
-            }
-            let imported = match import.kind {
-                ImportedSourceKind::File => entries_from_file(&path),
-                ImportedSourceKind::Folder => entries_from_directory(&path, true),
-            }?;
-            entries.extend(imported);
-        }
-        entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
-        entries.dedup_by(|left, right| {
-            left.canonical_path
-                .eq_ignore_ascii_case(&right.canonical_path)
-        });
-        Ok(entries)
+        Ok(self.catalog_composition_with_imports(imports)?.entries)
     }
 }
 
@@ -615,6 +705,17 @@ fn is_supported(path: &Path) -> bool {
             SUPPORTED_EXTENSIONS
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+}
+
+fn import_display_name(path: &Path, kind: ImportedSourceKind) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| match kind {
+            ImportedSourceKind::File => "Imported file".to_owned(),
+            ImportedSourceKind::Folder => "Imported folder".to_owned(),
         })
 }
 
@@ -1345,6 +1446,8 @@ mod tests {
         fs::create_dir_all(&imported).expect("imported");
         fs::write(songs.join("primary.json"), "{}").expect("primary");
         fs::write(imported.join("local.txt"), "notes").expect("imported song");
+        fs::write(imported.join("second.skysheet"), "notes").expect("second imported song");
+        fs::write(imported.join("ignored.csv"), "ignored").expect("unsupported import");
 
         let canonical = fs::canonicalize(root.join("imported")).expect("canonical folder");
         let manifest = LibraryManifestV1 {
@@ -1363,12 +1466,42 @@ mod tests {
         let entries = FileCatalogSource::new(&songs)
             .entries_with_imports(&manifest.imports)
             .expect("composed entries");
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         assert!(
             entries
                 .iter()
                 .any(|entry| entry.canonical_path.ends_with("local.txt"))
         );
+
+        let composition = FileCatalogSource::new(&songs)
+            .catalog_composition_with_imports(&[
+                manifest.imports[0].clone(),
+                ImportedSourceRef {
+                    source_id: "b".repeat(32),
+                    canonical_path: root.join("disconnected").to_string_lossy().into_owned(),
+                    kind: ImportedSourceKind::Folder,
+                },
+            ])
+            .expect("catalog composition");
+        assert_eq!(composition.primary_membership.len(), 1);
+        assert_eq!(composition.imported_status.len(), 2);
+        assert_eq!(composition.imported_status[0].song_count, 2);
+        assert!(composition.imported_status[0].available);
+        assert_eq!(composition.imported_membership[&"a".repeat(32)].len(), 2);
+        assert_eq!(composition.imported_status[1].song_count, 0);
+        assert!(!composition.imported_status[1].available);
+        assert!(composition.imported_membership[&"b".repeat(32)].is_empty());
+
+        let duplicate = FileCatalogSource::new(&songs)
+            .catalog_composition_with_imports(&[ImportedSourceRef {
+                source_id: "c".repeat(32),
+                canonical_path: songs.to_string_lossy().into_owned(),
+                kind: ImportedSourceKind::Folder,
+            }])
+            .expect("duplicate composition");
+        assert_eq!(duplicate.entries.len(), 1);
+        assert_eq!(duplicate.imported_status[0].song_count, 1);
+        assert_eq!(duplicate.imported_membership[&"c".repeat(32)].len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 }

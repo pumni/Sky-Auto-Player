@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 
-export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v3';
+export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v4';
+export const LEGACY_WORKBENCH_V3_STORAGE_KEY = 'sky.ui.workbench.v3';
 export const LEGACY_WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v2';
 export const LEGACY_WORKBENCH_V1_STORAGE_KEY = 'sky.ui.workbench.v1';
-export const MIN_NAVIGATOR_WIDTH = 220;
-export const COMPACT_NAVIGATOR_WIDTH = 72;
-export const DEFAULT_NAVIGATOR_WIDTH = 260;
-export const MAX_NAVIGATOR_WIDTH = 360;
-export const MIN_UTILITY_WIDTH = 320;
-export const DEFAULT_UTILITY_WIDTH = 360;
-export const MAX_UTILITY_WIDTH = 480;
-export const MIN_TRACK_BROWSER_WIDTH = 480;
+export const MIN_NAVIGATOR_WIDTH = 200;
+export const COMPACT_NAVIGATOR_WIDTH = 56;
+export const DEFAULT_NAVIGATOR_WIDTH = 240;
+export const MAX_NAVIGATOR_WIDTH = 340;
+export const MIN_UTILITY_WIDTH = 280;
+export const DEFAULT_UTILITY_WIDTH = 320;
+export const MAX_UTILITY_WIDTH = 440;
+export const MIN_TRACK_BROWSER_WIDTH = 420;
 export const WORKBENCH_GUTTER = 8;
 export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
 
@@ -32,8 +33,8 @@ export interface WorkbenchGeometry {
 
 export type NavigatorPreference = 'expanded' | 'collapsed';
 
-export interface WorkbenchLayoutStateV3 {
-  version: 3;
+export interface WorkbenchLayoutStateV4 {
+  version: 4;
   navigatorPreference: NavigatorPreference;
   expandedNavigatorWidth: number;
   utilityWidth: number;
@@ -95,10 +96,10 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizedLayout(
-  candidate: Partial<WorkbenchLayoutStateV3> | null | undefined,
-): WorkbenchLayoutStateV3 {
+  candidate: Partial<WorkbenchLayoutStateV4> | null | undefined,
+): WorkbenchLayoutStateV4 {
   return {
-    version: 3,
+    version: 4,
     navigatorPreference: candidate?.navigatorPreference === 'collapsed' ? 'collapsed' : 'expanded',
     expandedNavigatorWidth: clamp(
       typeof candidate?.expandedNavigatorWidth === 'number' &&
@@ -137,9 +138,18 @@ function readObject(key: string): Record<string, unknown> | null {
   }
 }
 
-export function loadWorkbenchLayout(): WorkbenchLayoutStateV3 {
+export function loadWorkbenchLayout(): WorkbenchLayoutStateV4 {
   const current = readObject(WORKBENCH_STORAGE_KEY);
-  if (current?.version === 3) return normalizedLayout(current as Partial<WorkbenchLayoutStateV3>);
+  if (current?.version === 4) return normalizedLayout(current as Partial<WorkbenchLayoutStateV4>);
+
+  const legacyV3 = readObject(LEGACY_WORKBENCH_V3_STORAGE_KEY);
+  if (legacyV3?.version === 3) {
+    return normalizedLayout({
+      navigatorPreference: legacyV3.navigatorPreference as NavigatorPreference,
+      expandedNavigatorWidth: legacyV3.expandedNavigatorWidth as number,
+      utilityWidth: legacyV3.utilityWidth as number,
+    });
+  }
 
   const legacyV2 = readObject(LEGACY_WORKBENCH_STORAGE_KEY);
   if (legacyV2?.version === 2) {
@@ -160,7 +170,7 @@ export function loadWorkbenchLayout(): WorkbenchLayoutStateV3 {
   return normalizedLayout(null);
 }
 
-function persistWorkbenchLayout(layout: WorkbenchLayoutStateV3): void {
+function persistWorkbenchLayout(layout: WorkbenchLayoutStateV4): void {
   try {
     storage()?.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(layout));
   } catch {
@@ -169,7 +179,7 @@ function persistWorkbenchLayout(layout: WorkbenchLayoutStateV3): void {
 }
 
 export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
-  const [layout, setLayout] = useState<WorkbenchLayoutStateV3>(() => loadWorkbenchLayout());
+  const [layout, setLayout] = useState<WorkbenchLayoutStateV4>(() => loadWorkbenchLayout());
   const layoutRef = useRef(layout);
 
   useEffect(() => {
@@ -193,7 +203,7 @@ export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
     utilityWidth: effectiveUtilityWidth,
   });
 
-  const update = (patch: Partial<WorkbenchLayoutStateV3>, persist = false) => {
+  const update = (patch: Partial<WorkbenchLayoutStateV4>, persist = false) => {
     const next = normalizedLayout({ ...layoutRef.current, ...patch });
     layoutRef.current = next;
     setLayout(next);

@@ -15,9 +15,9 @@ import type {
   SettingsPatch,
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
-  LibraryCollection,
-  LibraryCollections,
-  LibraryImport,
+  LibraryPlaylistSummary,
+  LibraryPlaylistImportResult,
+  LibraryNavigation,
   SongDetail,
   ThemeId,
   UiEvent,
@@ -105,9 +105,13 @@ export function createMockBridge(): DesktopBridge {
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
   let calibration: { operationId: string; state: CalibrationStateId } | null = null;
   const likedSongIds = new Set<string>();
-  let collections: LibraryCollection[] = [];
-  let importedSourceIds: string[] = [];
-  let collectionSequence = 0;
+  const playlistMembership = new Map<string, Set<string>>();
+  const localRows = new Map<string, SearchResult['items'][number]>([
+    [mockId(900), row(900, 'Local Song B')],
+    [mockId(901), row(901, 'Local Song C')],
+  ]);
+  let playlists: LibraryPlaylistSummary[] = [];
+  let playlistSequence = 0;
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
@@ -170,6 +174,31 @@ export function createMockBridge(): DesktopBridge {
       },
     });
   };
+  const allRows = () => [...rows, ...localRows.values()];
+  const updatePlaylist = (playlistId: string, songIds: string[]) => {
+    const playlist = playlists.find((item) => item.id === playlistId);
+    if (!playlist) throw new Error('playlist was not found');
+    const membership = playlistMembership.get(playlistId) ?? new Set<string>();
+    songIds.forEach((songId) => membership.add(songId));
+    playlistMembership.set(playlistId, membership);
+    const next = { ...playlist, song_count: membership.size };
+    playlists = playlists.map((item) => (item.id === playlistId ? next : item));
+    return next;
+  };
+  const createMockImport = (
+    playlistId: string,
+    kind: 'file' | 'folder',
+  ): LibraryPlaylistImportResult => {
+    const importedSongIds = [...localRows.keys()].slice(0, kind === 'folder' ? 2 : 1);
+    const playlist = updatePlaylist(playlistId, importedSongIds);
+    generation += 1;
+    emit({ v: 1, name: 'catalog.changed', payload: { generation, total: rows.length } });
+    return {
+      playlist,
+      imported_song_count: importedSongIds.length,
+      catalog_generation: generation,
+    };
+  };
 
   return {
     async bootstrap() {
@@ -193,8 +222,12 @@ export function createMockBridge(): DesktopBridge {
       const query = request.query.trim().toLocaleLowerCase();
       const sourceRows =
         request.source.kind === 'smart' && request.source.id === 'liked'
-          ? rows.filter((item) => likedSongIds.has(item.song_id))
-          : rows;
+          ? allRows().filter((item) => likedSongIds.has(item.song_id))
+          : request.source.kind === 'playlist'
+            ? allRows().filter((item) =>
+                playlistMembership.get(request.source.id)?.has(item.song_id),
+              )
+            : rows;
       const filtered = query
         ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
         : sourceRows;
@@ -210,7 +243,7 @@ export function createMockBridge(): DesktopBridge {
       };
     },
     async getSongDetail(request: DetailRequest) {
-      const found = rows.find((item) => item.song_id === request.songId);
+      const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       return {
         song_id: found.song_id,
@@ -255,90 +288,75 @@ export function createMockBridge(): DesktopBridge {
         selected_song_id: request.selectedSongId,
         items: (request.songIds.length > 0
           ? request.songIds
-              .map((songId) => rows.find((item) => item.song_id === songId))
+              .map((songId) => allRows().find((item) => item.song_id === songId))
               .filter((item): item is (typeof rows)[number] => item !== undefined)
           : rows.slice(request.firstIndex, request.lastIndex + 1)
         ).map((item) => ({ ...item, liked: likedSongIds.has(item.song_id) })),
       };
     },
     async setSongLiked(request) {
-      if (!rows.some((item) => item.song_id === request.songId)) {
+      if (!allRows().some((item) => item.song_id === request.songId)) {
         throw new Error('song was not found');
       }
       if (request.liked) likedSongIds.add(request.songId);
       else likedSongIds.delete(request.songId);
       return { song_id: request.songId, liked: request.liked, total: likedSongIds.size };
     },
-    async listCollections(): Promise<LibraryCollections> {
+    async listLibraryNavigation(): Promise<LibraryNavigation> {
       return {
-        collections: collections.map((collection) => ({
-          ...collection,
-          song_ids: [...collection.song_ids],
-        })),
-        imported_source_count: importedSourceIds.length,
-        imported_sources: importedSourceIds.map((id) => ({
-          id,
-          kind: 'file' as const,
-          display_name: 'Imported source',
-          available: true,
-        })),
+        playlists: playlists.map((playlist) => ({ ...playlist })),
       };
     },
-    async createCollection(name: string): Promise<LibraryCollection> {
-      collectionSequence += 1;
-      const collection = {
-        id: `mock-collection-${collectionSequence}`,
+    async createPlaylist(name: string): Promise<LibraryPlaylistSummary> {
+      playlistSequence += 1;
+      const playlist: LibraryPlaylistSummary = {
+        id: `mock-playlist-${playlistSequence}`,
         name: name.trim(),
-        song_ids: [],
+        song_count: 0,
       };
-      collections = [...collections, collection];
-      return collection;
+      playlists = [...playlists, playlist];
+      playlistMembership.set(playlist.id, new Set());
+      return playlist;
     },
-    async renameCollection(collectionId: string, name: string): Promise<LibraryCollection> {
-      const index = collections.findIndex((collection) => collection.id === collectionId);
-      const current = collections[index];
-      if (!current) throw new Error('collection was not found');
-      const collection: LibraryCollection = { ...current, name: name.trim() };
-      collections = collections.map((item, itemIndex) => (itemIndex === index ? collection : item));
-      return collection;
+    async renamePlaylist(playlistId: string, name: string): Promise<LibraryPlaylistSummary> {
+      const index = playlists.findIndex((playlist) => playlist.id === playlistId);
+      const current = playlists[index];
+      if (!current) throw new Error('playlist was not found');
+      const playlist: LibraryPlaylistSummary = { ...current, name: name.trim() };
+      playlists = playlists.map((item, itemIndex) => (itemIndex === index ? playlist : item));
+      return playlist;
     },
-    async deleteCollection(collectionId: string): Promise<boolean> {
-      const next = collections.filter((collection) => collection.id !== collectionId);
-      const removed = next.length !== collections.length;
-      collections = next;
+    async deletePlaylist(playlistId: string): Promise<boolean> {
+      const next = playlists.filter((playlist) => playlist.id !== playlistId);
+      const removed = next.length !== playlists.length;
+      playlists = next;
+      if (removed) playlistMembership.delete(playlistId);
       return removed;
     },
-    async addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection> {
-      const collection = collections.find((item) => item.id === collectionId);
-      if (!collection) throw new Error('collection was not found');
-      const next = { ...collection, song_ids: [...new Set([...collection.song_ids, ...songIds])] };
-      collections = collections.map((item) => (item.id === collectionId ? next : item));
+    async addSongsToPlaylist(
+      playlistId: string,
+      songIds: string[],
+    ): Promise<LibraryPlaylistSummary> {
+      return updatePlaylist(playlistId, songIds);
+    },
+    async removeSongsFromPlaylist(
+      playlistId: string,
+      songIds: string[],
+    ): Promise<LibraryPlaylistSummary> {
+      const playlist = playlists.find((item) => item.id === playlistId);
+      if (!playlist) throw new Error('playlist was not found');
+      const membership = playlistMembership.get(playlistId) ?? new Set<string>();
+      songIds.forEach((songId) => membership.delete(songId));
+      playlistMembership.set(playlistId, membership);
+      const next = { ...playlist, song_count: membership.size };
+      playlists = playlists.map((item) => (item.id === playlistId ? next : item));
       return next;
     },
-    async removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection> {
-      const collection = collections.find((item) => item.id === collectionId);
-      if (!collection) throw new Error('collection was not found');
-      const next = {
-        ...collection,
-        song_ids: collection.song_ids.filter((id) => !songIds.includes(id)),
-      };
-      collections = collections.map((item) => (item.id === collectionId ? next : item));
-      return next;
+    async importLocalFilesToPlaylist(playlistId: string): Promise<LibraryPlaylistImportResult> {
+      return createMockImport(playlistId, 'file');
     },
-    async importLocalFiles(): Promise<LibraryImport> {
-      return { source_ids: [], imported_count: 0, catalog_generation: generation };
-    },
-    async importLocalFolder(): Promise<LibraryImport> {
-      return { source_ids: [], imported_count: 0, catalog_generation: generation };
-    },
-    async removeImport(sourceId: string): Promise<LibraryImport> {
-      const before = importedSourceIds.length;
-      importedSourceIds = importedSourceIds.filter((id) => id !== sourceId);
-      return {
-        source_ids: before === importedSourceIds.length ? [] : [sourceId],
-        imported_count: before === importedSourceIds.length ? 0 : 1,
-        catalog_generation: generation,
-      };
+    async importLocalFolderToPlaylist(playlistId: string): Promise<LibraryPlaylistImportResult> {
+      return createMockImport(playlistId, 'folder');
     },
     async getSettings() {
       return settings;
@@ -444,7 +462,7 @@ export function createMockBridge(): DesktopBridge {
       return handoff;
     },
     async preparePlayback(request) {
-      const found = rows.find((item) => item.song_id === request.songId);
+      const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
       return {

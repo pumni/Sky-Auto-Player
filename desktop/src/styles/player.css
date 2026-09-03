@@ -1,7 +1,7 @@
 .player-bar {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(360px, 620px) minmax(220px, 1fr);
+  grid-template-columns: minmax(150px, 1fr) minmax(280px, 520px) minmax(80px, 1fr);
   align-items: center;
   min-width: 0;
   gap: 8px;
@@ -83,11 +83,15 @@
 }
 
 .player-transport {
+  position: relative;
   grid-column: 2;
   grid-row: 1;
   display: grid;
   width: 100%;
   min-width: 0;
+  min-height: 63px;
+  grid-template-rows: 40px 18px;
+  align-content: center;
   gap: 5px;
 }
 
@@ -131,24 +135,49 @@
 }
 
 .player-transport-status {
+  overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11px;
+  line-height: 11px;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-timeline-label-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  height: 11px;
+}
+
+.player-timeline-label-row .player-timeline-labels,
+.player-timeline-label-row .player-transport-status {
+  grid-area: 1 / 1;
 }
 
 .player-timeline {
   display: grid;
+  grid-template-rows: 11px 4px;
   min-width: 0;
+  min-height: 18px;
   gap: 3px;
 }
 
 .player-timeline-labels {
   display: flex;
+  height: 11px;
+  line-height: 11px;
   justify-content: space-between;
   color: var(--text-tertiary);
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.player-timeline-labels.is-hidden {
+  visibility: hidden;
 }
 
 .player-timeline progress {
@@ -180,6 +209,10 @@
   color: var(--text-tertiary);
 }
 
+.player-timeline.is-disabled .player-timeline-labels {
+  visibility: hidden;
+}
+
 .player-timeline progress[aria-disabled='true'] {
   border-color: var(--border-subtle);
   background: var(--surface-raised);
@@ -204,7 +237,7 @@
 
 .player-profile {
   position: relative;
-  width: min(190px, calc(100% - 42px));
+  width: 32px;
   min-width: 0;
 }
 
@@ -236,45 +269,21 @@
 }
 
 .profile-summary-button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-  gap: 7px;
-  padding: 5px 7px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  color: var(--text-tertiary);
   background: transparent;
-  text-align: left;
 }
 
 .profile-summary-button:hover {
-  background: var(--surface-hover);
+  color: var(--text-primary);
+  background: transparent;
 }
 
 .profile-summary-button > span {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.profile-summary-button strong,
-.profile-summary-button small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profile-summary-button strong {
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.profile-summary-button small {
-  color: var(--text-tertiary);
-  font-size: 10px;
+  display: none;
 }
 
 .profile-popover {
@@ -348,6 +357,11 @@
   box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
 }
 
+.player-admission-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+  border-left-color: var(--danger);
+}
+
 .admission-copy {
   display: grid;
   min-width: 0;
@@ -371,6 +385,10 @@
   color: var(--text-tertiary);
 }
 
+.player-admission-error .admission-copy span {
+  color: var(--danger);
+}
+
 .admission-actions {
   display: flex;
   flex: 0 0 auto;
@@ -390,14 +408,6 @@
     grid-template-columns: minmax(200px, 1fr) minmax(340px, 620px) minmax(200px, 1fr);
     gap: 8px;
     padding-inline: 10px;
-  }
-
-  .player-profile {
-    width: 148px;
-  }
-
-  .profile-summary-button small {
-    display: none;
   }
 
   .player-admission {
@@ -425,21 +435,6 @@
     width: 38px;
   }
 
-  .player-profile {
-    width: 34px;
-  }
-
-  .profile-summary-button {
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    padding: 0;
-  }
-
-  .profile-summary-button > span {
-    display: none;
-  }
-
   .player-tools {
     gap: 6px;
   }
@@ -449,4 +444,35 @@
   .resizable-separator span {
     transition: none;
   }
+}
+
+.player-tool-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+.player-tool-button:hover {
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.player-tool-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.player-tool-button[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.player-tools {
+  gap: 4px;
 }

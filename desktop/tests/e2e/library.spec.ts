@@ -12,8 +12,8 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
 
 async function expectWorkbenchWithinBounds(
   page: Page,
-  minimumTrackWidth = 480,
-  minimumUtilityWidth = 320,
+  minimumTrackWidth = 420,
+  minimumUtilityWidth = 280,
 ) {
   const geometry = await page.evaluate(() => {
     const box = (selector: string) => {
@@ -38,12 +38,16 @@ async function expectWorkbenchWithinBounds(
   expect(geometry.track).not.toBeNull();
   if (geometry.workbench && geometry.navigator && geometry.track) {
     expect(geometry.navigator.x).toBeGreaterThanOrEqual(geometry.workbench.x);
+    expect(geometry.navigator.x + geometry.navigator.width).toBeLessThanOrEqual(geometry.track.x);
     expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(
       geometry.workbench.x + geometry.workbench.width - 8,
     );
     expect(geometry.track.width).toBeGreaterThanOrEqual(minimumTrackWidth);
   }
   if (geometry.utility && geometry.workbench) {
+    if (geometry.track) {
+      expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(geometry.utility.x);
+    }
     expect(geometry.utility.x + geometry.utility.width).toBeLessThanOrEqual(
       geometry.workbench.x + geometry.workbench.width - 8,
     );
@@ -86,7 +90,7 @@ test('All Songs clears search while retaining the catalog count', async ({ page 
   const navigatorItem = page.getByRole('button', { name: 'All Songs' });
   await expect(navigatorItem).toContainText('500');
   await page.getByLabel('Search library').fill('Moonlit');
-  await expect(page.getByText('1 songs')).toBeVisible();
+  await expect(page.getByText('1 song')).toBeVisible();
   await expect(navigatorItem).toContainText('500');
   await navigatorItem.click();
   await expect(page.getByLabel('Search library')).toHaveValue('');
@@ -114,8 +118,132 @@ test('Liked Songs is a real source with Player Bar save behavior', async ({ page
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
 });
 
+test('Playlists support create, rename, delete, and membership actions', async ({ page }) => {
+  await page.goto('/');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(createDialog).toBeHidden();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('0 songs')).toBeVisible();
+
+  await page.getByRole('button', { name: 'More actions for Practice' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Add songs' })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Add songs' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(navigator.locator('.library-nav-action-row.is-active')).toContainText('Practice');
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
+
+  await page.getByRole('button', { name: 'More actions for Practice' }).click();
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  const renameDialog = page.getByRole('dialog', { name: 'Rename Practice' });
+  await renameDialog.getByLabel('Playlist name').fill('Morning Practice');
+  await renameDialog.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Morning Practice' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'More actions for Morning Practice' }).click();
+  await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+  const deleteDialog = page.getByRole('dialog', { name: /Delete/ });
+  await expect(deleteDialog).toContainText('Songs and local files will not be deleted');
+  await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
+  await expect(
+    navigator.getByRole('button', { name: 'Morning Practice', exact: true }),
+  ).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+});
+
+test('Add songs keeps local imports inside the selected playlist', async ({ page }) => {
+  await page.goto('/');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+  const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
+  await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
+  await page.getByRole('menuitem', { name: 'Add to Practice' }).click();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
+  await navigator.getByRole('button', { name: 'Practice', exact: true }).click();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.getByText('1 song')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Import files…' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+  await expect(navigator.getByText('Local')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Import folder…' }).click();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'All Songs' }).click();
+  await expect(page.getByText('500 songs')).toBeVisible();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Practice', exact: true }).click();
+  await page
+    .getByRole('row', { name: /Aurora Landing/ })
+    .getByRole('button', {
+      name: 'More actions for Aurora Landing',
+    })
+    .click();
+  await page.getByRole('menuitem', { name: 'Remove from playlist' }).click();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'More actions for Practice' }).click();
+  await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+  const deleteDialog = page.getByRole('dialog', { name: /Delete/ });
+  await expect(deleteDialog).toContainText('local files will not be deleted');
+  await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
+  await expect(navigator.getByRole('button', { name: /Practice/ })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+});
+
+test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
+  await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
+  const collapsedLabels = navigator.locator('.library-nav-item-label');
+  await expect(collapsedLabels).toHaveCount(2);
+  expect(
+    await collapsedLabels.evaluateAll((items) =>
+      items.every((item) => {
+        return getComputedStyle(item).display === 'none';
+      }),
+    ),
+  ).toBe(true);
+  const pane = await page.locator('.navigator-workbench-pane').boundingBox();
+  expect(pane).not.toBeNull();
+  if (pane) expect(Math.round(pane.width)).toBe(56);
+
+  await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
+  await expect(navigator.getByText('Your Library')).toBeVisible();
+});
+
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
@@ -150,31 +278,39 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
 test('minimum viewport keeps an open utility pane inside the actual client rectangle', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Notes' })).toBeHidden();
+  await expect(page.getByRole('columnheader', { name: 'Liked' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible();
+  const recommendationGrid = page.locator('.recommendation-grid');
+  await expect(recommendationGrid).toBeVisible();
+  await expect(recommendationGrid).toHaveCSS('grid-template-columns', /\S+px$/);
   await expectWorkbenchWithinBounds(page);
   const navigator = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(navigator).not.toBeNull();
-  if (navigator) expect(Math.round(navigator.width)).toBe(72);
+  if (navigator) expect(Math.round(navigator.width)).toBe(56);
 });
 
 test('browser resilience margin does not clip the workbench below the native minimum', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 900, height: 600 });
+  await page.setViewportSize({ width: 780, height: 540 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-  await expectWorkbenchWithinBounds(page, 480, 0);
+  await expectWorkbenchWithinBounds(page, 420, 0);
 });
 
 test('desktop workbench fits the supported viewport matrix', async ({ page }) => {
   for (const viewport of [
-    { width: 920, height: 620 },
+    { width: 800, height: 560 },
+    { width: 900, height: 600 },
+    { width: 1024, height: 640 },
     { width: 1200, height: 760 },
-    { width: 1280, height: 720 },
     { width: 1440, height: 900 },
     { width: 1920, height: 1080 },
   ]) {
@@ -196,40 +332,60 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     await page.getByRole('button', { name: 'Open utility panel' }).click();
     await page.getByRole('tab', { name: 'Runtime' }).click();
     await expectWorkbenchWithinBounds(page);
-    if (viewport.width >= 1280) {
-      await expect(
-        page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
-      ).toBeVisible();
-      await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-    } else {
-      await expect(
-        page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
-      ).toBeVisible();
-    }
+    await expect(
+      page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
+    ).toBeVisible();
   }
 });
 
 test('Player Bar communicates the no-selection state without actionable playback', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
-  const primary = player.getByRole('button', { name: 'Play' });
+  const primary = player.getByRole('button', { name: 'Play', exact: true });
   const labels = player.locator('.player-timeline-labels');
 
   await expect(primary).toBeDisabled();
-  await expect(labels).toContainText('--:--');
-  expect(await labels.textContent()).not.toContain('0:00');
+  await expect(player.getByText('Select a song from your Library')).toBeVisible();
+  await expect(labels).toHaveCount(1);
+  await expect(labels).toHaveAttribute('aria-hidden', 'true');
+  expect(await labels.textContent()).toBe('');
   await expect(player.getByRole('progressbar')).toHaveAttribute('aria-disabled', 'true');
 
-  await player.getByRole('button', { name: 'Configure timing profile' }).click();
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
   await expect(
     page.getByRole('dialog', { name: 'Playback profile' }).getByRole('button', {
       name: 'Test playback (no input)',
     }),
   ).toBeDisabled();
   await page.keyboard.press('Escape');
+});
+
+test('Player transport geometry stays fixed when song timing labels appear', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const measure = async () => {
+    const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
+    const timelineBox = await player.locator('.player-timeline').boundingBox();
+    expect(playBox).not.toBeNull();
+    expect(timelineBox).not.toBeNull();
+    if (!playBox || !timelineBox) throw new Error('player geometry is unavailable');
+    return {
+      playCenterY: playBox.y + playBox.height / 2,
+      timelineY: timelineBox.y,
+    };
+  };
+
+  const idleGeometry = await measure();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await expect(player.locator('.player-timeline-labels')).toHaveAttribute('aria-hidden', 'false');
+  const selectedGeometry = await measure();
+
+  expect(Math.abs(selectedGeometry.playCenterY - idleGeometry.playCenterY)).toBeLessThanOrEqual(1);
+  expect(Math.abs(selectedGeometry.timelineY - idleGeometry.timelineY)).toBeLessThanOrEqual(1);
 });
 
 test('Titlebar search and Player primary control share the application center axis', async ({
@@ -239,7 +395,7 @@ test('Titlebar search and Player primary control share the application center ax
   await page.goto('/');
   const viewportCenter = 1920 / 2;
   const searchBox = await page.getByLabel('Search library').boundingBox();
-  const idleBox = await page.getByRole('button', { name: 'Play' }).boundingBox();
+  const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();
   if (searchBox && idleBox) {
@@ -248,7 +404,7 @@ test('Titlebar search and Player primary control share the application center ax
   }
 
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
-  await page.getByRole('button', { name: 'Play' }).click();
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
   await page
     .getByRole('group', { name: 'Playback confirmation' })
     .getByRole('button', { name: 'Proceed with current settings' })
@@ -263,11 +419,11 @@ test('Titlebar search and Player primary control share the application center ax
 test('Player Bar remains compact, centered, and bounded at the minimum viewport', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const playerBox = await player.boundingBox();
-  const playBox = await player.getByRole('button', { name: 'Play' }).boundingBox();
+  const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   const timelineBox = await player.locator('.player-timeline').boundingBox();
   const toolsBox = await player.locator('.player-tools').boundingBox();
   expect(playerBox).not.toBeNull();
@@ -275,27 +431,27 @@ test('Player Bar remains compact, centered, and bounded at the minimum viewport'
   expect(timelineBox).not.toBeNull();
   expect(toolsBox).not.toBeNull();
   if (playerBox && playBox && timelineBox && toolsBox) {
-    expect(Math.abs(playBox.x + playBox.width / 2 - 460)).toBeLessThanOrEqual(2);
+    expect(Math.abs(playBox.x + playBox.width / 2 - 400)).toBeLessThanOrEqual(2);
     expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(playerBox.x + playerBox.width - 8);
     expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(toolsBox.x);
   }
-  await expect(player.getByRole('button', { name: 'Configure timing profile' })).toHaveAttribute(
+  await expect(player.getByRole('button', { name: 'Configure playback profile' })).toHaveAttribute(
     'aria-label',
-    'Configure timing profile',
+    'Configure playback profile',
   );
 
   await page.getByRole('button', { name: 'Open utility panel' }).click();
-  const openPlayBox = await player.getByRole('button', { name: 'Play' }).boundingBox();
+  const openPlayBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(openPlayBox).not.toBeNull();
   if (openPlayBox) {
-    expect(Math.abs(openPlayBox.x + openPlayBox.width / 2 - 460)).toBeLessThanOrEqual(2);
+    expect(Math.abs(openPlayBox.x + openPlayBox.width / 2 - 400)).toBeLessThanOrEqual(2);
   }
 });
 
 test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
-  const trigger = page.getByRole('button', { name: 'Configure timing profile' });
+  const trigger = page.getByRole('button', { name: 'Configure playback profile' });
   await trigger.click();
 
   const popover = page.getByRole('dialog', { name: 'Playback profile' });
@@ -343,19 +499,30 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
 });
 
 test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const progress = page.getByRole('progressbar', { name: /Playback progress/ });
   await expect(progress).toBeVisible();
   await expect(progress).toHaveAttribute('value', '0');
-  const idlePrimary = page.getByRole('button', { name: 'Play' });
+  const idlePrimary = page.getByRole('button', { name: 'Play', exact: true });
   const idleBox = await idlePrimary.boundingBox();
   expect(idleBox).not.toBeNull();
 
   await idlePrimary.click();
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  const transportStatus = player.locator('.player-transport-status');
+  await expect(transportStatus).toHaveText('Awaiting confirmation');
+  const playerBox = await player.boundingBox();
+  const statusBox = await transportStatus.boundingBox();
+  expect(playerBox).not.toBeNull();
+  expect(statusBox).not.toBeNull();
+  if (playerBox && statusBox) {
+    expect(statusBox.y).toBeGreaterThanOrEqual(playerBox.y);
+    expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(playerBox.y + playerBox.height);
+  }
   await expect(
     confirmation.getByRole('button', { name: 'Proceed with current settings' }),
   ).toBeFocused();
@@ -381,13 +548,13 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await page.getByRole('button', { name: 'Resume' }).click();
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
   await page.getByRole('button', { name: 'Stop' }).click();
-  await expect(page.getByRole('button', { name: 'Play' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 });
 
 test('Settings modal has no serious accessibility violations and closes accessibly', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
@@ -522,11 +689,11 @@ test('all supported themes round-trip through the settings surface', async ({ pa
 });
 
 test('update indicator and typed update dialog expose safe handoff states', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const indicator = page.getByRole('button', { name: /Open update 3\.6\.0-mock/ });
   await expect(indicator).toBeVisible();
-  await indicator.click();
+  await indicator.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'Software update' });
   await expect(dialog).toContainText('Version 3.6.0-mock is available');
   await expectNoSeriousAccessibilityViolations(page);
@@ -536,7 +703,7 @@ test('update indicator and typed update dialog expose safe handoff states', asyn
 });
 
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const trigger = page.getByRole('button', { name: 'Open utility panel' });
   await trigger.click();
@@ -566,7 +733,7 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const list = page.locator('.track-table');
   await list.evaluate((element) => {
@@ -601,7 +768,7 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
 });
 
 test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
-  await page.setViewportSize({ width: 920, height: 620 });
+  await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Advanced' }).click();

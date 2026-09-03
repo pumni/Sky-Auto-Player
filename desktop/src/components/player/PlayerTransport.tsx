@@ -19,13 +19,19 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const skip = useStore((store) => store.skipPlayback);
 
   const active = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
+  const transportStatus =
+    playback.prepared && !active && playback.prepared.admission !== 'blocked'
+      ? playback.prepared.admission === 'confirmation_required'
+        ? 'Awaiting confirmation'
+        : 'Preparing playback'
+      : null;
   const snapshot = playback.snapshot;
   const selectedDurationUs =
     playback.prepared?.song.duration_us ?? selectedRow?.duration_us ?? snapshot?.total_us ?? 0;
   const totalUs = snapshot?.total_us ?? selectedDurationUs;
   const currentUs = Math.min(Math.max(0, snapshot?.current_us ?? 0), totalUs || 0);
   const progressLabel = !selectedSongId
-    ? 'Playback progress unavailable until a sheet is selected'
+    ? 'Playback progress unavailable until a song is selected'
     : totalUs
       ? `Playback progress, ${formatPlayerDuration(currentUs)} of ${formatPlayerDuration(totalUs)}`
       : 'Playback progress unavailable';
@@ -111,9 +117,19 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
         className={`player-timeline${selectedSongId ? '' : ' is-disabled'}`}
         aria-label={progressLabel}
       >
-        <div className="player-timeline-labels">
-          <span>{selectedSongId ? formatPlayerDuration(currentUs) : '--:--'}</span>
-          <span>{selectedSongId ? formatPlayerDuration(totalUs) : '--:--'}</span>
+        <div className="player-timeline-label-row">
+          <div
+            className={`player-timeline-labels${transportStatus ? ' is-hidden' : ''}`}
+            aria-hidden={!selectedSongId || transportStatus !== null}
+          >
+            <span>{selectedSongId ? formatPlayerDuration(currentUs) : ''}</span>
+            <span>{selectedSongId ? formatPlayerDuration(totalUs) : ''}</span>
+          </div>
+          {transportStatus && (
+            <span className="player-transport-status" role="status">
+              {transportStatus}
+            </span>
+          )}
         </div>
         <progress
           value={selectedSongId ? currentUs : 0}
@@ -122,23 +138,6 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           aria-disabled={!selectedSongId}
         />
       </div>
-      {playback.prepared && !active && (
-        <span className="player-transport-status" role="status">
-          {playback.prepared.admission === 'confirmation_required'
-            ? 'Awaiting confirmation'
-            : 'Preparing playback'}
-        </span>
-      )}
-      {playback.prepared?.admission === 'blocked' && (
-        <span className="player-message player-message-danger" role="alert">
-          {playback.prepared.error_message}
-        </span>
-      )}
-      {playback.error && !playback.prepared && (
-        <span className="player-message player-message-danger" role="alert">
-          {playback.error}
-        </span>
-      )}
     </div>
   );
 }

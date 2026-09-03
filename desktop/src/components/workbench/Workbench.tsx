@@ -67,9 +67,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       <ResizableSeparator
         label="Resize library navigator"
         value={layout.navigatorWidth}
-        min={layout.navigatorCollapsed ? layout.navigatorWidth : 220}
+        min={layout.navigatorCollapsed ? layout.navigatorWidth : 200}
         max={layout.navigatorMax}
-        defaultValue={260}
+        defaultValue={240}
         disabled={layout.navigatorCollapsed}
         onChange={(value) => layout.setNavigatorWidth(value)}
         onCommit={(value) => layout.setNavigatorWidth(value, true)}
@@ -82,9 +82,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
           <ResizableSeparator
             label="Resize utility pane"
             value={layout.utilityWidth}
-            min={Math.min(320, layout.utilityWidth)}
+            min={Math.min(280, layout.utilityWidth)}
             max={layout.utilityWidthMax}
-            defaultValue={360}
+            defaultValue={320}
             direction={-1}
             onChange={(value) => layout.setUtilityWidth(value)}
             onCommit={(value) => layout.setUtilityWidth(value, true)}
