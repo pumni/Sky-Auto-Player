@@ -501,6 +501,7 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
 test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const progress = page.getByRole('progressbar', { name: /Playback progress/ });
   await expect(progress).toBeVisible();
@@ -512,6 +513,16 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await idlePrimary.click();
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  const transportStatus = player.locator('.player-transport-status');
+  await expect(transportStatus).toHaveText('Awaiting confirmation');
+  const playerBox = await player.boundingBox();
+  const statusBox = await transportStatus.boundingBox();
+  expect(playerBox).not.toBeNull();
+  expect(statusBox).not.toBeNull();
+  if (playerBox && statusBox) {
+    expect(statusBox.y).toBeGreaterThanOrEqual(playerBox.y);
+    expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(playerBox.y + playerBox.height);
+  }
   await expect(
     confirmation.getByRole('button', { name: 'Proceed with current settings' }),
   ).toBeFocused();

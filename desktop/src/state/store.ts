@@ -1198,16 +1198,12 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
       async openPlaylistAdd(playlistId) {
         const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
-        const current = get().library;
-        if (sourceKey(current.source) !== sourceKey(playlistSource)) {
-          await get().selectLibrarySource(playlistSource);
-        }
         detailRequestToken += 1;
         prepareRequestEpoch += 1;
-        const latest = get().library;
+        const current = get().library;
         set({
           library: {
-            ...latest,
+            ...current,
             source: playlistSource,
             playlistAddMode: { playlistId },
             selectedSongId: null,

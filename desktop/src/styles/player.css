@@ -135,21 +135,26 @@
 }
 
 .player-transport-status {
+  overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11px;
+  line-height: 11px;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.player-transport-status-slot {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 3px);
-  left: 0;
+.player-timeline-label-row {
+  position: relative;
   display: grid;
-  justify-items: center;
+  align-items: center;
   min-width: 0;
-  gap: 2px;
-  pointer-events: none;
+  height: 11px;
+}
+
+.player-timeline-label-row .player-timeline-labels,
+.player-timeline-label-row .player-transport-status {
+  grid-area: 1 / 1;
 }
 
 .player-timeline {
@@ -169,6 +174,10 @@
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.player-timeline-labels.is-hidden {
+  visibility: hidden;
 }
 
 .player-timeline progress {
@@ -348,6 +357,11 @@
   box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
 }
 
+.player-admission-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+  border-left-color: var(--danger);
+}
+
 .admission-copy {
   display: grid;
   min-width: 0;
@@ -369,6 +383,10 @@
 
 .admission-copy .muted {
   color: var(--text-tertiary);
+}
+
+.player-admission-error .admission-copy span {
+  color: var(--danger);
 }
 
 .admission-actions {

@@ -261,9 +261,15 @@ describe('desktop store', () => {
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().createPlaylist('Practice'));
     const playlistId = store.getState().library.source.id;
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    const firstSongId = rowAt(store, 0)?.song_id;
+    expect(firstSongId).toBeDefined();
+    await act(async () => store.getState().setSongLiked(firstSongId!, true));
     requests.length = 0;
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.source).toEqual({ kind: 'smart', id: 'all' });
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
     expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
