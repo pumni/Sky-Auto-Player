@@ -113,6 +113,7 @@ fn run_inner(gui_smoke: bool) {
         record_gui_smoke_phase("tauri.builder.create");
     }
     let mut builder = tauri::Builder::<ShellRuntime>::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(move |app| {
             #[cfg(windows)]
@@ -184,6 +185,15 @@ fn run_inner(gui_smoke: bool) {
             commands::reload_library,
             commands::set_library_viewport,
             commands::set_song_liked,
+            commands::library_list_collections,
+            commands::library_create_collection,
+            commands::library_rename_collection,
+            commands::library_delete_collection,
+            commands::library_add_songs,
+            commands::library_remove_songs,
+            commands::library_import_local_files,
+            commands::library_import_local_folder,
+            commands::library_remove_import,
             commands::get_settings,
             commands::patch_settings,
             commands::check_for_update,

@@ -31,6 +31,8 @@ sources.
 - [timing-principles.md](timing-principles.md) — timing semantics, targets, measurement domains, and
   fail-closed behavior.
 - [hold-frame-model.md](hold-frame-model.md) — user-selected FPS and authored hold materialization.
+- [library-v1-contract.md](library-v1-contract.md) — native manifest, collection, and local import
+  contract for the stacked Library V1 work.
 
 For implementation work, read relevant source and direct tests alongside the matching document. Do
 not open every architecture page by default.

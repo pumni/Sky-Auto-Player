@@ -15,6 +15,9 @@ import type {
   SettingsPatch,
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
+  LibraryCollection,
+  LibraryCollections,
+  LibraryImport,
   SongDetail,
   ThemeId,
   UiEvent,
@@ -102,6 +105,9 @@ export function createMockBridge(): DesktopBridge {
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
   let calibration: { operationId: string; state: CalibrationStateId } | null = null;
   const likedSongIds = new Set<string>();
+  let collections: LibraryCollection[] = [];
+  let importedSourceIds: string[] = [];
+  let collectionSequence = 0;
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
@@ -186,7 +192,9 @@ export function createMockBridge(): DesktopBridge {
     async searchSongs(request: SearchRequest) {
       const query = request.query.trim().toLocaleLowerCase();
       const sourceRows =
-        request.source === 'liked' ? rows.filter((item) => likedSongIds.has(item.song_id)) : rows;
+        request.source.kind === 'smart' && request.source.id === 'liked'
+          ? rows.filter((item) => likedSongIds.has(item.song_id))
+          : rows;
       const filtered = query
         ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
         : sourceRows;
@@ -260,6 +268,77 @@ export function createMockBridge(): DesktopBridge {
       if (request.liked) likedSongIds.add(request.songId);
       else likedSongIds.delete(request.songId);
       return { song_id: request.songId, liked: request.liked, total: likedSongIds.size };
+    },
+    async listCollections(): Promise<LibraryCollections> {
+      return {
+        collections: collections.map((collection) => ({
+          ...collection,
+          song_ids: [...collection.song_ids],
+        })),
+        imported_source_count: importedSourceIds.length,
+        imported_sources: importedSourceIds.map((id) => ({
+          id,
+          kind: 'file' as const,
+          display_name: 'Imported source',
+          available: true,
+        })),
+      };
+    },
+    async createCollection(name: string): Promise<LibraryCollection> {
+      collectionSequence += 1;
+      const collection = {
+        id: `mock-collection-${collectionSequence}`,
+        name: name.trim(),
+        song_ids: [],
+      };
+      collections = [...collections, collection];
+      return collection;
+    },
+    async renameCollection(collectionId: string, name: string): Promise<LibraryCollection> {
+      const index = collections.findIndex((collection) => collection.id === collectionId);
+      const current = collections[index];
+      if (!current) throw new Error('collection was not found');
+      const collection: LibraryCollection = { ...current, name: name.trim() };
+      collections = collections.map((item, itemIndex) => (itemIndex === index ? collection : item));
+      return collection;
+    },
+    async deleteCollection(collectionId: string): Promise<boolean> {
+      const next = collections.filter((collection) => collection.id !== collectionId);
+      const removed = next.length !== collections.length;
+      collections = next;
+      return removed;
+    },
+    async addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection> {
+      const collection = collections.find((item) => item.id === collectionId);
+      if (!collection) throw new Error('collection was not found');
+      const next = { ...collection, song_ids: [...new Set([...collection.song_ids, ...songIds])] };
+      collections = collections.map((item) => (item.id === collectionId ? next : item));
+      return next;
+    },
+    async removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection> {
+      const collection = collections.find((item) => item.id === collectionId);
+      if (!collection) throw new Error('collection was not found');
+      const next = {
+        ...collection,
+        song_ids: collection.song_ids.filter((id) => !songIds.includes(id)),
+      };
+      collections = collections.map((item) => (item.id === collectionId ? next : item));
+      return next;
+    },
+    async importLocalFiles(): Promise<LibraryImport> {
+      return { source_ids: [], imported_count: 0, catalog_generation: generation };
+    },
+    async importLocalFolder(): Promise<LibraryImport> {
+      return { source_ids: [], imported_count: 0, catalog_generation: generation };
+    },
+    async removeImport(sourceId: string): Promise<LibraryImport> {
+      const before = importedSourceIds.length;
+      importedSourceIds = importedSourceIds.filter((id) => id !== sourceId);
+      return {
+        source_ids: before === importedSourceIds.length ? [] : [sourceId],
+        imported_count: before === importedSourceIds.length ? 0 : 1,
+        catalog_generation: generation,
+      };
     },
     async getSettings() {
       return settings;

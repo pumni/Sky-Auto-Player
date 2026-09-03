@@ -183,8 +183,8 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.liked).toBe(true);
     expect(store.getState().library.indexById).toBe(indexById);
 
-    await act(async () => store.getState().selectLibrarySource('liked'));
-    expect(store.getState().library.source).toBe('liked');
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'liked' });
     expect(store.getState().library.resultTotal).toBe(1);
     expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
   });

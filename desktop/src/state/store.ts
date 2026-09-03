@@ -235,8 +235,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
   let diagnosticsEventSeq = 0;
   let diagnosticsLogSeq = 0;
 
+  const sourceKey = (source: LibrarySource) => JSON.stringify(source);
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
-    `${generation}\u0000${source}\u0000${query}`;
+    `${generation}\u0000${sourceKey(source)}\u0000${query}`;
 
   const boundedText = (value: string): string => {
     const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
@@ -325,7 +326,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
           pages,
           indexById,
           catalogTotal:
-            current.source === 'all' && current.query.trim() === ''
+            current.source.kind === 'smart' &&
+            current.source.id === 'all' &&
+            current.query.trim() === ''
               ? result.total
               : current.catalogTotal,
           likedTotal: result.liked_total,
@@ -401,7 +404,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       bootstrap: null,
       fatal: null,
       library: {
-        source: 'all',
+        source: { kind: 'smart', id: 'all' },
         query: '',
         generation: 0,
         catalogTotal: 0,
@@ -739,7 +742,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: {
               ...get().library,
               catalogTotal:
-                nextSource === 'all' && nextQuery.trim() === ''
+                nextSource.kind === 'smart' && nextSource.id === 'all' && nextQuery.trim() === ''
                   ? result.total
                   : get().library.catalogTotal,
               likedTotal: result.liked_total,
@@ -881,7 +884,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       async selectLibrarySource(source) {
-        if (get().library.source !== source) {
+        if (sourceKey(get().library.source) !== sourceKey(source)) {
           detailRequestToken += 1;
           prepareRequestEpoch += 1;
           set({
@@ -920,7 +923,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
               likedTotal: result.total,
             },
           });
-          if (library.source === 'liked') await get().search();
+          if (library.source.kind === 'smart' && library.source.id === 'liked') {
+            await get().search();
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           const latest = get().library;

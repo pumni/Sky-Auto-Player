@@ -39,20 +39,20 @@ export function LibraryNavigator({
       <LibraryNavItem
         collapsed={collapsed}
         label="Liked Songs"
-        active={source === 'liked'}
+        active={source.kind === 'smart' && source.id === 'liked'}
         count={likedTotal}
         icon={<Heart size={18} />}
-        onPress={() => void selectLibrarySource('liked')}
+        onPress={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
       >
         Liked Songs
       </LibraryNavItem>
       <LibraryNavItem
         collapsed={collapsed}
         label="All Songs"
-        active={source === 'all'}
+        active={source.kind === 'smart' && source.id === 'all'}
         count={catalogTotal}
         icon={<ListMusic size={18} />}
-        onPress={() => void selectLibrarySource('all')}
+        onPress={() => void selectLibrarySource({ kind: 'smart', id: 'all' })}
       >
         All Songs
       </LibraryNavItem>

@@ -78,7 +78,7 @@ export function App({ bridge }: AppProps) {
         query: '',
         offset: 0,
         limit: 200,
-        source: 'all',
+        source: { kind: 'smart', id: 'all' },
         ...(generation > 0 ? { generation } : {}),
       });
       if (

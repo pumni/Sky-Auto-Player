@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sky_app_core::library::ImportedSourceKind;
 use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
@@ -16,7 +17,7 @@ pub struct CatalogSearchRequest {
     pub limit: u16,
     pub generation: Option<u64>,
     #[serde(default)]
-    pub source: CatalogSourceId,
+    pub source: LibrarySource,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -26,6 +27,22 @@ pub enum CatalogSourceId {
     #[default]
     All,
     Liked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LibrarySource {
+    Smart { id: CatalogSourceId },
+    Collection { id: String },
+}
+
+impl Default for LibrarySource {
+    fn default() -> Self {
+        Self::Smart {
+            id: CatalogSourceId::All,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -426,6 +443,98 @@ pub struct CatalogSetLikedDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct LibraryCollectionDto {
+    pub id: String,
+    pub name: String,
+    pub song_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryImportedSourceKind {
+    File,
+    Folder,
+}
+
+impl From<ImportedSourceKind> for LibraryImportedSourceKind {
+    fn from(kind: ImportedSourceKind) -> Self {
+        match kind {
+            ImportedSourceKind::File => Self::File,
+            ImportedSourceKind::Folder => Self::Folder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LibraryImportedSourceDto {
+    pub id: String,
+    pub kind: LibraryImportedSourceKind,
+    pub display_name: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LibraryCollectionsDto {
+    pub collections: Vec<LibraryCollectionDto>,
+    pub imported_source_count: u64,
+    pub imported_sources: Vec<LibraryImportedSourceDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct LibraryCreateCollectionRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct LibraryRenameCollectionRequest {
+    pub collection_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct LibraryCollectionSongsRequest {
+    pub collection_id: String,
+    pub song_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct LibraryCollectionIdRequest {
+    pub collection_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct LibraryRemoveImportRequest {
+    pub source_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LibraryImportDto {
+    pub source_ids: Vec<String>,
+    pub imported_count: u64,
+    pub catalog_generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticsSetEnabledRequest {
     pub enabled: bool,
@@ -574,6 +683,122 @@ pub async fn set_song_liked(
     params: CatalogSetLikedRequest,
 ) -> Result<CatalogSetLikedDto, String> {
     blocking_request(state, "catalog.set_liked", params).await
+}
+
+#[tauri::command]
+pub async fn library_list_collections(
+    state: State<'_, AppState>,
+) -> Result<LibraryCollectionsDto, String> {
+    blocking_request(state, "library.list_collections", serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn library_create_collection(
+    state: State<'_, AppState>,
+    params: LibraryCreateCollectionRequest,
+) -> Result<LibraryCollectionDto, String> {
+    blocking_request(state, "library.create_collection", params).await
+}
+
+#[tauri::command]
+pub async fn library_rename_collection(
+    state: State<'_, AppState>,
+    params: LibraryRenameCollectionRequest,
+) -> Result<LibraryCollectionDto, String> {
+    blocking_request(state, "library.rename_collection", params).await
+}
+
+#[tauri::command]
+pub async fn library_delete_collection(
+    state: State<'_, AppState>,
+    params: LibraryCollectionIdRequest,
+) -> Result<bool, String> {
+    blocking_request(state, "library.delete_collection", params).await
+}
+
+#[tauri::command]
+pub async fn library_add_songs(
+    state: State<'_, AppState>,
+    params: LibraryCollectionSongsRequest,
+) -> Result<LibraryCollectionDto, String> {
+    blocking_request(state, "library.add_songs", params).await
+}
+
+#[tauri::command]
+pub async fn library_remove_songs(
+    state: State<'_, AppState>,
+    params: LibraryCollectionSongsRequest,
+) -> Result<LibraryCollectionDto, String> {
+    blocking_request(state, "library.remove_songs", params).await
+}
+
+#[tauri::command]
+pub async fn library_import_local_files(
+    app: tauri::AppHandle<super::ShellRuntime>,
+    state: State<'_, AppState>,
+) -> Result<LibraryImportDto, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let paths = tauri::async_runtime::spawn_blocking(move || {
+        let selected = app
+            .dialog()
+            .file()
+            .add_filter("Sky sheets", &["json", "skysheet", "txt"])
+            .blocking_pick_files();
+        selected
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| format!("selected import path is invalid: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|error| format!("Native dialog worker failed: {error}"))??;
+    blocking_request(
+        state,
+        "library.import_local_files",
+        serde_json::json!({ "paths": paths }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn library_import_local_folder(
+    app: tauri::AppHandle<super::ShellRuntime>,
+    state: State<'_, AppState>,
+) -> Result<LibraryImportDto, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| format!("selected import folder is invalid: {error}"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| format!("Native dialog worker failed: {error}"))??;
+    blocking_request(
+        state,
+        "library.import_local_folder",
+        serde_json::json!({ "paths": path.into_iter().collect::<Vec<_>>() }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn library_remove_import(
+    state: State<'_, AppState>,
+    params: LibraryRemoveImportRequest,
+) -> Result<LibraryImportDto, String> {
+    blocking_request(state, "library.remove_import", params).await
 }
 
 #[tauri::command]
