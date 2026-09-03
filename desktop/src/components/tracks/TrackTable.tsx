@@ -126,18 +126,20 @@ export function TrackTable({ useStore }: TrackTableProps) {
       tabIndex={0}
       onKeyDown={onTableKeyDown}
     >
-      <TrackTableHeader />
-      <div className="track-table-virtual-inner" style={{ height: virtualizer.getTotalSize() }}>
-        {renderedItems.map((virtualRow) => {
-          return (
-            <VirtualTrackRow
-              key={virtualRow.index}
-              index={virtualRow.index}
-              start={virtualRow.start}
-              useStore={useStore}
-            />
-          );
-        })}
+      <div className="track-table-frame">
+        <TrackTableHeader />
+        <div className="track-table-virtual-inner" style={{ height: virtualizer.getTotalSize() }}>
+          {renderedItems.map((virtualRow) => {
+            return (
+              <VirtualTrackRow
+                key={virtualRow.index}
+                index={virtualRow.index}
+                start={virtualRow.start}
+                useStore={useStore}
+              />
+            );
+          })}
+        </div>
       </div>
     </div>
   );

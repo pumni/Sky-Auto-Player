@@ -57,19 +57,6 @@ export const TrackRow = memo(function TrackRow({
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         {row.title}
       </span>
-      <span className="track-cell track-cell-notes" role="gridcell">
-        {metadata ? (
-          <span
-            className={`track-metadata-status is-${row.metadata_state}`}
-            aria-label={metadata.label}
-            title={metadata.label}
-          >
-            {metadata.value}
-          </span>
-        ) : (
-          (row.note_count ?? '—')
-        )}
-      </span>
       <span className="track-cell track-cell-liked" role="gridcell">
         <button
           className={`track-like-button${row.liked ? ' is-liked' : ''}`}
@@ -87,6 +74,19 @@ export const TrackRow = memo(function TrackRow({
         >
           <span aria-hidden="true">{row.liked ? '♥' : '♡'}</span>
         </button>
+      </span>
+      <span className="track-cell track-cell-notes" role="gridcell">
+        {metadata ? (
+          <span
+            className={`track-metadata-status is-${row.metadata_state}`}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </span>
+        ) : (
+          (row.note_count ?? '—')
+        )}
       </span>
       <span className="track-cell track-cell-duration" role="gridcell">
         {metadata ? (

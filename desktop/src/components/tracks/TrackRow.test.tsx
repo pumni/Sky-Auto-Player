@@ -40,10 +40,19 @@ describe('Track Browser primitives', () => {
       />,
     );
 
-    expect(screen.getByRole('row', { name: /Liminal Garden/ })).toHaveAttribute(
-      'aria-selected',
-      'false',
-    );
+    const renderedRow = screen.getByRole('row', { name: /Liminal Garden/ });
+    expect(renderedRow).toHaveAttribute('aria-selected', 'false');
+    expect(
+      [...renderedRow.querySelectorAll<HTMLElement>('[role="gridcell"]')].map(
+        (cell) => cell.className,
+      ),
+    ).toEqual([
+      'track-cell track-cell-index',
+      'track-cell track-cell-title',
+      'track-cell track-cell-liked',
+      'track-cell track-cell-notes',
+      'track-cell track-cell-duration',
+    ]);
     expect(screen.getByRole('gridcell', { name: '—' })).toBeInTheDocument();
     expect(screen.getByRole('gridcell', { name: '2:05' })).toBeInTheDocument();
     const likeButton = screen.getByRole('button', { name: 'Add Liminal Garden to Liked Songs' });
@@ -51,7 +60,7 @@ describe('Track Browser primitives', () => {
     fireEvent.click(likeButton);
     expect(onToggleLiked).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('row', { name: /Liminal Garden/ }));
+    fireEvent.click(renderedRow);
     expect(onSelect).toHaveBeenCalledOnce();
   });
 

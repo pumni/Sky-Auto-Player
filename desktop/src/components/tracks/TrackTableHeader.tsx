@@ -9,11 +9,11 @@ export function TrackTableHeader() {
       <span className="track-cell track-cell-title" role="columnheader">
         Title
       </span>
-      <span className="track-cell track-cell-notes" role="columnheader">
-        Notes
-      </span>
       <span className="track-cell track-cell-liked" role="columnheader" aria-label="Liked">
         <Heart size={14} aria-hidden="true" />
+      </span>
+      <span className="track-cell track-cell-notes" role="columnheader">
+        Notes
       </span>
       <span className="track-cell track-cell-duration" role="columnheader">
         Duration

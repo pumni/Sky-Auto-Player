@@ -8,11 +8,18 @@
 
 .track-table-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 72px 32px 76px;
+  grid-template-columns: 36px minmax(0, 1fr) 32px 72px 76px;
   align-items: center;
   min-width: 0;
   gap: 8px;
   padding-inline: 18px;
+}
+
+.track-table-frame {
+  position: relative;
+  min-width: 0;
+  min-height: 100%;
+  margin-inline: 8px;
 }
 
 .track-table-header {
@@ -27,7 +34,7 @@
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  padding-inline: 26px;
+  padding-inline: 18px;
 }
 
 .track-table-virtual-inner {
@@ -38,7 +45,7 @@
 
 .track-row {
   position: absolute;
-  inset-inline: 8px;
+  inset-inline: 0;
   height: 46px;
   padding-inline: 18px;
   border-left: 2px solid transparent;
@@ -143,7 +150,7 @@
   }
 
   .track-table-header {
-    padding-inline: 20px;
+    padding-inline: 12px;
   }
 
   .track-cell-notes {
