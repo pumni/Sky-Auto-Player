@@ -15,7 +15,9 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
     <section className="track-browser" aria-labelledby="track-browser-title">
       <header className="track-browser-header">
         <div>
-          <h1 id="track-browser-title">{source === 'liked' ? 'Liked Songs' : 'All Songs'}</h1>
+          <h1 id="track-browser-title">
+            {source.kind === 'smart' && source.id === 'liked' ? 'Liked Songs' : 'All Songs'}
+          </h1>
           <span className="track-browser-count">
             {loading ? 'Updating…' : `${resultTotal} songs`}
           </span>

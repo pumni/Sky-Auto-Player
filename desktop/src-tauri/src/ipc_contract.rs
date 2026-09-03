@@ -95,12 +95,48 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         invoke_name: "cancel_calibration",
         method: "calibration.cancel",
     },
+    CommandSpec {
+        invoke_name: "library_list_collections",
+        method: "library.list_collections",
+    },
+    CommandSpec {
+        invoke_name: "library_create_collection",
+        method: "library.create_collection",
+    },
+    CommandSpec {
+        invoke_name: "library_rename_collection",
+        method: "library.rename_collection",
+    },
+    CommandSpec {
+        invoke_name: "library_delete_collection",
+        method: "library.delete_collection",
+    },
+    CommandSpec {
+        invoke_name: "library_add_songs",
+        method: "library.add_songs",
+    },
+    CommandSpec {
+        invoke_name: "library_remove_songs",
+        method: "library.remove_songs",
+    },
+    CommandSpec {
+        invoke_name: "library_import_local_files",
+        method: "library.import_local_files",
+    },
+    CommandSpec {
+        invoke_name: "library_import_local_folder",
+        method: "library.import_local_folder",
+    },
+    CommandSpec {
+        invoke_name: "library_remove_import",
+        method: "library.remove_import",
+    },
 ];
 
 pub(crate) const UI_EVENTS_COMMAND: &str = "subscribe_ui_events";
 
 pub(crate) fn is_complete() -> bool {
-    COMMANDS.len() == 22
+    COMMANDS.len() == 31
         && COMMANDS.iter().all(|spec| {
             !spec.invoke_name.is_empty()
                 && !spec.method.is_empty()
@@ -124,7 +160,7 @@ mod tests {
     #[test]
     fn stable_command_contract_is_exactly_the_native_set() {
         assert!(is_complete());
-        assert_eq!(COMMANDS.len(), 22);
+        assert_eq!(COMMANDS.len(), 31);
         assert_eq!(
             COMMANDS[0],
             CommandSpec {
@@ -133,10 +169,10 @@ mod tests {
             }
         );
         assert_eq!(
-            COMMANDS[21],
+            COMMANDS[30],
             CommandSpec {
-                invoke_name: "cancel_calibration",
-                method: "calibration.cancel"
+                invoke_name: "library_remove_import",
+                method: "library.remove_import"
             }
         );
         assert_eq!(UI_EVENTS_COMMAND, "subscribe_ui_events");
