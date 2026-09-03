@@ -45,6 +45,7 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::System::Threading",
     "Win32::UI::Input::KeyboardAndMouse",
     "Win32::UI::Controls",
+    "Win32::UI::Shell",
     "Win32::UI::HiDpi",
     "Win32::UI::WindowsAndMessaging",
     "Win32::Networking::WinHttp",
@@ -1355,9 +1356,9 @@ fn command_names_source(root: &Path) -> Result<String> {
         };
         commands.push(rest[..end].to_owned());
     }
-    if commands.len() != 21 {
+    if commands.len() != 31 {
         return Err(format!(
-            "IPC registry contains {} commands; expected 21",
+            "IPC registry contains {} commands; expected 31",
             commands.len()
         )
         .into());

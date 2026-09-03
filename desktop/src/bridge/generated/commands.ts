@@ -10,6 +10,9 @@ import type {
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
   DetailRequest,
+  LibraryCollection,
+  LibraryCollections,
+  LibraryImport,
   PlaybackCommandAck,
   PlaybackPrepare,
   PlaybackSession,
@@ -17,6 +20,7 @@ import type {
   PlaybackStart,
   PreparedPlayback,
   SearchRequest,
+  SetSongLikedRequest,
   SearchResult,
   Settings,
   SettingsPatch,
@@ -38,6 +42,7 @@ export interface CommandRequestMap {
   get_song_detail: DetailRequest;
   reload_library: undefined;
   set_library_viewport: ViewportRequest;
+  set_song_liked: SetSongLikedRequest;
   get_settings: undefined;
   patch_settings: SettingsPatch;
   check_for_update: undefined;
@@ -53,6 +58,15 @@ export interface CommandRequestMap {
   set_diagnostics_enabled: DiagnosticsSetEnabled;
   start_calibration: CalibrationStart;
   cancel_calibration: CalibrationCancel;
+  library_list_collections: undefined;
+  library_create_collection: { name: string };
+  library_rename_collection: { collectionId: string; name: string };
+  library_delete_collection: { collectionId: string };
+  library_add_songs: { collectionId: string; songIds: string[] };
+  library_remove_songs: { collectionId: string; songIds: string[] };
+  library_import_local_files: undefined;
+  library_import_local_folder: undefined;
+  library_remove_import: { sourceId: string };
 }
 
 export interface CommandResponseMap {
@@ -62,6 +76,7 @@ export interface CommandResponseMap {
   get_song_detail: SongDetail;
   reload_library: { generation: number; total: number };
   set_library_viewport: ViewportResult;
+  set_song_liked: import('./CatalogSetLikedDto').CatalogSetLikedDto;
   get_settings: Settings;
   patch_settings: Settings;
   check_for_update: UpdateCheck;
@@ -77,6 +92,15 @@ export interface CommandResponseMap {
   set_diagnostics_enabled: DiagnosticsEnabled;
   start_calibration: CalibrationStartAck;
   cancel_calibration: CalibrationCancelAck;
+  library_list_collections: LibraryCollections;
+  library_create_collection: LibraryCollection;
+  library_rename_collection: LibraryCollection;
+  library_delete_collection: boolean;
+  library_add_songs: LibraryCollection;
+  library_remove_songs: LibraryCollection;
+  library_import_local_files: LibraryImport;
+  library_import_local_folder: LibraryImport;
+  library_remove_import: LibraryImport;
 }
 
 export type DesktopCommandName = keyof CommandRequestMap;

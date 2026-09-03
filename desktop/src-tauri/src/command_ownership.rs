@@ -96,6 +96,46 @@ pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
         crate::ipc_contract::COMMANDS[20].method,
         CommandOwner::Native,
     ),
+    (
+        crate::ipc_contract::COMMANDS[21].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[22].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[23].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[24].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[25].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[26].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[27].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[28].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[29].method,
+        CommandOwner::Native,
+    ),
+    (
+        crate::ipc_contract::COMMANDS[30].method,
+        CommandOwner::Native,
+    ),
 ];
 
 /// Native handlers are enumerated separately from policy so the matrix cannot
@@ -123,9 +163,19 @@ pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
     crate::ipc_contract::COMMANDS[18].method,
     crate::ipc_contract::COMMANDS[19].method,
     crate::ipc_contract::COMMANDS[20].method,
+    crate::ipc_contract::COMMANDS[21].method,
+    crate::ipc_contract::COMMANDS[22].method,
+    crate::ipc_contract::COMMANDS[23].method,
+    crate::ipc_contract::COMMANDS[24].method,
+    crate::ipc_contract::COMMANDS[25].method,
+    crate::ipc_contract::COMMANDS[26].method,
+    crate::ipc_contract::COMMANDS[27].method,
+    crate::ipc_contract::COMMANDS[28].method,
+    crate::ipc_contract::COMMANDS[29].method,
+    crate::ipc_contract::COMMANDS[30].method,
 ];
 
-const REQUIRED_COMMANDS: [&str; 21] = [
+const REQUIRED_COMMANDS: [&str; 31] = [
     crate::ipc_contract::COMMANDS[0].method,
     crate::ipc_contract::COMMANDS[1].method,
     crate::ipc_contract::COMMANDS[2].method,
@@ -147,6 +197,16 @@ const REQUIRED_COMMANDS: [&str; 21] = [
     crate::ipc_contract::COMMANDS[18].method,
     crate::ipc_contract::COMMANDS[19].method,
     crate::ipc_contract::COMMANDS[20].method,
+    crate::ipc_contract::COMMANDS[21].method,
+    crate::ipc_contract::COMMANDS[22].method,
+    crate::ipc_contract::COMMANDS[23].method,
+    crate::ipc_contract::COMMANDS[24].method,
+    crate::ipc_contract::COMMANDS[25].method,
+    crate::ipc_contract::COMMANDS[26].method,
+    crate::ipc_contract::COMMANDS[27].method,
+    crate::ipc_contract::COMMANDS[28].method,
+    crate::ipc_contract::COMMANDS[29].method,
+    crate::ipc_contract::COMMANDS[30].method,
 ];
 
 pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
@@ -182,13 +242,13 @@ mod tests {
 
     #[test]
     fn every_current_desktop_method_has_exactly_one_native_owner() {
-        assert_eq!(COMMAND_OWNERS.len(), 21);
+        assert_eq!(COMMAND_OWNERS.len(), 31);
         assert_eq!(
             COMMAND_OWNERS
                 .iter()
                 .filter(|(_, owner)| *owner == CommandOwner::Native)
                 .count(),
-            21
+            31
         );
         for (method, owner) in COMMAND_OWNERS {
             assert_eq!(owner_for(method), Some(*owner));
@@ -200,7 +260,7 @@ mod tests {
         );
         assert_eq!(owner_for("unknown"), None);
         assert!(matrix_is_complete());
-        assert_eq!(NATIVE_HANDLER_METHODS.len(), 21);
+        assert_eq!(NATIVE_HANDLER_METHODS.len(), 31);
         for method in NATIVE_HANDLER_METHODS {
             assert_eq!(owner_for(method), Some(CommandOwner::Native));
             assert!(

@@ -1,12 +1,10 @@
-import { Activity, X } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
-import { useEffect, useRef, type RefObject } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 
-interface DiagnosticsPanelProps {
+interface DiagnosticsViewProps {
   useStore: DesktopStoreHook;
-  mode: 'pane' | 'overlay';
-  restoreFocusRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function number(value: number | null | undefined, digits = 2): string {
@@ -16,7 +14,7 @@ function number(value: number | null | undefined, digits = 2): string {
 function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples'] }) {
   const width = 560;
   const height = 112;
-  const values = samples.slice(-600).map((sample) => Math.max(0, sample.max_lateness_us));
+  const values = samples.map((sample) => Math.max(0, sample.max_lateness_us));
   const maximum = Math.max(1, ...values);
   const points = values
     .map((value, index) => {
@@ -42,79 +40,21 @@ function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples
   );
 }
 
-export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: DiagnosticsPanelProps) {
-  const diagnostics = useStore((store) => store.diagnostics);
-  const close = useStore((store) => store.setDiagnosticsOpen);
-  const surfaceRef = useRef<HTMLElement>(null);
-  const overlayWasOpen = useRef(false);
-  const pane = mode === 'pane';
-
-  useEffect(() => {
-    if (pane || !diagnostics.open) return;
-    overlayWasOpen.current = true;
-    const frame = window.requestAnimationFrame(() => surfaceRef.current?.focus());
-    return () => {
-      window.cancelAnimationFrame(frame);
-      if (!overlayWasOpen.current) return;
-      overlayWasOpen.current = false;
-      window.queueMicrotask(() => restoreFocusRef?.current?.focus());
-    };
-  }, [diagnostics.open, pane, restoreFocusRef]);
-
-  if (!diagnostics.open) return null;
+export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
+  const diagnostics = useStore((store: DesktopStore) => store.diagnostics);
+  const scrollRef = useScrollVisibility<HTMLDivElement>();
+  const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
+  const logsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   return (
-    <section
-      ref={surfaceRef}
-      className={`diagnostics-surface diagnostics-${mode}`}
-      role={pane ? 'region' : 'dialog'}
-      aria-label="Diagnostics"
-      tabIndex={pane ? undefined : -1}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          close(false);
-          return;
-        }
-        if (pane || event.key !== 'Tab') return;
-        const focusable = Array.from(
-          surfaceRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-          ) ?? [],
-        ).filter((element) => !element.hasAttribute('disabled'));
-        if (focusable.length === 0) {
-          event.preventDefault();
-          surfaceRef.current?.focus();
-          return;
-        }
-        const first = focusable[0]!;
-        const last = focusable[focusable.length - 1]!;
-        const activeElement = document.activeElement;
-        if (event.shiftKey && (activeElement === first || activeElement === surfaceRef.current)) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }}
+    <div
+      ref={scrollRef}
+      className="diagnostics-view scroll-surface"
+      aria-labelledby="diagnostics-title"
     >
-      <div className="diagnostics-heading">
-        <div>
-          <p className="eyebrow">RUNTIME TELEMETRY</p>
-          <h2>
-            <Activity size={17} aria-hidden="true" /> Diagnostics
-          </h2>
-        </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Close diagnostics"
-          onClick={() => close(false)}
-        >
-          <X size={16} aria-hidden="true" />
-        </button>
-      </div>
+      <h3 id="diagnostics-title" className="visually-hidden">
+        Runtime diagnostics
+      </h3>
       {diagnostics.error && (
         <p className="inline-error" role="alert">
           {diagnostics.error}
@@ -140,6 +80,7 @@ export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: Diagnostic
             <Metric label="Stuck" value={latest ? String(latest.stuck_keys) : '—'} />
           </div>
           <p className="diagnostics-status">
+            <Activity size={14} aria-hidden="true" />
             {latest
               ? `Backend: ${latest.backend_status}`
               : 'Diagnostics are waiting for the native session.'}
@@ -148,7 +89,11 @@ export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: Diagnostic
         <TabPanel id="timing" className="diagnostics-panel">
           <TimingPlot samples={diagnostics.samples} />
         </TabPanel>
-        <TabPanel id="events" className="diagnostics-panel diagnostics-scroll">
+        <TabPanel
+          ref={eventsScrollRef}
+          id="events"
+          className="diagnostics-panel diagnostics-scroll scroll-surface"
+        >
           {diagnostics.events.length === 0 ? (
             <p className="muted">No events recorded.</p>
           ) : (
@@ -166,7 +111,11 @@ export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: Diagnostic
             </ol>
           )}
         </TabPanel>
-        <TabPanel id="logs" className="diagnostics-panel diagnostics-scroll">
+        <TabPanel
+          ref={logsScrollRef}
+          id="logs"
+          className="diagnostics-panel diagnostics-scroll scroll-surface"
+        >
           {diagnostics.logs.length === 0 ? (
             <p className="muted">No logs recorded.</p>
           ) : (
@@ -185,7 +134,7 @@ export function DiagnosticsPanel({ useStore, mode, restoreFocusRef }: Diagnostic
           )}
         </TabPanel>
       </Tabs>
-    </section>
+    </div>
   );
 }
 

@@ -6,23 +6,33 @@ import { App } from './App';
 describe('desktop application shell', () => {
   afterEach(() => cleanup());
 
-  it('renders library, inspector, and settings through the bridge', async () => {
+  it('renders the navigator, track browser, utility details, and settings', async () => {
     render(<App bridge={createMockBridge()} />);
     expect(screen.getByText('Opening your library…')).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole('option', { name: /Aurora Landing/ })).toBeInTheDocument(),
+      expect(screen.getByRole('row', { name: /Aurora Landing/ })).toBeInTheDocument(),
     );
+    expect(screen.getByRole('navigation', { name: 'Library' })).toHaveTextContent('All Songs');
+    expect(screen.getByRole('grid', { name: 'Songs' })).toBeInTheDocument();
 
-    const firstSong = screen.getByRole('option', { name: /Aurora Landing/ });
+    const firstSong = screen.getByRole('row', { name: /Aurora Landing/ });
     fireEvent.click(firstSong);
     await waitFor(() => expect(firstSong).toHaveAttribute('aria-selected', 'true'));
-    await waitFor(() => expect(screen.getByText('Medium timing risk')).toBeInTheDocument());
+    expect(screen.queryByText('Medium timing risk')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open utility panel' }));
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Utility: Song Details' })).toBeInTheDocument(),
+    );
+    expect(screen.getByText('Medium timing risk')).toBeInTheDocument();
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     fireEvent.click(settingsButton);
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByLabelText('Theme')).toHaveValue('aurora');
+    fireEvent.click(screen.getByRole('button', { name: 'About' }));
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('3.5.0-mock');
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('Native ABI');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(
       document.activeElement as HTMLElement,
     );
@@ -31,40 +41,38 @@ describe('desktop application shell', () => {
     expect(document.activeElement).toBe(settingsButton);
   });
 
-  it('supports keyboard navigation in the virtualized library', async () => {
+  it('supports keyboard navigation in the virtualized track table', async () => {
     render(<App bridge={createMockBridge()} />);
-    const list = await screen.findByRole('listbox', { name: 'Songs' });
-    list.focus();
-    fireEvent.keyDown(list, { key: 'ArrowDown' });
+    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    grid.focus();
+    fireEvent.keyDown(grid, { key: 'ArrowDown' });
     await waitFor(() =>
       expect(
         screen
-          .getAllByRole('option', { name: /Blue Bird/ })
-          .some((option) => option.getAttribute('aria-selected') === 'true'),
+          .getAllByRole('row', { name: /Blue Bird/ })
+          .some((row) => row.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );
-    fireEvent.keyDown(list, { key: 'Home' });
+    fireEvent.keyDown(grid, { key: 'Home' });
     await waitFor(() =>
       expect(
         screen
-          .getAllByRole('option', { name: /Aurora Landing/ })
-          .some((option) => option.getAttribute('aria-selected') === 'true'),
+          .getAllByRole('row', { name: /Aurora Landing/ })
+          .some((row) => row.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );
   });
 
   it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {
     render(<App bridge={createMockBridge()} />);
-    const list = await screen.findByRole('listbox', { name: 'Songs' });
-    list.focus();
-
-    fireEvent.keyDown(list, { key: 'End' });
-
+    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    grid.focus();
+    fireEvent.keyDown(grid, { key: 'End' });
     await waitFor(() =>
       expect(
         screen
-          .getAllByRole('option', { name: /Song 500/ })
-          .some((option) => option.getAttribute('aria-selected') === 'true'),
+          .getAllByRole('row', { name: /Song 500/ })
+          .some((row) => row.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );
   });
@@ -79,19 +87,22 @@ describe('desktop application shell', () => {
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
   });
 
-  it('opens bounded diagnostics and the safe calibration dialog', async () => {
+  it('opens the docked utility diagnostics and closes with Escape', async () => {
     render(<App bridge={createMockBridge()} />);
-    await screen.findByRole('option', { name: /Aurora Landing/ });
+    await screen.findByRole('row', { name: /Aurora Landing/ });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open diagnostics' }));
-    expect(await screen.findByRole('dialog', { name: 'Diagnostics' })).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: 'Open utility panel' });
+    fireEvent.click(trigger);
+    const utility = await screen.findByRole('region', { name: 'Utility: Song Details' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
+    const diagnostics = await screen.findByRole('region', { name: 'Utility: Diagnostics' });
+    expect(utility).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Performance' })).toBeInTheDocument();
-    fireEvent.click(
-      screen
-        .getByRole('dialog', { name: 'Diagnostics' })
-        .querySelector('button[aria-label="Close diagnostics"]') as HTMLButtonElement,
+    fireEvent.keyDown(diagnostics, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Utility: Diagnostics' })).toBeNull(),
     );
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Diagnostics' })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));

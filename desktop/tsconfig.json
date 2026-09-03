@@ -18,7 +18,9 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": false
+    // Third-party Babel/React Compiler declarations currently publish
+    // incompatible graphs; source checking remains strict.
+    "skipLibCheck": true
   },
   "include": ["src", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

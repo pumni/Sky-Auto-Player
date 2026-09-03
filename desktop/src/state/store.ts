@@ -21,6 +21,7 @@ import type {
   PreparedPlayback,
   UpdateCheck,
   UpdateChannelId,
+  LibrarySource,
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 
@@ -29,11 +30,14 @@ type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
 type CalibrationUiState =
   'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
+export type UtilityView = 'details' | 'diagnostics';
 
 export const MAX_DIAGNOSTIC_SAMPLES = 600;
 export const MAX_DIAGNOSTIC_EVENTS = 500;
 export const MAX_DIAGNOSTIC_LOGS = 200;
 export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
+export const LIBRARY_PAGE_SIZE = 200;
+export const DETAIL_CACHE_LIMIT = 64;
 
 export interface DiagnosticsEventLine {
   seq: number;
@@ -47,27 +51,42 @@ export interface DiagnosticsLogLine {
   message: string;
 }
 
+export interface LibraryState {
+  source: LibrarySource;
+  query: string;
+  generation: number;
+  catalogTotal: number;
+  likedTotal: number;
+  resultTotal: number;
+  pages: Map<number, readonly SongRow[]>;
+  indexById: Map<string, number>;
+  selectedSongId: string | null;
+  visibleRange: { first: number; last: number };
+  loading: boolean;
+  searchRequestGeneration: number;
+  error: string | null;
+}
+
+export interface DetailEntry {
+  state: LoadState;
+  value: SongDetail | null;
+  error: string | null;
+}
+
 export interface DesktopStore {
   bootstrapState: LoadState;
   bootstrap: Bootstrap | null;
   fatal: string | null;
-  library: {
-    query: string;
-    generation: number;
-    total: number;
-    rows: SongRow[];
-    selectedSongId: string | null;
-    visibleRange: { first: number; last: number };
-    loading: boolean;
-    searchRequestGeneration: number;
-    error: string | null;
-  };
-  detail: { state: LoadState; value: SongDetail | null; error: string | null };
+  library: LibraryState;
+  details: { bySongId: Map<string, DetailEntry> };
   settings: Settings | null;
   settingsState: LoadState;
   settingsOpen: boolean;
-  diagnostics: {
+  utility: {
     open: boolean;
+    activeView: UtilityView;
+  };
+  diagnostics: {
     enabled: boolean;
     samples: DiagnosticsSnapshot[];
     events: DiagnosticsEventLine[];
@@ -107,9 +126,11 @@ export interface DesktopStore {
   };
   initialize: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
-  search: (query?: string) => Promise<void>;
+  search: (query?: string, source?: LibrarySource) => Promise<void>;
   selectSong: (songId: string) => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
+  selectLibrarySource: (source: LibrarySource) => Promise<void>;
+  setSongLiked: (songId: string, liked: boolean) => Promise<void>;
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<void>;
   checkForUpdate: () => Promise<void>;
@@ -122,11 +143,77 @@ export interface DesktopStore {
   resumePlayback: () => Promise<void>;
   skipPlayback: () => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
-  setDiagnosticsOpen: (open: boolean) => void;
   setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
+  openUtility: (view: UtilityView) => void;
+  closeUtility: () => void;
+  toggleUtility: () => void;
+  setUtilityView: (view: UtilityView) => void;
   startCalibration: (mode?: CalibrationModeId) => Promise<void>;
   cancelCalibration: () => Promise<void>;
   setCalibrationOpen: (open: boolean) => void;
+}
+
+const EMPTY_DETAIL: DetailEntry = { state: 'idle', value: null, error: null };
+
+export function selectSelectedDetail(
+  store: Pick<DesktopStore, 'library' | 'details'>,
+): DetailEntry {
+  const selectedSongId = store.library.selectedSongId;
+  return selectedSongId
+    ? (store.details.bySongId.get(selectedSongId) ?? EMPTY_DETAIL)
+    : EMPTY_DETAIL;
+}
+
+export function selectRowAtIndex(library: Pick<LibraryState, 'pages'>, index: number) {
+  if (index < 0) return undefined;
+  const offset = Math.floor(index / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;
+  return library.pages.get(offset)?.[index - offset];
+}
+
+export function selectSongById(
+  library: Pick<LibraryState, 'pages' | 'indexById'>,
+  songId: string | null,
+) {
+  const index = songId ? library.indexById.get(songId) : undefined;
+  return index === undefined ? undefined : selectRowAtIndex(library, index);
+}
+
+function updateLoadedRows(library: LibraryState, updates: readonly SongRow[]): LibraryState {
+  const pages = new Map(library.pages);
+  const changedPages = new Map<number, SongRow[]>();
+
+  for (const row of updates) {
+    const index = library.indexById.get(row.song_id);
+    if (index === undefined) continue;
+    const offset = Math.floor(index / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;
+    let page = changedPages.get(offset);
+    if (!page) {
+      const currentPage = library.pages.get(offset);
+      if (!currentPage) continue;
+      page = [...currentPage];
+      changedPages.set(offset, page);
+    }
+    page[index - offset] = row;
+  }
+
+  for (const [offset, page] of changedPages) pages.set(offset, page);
+  return { ...library, pages };
+}
+
+function cacheDetail(
+  entries: Map<string, DetailEntry>,
+  songId: string,
+  entry: DetailEntry,
+): Map<string, DetailEntry> {
+  const next = new Map(entries);
+  next.delete(songId);
+  next.set(songId, entry);
+  while (next.size > DETAIL_CACHE_LIMIT) {
+    const oldest = next.keys().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
 }
 
 export function createDesktopStore(bridge: DesktopBridge) {
@@ -142,13 +229,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
   let settingsMutationTail: Promise<void> = Promise.resolve();
   let diagnosticsToggleEpoch = 0;
   const retiredSessionIds = new Set<string>();
-  const pageSize = 200;
+  const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
   let diagnosticsEventSeq = 0;
   let diagnosticsLogSeq = 0;
 
-  const cacheKey = (query: string, generation: number) => `${generation}\u0000${query}`;
+  const sourceKey = (source: LibrarySource) => JSON.stringify(source);
+  const cacheKey = (source: LibrarySource, query: string, generation: number) =>
+    `${generation}\u0000${sourceKey(source)}\u0000${query}`;
 
   const boundedText = (value: string): string => {
     const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
@@ -222,20 +311,28 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
     const mergePage = (result: SearchResult, token: number): boolean => {
       const current = get().library;
-      if (current.searchRequestGeneration !== token) return false;
-      const rows =
-        current.rows.length === result.total
-          ? [...current.rows]
-          : (new Array<SongRow | undefined>(result.total) as SongRow[]);
+      if (current.searchRequestGeneration !== token || current.generation !== result.generation) {
+        return false;
+      }
+      const pages = new Map(current.pages);
+      const indexById = new Map(current.indexById);
+      pages.set(result.offset, result.items);
       result.items.forEach((row, index) => {
-        const target = result.offset + index;
-        if (target < rows.length) rows[target] = row;
+        indexById.set(row.song_id, result.offset + index);
       });
       set({
         library: {
           ...current,
-          rows,
-          total: result.total,
+          pages,
+          indexById,
+          catalogTotal:
+            current.source.kind === 'smart' &&
+            current.source.id === 'all' &&
+            current.query.trim() === ''
+              ? result.total
+              : current.catalogTotal,
+          likedTotal: result.liked_total,
+          resultTotal: result.total,
           generation: result.generation,
         },
       });
@@ -244,11 +341,12 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
     const loadPage = async (
       query: string,
+      source: LibrarySource,
       offset: number,
       generation: number,
       token: number,
     ): Promise<SearchResult> => {
-      const key = cacheKey(query, generation);
+      const key = cacheKey(source, query, generation);
       const cached = pageCache.get(key)?.get(offset);
       if (cached) {
         mergePage(cached, token);
@@ -261,6 +359,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         query,
         offset,
         limit: pageSize,
+        source,
         ...(generation > 0 ? { generation } : {}),
       };
       const requestPromise = bridge.searchSongs(request);
@@ -268,9 +367,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
       pageRequests.set(requestKey, requestPromise);
       try {
         const result = await requestPromise;
-        const generationPages = pageCache.get(cacheKey(query, result.generation)) ?? new Map();
+        const generationPages =
+          pageCache.get(cacheKey(source, query, result.generation)) ?? new Map();
         generationPages.set(result.offset, result);
-        pageCache.set(cacheKey(query, result.generation), generationPages);
+        pageCache.set(cacheKey(source, query, result.generation), generationPages);
         mergePage(result, token);
         return result;
       } finally {
@@ -281,14 +381,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const ensureRange = async (first: number, last: number, token: number): Promise<void> => {
       if (last < first) return;
       const current = get().library;
-      if (current.total === 0) return;
+      if (current.resultTotal === 0) return;
       const offsets: number[] = [];
       const firstPage = Math.floor(Math.max(0, first) / pageSize) * pageSize;
       const lastPage = Math.floor(Math.max(0, last) / pageSize) * pageSize;
       for (let offset = firstPage; offset <= lastPage; offset += pageSize) offsets.push(offset);
       try {
         await Promise.all(
-          offsets.map((offset) => loadPage(current.query, offset, current.generation, token)),
+          offsets.map((offset) =>
+            loadPage(current.query, current.source, offset, current.generation, token),
+          ),
         );
       } catch (error) {
         if (get().library.searchRequestGeneration !== token) return;
@@ -302,22 +404,30 @@ export function createDesktopStore(bridge: DesktopBridge) {
       bootstrap: null,
       fatal: null,
       library: {
+        source: { kind: 'smart', id: 'all' },
         query: '',
         generation: 0,
-        total: 0,
-        rows: [],
+        catalogTotal: 0,
+        likedTotal: 0,
+        resultTotal: 0,
+        pages: new Map(),
+        indexById: new Map(),
+
         selectedSongId: null,
         visibleRange: { first: 0, last: 0 },
         loading: false,
         searchRequestGeneration: 0,
         error: null,
       },
-      detail: { state: 'idle', value: null, error: null },
+      details: { bySongId: new Map() },
       settings: null,
       settingsState: 'idle',
       settingsOpen: false,
-      diagnostics: {
+      utility: {
         open: false,
+        activeView: 'details',
+      },
+      diagnostics: {
         enabled: false,
         samples: [],
         events: [],
@@ -402,7 +512,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           {
             ...initialEventState,
             catalogGeneration: get().library.generation,
-            catalogTotal: get().library.total,
+            catalogTotal: get().library.catalogTotal,
             fatal: get().fatal,
           },
           event,
@@ -432,15 +542,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: {
               ...get().library,
               generation: eventState.catalogGeneration,
-              total: eventState.catalogTotal,
-              rows: [],
+              catalogTotal: eventState.catalogTotal,
+              resultTotal: eventState.catalogTotal,
+              pages: new Map(),
+              indexById: new Map(),
               selectedSongId: null,
               error: null,
               loading: true,
             },
             playback: { ...get().playback, prepared: null },
           });
-          set({ detail: { state: 'idle', value: null, error: null } });
+          set({ details: { bySongId: new Map() } });
           void get().search();
         }
         if (event.name === 'playback.state_changed') {
@@ -519,7 +631,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } else if (event.name === 'diagnostics.snapshot') {
           const current = get().diagnostics;
-          if (!current.enabled || !current.open) return;
+          if (!current.enabled) return;
           set({
             diagnostics: {
               ...current,
@@ -605,29 +717,36 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
-      async search(query) {
+      async search(query, source) {
         const current = get().library;
         const nextQuery = query ?? current.query;
+        const nextSource = source ?? current.source;
         const token = current.searchRequestGeneration + 1;
         set({
           library: {
             ...current,
+            source: nextSource,
             query: nextQuery,
-            rows: [],
-            total: 0,
+            pages: new Map(),
+            indexById: new Map(),
+            resultTotal: 0,
             loading: true,
             error: null,
             searchRequestGeneration: token,
           },
         });
         try {
-          const result = await loadPage(nextQuery, 0, current.generation, token);
+          const result = await loadPage(nextQuery, nextSource, 0, current.generation, token);
           if (get().library.searchRequestGeneration !== token) return;
           set({
             library: {
               ...get().library,
-              rows: get().library.rows,
-              total: result.total,
+              catalogTotal:
+                nextSource.kind === 'smart' && nextSource.id === 'all' && nextQuery.trim() === ''
+                  ? result.total
+                  : get().library.catalogTotal,
+              likedTotal: result.liked_total,
+              resultTotal: result.total,
               generation: result.generation,
               loading: false,
               error: null,
@@ -641,17 +760,37 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       async selectSong(songId) {
+        const current = get();
+        const cached = current.details.bySongId.get(songId);
+        if (
+          current.library.selectedSongId === songId &&
+          cached &&
+          (cached.state === 'ready' || cached.state === 'loading')
+        ) {
+          return;
+        }
         detailRequestToken += 1;
         prepareRequestEpoch += 1;
         const token = detailRequestToken;
-        const requestGeneration = get().library.generation;
+        const requestGeneration = current.library.generation;
         const currentPlayback = get().playback;
         const sessionIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(
           currentPlayback.state,
         );
+        const detail =
+          cached ??
+          ({
+            state: 'loading',
+            value: null,
+            error: null,
+          } satisfies DetailEntry);
         set({
-          library: { ...get().library, selectedSongId: songId },
-          detail: { state: 'loading', value: null, error: null },
+          library: { ...current.library, selectedSongId: songId },
+          details: {
+            bySongId: cached
+              ? cacheDetail(current.details.bySongId, songId, cached)
+              : cacheDetail(current.details.bySongId, songId, detail),
+          },
           playback: {
             ...currentPlayback,
             prepared: null,
@@ -659,17 +798,28 @@ export function createDesktopStore(bridge: DesktopBridge) {
             error: null,
           },
         });
+        if (cached && cached.state !== 'loading') return;
         try {
           const request = { songId } as { songId: string; generation?: number };
           if (requestGeneration > 0) request.generation = requestGeneration;
           const value = await bridge.getSongDetail(request);
           if (token !== detailRequestToken) return;
           if (get().library.generation !== requestGeneration) return;
-          set({ detail: { state: 'ready', value, error: null } });
+          const nextDetail = { state: 'ready' as const, value, error: null };
+          set({
+            details: {
+              bySongId: cacheDetail(get().details.bySongId, songId, nextDetail),
+            },
+          });
         } catch (error) {
           if (token !== detailRequestToken) return;
           const message = error instanceof Error ? error.message : String(error);
-          set({ detail: { state: 'fatal', value: null, error: message } });
+          const nextDetail = { state: 'fatal' as const, value: null, error: message };
+          set({
+            details: {
+              bySongId: cacheDetail(get().details.bySongId, songId, nextDetail),
+            },
+          });
         }
       },
 
@@ -677,24 +827,122 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const library = get().library;
         set({ library: { ...library, visibleRange: { first, last } } });
         if (library.generation === 0 || first > last) return;
-        void ensureRange(first, last, library.searchRequestGeneration);
-
-        // The native viewport contract is expressed in full-catalog indices. A
-        // filtered result has its own index space, so sending those indices as
-        // metadata-priority hints would select unrelated songs. Paging still
-        // loads the filtered window above; only an unfiltered view sends the
-        // full-catalog hint.
-        if (library.query.trim() !== '') return;
+        await ensureRange(first, last, library.searchRequestGeneration);
+        const current = get().library;
+        if (
+          current.searchRequestGeneration !== library.searchRequestGeneration ||
+          current.generation !== library.generation
+        ) {
+          return;
+        }
+        const songIds: string[] = [];
+        for (let index = Math.max(0, first); index <= Math.max(0, last); index += 1) {
+          const row = selectRowAtIndex(current, index);
+          if (row) songIds.push(row.song_id);
+        }
         try {
-          await bridge.setLibraryViewport({
-            generation: library.generation,
+          const result = await bridge.setLibraryViewport({
+            generation: current.generation,
             firstIndex: first,
             lastIndex: last,
-            selectedSongId: library.selectedSongId,
+            selectedSongId: current.selectedSongId,
+            songIds,
+          });
+          if (result.generation !== get().library.generation) return;
+          if (result.items.length === 0) return;
+          const latest = get().library;
+          const cachedPages = pageCache.get(
+            cacheKey(latest.source, latest.query, latest.generation),
+          );
+          if (cachedPages) {
+            const updatesByPage = new Map<number, SongRow[]>();
+            for (const row of result.items) {
+              const index = latest.indexById.get(row.song_id);
+              if (index === undefined) continue;
+              const offset = Math.floor(index / pageSize) * pageSize;
+              let items = updatesByPage.get(offset);
+              if (!items) {
+                const cached = cachedPages.get(offset);
+                if (!cached) continue;
+                items = [...cached.items];
+                updatesByPage.set(offset, items);
+              }
+              items[index - offset] = row;
+            }
+            for (const [offset, items] of updatesByPage) {
+              const cached = cachedPages.get(offset);
+              if (cached) cached.items = items;
+            }
+          }
+          set({
+            library: updateLoadedRows(latest, result.items),
           });
         } catch {
-          // Viewport hints are best effort. A catalog.changed event will trigger
-          // a fresh search and establish the next generation.
+          // Metadata hydration is best effort for a moving viewport. A later
+          // viewport event retries the bounded request without blocking rows.
+        }
+      },
+
+      async selectLibrarySource(source) {
+        if (sourceKey(get().library.source) !== sourceKey(source)) {
+          detailRequestToken += 1;
+          prepareRequestEpoch += 1;
+          set({
+            library: { ...get().library, selectedSongId: null },
+            details: { bySongId: new Map() },
+            playback: { ...get().playback, prepared: null },
+          });
+        }
+        await get().search('', source);
+      },
+
+      async setSongLiked(songId, liked) {
+        const current = get().library;
+        const previous = selectSongById(current, songId);
+        if (!previous) return;
+        const optimistic = { ...previous, liked };
+        const likedDelta = previous.liked === liked ? 0 : liked ? 1 : -1;
+        pageCache.clear();
+        set({
+          library: {
+            ...updateLoadedRows(current, [optimistic]),
+            likedTotal: Math.max(0, current.likedTotal + likedDelta),
+          },
+        });
+        const generation = current.generation > 0 ? current.generation : undefined;
+        try {
+          const result = await bridge.setSongLiked({
+            songId,
+            liked,
+            ...(generation === undefined ? {} : { generation }),
+          });
+          const library = get().library;
+          set({
+            library: {
+              ...library,
+              likedTotal: result.total,
+            },
+          });
+          if (library.source.kind === 'smart' && library.source.id === 'liked') {
+            await get().search();
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const latest = get().library;
+          const row = selectSongById(latest, songId);
+          const shouldRollback = row?.liked === liked;
+          const rollback = shouldRollback
+            ? updateLoadedRows(latest, [{ ...previous, liked: !liked }])
+            : latest;
+          set({
+            library: {
+              ...rollback,
+              likedTotal: shouldRollback
+                ? Math.max(0, latest.likedTotal - likedDelta)
+                : rollback.likedTotal,
+            },
+          });
+          set({ library: { ...get().library, error: message } });
         }
       },
 
@@ -986,10 +1234,41 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
-      setDiagnosticsOpen(open) {
-        if (get().diagnostics.open === open) return;
-        set({ diagnostics: { ...get().diagnostics, open } });
-        void get().setDiagnosticsEnabled(open);
+      openUtility(view) {
+        set({ utility: { open: true, activeView: view } });
+        if (view === 'diagnostics' && !get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(true);
+        } else if (view === 'details' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
+      },
+
+      closeUtility() {
+        const activeView = get().utility.activeView;
+        set({ utility: { ...get().utility, open: false } });
+        if (activeView === 'diagnostics' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
+      },
+
+      toggleUtility() {
+        const utility = get().utility;
+        if (utility.open) {
+          get().closeUtility();
+          return;
+        }
+        get().openUtility(utility.activeView);
+      },
+
+      setUtilityView(view) {
+        const current = get().utility;
+        if (current.activeView === view) return;
+        set({ utility: { ...current, activeView: view } });
+        if (view === 'diagnostics' && !get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(true);
+        } else if (view === 'details' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
       },
 
       async startCalibration(mode = 'quick') {

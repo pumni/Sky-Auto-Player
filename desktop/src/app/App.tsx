@@ -2,26 +2,25 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { BootstrapGate } from './BootstrapGate';
 import { SettingsPanel } from '../components/settings/SettingsPanel';
-import { Toolbar } from '../components/shell/Toolbar';
+import { AppTitleBar } from '../components/chrome/AppTitleBar';
 import { PlayerBar } from '../components/player/PlayerBar';
 import { Workbench } from '../components/workbench/Workbench';
 import { CalibrationDialog } from '../components/calibration/CalibrationDialog';
 import { UpdateDialog } from '../components/updates/UpdateDialog';
 import { createDesktopStore } from '../state/store';
+import { createWindowControls } from '../platform/windowControls';
 
 interface AppProps {
   bridge: DesktopBridge;
 }
 
 export function App({ bridge }: AppProps) {
-  const storeRef = useRef<ReturnType<typeof createDesktopStore> | null>(null);
-  const diagnosticsTriggerRef = useRef<HTMLButtonElement>(null);
-  const useStore = useMemo(() => {
-    if (storeRef.current === null) storeRef.current = createDesktopStore(bridge);
-    return storeRef.current;
-  }, [bridge]);
+  const utilityTriggerRef = useRef<HTMLButtonElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const useStore = useMemo(() => createDesktopStore(bridge), [bridge]);
   const bootstrap = useStore((store) => store.bootstrap);
   const settingsOpen = useStore((store) => store.settingsOpen);
+  const windowControls = useMemo(() => createWindowControls(), []);
 
   useEffect(() => {
     void useStore.getState().initialize();
@@ -79,6 +78,7 @@ export function App({ bridge }: AppProps) {
         query: '',
         offset: 0,
         limit: 200,
+        source: { kind: 'smart', id: 'all' },
         ...(generation > 0 ? { generation } : {}),
       });
       if (
@@ -219,10 +219,19 @@ export function App({ bridge }: AppProps) {
     <BootstrapGate useStore={useStore}>
       {bootstrap && (
         <div className="app-shell">
-          <Toolbar bootstrap={bootstrap} useStore={useStore} />
-          <Workbench useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
-          <PlayerBar useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
-          <SettingsPanel bootstrap={bootstrap} useStore={useStore} />
+          <AppTitleBar
+            bootstrap={bootstrap}
+            useStore={useStore}
+            settingsTriggerRef={settingsTriggerRef}
+            windowControls={windowControls}
+          />
+          <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+          <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+          <SettingsPanel
+            bootstrap={bootstrap}
+            useStore={useStore}
+            settingsTriggerRef={settingsTriggerRef}
+          />
           <CalibrationDialog useStore={useStore} />
           <UpdateDialog useStore={useStore} />
         </div>

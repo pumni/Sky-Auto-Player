@@ -1,14 +1,14 @@
 import eslint from '@eslint/js';
+import babelParser from '@babel/eslint-parser';
+import reactHooks from 'eslint-plugin-react-hooks';
 
-// TypeScript 7 is the locked frontend baseline. typescript-eslint currently
-// rejects TS 7, so tsc is the authoritative TypeScript gate; ESLint keeps
-// validating the executable config surface and ignores TS source explicitly.
 export default [
-  eslint.configs.recommended,
+  {
+    ...eslint.configs.recommended,
+    files: ['**/*.{js,mjs,cjs}'],
+  },
   {
     ignores: [
-      '**/*.ts',
-      '**/*.tsx',
       'dist/**',
       'src-tauri/**',
       'node_modules/**',
@@ -23,5 +23,21 @@ export default [
         fetch: 'readonly',
       },
     },
+  },
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    languageOptions: {
+      parser: babelParser,
+      parserOptions: {
+        requireConfigFile: false,
+        babelOptions: {
+          presets: [
+            ['@babel/preset-typescript', { ignoreExtensions: true }],
+            ['@babel/preset-react', { runtime: 'automatic' }],
+          ],
+        },
+      },
+    },
+    ...reactHooks.configs.flat.recommended,
   },
 ];

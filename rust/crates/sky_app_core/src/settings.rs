@@ -4,6 +4,7 @@
 //! persisted `config.json` layout, legacy migration, and atomic file swap stay
 //! in an outer adapter so raw storage never becomes the domain model.
 
+use crate::library::{LibraryError, LikedSongs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -139,6 +140,11 @@ pub struct ApplicationSettings {
     pub hotkeys: HotkeySettings,
     pub safety: SafetySettings,
     pub update: UpdatePreferences,
+    // The durable JSON schema stores this collection as `liked_song_ids`.
+    // Keep the domain aggregate out of the generic settings representation so
+    // adapters remain responsible for the storage projection.
+    #[serde(skip)]
+    pub liked_songs: LikedSongs,
 }
 
 impl Default for ApplicationSettings {
@@ -155,6 +161,7 @@ impl Default for ApplicationSettings {
             hotkeys: HotkeySettings::default(),
             safety: SafetySettings::default(),
             update: UpdatePreferences::default(),
+            liked_songs: LikedSongs::default(),
         }
     }
 }
@@ -211,6 +218,22 @@ impl<S: SettingsStore> SettingsService<S> {
 
     pub fn snapshot(&self) -> &ApplicationSettings {
         &self.current
+    }
+
+    pub fn set_song_liked(&mut self, song_id: &str, liked: bool) -> Result<bool, SettingsError> {
+        let mut next = self.current.clone();
+        let changed = next
+            .liked_songs
+            .set(song_id, liked)
+            .map_err(|error: LibraryError| SettingsError::InvalidField {
+                field: "song_id".into(),
+                message: error.to_string(),
+            })?;
+        if changed {
+            self.store.save(&next)?;
+            self.current = next;
+        }
+        Ok(changed)
     }
 
     pub fn reload(&mut self) -> Result<&ApplicationSettings, SettingsError> {

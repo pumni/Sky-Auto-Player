@@ -1,61 +1,90 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
-import { DiagnosticsPanel } from '../diagnostics/DiagnosticsPanel';
-import { LibraryPanel } from '../library/LibraryPanel';
-import { SongInspector } from '../inspector/SongInspector';
+import { LibraryNavigator } from '../library/LibraryNavigator';
+import { TrackBrowser } from '../tracks/TrackBrowser';
+import { UtilityPane } from '../utility/UtilityPane';
 import { ResizableSeparator } from './ResizableSeparator';
 import { useWorkbenchLayout } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
+  utilityTriggerRef: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
-  diagnosticsTriggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
-function useViewportWidth(): number {
+function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(() => window.innerWidth);
   useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    const workbench = workbenchRef.current;
+    if (!workbench) return undefined;
+
+    const update = () => {
+      const measuredWidth = Math.floor(workbench.getBoundingClientRect().width);
+      setWidth(measuredWidth > 0 ? measuredWidth : window.innerWidth);
+    };
+    update();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(update);
+      observer.observe(workbench);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [workbenchRef]);
   return width;
 }
 
-export function Workbench({ useStore, diagnosticsTriggerRef }: WorkbenchProps) {
-  const viewportWidth = useViewportWidth();
-  const diagnosticsOpen = useStore((store) => store.diagnostics.open);
-  const utilityVisible = diagnosticsOpen && viewportWidth >= 1280;
-  const layout = useWorkbenchLayout(viewportWidth, utilityVisible);
+export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
+  const workbenchRef = useRef<HTMLElement>(null);
+  const viewportWidth = useWorkbenchWidth(workbenchRef);
+  const utility = useStore((store) => store.utility);
+  const layout = useWorkbenchLayout(viewportWidth, utility.open);
 
   return (
-    <main className={`workbench${utilityVisible ? ' has-utility' : ''}`}>
+    <main
+      ref={workbenchRef}
+      className={`workbench${utility.open ? ' has-utility' : ''}`}
+      aria-label="Music sheet workbench"
+      data-layout-fits={layout.geometry.fits ? 'true' : 'false'}
+    >
       <WorkbenchPane
-        className="library-workbench-pane"
-        style={{ flex: `0 0 ${layout.libraryWidth}px` }}
+        className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}
+        style={{ flex: `0 0 ${layout.navigatorWidth}px` }}
       >
-        <LibraryPanel useStore={useStore} />
+        <LibraryNavigator
+          collapsed={layout.navigatorCollapsed}
+          onToggleCollapsed={() =>
+            layout.setNavigatorPreference(
+              layout.navigatorCollapsed ? 'expanded' : 'collapsed',
+              true,
+            )
+          }
+          useStore={useStore}
+        />
       </WorkbenchPane>
       <ResizableSeparator
-        label="Resize library pane"
-        value={layout.libraryWidth}
-        min={280}
-        max={layout.libraryMax}
-        defaultValue={344}
-        onChange={(value) => layout.setLibraryWidth(value)}
-        onCommit={(value) => layout.setLibraryWidth(value, true)}
+        label="Resize library navigator"
+        value={layout.navigatorWidth}
+        min={layout.navigatorCollapsed ? layout.navigatorWidth : 220}
+        max={layout.navigatorMax}
+        defaultValue={260}
+        disabled={layout.navigatorCollapsed}
+        onChange={(value) => layout.setNavigatorWidth(value)}
+        onCommit={(value) => layout.setNavigatorWidth(value, true)}
       />
-      <WorkbenchPane className="inspector-workbench-pane">
-        <SongInspector useStore={useStore} />
+      <WorkbenchPane className="track-browser-workbench-pane">
+        <TrackBrowser useStore={useStore} />
       </WorkbenchPane>
-      {utilityVisible && (
+      {utility.open && (
         <>
           <ResizableSeparator
-            label="Resize diagnostics pane"
+            label="Resize utility pane"
             value={layout.utilityWidth}
-            min={300}
-            max={480}
-            defaultValue={340}
+            min={Math.min(320, layout.utilityWidth)}
+            max={layout.utilityWidthMax}
+            defaultValue={360}
             direction={-1}
             onChange={(value) => layout.setUtilityWidth(value)}
             onCommit={(value) => layout.setUtilityWidth(value, true)}
@@ -64,16 +93,9 @@ export function Workbench({ useStore, diagnosticsTriggerRef }: WorkbenchProps) {
             className="utility-workbench-pane"
             style={{ flex: `0 0 ${layout.utilityWidth}px` }}
           >
-            <DiagnosticsPanel useStore={useStore} mode="pane" />
+            <UtilityPane useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
           </WorkbenchPane>
         </>
-      )}
-      {diagnosticsOpen && !utilityVisible && (
-        <DiagnosticsPanel
-          useStore={useStore}
-          mode="overlay"
-          {...(diagnosticsTriggerRef ? { restoreFocusRef: diagnosticsTriggerRef } : {})}
-        />
       )}
     </main>
   );

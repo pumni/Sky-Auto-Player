@@ -1,0 +1,177 @@
+.track-table {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.track-table-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 32px 72px 76px;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  padding-inline: 18px;
+}
+
+.track-table-frame {
+  position: relative;
+  min-width: 0;
+  min-height: 100%;
+  margin-inline: 8px;
+}
+
+.track-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 36px;
+  color: var(--text-tertiary);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding-inline: 18px;
+}
+
+.track-table-virtual-inner {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
+.track-row {
+  position: absolute;
+  inset-inline: 0;
+  height: 46px;
+  padding-inline: 18px;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.track-row:hover {
+  background: var(--surface-hover);
+}
+
+.track-row.is-selected {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--surface-selected);
+}
+
+.track-cell {
+  min-width: 0;
+}
+
+.track-cell-index,
+.track-cell-notes,
+.track-cell-duration {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.track-cell-index {
+  text-align: center;
+}
+
+.track-cell-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-cell-notes,
+.track-cell-duration {
+  text-align: right;
+}
+
+.track-cell-liked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.track-metadata-status {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.track-metadata-status.is-error {
+  font-size: 11px;
+}
+
+.track-like-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  background: transparent;
+  opacity: 0;
+}
+
+.track-like-button:hover,
+.track-like-button:focus-visible {
+  color: var(--accent);
+  background: var(--surface-hover);
+  opacity: 1;
+}
+
+.track-like-button.is-liked {
+  color: var(--accent);
+  background: transparent;
+  opacity: 1;
+}
+
+.track-row:hover .track-like-button,
+.track-row:focus-within .track-like-button {
+  opacity: 1;
+}
+
+.track-row-placeholder {
+  color: var(--text-tertiary);
+  cursor: default;
+  opacity: 0.7;
+}
+
+@media (max-width: 1040px) {
+  .track-table-row {
+    grid-template-columns: 32px minmax(0, 1fr) 32px 76px;
+    padding-inline: 12px;
+  }
+
+  .track-table-header {
+    padding-inline: 12px;
+  }
+
+  .track-cell-notes {
+    display: none;
+  }
+
+  .track-cell-liked {
+    grid-column: 3;
+  }
+}
+
+@media (forced-colors: active) {
+  .track-row.is-selected {
+    border-left-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .track-row:focus-visible,
+  .track-table:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

@@ -9,6 +9,8 @@ mod native_update;
 mod startup_guard;
 mod ui_events;
 #[cfg(windows)]
+mod windows_caption;
+#[cfg(windows)]
 mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
@@ -111,6 +113,7 @@ fn run_inner(gui_smoke: bool) {
         record_gui_smoke_phase("tauri.builder.create");
     }
     let mut builder = tauri::Builder::<ShellRuntime>::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(move |app| {
             #[cfg(windows)]
@@ -121,6 +124,11 @@ fn run_inner(gui_smoke: bool) {
                     && let Err(error) = windows_icon::apply_native_window_icons(&window)
                 {
                     eprintln!("failed to apply native Windows icons: {error}");
+                }
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_caption::install(&window)
+                {
+                    eprintln!("failed to install native maximize hit target: {error}");
                 }
             }
             if gui_smoke {
@@ -176,6 +184,16 @@ fn run_inner(gui_smoke: bool) {
             commands::get_song_detail,
             commands::reload_library,
             commands::set_library_viewport,
+            commands::set_song_liked,
+            commands::library_list_collections,
+            commands::library_create_collection,
+            commands::library_rename_collection,
+            commands::library_delete_collection,
+            commands::library_add_songs,
+            commands::library_remove_songs,
+            commands::library_import_local_files,
+            commands::library_import_local_folder,
+            commands::library_remove_import,
             commands::get_settings,
             commands::patch_settings,
             commands::check_for_update,
@@ -207,6 +225,9 @@ fn run_inner(gui_smoke: bool) {
             }
             #[cfg(windows)]
             tauri::WindowEvent::Destroyed => {
+                if let Err(error) = windows_caption::uninstall_window(window) {
+                    eprintln!("failed to remove native maximize hit target: {error}");
+                }
                 windows_icon::release_native_window_icons(window);
             }
             _ => {}

@@ -10,11 +10,18 @@ import type {
   CalibrationStartRequest,
   CalibrationState,
   CatalogDetailRequest,
+  CatalogSetLikedDto,
+  CatalogSetLikedRequest,
   CatalogRowDto,
   CatalogSearchDto,
   CatalogSearchRequest,
   CatalogViewportDto,
   CatalogViewportRequest,
+  LibraryCollectionDto,
+  LibraryCollectionsDto,
+  LibraryImportedSourceDto,
+  LibraryImportDto,
+  LibrarySource as GeneratedLibrarySource,
   DiagnosticsBackendStatus,
   DiagnosticsEnabledDto,
   DiagnosticsSetEnabledRequest,
@@ -76,11 +83,19 @@ export type SearchResult = Omit<CatalogSearchDto, 'items'> & { items: SongRow[] 
 export type DetailRequest = Omit<CatalogDetailRequest, 'generation'> & {
   generation?: number;
 };
+export type SetSongLikedRequest = Omit<CatalogSetLikedRequest, 'generation'> & {
+  generation?: number;
+};
 export type RiskSummary = Omit<RiskSummaryDto, 'level'> & { level: RiskLevel };
 export type PlaybackRecommendation = PlaybackRecommendationDto;
 export type SongDetail = Omit<SongDetailDto, 'risk'> & { risk: RiskSummary };
 export type ViewportRequest = CatalogViewportRequest;
-export type ViewportResult = CatalogViewportDto;
+export type ViewportResult = Omit<CatalogViewportDto, 'items'> & { items: SongRow[] };
+export type LibrarySource = GeneratedLibrarySource;
+export type LibraryCollection = LibraryCollectionDto;
+export type LibraryCollections = LibraryCollectionsDto;
+export type LibraryImportedSource = LibraryImportedSourceDto;
+export type LibraryImport = LibraryImportDto;
 export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   theme: ThemeId;
   update_preferences: UpdatePreferences;
@@ -146,6 +161,16 @@ export interface DesktopBridge {
   getSongDetail(request: DetailRequest): Promise<SongDetail>;
   reloadLibrary(): Promise<{ generation: number; total: number }>;
   setLibraryViewport(request: ViewportRequest): Promise<ViewportResult>;
+  setSongLiked(request: SetSongLikedRequest): Promise<CatalogSetLikedDto>;
+  listCollections(): Promise<LibraryCollections>;
+  createCollection(name: string): Promise<LibraryCollection>;
+  renameCollection(collectionId: string, name: string): Promise<LibraryCollection>;
+  deleteCollection(collectionId: string): Promise<boolean>;
+  addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection>;
+  removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection>;
+  importLocalFiles(): Promise<LibraryImport>;
+  importLocalFolder(): Promise<LibraryImport>;
+  removeImport(sourceId: string): Promise<LibraryImport>;
   getSettings(): Promise<Settings>;
   patchSettings(patch: SettingsPatch): Promise<Settings>;
   checkForUpdate(): Promise<UpdateCheck>;

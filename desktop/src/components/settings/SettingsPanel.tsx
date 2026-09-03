@@ -1,15 +1,17 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 
 interface SettingsPanelProps {
   bootstrap: Bootstrap;
+  settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
 }
 
-type SettingsCategory = 'playback' | 'appearance' | 'diagnostics' | 'updates' | 'advanced';
+type SettingsCategory =
+  'playback' | 'appearance' | 'diagnostics' | 'updates' | 'advanced' | 'about';
 
 const categories: Array<{ id: SettingsCategory; label: string }> = [
   { id: 'playback', label: 'Playback' },
@@ -17,6 +19,7 @@ const categories: Array<{ id: SettingsCategory; label: string }> = [
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'updates', label: 'Updates' },
   { id: 'advanced', label: 'Advanced' },
+  { id: 'about', label: 'About' },
 ];
 
 const themes: Array<{ id: ThemeId; label: string }> = [
@@ -27,7 +30,7 @@ const themes: Array<{ id: ThemeId; label: string }> = [
   { id: 'classic', label: 'Classic' },
 ];
 
-export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
+export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: SettingsPanelProps) {
   const settings = useStore((store: StoreState) => store.settings);
   const open = useStore((store: StoreState) => store.settingsOpen);
   const setOpen = useStore((store: StoreState) => store.setSettingsOpen);
@@ -42,13 +45,19 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
   useEffect(() => {
     if (open) {
       wasOpen.current = true;
-      setCategory('playback');
       dialogRef.current?.focus();
     } else if (wasOpen.current) {
       wasOpen.current = false;
-      document.querySelector<HTMLElement>('[aria-label="Open settings"]')?.focus();
+      window.setTimeout(
+        () =>
+          (
+            settingsTriggerRef?.current ??
+            document.querySelector<HTMLElement>('[aria-label="Open settings"]')
+          )?.focus(),
+        0,
+      );
     }
-  }, [open]);
+  }, [open, settingsTriggerRef]);
 
   if (!open || !settings) return null;
 
@@ -259,6 +268,41 @@ export function SettingsPanel({ bootstrap, useStore }: SettingsPanelProps) {
                       Open calibration
                     </button>
                   </div>
+                </section>
+              )}
+
+              {category === 'about' && (
+                <section className="settings-section" aria-labelledby="about-settings-title">
+                  <h3 id="about-settings-title">About Sky Auto Player</h3>
+                  <p className="about-intro">
+                    A focused Windows workbench for preparing and playing Sky music sheets.
+                  </p>
+                  <dl className="about-details">
+                    <div>
+                      <dt>Version</dt>
+                      <dd>{bootstrap.app_version}</dd>
+                    </div>
+                    <div>
+                      <dt>Native version</dt>
+                      <dd>{bootstrap.native_build.native_version}</dd>
+                    </div>
+                    <div>
+                      <dt>Build commit</dt>
+                      <dd>{bootstrap.native_build.native_build_commit}</dd>
+                    </div>
+                    <div>
+                      <dt>Native ABI</dt>
+                      <dd>{bootstrap.native_build.native_abi}</dd>
+                    </div>
+                    <div>
+                      <dt>Rust</dt>
+                      <dd>{bootstrap.native_build.rustc_version}</dd>
+                    </div>
+                    <div>
+                      <dt>Win32 backend</dt>
+                      <dd>{bootstrap.native_build.win32_backend ? 'Enabled' : 'Disabled'}</dd>
+                    </div>
+                  </dl>
                 </section>
               )}
             </div>

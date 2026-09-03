@@ -1,27 +1,93 @@
 import { useEffect, useRef, useState } from 'react';
 
-export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v1';
-export const MIN_LIBRARY_WIDTH = 280;
-export const DEFAULT_LIBRARY_WIDTH = 344;
-export const MAX_LIBRARY_WIDTH = 520;
-export const MIN_UTILITY_WIDTH = 300;
-export const DEFAULT_UTILITY_WIDTH = 340;
+export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v3';
+export const LEGACY_WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v2';
+export const LEGACY_WORKBENCH_V1_STORAGE_KEY = 'sky.ui.workbench.v1';
+export const MIN_NAVIGATOR_WIDTH = 220;
+export const COMPACT_NAVIGATOR_WIDTH = 72;
+export const DEFAULT_NAVIGATOR_WIDTH = 260;
+export const MAX_NAVIGATOR_WIDTH = 360;
+export const MIN_UTILITY_WIDTH = 320;
+export const DEFAULT_UTILITY_WIDTH = 360;
 export const MAX_UTILITY_WIDTH = 480;
-const MIN_INSPECTOR_WIDTH = 360;
-const WORKBENCH_GUTTER = 8;
+export const MIN_TRACK_BROWSER_WIDTH = 480;
+export const WORKBENCH_GUTTER = 8;
+export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
 
-export interface WorkbenchLayoutState {
-  libraryWidth: number;
+interface WorkbenchGeometryInput {
+  viewportWidth: number;
+  navigatorWidth: number;
   utilityWidth: number;
-  utilityOpen: boolean;
-  version: 1;
 }
 
-export function getLibraryWidthMax(viewportWidth: number, utilityWidth = 0): number {
-  const utilitySpace = utilityWidth > 0 ? utilityWidth + WORKBENCH_GUTTER : 0;
-  const fixedWorkspaceSpace = MIN_INSPECTOR_WIDTH + WORKBENCH_GUTTER * 3;
-  const availableForLibrary = viewportWidth - fixedWorkspaceSpace - utilitySpace;
-  return Math.max(MIN_LIBRARY_WIDTH, Math.min(MAX_LIBRARY_WIDTH, availableForLibrary));
+export interface WorkbenchGeometry {
+  availableWidth: number;
+  outerInlinePadding: number;
+  separatorSpace: number;
+  navigatorWidth: number;
+  trackBrowserWidth: number;
+  utilityWidth: number;
+  fits: boolean;
+}
+
+export type NavigatorPreference = 'expanded' | 'collapsed';
+
+export interface WorkbenchLayoutStateV3 {
+  version: 3;
+  navigatorPreference: NavigatorPreference;
+  expandedNavigatorWidth: number;
+  utilityWidth: number;
+}
+
+function availableNavigatorWidth(viewportWidth: number, utilityWidth: number): number {
+  const separatorSpace = utilityWidth > 0 ? WORKBENCH_GUTTER * 2 : WORKBENCH_GUTTER;
+  return Math.floor(
+    viewportWidth - OUTER_INLINE_PADDING - separatorSpace - utilityWidth - MIN_TRACK_BROWSER_WIDTH,
+  );
+}
+
+export function getNavigatorWidthMax(viewportWidth: number, utilityWidth = 0): number {
+  return Math.max(
+    MIN_NAVIGATOR_WIDTH,
+    Math.min(MAX_NAVIGATOR_WIDTH, availableNavigatorWidth(viewportWidth, utilityWidth)),
+  );
+}
+
+export function getUtilityWidthMax(viewportWidth: number): number {
+  const available =
+    viewportWidth -
+    OUTER_INLINE_PADDING -
+    WORKBENCH_GUTTER * 2 -
+    COMPACT_NAVIGATOR_WIDTH -
+    MIN_TRACK_BROWSER_WIDTH;
+  return Math.min(MAX_UTILITY_WIDTH, Math.max(0, Math.floor(available)));
+}
+
+export function getUtilityWidthMin(viewportWidth: number): number {
+  return Math.min(MIN_UTILITY_WIDTH, getUtilityWidthMax(viewportWidth));
+}
+
+export function solveWorkbenchGeometry({
+  viewportWidth,
+  navigatorWidth,
+  utilityWidth,
+}: WorkbenchGeometryInput): WorkbenchGeometry {
+  const availableWidth = Math.max(0, Math.floor(viewportWidth));
+  const separatorSpace = utilityWidth > 0 ? WORKBENCH_GUTTER * 2 : WORKBENCH_GUTTER;
+  const trackBrowserWidth =
+    availableWidth - OUTER_INLINE_PADDING - navigatorWidth - separatorSpace - utilityWidth;
+  const occupiedWidth =
+    OUTER_INLINE_PADDING + navigatorWidth + separatorSpace + trackBrowserWidth + utilityWidth;
+
+  return {
+    availableWidth,
+    outerInlinePadding: OUTER_INLINE_PADDING,
+    separatorSpace,
+    navigatorWidth,
+    trackBrowserWidth,
+    utilityWidth,
+    fits: occupiedWidth <= availableWidth && trackBrowserWidth >= MIN_TRACK_BROWSER_WIDTH,
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -29,17 +95,18 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizedLayout(
-  candidate: Partial<WorkbenchLayoutState> | null | undefined,
-  libraryMax = MAX_LIBRARY_WIDTH,
-): WorkbenchLayoutState {
+  candidate: Partial<WorkbenchLayoutStateV3> | null | undefined,
+): WorkbenchLayoutStateV3 {
   return {
-    version: 1,
-    libraryWidth: clamp(
-      typeof candidate?.libraryWidth === 'number' && Number.isFinite(candidate.libraryWidth)
-        ? candidate.libraryWidth
-        : DEFAULT_LIBRARY_WIDTH,
-      MIN_LIBRARY_WIDTH,
-      libraryMax,
+    version: 3,
+    navigatorPreference: candidate?.navigatorPreference === 'collapsed' ? 'collapsed' : 'expanded',
+    expandedNavigatorWidth: clamp(
+      typeof candidate?.expandedNavigatorWidth === 'number' &&
+        Number.isFinite(candidate.expandedNavigatorWidth)
+        ? candidate.expandedNavigatorWidth
+        : DEFAULT_NAVIGATOR_WIDTH,
+      MIN_NAVIGATOR_WIDTH,
+      MAX_NAVIGATOR_WIDTH,
     ),
     utilityWidth: clamp(
       typeof candidate?.utilityWidth === 'number' && Number.isFinite(candidate.utilityWidth)
@@ -48,7 +115,6 @@ function normalizedLayout(
       MIN_UTILITY_WIDTH,
       MAX_UTILITY_WIDTH,
     ),
-    utilityOpen: candidate?.utilityOpen === true,
   };
 }
 
@@ -60,21 +126,41 @@ function storage(): Storage | null {
   }
 }
 
-export function loadWorkbenchLayout(libraryMax = MAX_LIBRARY_WIDTH): WorkbenchLayoutState {
+function readObject(key: string): Record<string, unknown> | null {
   try {
-    const raw = storage()?.getItem(WORKBENCH_STORAGE_KEY);
-    if (!raw) return normalizedLayout(null, libraryMax);
+    const raw = storage()?.getItem(key);
+    if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || (parsed as { version?: unknown }).version !== 1) {
-      return normalizedLayout(null, libraryMax);
-    }
-    return normalizedLayout(parsed as Partial<WorkbenchLayoutState>, libraryMax);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return normalizedLayout(null, libraryMax);
+    return null;
   }
 }
 
-function persistWorkbenchLayout(layout: WorkbenchLayoutState): void {
+export function loadWorkbenchLayout(): WorkbenchLayoutStateV3 {
+  const current = readObject(WORKBENCH_STORAGE_KEY);
+  if (current?.version === 3) return normalizedLayout(current as Partial<WorkbenchLayoutStateV3>);
+
+  const legacyV2 = readObject(LEGACY_WORKBENCH_STORAGE_KEY);
+  if (legacyV2?.version === 2) {
+    return normalizedLayout({
+      expandedNavigatorWidth: legacyV2.navigatorWidth as number,
+      utilityWidth: legacyV2.utilityWidth as number,
+    });
+  }
+
+  const legacyV1 = readObject(LEGACY_WORKBENCH_V1_STORAGE_KEY);
+  if (legacyV1?.version === 1) {
+    return normalizedLayout({
+      expandedNavigatorWidth: legacyV1.libraryWidth as number,
+      utilityWidth: legacyV1.utilityWidth as number,
+    });
+  }
+
+  return normalizedLayout(null);
+}
+
+function persistWorkbenchLayout(layout: WorkbenchLayoutStateV3): void {
   try {
     storage()?.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(layout));
   } catch {
@@ -82,25 +168,33 @@ function persistWorkbenchLayout(layout: WorkbenchLayoutState): void {
   }
 }
 
-export function useWorkbenchLayout(viewportWidth: number, utilityVisible = false) {
-  const [layout, setLayout] = useState<WorkbenchLayoutState>(() =>
-    loadWorkbenchLayout(getLibraryWidthMax(viewportWidth)),
-  );
-  const libraryMax = getLibraryWidthMax(viewportWidth, utilityVisible ? layout.utilityWidth : 0);
+export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
+  const [layout, setLayout] = useState<WorkbenchLayoutStateV3>(() => loadWorkbenchLayout());
   const layoutRef = useRef(layout);
 
   useEffect(() => {
     layoutRef.current = layout;
   }, [layout]);
 
-  useEffect(() => {
-    const next = normalizedLayout(layoutRef.current, libraryMax);
-    layoutRef.current = next;
-    setLayout(next);
-  }, [libraryMax]);
+  const utilityWidthMax = getUtilityWidthMax(viewportWidth);
+  const effectiveUtilityWidth = utilityOpen
+    ? clamp(layout.utilityWidth, getUtilityWidthMin(viewportWidth), utilityWidthMax)
+    : 0;
+  const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth);
+  const navigatorCollapsed =
+    layout.navigatorPreference === 'collapsed' ||
+    availableNavigatorWidth(viewportWidth, effectiveUtilityWidth) < MIN_NAVIGATOR_WIDTH;
+  const navigatorWidth = navigatorCollapsed
+    ? COMPACT_NAVIGATOR_WIDTH
+    : clamp(layout.expandedNavigatorWidth, MIN_NAVIGATOR_WIDTH, navigatorMax);
+  const geometry = solveWorkbenchGeometry({
+    viewportWidth,
+    navigatorWidth,
+    utilityWidth: effectiveUtilityWidth,
+  });
 
-  const update = (patch: Partial<WorkbenchLayoutState>, persist = false) => {
-    const next = normalizedLayout({ ...layoutRef.current, ...patch }, libraryMax);
+  const update = (patch: Partial<WorkbenchLayoutStateV3>, persist = false) => {
+    const next = normalizedLayout({ ...layoutRef.current, ...patch });
     layoutRef.current = next;
     setLayout(next);
     if (persist) persistWorkbenchLayout(next);
@@ -108,10 +202,21 @@ export function useWorkbenchLayout(viewportWidth: number, utilityVisible = false
 
   return {
     ...layout,
-    libraryMax,
-    setLibraryWidth: (width: number, persist = false) => update({ libraryWidth: width }, persist),
+    navigatorWidth,
+    navigatorMax,
+    navigatorCollapsed,
+    utilityWidth: effectiveUtilityWidth,
+    utilityWidthMax,
+    geometry,
+    setNavigatorWidth: (width: number, persist = false) =>
+      update({ expandedNavigatorWidth: width, navigatorPreference: 'expanded' }, persist),
+    setNavigatorPreference: (preference: NavigatorPreference, persist = false) =>
+      update({ navigatorPreference: preference }, persist),
     setUtilityWidth: (width: number, persist = false) => update({ utilityWidth: width }, persist),
-    setUtilityOpen: (open: boolean, persist = false) => update({ utilityOpen: open }, persist),
-    resetLibraryWidth: () => update({ libraryWidth: DEFAULT_LIBRARY_WIDTH }, true),
+    resetNavigatorWidth: () =>
+      update(
+        { expandedNavigatorWidth: DEFAULT_NAVIGATOR_WIDTH, navigatorPreference: 'expanded' },
+        true,
+      ),
   };
 }

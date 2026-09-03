@@ -47,6 +47,18 @@ export function createTauriBridge(): DesktopBridge {
     getSongDetail: (request: DetailRequest) => call(COMMANDS.getSongDetail, request),
     reloadLibrary: () => call(COMMANDS.reloadLibrary),
     setLibraryViewport: (request: ViewportRequest) => call(COMMANDS.setLibraryViewport, request),
+    setSongLiked: (request) => call(COMMANDS.setSongLiked, request),
+    listCollections: () => call(COMMANDS.libraryListCollections),
+    createCollection: (name) => call(COMMANDS.libraryCreateCollection, { name }),
+    renameCollection: (collectionId, name) =>
+      call(COMMANDS.libraryRenameCollection, { collectionId, name }),
+    deleteCollection: (collectionId) => call(COMMANDS.libraryDeleteCollection, { collectionId }),
+    addSongs: (collectionId, songIds) => call(COMMANDS.libraryAddSongs, { collectionId, songIds }),
+    removeSongs: (collectionId, songIds) =>
+      call(COMMANDS.libraryRemoveSongs, { collectionId, songIds }),
+    importLocalFiles: () => call(COMMANDS.libraryImportLocalFiles),
+    importLocalFolder: () => call(COMMANDS.libraryImportLocalFolder),
+    removeImport: (sourceId) => call(COMMANDS.libraryRemoveImport, { sourceId }),
     getSettings: () => call(COMMANDS.getSettings),
     patchSettings: (patch: SettingsPatch) => call(COMMANDS.patchSettings, patch),
     checkForUpdate: () => call(COMMANDS.checkForUpdate),

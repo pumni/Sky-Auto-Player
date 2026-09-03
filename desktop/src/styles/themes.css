@@ -2,6 +2,7 @@
 html[data-theme='aurora'] {
   --canvas: #0b1018;
   --surface-panel: #101722;
+  --surface-secondary: #0d141e;
   --surface-raised: #151e2b;
   --surface-hover: #1a2533;
   --surface-selected: #1b2636;
@@ -18,6 +19,7 @@ html[data-theme='aurora'] {
 html[data-theme='minimalist'] {
   --canvas: #17191d;
   --surface-panel: #202328;
+  --surface-secondary: #1b1e22;
   --surface-raised: #292d33;
   --surface-hover: #333941;
   --surface-selected: #343a42;
@@ -34,6 +36,7 @@ html[data-theme='minimalist'] {
 html[data-theme='slate'] {
   --canvas: #10171d;
   --surface-panel: #17232c;
+  --surface-secondary: #13202a;
   --surface-raised: #20313d;
   --surface-hover: #2a3d4a;
   --surface-selected: #2a3d4a;
@@ -50,6 +53,7 @@ html[data-theme='slate'] {
 html[data-theme='cyberpunk'] {
   --canvas: #130f1d;
   --surface-panel: #1d1529;
+  --surface-secondary: #191225;
   --surface-raised: #291c37;
   --surface-hover: #352445;
   --surface-selected: #3a274a;
@@ -66,6 +70,7 @@ html[data-theme='cyberpunk'] {
 html[data-theme='classic'] {
   --canvas: #171512;
   --surface-panel: #211d18;
+  --surface-secondary: #1c1915;
   --surface-raised: #2c261f;
   --surface-hover: #393126;
   --surface-selected: #3a3126;

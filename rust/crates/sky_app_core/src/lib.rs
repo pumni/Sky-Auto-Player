@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod library;
 pub mod settings;
 pub mod song;
 pub mod timing;

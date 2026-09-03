@@ -6,6 +6,7 @@ interface ResizableSeparatorProps {
   min: number;
   max: number;
   defaultValue: number;
+  disabled?: boolean;
   /** Direction of the pane whose width this separator owns. */
   direction?: 1 | -1;
   onChange: (value: number) => void;
@@ -23,6 +24,7 @@ export function ResizableSeparator({
   max,
   defaultValue,
   direction = 1,
+  disabled = false,
   onChange,
   onCommit,
 }: ResizableSeparatorProps) {
@@ -45,7 +47,7 @@ export function ResizableSeparator({
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (disabled || event.button !== 0) return;
     event.preventDefault();
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: value };
     dragValueRef.current = value;
@@ -54,6 +56,7 @@ export function ResizableSeparator({
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const next = clamp(drag.startValue + direction * (event.clientX - drag.startX), min, max);
@@ -62,6 +65,7 @@ export function ResizableSeparator({
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (dragRef.current?.pointerId !== event.pointerId) return;
     finishDrag();
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -70,6 +74,7 @@ export function ResizableSeparator({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     let next: number | null = null;
     const step = event.shiftKey ? 32 : 8;
     if (event.key === 'ArrowLeft') next = value - direction * step;
@@ -88,20 +93,22 @@ export function ResizableSeparator({
   return (
     <div
       ref={separatorRef}
-      className={`resizable-separator${dragging ? ' is-dragging' : ''}`}
+      className={`resizable-separator${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
       role="separator"
       aria-label={label}
       aria-orientation="vertical"
       aria-valuemin={min}
       aria-valuemax={max}
       aria-valuenow={value}
-      tabIndex={0}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={finishDrag}
       onLostPointerCapture={finishDrag}
       onDoubleClick={() => {
+        if (disabled) return;
         dragValueRef.current = defaultValue;
         onChange(defaultValue);
         onCommit?.(defaultValue);

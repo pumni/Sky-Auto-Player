@@ -6,6 +6,10 @@
 
 use serde_json::{Map, Value};
 use sky_app_core::catalog::{CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource};
+use sky_app_core::library::{
+    ImportedSourceKind, ImportedSourceRef, LIBRARY_MANIFEST_VERSION, LibraryError,
+    LibraryManifestStore, LibraryManifestV1, LikedSongs,
+};
 use sky_app_core::settings::{
     ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
     DEFAULT_SONGS_DIR, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
@@ -458,6 +462,53 @@ impl SettingsStore for JsonSettingsStore {
     }
 }
 
+/// Native-only persistence for user library data.  The canonical paths in
+/// this document are never projected to the frontend; they are resolved only
+/// while composing the native catalog.
+#[derive(Clone)]
+pub struct JsonLibraryManifestStore {
+    path: PathBuf,
+    write_lock: Arc<Mutex<()>>,
+}
+
+impl JsonLibraryManifestStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            write_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl LibraryManifestStore for JsonLibraryManifestStore {
+    fn load(&self) -> Result<LibraryManifestV1, LibraryError> {
+        if !self.path.exists() {
+            return Ok(LibraryManifestV1 {
+                version: LIBRARY_MANIFEST_VERSION,
+                ..Default::default()
+            });
+        }
+        let text = fs::read_to_string(&self.path)
+            .map_err(|error| LibraryError::Storage(error.to_string()))?;
+        serde_json::from_str(&text).map_err(|error| LibraryError::Storage(error.to_string()))
+    }
+
+    fn save(&self, manifest: &LibraryManifestV1) -> Result<(), LibraryError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| LibraryError::Storage("library manifest write lock poisoned".into()))?;
+        let encoded = serde_json::to_vec_pretty(manifest)
+            .map_err(|error| LibraryError::Storage(error.to_string()))?;
+        atomic_replace(&self.path, &encoded)
+            .map_err(|error| LibraryError::Storage(error.to_string()))
+    }
+}
+
 pub struct FileCatalogSource {
     root: PathBuf,
 }
@@ -469,43 +520,92 @@ impl FileCatalogSource {
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    /// Compose the primary songs directory with explicit native-owned import
+    /// references. Missing imported paths are ignored so a disconnected
+    /// removable drive does not make the rest of the catalog unavailable.
+    pub fn entries_with_imports(
+        &self,
+        imports: &[ImportedSourceRef],
+    ) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
+        let mut entries = self.entries()?;
+        for import in imports {
+            let path = PathBuf::from(&import.canonical_path);
+            if !path.exists() {
+                continue;
+            }
+            let imported = match import.kind {
+                ImportedSourceKind::File => entries_from_file(&path),
+                ImportedSourceKind::Folder => entries_from_directory(&path, true),
+            }?;
+            entries.extend(imported);
+        }
+        entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+        entries.dedup_by(|left, right| {
+            left.canonical_path
+                .eq_ignore_ascii_case(&right.canonical_path)
+        });
+        Ok(entries)
+    }
 }
 
 impl SongSource for FileCatalogSource {
     fn entries(&self) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
-        if !self.root.exists() {
-            return Ok(Vec::new());
-        }
-        if !self.root.is_dir() {
-            return Err(CatalogError::SourceUnavailable(
-                "songs directory is not a directory".into(),
-            ));
-        }
-        let mut entries = Vec::new();
-        let read_dir = fs::read_dir(&self.root)
+        entries_from_directory(&self.root, false)
+    }
+}
+
+fn entries_from_file(path: &Path) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
+    if !path.is_file() || !is_supported(path) {
+        return Ok(Vec::new());
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+    Ok(vec![CatalogSourceEntry {
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        title: path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_owned(),
+    }])
+}
+
+fn entries_from_directory(
+    root: &Path,
+    recursive: bool,
+) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    if !root.is_dir() {
+        return Err(CatalogError::SourceUnavailable(
+            "songs directory is not a directory".into(),
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut directories = vec![root.to_owned()];
+    while let Some(directory) = directories.pop() {
+        let read_dir = fs::read_dir(&directory)
             .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
         for item in read_dir {
-            let path = item
-                .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?
-                .path();
-            if !path.is_file() || !is_supported(&path) {
-                continue;
-            }
-            let canonical = fs::canonicalize(&path)
+            let item = item.map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+            let path = item.path();
+            let file_type = item
+                .file_type()
                 .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
-            let title = path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            entries.push(CatalogSourceEntry {
-                canonical_path: canonical.to_string_lossy().into_owned(),
-                title,
-            });
+            if recursive && file_type.is_dir() {
+                directories.push(path);
+            } else if file_type.is_file() {
+                entries.extend(entries_from_file(&path)?);
+            }
         }
-        entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
-        Ok(entries)
+        if !recursive {
+            break;
+        }
     }
+    entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+    Ok(entries)
 }
 
 fn is_supported(path: &Path) -> bool {
@@ -531,6 +631,8 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     settings.verbose_hud = raw_bool(raw, "verbose_hud", false);
     settings.songs_dir = raw_string(raw, "songs_dir", DEFAULT_SONGS_DIR);
     settings.allow_title_fallback = raw_bool(raw, "allow_title_fallback", false);
+    settings.liked_songs =
+        LikedSongs::from_persisted(raw_string_list(raw.get("liked_song_ids")).unwrap_or_default());
     settings.sky_process_names =
         raw_string_list(raw.get("sky_process_names")).unwrap_or_else(|| {
             DEFAULT_PROCESS_NAMES
@@ -889,6 +991,20 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         "allow_title_fallback".into(),
         Value::from(settings.allow_title_fallback),
     );
+    if !settings.liked_songs.is_empty() || raw.contains_key("liked_song_ids") {
+        raw.insert(
+            "liked_song_ids".into(),
+            Value::Array(
+                settings
+                    .liked_songs
+                    .ids()
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        );
+    }
     raw.insert("hotkeys".into(), serde_json::json!({"pause": settings.hotkeys.pause, "skip": settings.hotkeys.skip, "quit": settings.hotkeys.quit, "refocus": settings.hotkeys.refocus, "panic": settings.hotkeys.panic}));
     raw.insert("safety".into(), serde_json::json!({"prompt_on_medium_risk": settings.safety.prompt_on_medium_risk, "prompt_on_high_risk": settings.safety.prompt_on_high_risk}));
     let mut update = raw
@@ -1210,6 +1326,49 @@ mod tests {
             FileCatalogSource::new(file).entries(),
             Err(CatalogError::SourceUnavailable(_))
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn library_manifest_round_trips_and_imported_folders_are_composed() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-library-manifest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let songs = root.join("songs");
+        let imported = root.join("imported/nested");
+        fs::create_dir_all(&songs).expect("songs");
+        fs::create_dir_all(&imported).expect("imported");
+        fs::write(songs.join("primary.json"), "{}").expect("primary");
+        fs::write(imported.join("local.txt"), "notes").expect("imported song");
+
+        let canonical = fs::canonicalize(root.join("imported")).expect("canonical folder");
+        let manifest = LibraryManifestV1 {
+            version: LIBRARY_MANIFEST_VERSION,
+            imports: vec![ImportedSourceRef {
+                source_id: "a".repeat(32),
+                canonical_path: canonical.to_string_lossy().into_owned(),
+                kind: ImportedSourceKind::Folder,
+            }],
+            collections: Vec::new(),
+        };
+        let store = JsonLibraryManifestStore::new(root.join("library-manifest.json"));
+        store.save(&manifest).expect("manifest save");
+        assert_eq!(store.load().expect("manifest load"), manifest);
+
+        let entries = FileCatalogSource::new(&songs)
+            .entries_with_imports(&manifest.imports)
+            .expect("composed entries");
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.canonical_path.ends_with("local.txt"))
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
