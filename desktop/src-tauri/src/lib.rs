@@ -9,6 +9,8 @@ mod native_update;
 mod startup_guard;
 mod ui_events;
 #[cfg(windows)]
+mod windows_caption;
+#[cfg(windows)]
 mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
@@ -122,6 +124,11 @@ fn run_inner(gui_smoke: bool) {
                 {
                     eprintln!("failed to apply native Windows icons: {error}");
                 }
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_caption::install(&window)
+                {
+                    eprintln!("failed to install native maximize hit target: {error}");
+                }
             }
             if gui_smoke {
                 record_gui_smoke_phase("tauri.setup.enter");
@@ -208,6 +215,9 @@ fn run_inner(gui_smoke: bool) {
             }
             #[cfg(windows)]
             tauri::WindowEvent::Destroyed => {
+                if let Err(error) = windows_caption::uninstall_window(window) {
+                    eprintln!("failed to remove native maximize hit target: {error}");
+                }
                 windows_icon::release_native_window_icons(window);
             }
             _ => {}

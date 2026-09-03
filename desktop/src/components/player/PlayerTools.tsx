@@ -48,6 +48,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             className="profile-summary-button"
             type="button"
             aria-label="Configure timing profile"
+            title="Configure timing profile"
           >
             <SlidersHorizontal size={15} aria-hidden="true" />
             <span>

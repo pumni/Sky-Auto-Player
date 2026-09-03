@@ -9,6 +9,8 @@ import {
   LEGACY_WORKBENCH_V1_STORAGE_KEY,
   loadWorkbenchLayout,
   MIN_NAVIGATOR_WIDTH,
+  getUtilityWidthMax,
+  solveWorkbenchGeometry,
   WORKBENCH_STORAGE_KEY,
 } from './useWorkbenchLayout';
 
@@ -155,8 +157,16 @@ describe('workbench layout persistence', () => {
 
   it('accounts for padding, separators, and the minimum track browser width', () => {
     expect(getNavigatorWidthMax(900)).toBe(360);
-    expect(getNavigatorWidthMax(1200, 340)).toBe(356);
+    expect(getNavigatorWidthMax(1200, 340)).toBe(348);
     expect(getNavigatorWidthMax(920, 320)).toBe(MIN_NAVIGATOR_WIDTH);
+    expect(getUtilityWidthMax(920)).toBe(336);
+    const minimum = solveWorkbenchGeometry({
+      viewportWidth: 920,
+      navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
+      utilityWidth: getUtilityWidthMax(920),
+    });
+    expect(minimum.trackBrowserWidth).toBe(480);
+    expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(72);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
   });

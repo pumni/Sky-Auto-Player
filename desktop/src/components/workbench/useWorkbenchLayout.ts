@@ -12,6 +12,23 @@ export const DEFAULT_UTILITY_WIDTH = 360;
 export const MAX_UTILITY_WIDTH = 480;
 export const MIN_TRACK_BROWSER_WIDTH = 480;
 export const WORKBENCH_GUTTER = 8;
+export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
+
+interface WorkbenchGeometryInput {
+  viewportWidth: number;
+  navigatorWidth: number;
+  utilityWidth: number;
+}
+
+export interface WorkbenchGeometry {
+  availableWidth: number;
+  outerInlinePadding: number;
+  separatorSpace: number;
+  navigatorWidth: number;
+  trackBrowserWidth: number;
+  utilityWidth: number;
+  fits: boolean;
+}
 
 export type NavigatorPreference = 'expanded' | 'collapsed';
 
@@ -25,7 +42,7 @@ export interface WorkbenchLayoutStateV3 {
 function availableNavigatorWidth(viewportWidth: number, utilityWidth: number): number {
   const separatorSpace = utilityWidth > 0 ? WORKBENCH_GUTTER * 2 : WORKBENCH_GUTTER;
   return Math.floor(
-    viewportWidth - WORKBENCH_GUTTER - separatorSpace - utilityWidth - MIN_TRACK_BROWSER_WIDTH,
+    viewportWidth - OUTER_INLINE_PADDING - separatorSpace - utilityWidth - MIN_TRACK_BROWSER_WIDTH,
   );
 }
 
@@ -36,14 +53,41 @@ export function getNavigatorWidthMax(viewportWidth: number, utilityWidth = 0): n
   );
 }
 
-function getUtilityWidthMax(viewportWidth: number): number {
+export function getUtilityWidthMax(viewportWidth: number): number {
   const available =
     viewportWidth -
-    WORKBENCH_GUTTER -
+    OUTER_INLINE_PADDING -
     WORKBENCH_GUTTER * 2 -
     COMPACT_NAVIGATOR_WIDTH -
     MIN_TRACK_BROWSER_WIDTH;
-  return Math.max(MIN_UTILITY_WIDTH, Math.min(MAX_UTILITY_WIDTH, Math.floor(available)));
+  return Math.min(MAX_UTILITY_WIDTH, Math.max(0, Math.floor(available)));
+}
+
+export function getUtilityWidthMin(viewportWidth: number): number {
+  return Math.min(MIN_UTILITY_WIDTH, getUtilityWidthMax(viewportWidth));
+}
+
+export function solveWorkbenchGeometry({
+  viewportWidth,
+  navigatorWidth,
+  utilityWidth,
+}: WorkbenchGeometryInput): WorkbenchGeometry {
+  const availableWidth = Math.max(0, Math.floor(viewportWidth));
+  const separatorSpace = utilityWidth > 0 ? WORKBENCH_GUTTER * 2 : WORKBENCH_GUTTER;
+  const trackBrowserWidth =
+    availableWidth - OUTER_INLINE_PADDING - navigatorWidth - separatorSpace - utilityWidth;
+  const occupiedWidth =
+    OUTER_INLINE_PADDING + navigatorWidth + separatorSpace + trackBrowserWidth + utilityWidth;
+
+  return {
+    availableWidth,
+    outerInlinePadding: OUTER_INLINE_PADDING,
+    separatorSpace,
+    navigatorWidth,
+    trackBrowserWidth,
+    utilityWidth,
+    fits: occupiedWidth <= availableWidth && trackBrowserWidth >= MIN_TRACK_BROWSER_WIDTH,
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -132,8 +176,9 @@ export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
     layoutRef.current = layout;
   }, [layout]);
 
+  const utilityWidthMax = getUtilityWidthMax(viewportWidth);
   const effectiveUtilityWidth = utilityOpen
-    ? clamp(layout.utilityWidth, MIN_UTILITY_WIDTH, getUtilityWidthMax(viewportWidth))
+    ? clamp(layout.utilityWidth, getUtilityWidthMin(viewportWidth), utilityWidthMax)
     : 0;
   const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth);
   const navigatorCollapsed =
@@ -142,6 +187,11 @@ export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
   const navigatorWidth = navigatorCollapsed
     ? COMPACT_NAVIGATOR_WIDTH
     : clamp(layout.expandedNavigatorWidth, MIN_NAVIGATOR_WIDTH, navigatorMax);
+  const geometry = solveWorkbenchGeometry({
+    viewportWidth,
+    navigatorWidth,
+    utilityWidth: effectiveUtilityWidth,
+  });
 
   const update = (patch: Partial<WorkbenchLayoutStateV3>, persist = false) => {
     const next = normalizedLayout({ ...layoutRef.current, ...patch });
@@ -156,6 +206,8 @@ export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
     navigatorMax,
     navigatorCollapsed,
     utilityWidth: effectiveUtilityWidth,
+    utilityWidthMax,
+    geometry,
     setNavigatorWidth: (width: number, persist = false) =>
       update({ expandedNavigatorWidth: width, navigatorPreference: 'expanded' }, persist),
     setNavigatorPreference: (preference: NavigatorPreference, persist = false) =>

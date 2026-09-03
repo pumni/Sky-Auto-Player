@@ -64,8 +64,13 @@
 }
 
 .player-like-button:hover,
+.player-like-button:focus-visible,
 .player-like-button.is-liked {
   color: var(--accent);
+}
+
+.player-like-button:hover,
+.player-like-button:focus-visible {
   background: var(--surface-hover);
 }
 
@@ -382,13 +387,17 @@
 
 @media (max-width: 1100px) {
   .player-bar {
-    grid-template-columns: minmax(220px, 1fr) minmax(340px, 620px) minmax(220px, 1fr);
+    grid-template-columns: minmax(200px, 1fr) minmax(340px, 620px) minmax(200px, 1fr);
     gap: 8px;
     padding-inline: 10px;
   }
 
   .player-profile {
-    width: 180px;
+    width: 148px;
+  }
+
+  .profile-summary-button small {
+    display: none;
   }
 
   .player-admission {
@@ -399,7 +408,9 @@
 
 @media (max-width: 960px) {
   .player-bar {
-    grid-template-columns: minmax(200px, 1fr) minmax(320px, 620px) minmax(200px, 1fr);
+    grid-template-columns: minmax(180px, 1fr) minmax(300px, 620px) minmax(180px, 1fr);
+    gap: 6px;
+    padding-inline: 8px;
   }
 
   .player-track-icon {
@@ -412,6 +423,25 @@
 
   .transport-actions .player-primary-action {
     width: 38px;
+  }
+
+  .player-profile {
+    width: 34px;
+  }
+
+  .profile-summary-button {
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+
+  .profile-summary-button > span {
+    display: none;
+  }
+
+  .player-tools {
+    gap: 6px;
   }
 }
 

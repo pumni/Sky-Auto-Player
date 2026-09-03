@@ -102,7 +102,36 @@
   grid-column: 6;
   align-self: stretch;
   height: var(--titlebar-height);
-  margin-left: 4px;
+  margin-left: 10px;
+}
+
+.caption-glyph {
+  display: block;
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', sans-serif;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1;
+  speak: never;
+}
+
+.caption-glyph-minimize::before {
+  content: '\E921';
+}
+
+.caption-glyph-maximize::before {
+  content: '\E922';
+}
+
+.caption-glyph-restore::before {
+  content: '\E923';
+}
+
+.caption-glyph-close::before {
+  content: '\E8BB';
+}
+
+.window-caption-controls.is-inactive .caption-button {
+  color: var(--text-tertiary);
 }
 
 .caption-button {
@@ -127,7 +156,8 @@
 }
 
 .caption-button:focus-visible {
-  outline-offset: -2px;
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -3px;
 }
 
 .caption-button-close:hover {

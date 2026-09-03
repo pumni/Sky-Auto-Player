@@ -10,6 +10,51 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
   ).toEqual([]);
 }
 
+async function expectWorkbenchWithinBounds(
+  page: Page,
+  minimumTrackWidth = 480,
+  minimumUtilityWidth = 320,
+) {
+  const geometry = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom, width: rect.width };
+    };
+    return {
+      viewportWidth: window.innerWidth,
+      workbench: box('.workbench'),
+      navigator: box('.navigator-workbench-pane'),
+      track: box('.track-browser-workbench-pane'),
+      utility: box('.utility-workbench-pane'),
+      rootMinWidth: getComputedStyle(document.documentElement).minWidth,
+      bodyMinWidth: getComputedStyle(document.body).minWidth,
+    };
+  });
+
+  expect(geometry.workbench).not.toBeNull();
+  expect(geometry.navigator).not.toBeNull();
+  expect(geometry.track).not.toBeNull();
+  if (geometry.workbench && geometry.navigator && geometry.track) {
+    expect(geometry.navigator.x).toBeGreaterThanOrEqual(geometry.workbench.x);
+    expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(
+      geometry.workbench.x + geometry.workbench.width - 8,
+    );
+    expect(geometry.track.width).toBeGreaterThanOrEqual(minimumTrackWidth);
+  }
+  if (geometry.utility && geometry.workbench) {
+    expect(geometry.utility.x + geometry.utility.width).toBeLessThanOrEqual(
+      geometry.workbench.x + geometry.workbench.width - 8,
+    );
+    expect(Math.round(geometry.viewportWidth - geometry.utility.right)).toBeGreaterThanOrEqual(8);
+    expect(geometry.utility.width).toBeGreaterThanOrEqual(minimumUtilityWidth);
+  }
+  expect(geometry.rootMinWidth).toBe('0px');
+  expect(geometry.bodyMinWidth).toBe('0px');
+  await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
+}
+
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -90,6 +135,7 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   if (titlebar && navigatorPane) {
     expect(Math.round(navigatorPane.y - (titlebar.y + titlebar.height))).toBe(0);
   }
+  await expectWorkbenchWithinBounds(page);
   const dimensions = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
@@ -99,6 +145,29 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
   expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('minimum viewport keeps an open utility pane inside the actual client rectangle', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+  await expectWorkbenchWithinBounds(page);
+  const navigator = await page.locator('.navigator-workbench-pane').boundingBox();
+  expect(navigator).not.toBeNull();
+  if (navigator) expect(Math.round(navigator.width)).toBe(72);
+});
+
+test('browser resilience margin does not clip the workbench below the native minimum', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 600 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+  await expectWorkbenchWithinBounds(page, 480, 0);
 });
 
 test('desktop workbench fits the supported viewport matrix', async ({ page }) => {
@@ -126,6 +195,7 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
 
     await page.getByRole('button', { name: 'Open utility panel' }).click();
     await page.getByRole('tab', { name: 'Runtime' }).click();
+    await expectWorkbenchWithinBounds(page);
     if (viewport.width >= 1280) {
       await expect(
         page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
@@ -187,6 +257,38 @@ test('Titlebar search and Player primary control share the application center ax
   expect(activeBox).not.toBeNull();
   if (activeBox) {
     expect(Math.abs(activeBox.x + activeBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+  }
+});
+
+test('Player Bar remains compact, centered, and bounded at the minimum viewport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 620 });
+  await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const playerBox = await player.boundingBox();
+  const playBox = await player.getByRole('button', { name: 'Play' }).boundingBox();
+  const timelineBox = await player.locator('.player-timeline').boundingBox();
+  const toolsBox = await player.locator('.player-tools').boundingBox();
+  expect(playerBox).not.toBeNull();
+  expect(playBox).not.toBeNull();
+  expect(timelineBox).not.toBeNull();
+  expect(toolsBox).not.toBeNull();
+  if (playerBox && playBox && timelineBox && toolsBox) {
+    expect(Math.abs(playBox.x + playBox.width / 2 - 460)).toBeLessThanOrEqual(2);
+    expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(playerBox.x + playerBox.width - 8);
+    expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(toolsBox.x);
+  }
+  await expect(player.getByRole('button', { name: 'Configure timing profile' })).toHaveAttribute(
+    'aria-label',
+    'Configure timing profile',
+  );
+
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  const openPlayBox = await player.getByRole('button', { name: 'Play' }).boundingBox();
+  expect(openPlayBox).not.toBeNull();
+  if (openPlayBox) {
+    expect(Math.abs(openPlayBox.x + openPlayBox.width / 2 - 460)).toBeLessThanOrEqual(2);
   }
 });
 

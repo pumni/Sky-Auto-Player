@@ -1,4 +1,3 @@
-import { Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { WindowControls } from '../../platform/windowControls';
 
@@ -8,6 +7,7 @@ interface WindowCaptionControlsProps {
 
 export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) {
   const [maximized, setMaximized] = useState(false);
+  const [windowActive, setWindowActive] = useState(() => document.hasFocus());
 
   useEffect(() => {
     let disposed = false;
@@ -31,10 +31,21 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
     };
   }, [controls]);
 
+  useEffect(() => {
+    const activate = () => setWindowActive(true);
+    const deactivate = () => setWindowActive(false);
+    window.addEventListener('focus', activate);
+    window.addEventListener('blur', deactivate);
+    return () => {
+      window.removeEventListener('focus', activate);
+      window.removeEventListener('blur', deactivate);
+    };
+  }, []);
+
   const maximizeLabel = maximized ? 'Restore window' : 'Maximize window';
   return (
     <div
-      className="window-caption-controls"
+      className={`window-caption-controls${windowActive ? '' : ' is-inactive'}`}
       aria-label="Window controls"
       data-tauri-drag-region="false"
     >
@@ -46,7 +57,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         data-tauri-drag-region="false"
         onClick={() => void controls.minimize()}
       >
-        <Minus size={16} strokeWidth={1.5} aria-hidden="true" />
+        <span className="caption-glyph caption-glyph-minimize" aria-hidden="true" />
       </button>
       <button
         className="caption-button"
@@ -56,11 +67,10 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         data-tauri-drag-region="false"
         onClick={() => void controls.toggleMaximize()}
       >
-        {maximized ? (
-          <Copy size={14} strokeWidth={1.5} aria-hidden="true" />
-        ) : (
-          <Square size={14} strokeWidth={1.5} aria-hidden="true" />
-        )}
+        <span
+          className={`caption-glyph ${maximized ? 'caption-glyph-restore' : 'caption-glyph-maximize'}`}
+          aria-hidden="true"
+        />
       </button>
       <button
         className="caption-button caption-button-close"
@@ -70,7 +80,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         data-tauri-drag-region="false"
         onClick={() => void controls.close()}
       >
-        <X size={16} strokeWidth={1.5} aria-hidden="true" />
+        <span className="caption-glyph caption-glyph-close" aria-hidden="true" />
       </button>
     </div>
   );
