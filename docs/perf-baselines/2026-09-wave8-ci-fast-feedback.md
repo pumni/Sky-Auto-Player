@@ -284,3 +284,31 @@ For each candidate run, record:
 5. `Post Rust-cache save — validate` (main/dispatch)
 6. `Post Rust-cache save — packaged` (main/dispatch)
 7. `Required-gate wall clock` (adoption decider)
+
+### 5.4 Empirical Measurements: Control A vs Variant B
+
+| Metric | Control A (Main Run #562) | Control A (PR Run #561) | Variant B (Manual Run #564) | Variant B (PR Run #563) | Impact / Delta (Variant B) |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Commit SHA** | `81bb7c2f1dff` | `c8e6fc2875f1` | `f6ca8063e810` | `f6ca8063e810` | Exact candidate HEAD |
+| **Trigger** | `push` (main) | `pull_request` | `workflow_dispatch` | `pull_request` | Full matrix qualification |
+| **Rust-cache restore — `validate`** | 55s | ~48–55s | **6s** | **7s** | **~88% faster restore** (-48s) |
+| **Rust-cache restore — `packaged`** | ~36s | ~32s | **5s** | **11s** | **~70–85% faster restore** (-25s to -31s) |
+| **Productive test — `validate`** | 7m03s | 7m10s | 11m13s | 10m53s | **+3m43s to +4m10s** (clean crate build) |
+| **Dist build — `packaged`** | 8m00s | 7m50s | 10m22s | 10m50s | **+2m22s to +3m00s** (clean crate build) |
+| **Post-save — `validate`** | 6m31s (391s) | 0s (skipped) | **15s** | 0s (skipped) | **-6m16s save tax eliminated** |
+| **Post-save — `packaged`** | 1m32s | 0s (skipped) | **32s** | 0s (skipped) | **-1m00s save tax reduced** |
+| **Job total — `validate`** | 15m35s | 7m45s | **12m32s** | **11m36s** | **-3m03s on main** / +3m51s on PR |
+| **Job total — `packaged`** | 9m37s | 8m27s | **11m52s** | **11m46s** | +2m15s on main / +3m19s on PR |
+| **Required-gate Wall-Clock** | **15m40s** | **8m35s** | **13m00s** | **12m13s** | **-2m40s on main (-17%)** / +3m38s on PR |
+
+#### Authoritative Artifacts for CI-FAST-3 Variant B:
+- **PR Run #563 (`33703355904`)**:
+  - Artifact ID: `9874610048`
+  - Name: `sky-auto-player-portable-f6ca8063e810fd9cfae4cc50f3af80b48c0c1bde`
+  - Size: `9,172,089 bytes`
+  - Digest: `sha256:f597df11e1d0df80f2f5d244281a035c681ee1eee5520fc8cf0fe70860193418`
+- **Manual Run #564 (`33703366753`)**:
+  - Artifact ID: `9874584256`
+  - Name: `sky-auto-player-portable-f6ca8063e810fd9cfae4cc50f3af80b48c0c1bde`
+  - Size: `9,172,007 bytes`
+  - Digest: `sha256:a069bab7c0f3db0b2d823ec42208bf8cb3993e8c531605b1a84d425baa89bbd2`
