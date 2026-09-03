@@ -254,14 +254,15 @@ fn legacy_release_guard(root: &Path) -> Result<()> {
 }
 
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
-    let start = source
+    let normalized = source.replace("\r\n", "\n");
+    let start = normalized
         .find("  packaged:\n")
         .ok_or("CI workflow is missing the packaged job")?;
-    let end = source[start..]
+    let end = normalized[start..]
         .find("\n  status:\n")
         .map(|offset| start + offset)
         .ok_or("CI workflow packaged job is missing the status boundary")?;
-    let packaged = &source[start..end];
+    let packaged = &normalized[start..end];
 
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
@@ -1879,8 +1880,10 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
         run: check sky_desktop_shell.exe uninstall.exe
       - uses: actions/upload-artifact@v7
   status:
-"#;
+        "#;
         assert!(packaged_ci_contract_source(source).is_ok());
+        let crlf_source = source.replace('\n', "\r\n");
+        assert!(packaged_ci_contract_source(&crlf_source).is_ok());
         for forbidden in [
             "cargo xtask dist",
             "verify-dist",
