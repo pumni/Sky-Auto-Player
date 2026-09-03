@@ -294,14 +294,14 @@ impl NativeCalibrationService {
     }
 
     #[cfg(test)]
-    fn from_install_root(
-        install_root: PathBuf,
+    fn from_test_sandbox(
+        root: &Path,
         activity: ActivityCoordinator,
         events: Arc<Mutex<NativeEventHub>>,
         playback: Arc<NativePlaybackService>,
         test_seams: TestSeams,
     ) -> Self {
-        let paths = AppPaths::from_app_data_root(install_root.clone(), install_root);
+        let paths = AppPaths::from_test_sandbox(root);
         Self::new(paths, activity, events, playback, test_seams)
     }
 
@@ -1214,13 +1214,7 @@ fn prepare_calibration_cache(
             "applied_transport_margin_us": if valid { Value::from(applied) } else { Value::Null }
         }),
     );
-    let cache_path = if cache_root.join(".cache").is_dir() {
-        cache_root.join(".cache").join("input_latency.json")
-    } else if cache_root.ends_with("cache") || cache_root.ends_with(".cache") {
-        cache_root.join("input_latency.json")
-    } else {
-        cache_root.join(".cache").join("input_latency.json")
-    };
+    let cache_path = cache_root.join(sky_native_adapters::paths::CALIBRATION_CACHE_FILE);
     fs::create_dir_all(cache_path.parent().expect("cache parent"))
         .map_err(|error| error.to_string())?;
     let temp = cache_path.with_extension(format!("json.{}.tmp", opaque_native_id()?));
@@ -1400,6 +1394,15 @@ impl NativeDesktopRuntime {
         activity: ActivityCoordinator,
         test_seams: TestSeams,
     ) -> Result<Self, String> {
+        paths.assert_clean_boundary()?;
+        Self::from_paths_internal(paths, activity, test_seams)
+    }
+
+    fn from_paths_internal(
+        paths: AppPaths,
+        activity: ActivityCoordinator,
+        test_seams: TestSeams,
+    ) -> Result<Self, String> {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
         let settings = SettingsService::load(settings_store)
@@ -1407,7 +1410,9 @@ impl NativeDesktopRuntime {
         let manifest_store = JsonLibraryManifestStore::new(paths.library_manifest_path());
         let library_manifest = LibraryManifestService::load(manifest_store)
             .map_err(|error| format!("native library manifest startup failed: {error}"))?;
-        let songs_dir = paths.resolve_songs_dir(&settings.snapshot().songs_dir);
+        let songs_dir = paths
+            .resolve_songs_dir(&settings.snapshot().songs_dir)
+            .unwrap_or_else(|_| paths.user_music_root().to_path_buf());
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
         let calibration = Arc::new(NativeCalibrationService::new(
@@ -1435,13 +1440,21 @@ impl NativeDesktopRuntime {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_install_root_with_activity_and_seams(
         install_root: PathBuf,
         activity: ActivityCoordinator,
         test_seams: TestSeams,
     ) -> Result<Self, String> {
-        let paths = AppPaths::from_app_data_root(install_root.clone(), install_root);
-        Self::from_paths_with_activity_and_seams(paths, activity, test_seams)
+        let paths = AppPaths::from_roots(
+            install_root.clone(),
+            install_root.clone(),
+            install_root.clone(),
+            install_root.join("cache"),
+            install_root.join("logs"),
+            install_root.join("songs"),
+        );
+        Self::from_paths_internal(paths, activity, test_seams)
     }
 
     #[allow(dead_code)]
@@ -4655,7 +4668,7 @@ mod tests {
     use serde_json::Value;
     use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
-    use sky_native_adapters::load_calibration_resolution;
+    use sky_native_adapters::{AppPaths, load_calibration_resolution};
     use std::fs;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier, Condvar, Mutex};
@@ -4793,8 +4806,8 @@ mod tests {
             timeout_seconds: None,
         };
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let safe = NativeCalibrationService::from_install_root(
-            root.clone(),
+        let safe = NativeCalibrationService::from_test_sandbox(
+            &root,
             activity.clone(),
             events.clone(),
             playback.clone(),
@@ -4805,8 +4818,8 @@ mod tests {
                 .is_ok()
         );
 
-        let production = NativeCalibrationService::from_install_root(
-            root,
+        let production = NativeCalibrationService::from_test_sandbox(
+            &root,
             activity,
             events,
             playback,
@@ -4825,8 +4838,8 @@ mod tests {
     fn duplicate_calibration_start_keeps_already_running_contract() {
         let activity = ActivityCoordinator::default();
         let reservation = activity.reserve_calibration().expect("first reservation");
-        let service = NativeCalibrationService::from_install_root(
-            std::env::temp_dir(),
+        let service = NativeCalibrationService::from_test_sandbox(
+            &std::env::temp_dir(),
             activity,
             Arc::new(Mutex::new(NativeEventHub::default())),
             Arc::new(NativePlaybackService::new(ActivityCoordinator::default())),
@@ -4881,16 +4894,17 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("sky-calibration-close-before-{suffix}"));
-        let cache = root.join(".cache/input_latency.json");
-        fs::create_dir_all(cache.parent().expect("cache parent")).expect("cache directory");
+        let paths = AppPaths::from_test_sandbox(&root);
+        paths.ensure_mutable_directories().expect("cache directory");
+        let cache = paths.calibration_cache_path();
         let original = br#"{"sentinel":"unchanged"}"#.to_vec();
         fs::write(&cache, &original).expect("sentinel cache");
 
         let activity = ActivityCoordinator::default();
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
-        let service = Arc::new(NativeCalibrationService::from_install_root(
-            root.clone(),
+        let service = Arc::new(NativeCalibrationService::new(
+            paths,
             activity.clone(),
             events.clone(),
             playback.clone(),
@@ -4951,17 +4965,19 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("sky-calibration-commit-before-{suffix}"));
+        let paths = AppPaths::from_test_sandbox(&root);
+        paths.ensure_mutable_directories().expect("cache directory");
         let activity = ActivityCoordinator::default();
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
-        let service = Arc::new(NativeCalibrationService::from_install_root(
-            root.clone(),
+        let service = Arc::new(NativeCalibrationService::new(
+            paths.clone(),
             activity.clone(),
             events.clone(),
             playback.clone(),
             TestSeams::SafePackage,
         ));
-        let cache = root.join(".cache/input_latency.json");
+        let cache = paths.calibration_cache_path();
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         service
@@ -5008,8 +5024,8 @@ mod tests {
         let activity = ActivityCoordinator::default();
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
-        let service = Arc::new(NativeCalibrationService::from_install_root(
-            root.clone(),
+        let service = Arc::new(NativeCalibrationService::from_test_sandbox(
+            &root,
             activity.clone(),
             events.clone(),
             playback.clone(),
@@ -5130,8 +5146,10 @@ mod tests {
                 std::env::temp_dir().join(format!("sky-calibration-roundtrip-{suffix}-{worst}"));
             let mut raw = safe_calibration_evidence();
             raw["pair_buckets"]["1"]["hot"]["sendinput_shrink_us"]["max"] = Value::from(worst);
-            publish_calibration_cache(&root, &raw).expect("cache publication");
-            let cache = root.join(".cache/input_latency.json");
+            let paths = AppPaths::from_test_sandbox(&root);
+            paths.ensure_mutable_directories().expect("cache directory");
+            publish_calibration_cache(paths.cache_root(), &raw).expect("cache publication");
+            let cache = paths.calibration_cache_path();
             let resolution = load_calibration_resolution(&cache);
             assert_eq!(resolution.margin_us, expected_margin.unwrap_or(300));
             assert_eq!(
@@ -6500,7 +6518,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::permissions_set_readonly_false)]
     fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6513,11 +6530,12 @@ mod tests {
         fs::create_dir_all(&install_root).expect("create install payload");
         let dummy_exe = install_root.join(sky_native_adapters::CALIBRATION_EXE);
         fs::write(&dummy_exe, b"immutable-binary-data").expect("write dummy exe");
+        let dummy_resource = install_root.join("resources.pak");
+        fs::write(&dummy_resource, b"immutable-resource-data").expect("write dummy resource");
 
-        // Make install payload read-only
-        let mut perms = fs::metadata(&dummy_exe).expect("meta").permissions();
-        perms.set_readonly(true);
-        fs::set_permissions(&dummy_exe, perms).expect("set readonly");
+        // Take snapshot of entire install payload before runtime execution
+        let install_snapshot_before = sky_native_adapters::snapshot_directory(&install_root)
+            .expect("snapshot install before");
 
         let paths = sky_native_adapters::AppPaths::from_app_data_root(
             install_root.clone(),
@@ -6578,13 +6596,17 @@ mod tests {
         assert!(!install_root.join(".cache").exists());
         assert!(!install_root.join("cache").exists());
 
-        // 4. Clean shutdown and cleanup
+        // 4. Clean shutdown
         runtime.shutdown();
 
-        // Restore permissions for cleanup
-        let mut perms = fs::metadata(&dummy_exe).expect("meta").permissions();
-        perms.set_readonly(false);
-        let _ = fs::set_permissions(&dummy_exe, perms);
+        // 5. Cryptographic proof: entire install payload is completely byte-for-byte unchanged
+        let install_snapshot_after =
+            sky_native_adapters::snapshot_directory(&install_root).expect("snapshot install after");
+        assert_eq!(
+            install_snapshot_before, install_snapshot_after,
+            "install payload must remain 100% byte-for-byte identical"
+        );
+
         let _ = fs::remove_dir_all(&temp);
     }
 }

@@ -494,6 +494,7 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
     }
     fs::create_dir_all(&smoke_app_data)?;
     copy_tree(release_dir, &smoke_dir)?;
+    let smoke_snapshot_before = snapshot_tree(&smoke_dir)?;
     let phase_log = smoke_app_data.join("gui-smoke-phases.log");
     let _ = fs::remove_file(&phase_log);
     let path_value = if python_unavailable {
@@ -539,6 +540,10 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
             &env,
             PACKAGED_SMOKE_TIMEOUT,
         )?;
+        let smoke_snapshot_after = snapshot_tree(&smoke_dir)?;
+        if smoke_snapshot_before != smoke_snapshot_after {
+            return Err("packaged smoke modified immutable installation payload".into());
+        }
         Ok(())
     })();
     let result_error = result.err();
@@ -559,6 +564,36 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
     cleanup?;
     if let Some(error) = result_error {
         return Err(error);
+    }
+    Ok(())
+}
+
+fn snapshot_tree(root: &Path) -> Result<std::collections::BTreeMap<String, (u64, String)>> {
+    let mut files = std::collections::BTreeMap::new();
+    collect_tree(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_tree(
+    base: &Path,
+    current: &Path,
+    files: &mut std::collections::BTreeMap<String, (u64, String)>,
+) -> Result<()> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_tree(base, &path, files)?;
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(base)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let size = fs::metadata(&path)?.len();
+            let hash = manifest::sha256(&path)?;
+            files.insert(relative, (size, hash));
+        }
     }
     Ok(())
 }

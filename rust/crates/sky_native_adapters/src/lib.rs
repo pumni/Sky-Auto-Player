@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub mod paths;
-pub use paths::{AppPaths, CALIBRATION_EXE, V4_APP_IDENTIFIER};
+pub use paths::{AppPaths, CALIBRATION_EXE, V4_APP_IDENTIFIER, snapshot_directory};
 
 pub const DEFAULT_TRANSPORT_MARGIN_US: u64 = 300;
 pub const CALIBRATION_MARGIN_SOURCE_DEFAULT: &str = "default_transport_300";

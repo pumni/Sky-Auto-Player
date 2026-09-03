@@ -3390,6 +3390,7 @@ name = "sky_native_adapters"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "sha2 0.11.0",
  "sky_app_core",
  "sky_player",
  "windows-sys 0.61.2",

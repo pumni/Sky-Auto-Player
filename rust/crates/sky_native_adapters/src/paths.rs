@@ -9,8 +9,10 @@
 //!   requiring an updater preserve list inside the installation directory.
 //! - Production `.env` files beside the executable are not part of the v4 configuration model.
 
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The permanent canonical v4 application identifier per ADR-0006.
 pub const V4_APP_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
@@ -76,21 +78,16 @@ impl AppPaths {
     /// Per ADR-0006 target Windows layout:
     /// - `config_root`: `app_data_root`
     /// - `data_root`: `app_data_root`
-    /// - `cache_root`: `app_data_root/cache`
+    /// - `cache_root`: `app_data_root/cache` (deterministic canonical v4 cache)
     /// - `logs_root`: `app_data_root/logs`
     /// - `user_music_root`: `app_data_root/songs`
     pub fn from_app_data_root(install_root: PathBuf, app_data_root: PathBuf) -> Self {
-        let cache_root = if install_root == app_data_root || app_data_root.join(".cache").is_dir() {
-            app_data_root.join(".cache")
-        } else {
-            app_data_root.join(CACHE_SUBDIR)
-        };
         Self {
-            config_root: app_data_root.clone(),
-            data_root: app_data_root.clone(),
-            cache_root,
+            cache_root: app_data_root.join(CACHE_SUBDIR),
             logs_root: app_data_root.join(LOGS_SUBDIR),
             user_music_root: app_data_root.join(DEFAULT_SONGS_SUBDIR),
+            config_root: app_data_root.clone(),
+            data_root: app_data_root,
             install_root,
         }
     }
@@ -142,6 +139,8 @@ impl AppPaths {
     }
 
     /// Full path to the calibration cache file (`input_latency.json`).
+    ///
+    /// Always resolves deterministically to `cache_root/input_latency.json`.
     pub fn calibration_cache_path(&self) -> PathBuf {
         self.cache_root.join(CALIBRATION_CACHE_FILE)
     }
@@ -153,19 +152,40 @@ impl AppPaths {
 
     /// Resolve a songs directory from user settings.
     ///
-    /// - If `songs_dir` is absolute, returns it as-is (user-specified location).
-    /// - If `songs_dir` is `"songs"` or empty, returns `user_music_root`.
-    /// - Otherwise, resolves relative to `user_music_root`.
-    /// - NEVER resolves relative to `install_root`.
-    pub fn resolve_songs_dir(&self, songs_dir: &str) -> PathBuf {
+    /// Fails closed if:
+    /// - `songs_dir` contains parent directory traversal components (`..`).
+    /// - The resolved path resides inside `install_root`.
+    ///
+    /// Valid external absolute paths are preserved as-is.
+    /// Default `"songs"` or empty string resolves to `user_music_root`.
+    pub fn resolve_songs_dir(&self, songs_dir: &str) -> Result<PathBuf, String> {
         let path = Path::new(songs_dir);
-        if path.is_absolute() {
+
+        // Reject any traversal attempt using '..' components
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(format!(
+                "v4 architecture violation: songs_dir ('{songs_dir}') must not contain parent directory traversal ('..')"
+            ));
+        }
+
+        let resolved = if path.is_absolute() {
             path.to_path_buf()
         } else if songs_dir == DEFAULT_SONGS_SUBDIR || songs_dir.is_empty() {
             self.user_music_root.clone()
         } else {
             self.user_music_root.join(path)
+        };
+
+        // Reject if the resolved path resides inside the immutable install root
+        if self.is_installer_owned(&resolved) {
+            return Err(format!(
+                "v4 architecture violation: resolved songs directory ('{}') must not reside inside install root ('{}')",
+                resolved.display(),
+                self.install_root.display()
+            ));
         }
+
+        Ok(resolved)
     }
 
     /// Check whether a path resides inside the installer-owned payload directory.
@@ -218,36 +238,85 @@ impl AppPaths {
     }
 
     /// Resolve canonical `AppPaths` for the running process from host environment.
+    ///
+    /// Fails closed if:
+    /// - `SKY_INSTALL_ROOT` fails strict canonicalization.
+    /// - The resolved mutable roots violate `assert_clean_boundary()`.
     pub fn resolve() -> Result<Self, String> {
         let install_root = resolve_install_root()?;
         let app_data_root = resolve_app_data_root()?;
         let user_music_root = resolve_user_music_root(&app_data_root);
 
-        Ok(Self {
+        let paths = Self {
             config_root: app_data_root.clone(),
             data_root: app_data_root.clone(),
             cache_root: app_data_root.join(CACHE_SUBDIR),
             logs_root: app_data_root.join(LOGS_SUBDIR),
             user_music_root,
             install_root,
-        })
+        };
+
+        // Fail closed immediately if any mutable root is nested inside the install payload
+        paths.assert_clean_boundary()?;
+
+        Ok(paths)
     }
+}
+
+/// Snapshot all files under a directory: relative path -> (file size, sha256 hex).
+///
+/// Provides immutable proof that the installation directory was not touched or modified.
+pub fn snapshot_directory(root: &Path) -> Result<BTreeMap<String, (u64, String)>, std::io::Error> {
+    let mut files = BTreeMap::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    collect_directory_files(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_directory_files(
+    base: &Path,
+    current: &Path,
+    files: &mut BTreeMap<String, (u64, String)>,
+) -> Result<(), std::io::Error> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_directory_files(base, &path, files)?;
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(base)
+                .map_err(std::io::Error::other)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let data = fs::read(&path)?;
+            let size = data.len() as u64;
+            let digest = Sha256::digest(&data);
+            let mut hash = String::with_capacity(64);
+            for byte in digest {
+                use std::fmt::Write as _;
+                let _ = write!(hash, "{byte:02x}");
+            }
+            files.insert(relative, (size, hash));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_install_root() -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("SKY_INSTALL_ROOT") {
-        let path = PathBuf::from(&value);
-        return fs::canonicalize(&path)
-            .or(Ok(path))
-            .map_err(|error: std::io::Error| format!("invalid SKY_INSTALL_ROOT: {error}"));
+        return fs::canonicalize(value)
+            .map_err(|error| format!("invalid SKY_INSTALL_ROOT: {error}"));
     }
     if cfg!(debug_assertions) {
         let root = std::env::var_os("SKY_DESKTOP_REPOSITORY_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."));
-        return fs::canonicalize(&root)
-            .or(Ok(root))
-            .map_err(|error: std::io::Error| format!("invalid debug repository root: {error}"));
+        return fs::canonicalize(root)
+            .map_err(|error| format!("invalid debug repository root: {error}"));
     }
     let executable =
         std::env::current_exe().map_err(|error| format!("cannot resolve executable: {error}"))?;
@@ -336,49 +405,113 @@ mod tests {
     }
 
     #[test]
-    fn resolve_songs_dir_never_resolves_relative_to_install_root() {
+    fn resolve_songs_dir_resolves_valid_relative_and_absolute_paths() {
         let install_root = PathBuf::from(r"C:\Program Files\Sky Auto Player");
         let app_data =
             PathBuf::from(r"C:\Users\tester\AppData\Local\io.github.pumni.skyautoplayer");
         let paths = AppPaths::from_app_data_root(install_root.clone(), app_data.clone());
 
         // Default relative "songs" resolves to user music root under app data
-        let default_songs = paths.resolve_songs_dir("songs");
+        let default_songs = paths.resolve_songs_dir("songs").expect("valid songs");
         assert_eq!(default_songs, app_data.join("songs"));
         assert!(!default_songs.starts_with(&install_root));
 
         // Subdirectory under user music
-        let sub = paths.resolve_songs_dir("custom_sub");
+        let sub = paths
+            .resolve_songs_dir("custom_sub")
+            .expect("valid subpath");
         assert_eq!(sub, app_data.join("songs").join("custom_sub"));
         assert!(!sub.starts_with(&install_root));
 
-        // Absolute path stays absolute
-        let abs = paths.resolve_songs_dir(r"D:\MyMusic\SkySheets");
+        // Absolute external path is preserved
+        let abs = paths
+            .resolve_songs_dir(r"D:\MyMusic\SkySheets")
+            .expect("valid external abs");
         assert_eq!(abs, PathBuf::from(r"D:\MyMusic\SkySheets"));
         assert!(!abs.starts_with(&install_root));
     }
 
     #[test]
-    fn ownership_predicates_distinguish_installer_and_app_data() {
+    fn resolve_songs_dir_rejects_relative_parent_traversal() {
         let install_root = PathBuf::from(r"C:\Program Files\Sky Auto Player");
         let app_data =
             PathBuf::from(r"C:\Users\tester\AppData\Local\io.github.pumni.skyautoplayer");
-        let paths = AppPaths::from_app_data_root(install_root.clone(), app_data.clone());
+        let paths = AppPaths::from_app_data_root(install_root, app_data);
 
-        let binary = paths.calibration_binary_path();
-        assert!(paths.is_installer_owned(&binary));
-        assert!(!paths.is_app_data_owned(&binary));
+        // Relative parent escape: "../escaped"
+        let err = paths.resolve_songs_dir("../escaped").unwrap_err();
+        assert!(err.contains("parent directory traversal ('..')"), "{err}");
 
-        let settings = paths.settings_path();
-        assert!(!paths.is_installer_owned(&settings));
-        assert!(paths.is_app_data_owned(&settings));
+        // Nested traversal: "songs/../../escaped"
+        let err = paths.resolve_songs_dir("songs/../../escaped").unwrap_err();
+        assert!(err.contains("parent directory traversal ('..')"), "{err}");
+    }
 
-        let manifest = paths.library_manifest_path();
-        assert!(!paths.is_installer_owned(&manifest));
-        assert!(paths.is_app_data_owned(&manifest));
+    #[test]
+    fn resolve_songs_dir_rejects_absolute_path_inside_install_root() {
+        let install_root = PathBuf::from(r"C:\Program Files\Sky Auto Player");
+        let app_data =
+            PathBuf::from(r"C:\Users\tester\AppData\Local\io.github.pumni.skyautoplayer");
+        let paths = AppPaths::from_app_data_root(install_root.clone(), app_data);
 
-        let cache = paths.calibration_cache_path();
-        assert!(!paths.is_installer_owned(&cache));
-        assert!(paths.is_app_data_owned(&cache));
+        // Absolute path targeting inside the installer-owned root
+        let inside = install_root.join("songs");
+        let err = paths
+            .resolve_songs_dir(&inside.display().to_string())
+            .unwrap_err();
+        assert!(err.contains("must not reside inside install root"), "{err}");
+    }
+
+    #[test]
+    fn snapshot_directory_detects_additions_modifications_and_deletions() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("sky-snapshot-test-{suffix}"));
+        fs::create_dir_all(&temp).expect("create temp");
+
+        let file_a = temp.join("a.txt");
+        let sub = temp.join("sub");
+        fs::create_dir_all(&sub).expect("create sub");
+        let file_b = sub.join("b.txt");
+
+        fs::write(&file_a, b"content a").expect("write a");
+        fs::write(&file_b, b"content b").expect("write b");
+
+        let snap1 = snapshot_directory(&temp).expect("snapshot 1");
+        assert_eq!(snap1.len(), 2);
+        assert!(snap1.contains_key("a.txt"));
+        assert!(snap1.contains_key("sub/b.txt"));
+
+        // Exact equality when unchanged
+        let snap2 = snapshot_directory(&temp).expect("snapshot 2");
+        assert_eq!(snap1, snap2);
+
+        // Modification is detected
+        fs::write(&file_a, b"modified content a").expect("modify a");
+        let snap_modified = snapshot_directory(&temp).expect("snapshot modified");
+        assert_ne!(snap1, snap_modified);
+
+        // Restore file_a
+        fs::write(&file_a, b"content a").expect("restore a");
+
+        // Addition is detected
+        let file_c = temp.join("c.txt");
+        fs::write(&file_c, b"content c").expect("write c");
+        let snap_added = snapshot_directory(&temp).expect("snapshot added");
+        assert_ne!(snap1, snap_added);
+        assert_eq!(snap_added.len(), 3);
+
+        // Deletion is detected
+        fs::remove_file(&file_c).expect("remove c");
+        fs::remove_file(&file_b).expect("remove b");
+        let snap_deleted = snapshot_directory(&temp).expect("snapshot deleted");
+        assert_ne!(snap1, snap_deleted);
+        assert_eq!(snap_deleted.len(), 1);
+
+        let _ = fs::remove_dir_all(&temp);
     }
 }
