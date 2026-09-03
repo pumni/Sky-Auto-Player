@@ -233,3 +233,165 @@ To qualify the short-circuit optimization for manual dispatch and main push:
   - Name: `sky-auto-player-portable-e824c4c21cf3c7328076ca9df64f6a259b654315`
   - Size: `9,171,973 bytes`
   - Digest: `sha256:19e43255c1f8754a52cdecbf469269c8faab5df8a7a8901bae17e066d9f4202a`
+
+#### Exact-Head PR Qualification Run #561 (`33697726794`) on HEAD `c8e6fc2875f1`
+- **Trigger**: `pull_request` (PR #97)
+- **Total Jobs**: 6/6 `SUCCESS`
+- **Timing Evidence**:
+  - `changes`: **16s** (ID `100470149626`)
+  - `static`: **34s** (ID `100470225379`)
+  - `supply_chain`: **26s** (ID `100470225358`)
+  - `validate`: **7m45s** (ID `100470225323`)
+  - `packaged`: **8m27s** (ID `100470225290`)
+  - `status`: **2s** (ID `100472124981`)
+- **Authoritative Artifact**:
+  - Artifact ID: `9872596392`
+  - Name: `sky-auto-player-portable-c8e6fc2875f1f4c0cb31901b360e5e661ca2d618`
+  - Size: `9,172,001 bytes`
+  - Digest: `sha256:990533d8ff1b51e11022b33d97598a42c5e77cac82270802e4aad654c2493250`
+- **Merge Provenance**:
+  - PR #97 merged into `main` at commit `81bb7c2f1dff152e38fe1f721dae549bf442266b`.
+
+---
+
+## 5. CI-FAST-3: Rust Cache Architecture & Target Pruning
+
+### 5.1 Problem Statement & Hypothesis
+In Control A (`cache-targets: true`), caching the whole `rust/target` directory imposes:
+- **Save Tax on Main / Dispatch**: ~6m27s compressing and uploading ~1.5 GB in `validate`, plus ~2m40s in `packaged`.
+- **Restore Tax on Windows Runners**: ~36s–60s per job unpacking target caches, with frequent lock contention and cache eviction.
+- **Variant B Hypothesis**: Disabling target caching (`cache-targets: false`) retains Cargo registry, git index, and tool binaries (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, `$CARGO_HOME/bin`), but skips `rust/target`. This should eliminate the 6m+ post-save tax and reduce restore time, while evaluating whether clean crate compilation against cached dependencies produces a net win in required-gate critical path.
+
+### 5.2 Variant B Configuration
+Applied to both `validate` and `packaged` in `.github/workflows/ci.yml`:
+```yaml
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-targets: false
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+```
+
+### 5.3 Benchmark & Measurement Framework
+For each candidate run, record:
+1. `Rust cache restore — validate`
+2. `Rust cache restore — packaged`
+3. `Productive compile/test — validate`
+4. `Dist build — packaged`
+5. `Post Rust-cache save — validate` (main/dispatch)
+6. `Post Rust-cache save — packaged` (main/dispatch)
+7. `Required-gate wall clock` (adoption decider)
+
+### 5.4 Empirical Measurements: Control A vs Variant B
+
+| Metric | Control A (Main Run #562) | Control A (PR Run #561) | Variant B (Manual Run #564) | Variant B (PR Run #563) | Impact / Delta (Variant B) |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Commit SHA** | `81bb7c2f1dff` | `c8e6fc2875f1` | `f6ca8063e810` | `f6ca8063e810` | Exact candidate HEAD |
+| **Trigger** | `push` (main) | `pull_request` | `workflow_dispatch` | `pull_request` | Full matrix qualification |
+| **Rust-cache restore — `validate`** | 55s | ~48–55s | **6s** | **7s** | **~88% faster restore** (-48s) |
+| **Rust-cache restore — `packaged`** | ~36s | ~32s | **5s** | **11s** | **~70–85% faster restore** (-25s to -31s) |
+| **Productive test — `validate`** | 7m03s | 7m10s | 11m13s | 10m53s | **+3m43s to +4m10s** (clean crate build) |
+| **Dist build — `packaged`** | 8m00s | 7m50s | 10m22s | 10m50s | **+2m22s to +3m00s** (clean crate build) |
+| **Post-save — `validate`** | 6m31s (391s) | 0s (skipped) | **15s** | 0s (skipped) | **-6m16s save tax eliminated** |
+| **Post-save — `packaged`** | ~2m19s (139s) | 0s (skipped) | **32s** | 0s (skipped) | **-1m47s save tax reduced** |
+| **Job total — `validate`** | 15m35s | 7m45s | **12m32s** | **11m36s** | **-3m03s on main** / +3m51s on PR |
+| **Job total — `packaged`** | 9m37s | 8m27s | **11m52s** | **11m46s** | +2m15s on main / +3m19s on PR |
+| **Required-gate Wall-Clock** | **15m40s** | **8m35s** | **13m00s** | **12m13s** | **-2m40s on main (-17%)** / +3m38s on PR |
+
+#### Warm Variant B PR Evidence (Run #565 on HEAD `66354ce43be2`)
+- **Trigger**: `pull_request` (PR #98)
+- **Cache State**: Warm Cargo registry/git/bin cache (populated by Run #564); clean `target/`.
+- **Timing Results**:
+  - `changes`: **16s** (ID `100490154685`)
+  - `static`: **33s** (ID `100490219827`)
+  - `supply_chain`: **27s** (ID `100490219805`)
+  - `validate`: **11m30s** (ID `100490219858`)
+  - `packaged`: **11m40s** (ID `100490219853`)
+  - `status`: **5s** (ID `100492583741`)
+  - Total workflow wall-clock: **12m24s** (01:36:41Z $\rightarrow$ 01:49:05Z).
+- **Core Finding & Decision**:
+  - Warm Cargo dependency cache alone does NOT restore PR feedback latency, as Cargo still compiles clean workspace and dependency crate graphs without object-level reuse (~11m30s vs ~8m35s in Control A).
+  - **Verdict**: Variant B is accepted as an empirical benchmark and lower-level control architecture, but rejected for final adoption. We proceed to **Variant C (`cache-targets: false` + `sccache`)**.
+
+#### Authoritative Artifacts for CI-FAST-3 Variant B:
+- **PR Run #563 (`33703355904`)**:
+  - Artifact ID: `9874610048`
+  - Name: `sky-auto-player-portable-f6ca8063e810fd9cfae4cc50f3af80b48c0c1bde`
+  - Size: `9,172,089 bytes`
+  - Digest: `sha256:f597df11e1d0df80f2f5d244281a035c681ee1eee5520fc8cf0fe70860193418`
+- **Manual Run #564 (`33703366753`)**:
+  - Artifact ID: `9874584256`
+  - Name: `sky-auto-player-portable-f6ca8063e810fd9cfae4cc50f3af80b48c0c1bde`
+  - Size: `9,172,007 bytes`
+  - Digest: `sha256:a069bab7c0f3db0b2d823ec42208bf8cb3993e8c531605b1a84d425baa89bbd2`
+
+---
+
+## 6. CI-FAST-3: Variant C (`cache-targets: false` + `sccache`)
+
+### 6.1 Architectural Design
+Variant C preserves the benefits of Variant B while restoring object-level compiled crate reuse:
+1. **Target Pruning Retained**: `cache-targets: false` in `Swatinem/rust-cache` keeps Cargo registry/git/bin caches small (~95 MB) and avoids the 1.5 GB target upload.
+2. **Object-Level Compiler Caching**: Integrates `sccache v0.17.0` via `mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11`.
+3. **GHA Backend & Security Boundary**:
+   - `RUSTC_WRAPPER: sccache`
+   - `SCCACHE_GHA_ENABLED: "true"`
+   - `SCCACHE_GHA_VERSION: "sky-ci-v1"`
+   - `SCCACHE_GHA_RW_MODE`: `READ_ONLY` on PRs, `READ_WRITE` on main / workflow_dispatch.
+4. **Environment Isolation**:
+   - `"sccache"` added to `$required` in `Construct Python-unavailable validation environment` and `Construct Python-unavailable canonical environment`, preserving `sccache.exe` in the restricted PATH while scrubbing all Python binaries and environments.
+5. **Observability**: Explicitly logs `sccache --show-stats` in `validate` and `packaged`.
+
+### 6.2 Acceptance Thresholds for Variant C
+- Warm PR required-gate: $\le 9\text{m}$ (ideally $\le \text{Control A } \sim 8\text{m}35\text{s}$).
+- Save-enabled path: Maintains clear advantage over Control A 15m40s (around or below Variant B $\sim 13\text{m}$).
+- Sccache upload overhead: Must not create a multi-minute critical path tail.
+- Hit statistics: Directly observe and report compile requests, cache hits, misses, and hit rate from `sccache --show-stats`.
+
+### 6.3 Empirical Measurements: Variant C (`sccache` + Target Pruning)
+
+| Metric | Control A Main (#562 save-enabled) | Variant B (Manual #564) | Variant C (Cold Dispatch #567) | Variant C (Warm Dispatch #568) | Impact / Delta (Variant C Warm) |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Commit SHA** | `81bb7c2f1dff` | `f6ca8063e810` | `8cc535bf2595` | `8cc535bf2595` | Exact candidate HEAD |
+| **Trigger** | `push` (main) | `workflow_dispatch` | `workflow_dispatch` | `workflow_dispatch` | Branch ref cache isolation |
+| **Sccache hits / hit rate — `packaged`** | N/A | N/A | 4 hits (1%) | **402 hits (79%)** | **79% object reuse** |
+| **Sccache hits / hit rate — `validate`** | N/A | N/A | 70 hits (9%) | **582 hits (79%)** | **79% object reuse** |
+| **Dist build — `packaged`** | 8m00s | 10m22s | 10m24s | **7m02s** | **-3m20s vs B / -58s vs A** |
+| **Restricted tests — `validate`** | 7m03s | 11m13s | 11m15s | **8m00s** | **-3m13s vs B (-28%)** |
+| **Post Rust-cache overhead — `validate`** | 6m31s (391s save) | 15s (save) | 51s (save attempt) | **52s (contention/attempt)** | **-5m39s vs Control A** |
+| **Post Rust-cache overhead — `packaged`** | ~2m19s (139s save) | 32s (save) | 33s (save) | **33s (contention/attempt)** | **-1m46s vs Control A** |
+| **Post Set up sccache overhead** | N/A | N/A | 1s | **1s** | Negligible overhead |
+| **Job total — `packaged`** | 9m37s | 11m52s | 12m00s | **8m36s** | **-3m16s vs B / -1m01s vs A** |
+| **Job total — `validate`** | 15m35s | 12m32s | 14m40s | **10m49s** | **-4m46s vs A / -1m43s vs B** |
+| **Required-gate Wall-Clock** | **15m40s** | **13m00s** | **15m03s** | **11m11s** | **-4m29s vs A (-29%)** |
+
+*Note on Control & Cache Provenance*:
+- **Control #562** represents a normal main-branch run under Control A: it restored ~1.5 GB target cache and executed full post-job save (391s in validate, 139s in packaged); it is a save-enabled baseline, not a cold-cache baseline.
+- **Post Rust-cache in #568**: Both jobs completed Cargo dependency cleanup and attempted save under 33s / 52s; concurrent execution resulted in cache reservation contention (`Unable to reserve cache ... another job may be creating this cache`), with total post-job tail remaining in tens of seconds rather than multi-minute delays.
+
+#### Authoritative Artifacts for CI-FAST-3 Variant C:
+- **PR Run #566 (`33705285415`)**:
+  - Artifact ID: `9875629211`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,171,984 bytes`
+  - Digest: `sha256:1385086a543c645e2b3dfbdf7d12251c357cbac5d6944940a40998a25e8f4ea5`
+- **Manual Cold Run #567 (`33705309353`)**:
+  - Artifact ID: `9875245555`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,172,041 bytes`
+  - Digest: `sha256:4e2ec43be3a26ce271591077e283224cf9adda78c67c12c95a182e9d4d1ef78e`
+- **Manual Warm Run #568 (`33707301987`)**:
+  - Artifact ID: `9875840231`
+  - Name: `sky-auto-player-portable-8cc535bf2595f06601a9ed2816cb941a02781385`
+  - Size: `9,172,017 bytes`
+  - Digest: `sha256:fe2f011a78bdd1d47c6d1bc70390dcaa20c404ed57ac81d0cde7f1c2bdb0e224`
+
+#### Analysis of PR Branch Lookup Semantics vs Main
+Under the GitHub Actions cache security model:
+1. Workflows on `pull_request` (`refs/pull/XX/merge`) only have access to caches stored on the current pull request ref or on the base branch (`refs/heads/main`).
+2. Pull requests do not have read access to caches stored under feature/topic branch refs (`refs/heads/perf/ci-fast-3-rust-cache`).
+3. Since Variant C is currently under review on branch `perf/ci-fast-3-rust-cache`, `main` has not yet had `sccache` enabled and does not yet host a `sky-ci-v1` cache on `refs/heads/main`.
+4. Run #568 empirically verified that once the cache is present on the ref (as will occur on `main` post-merge), `sccache` achieves a **79% hit rate** (402 hits in packaged, 582 hits in validate), slashing packaged build time to **7m02s** and required-gate qualification time to **11m11s** (a 29% total wall-clock reduction).
