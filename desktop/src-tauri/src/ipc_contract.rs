@@ -96,20 +96,20 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         method: "calibration.cancel",
     },
     CommandSpec {
-        invoke_name: "library_list_collections",
-        method: "library.list_collections",
+        invoke_name: "library_list_playlists",
+        method: "library.list_playlists",
     },
     CommandSpec {
-        invoke_name: "library_create_collection",
-        method: "library.create_collection",
+        invoke_name: "library_create_playlist",
+        method: "library.create_playlist",
     },
     CommandSpec {
-        invoke_name: "library_rename_collection",
-        method: "library.rename_collection",
+        invoke_name: "library_rename_playlist",
+        method: "library.rename_playlist",
     },
     CommandSpec {
-        invoke_name: "library_delete_collection",
-        method: "library.delete_collection",
+        invoke_name: "library_delete_playlist",
+        method: "library.delete_playlist",
     },
     CommandSpec {
         invoke_name: "library_add_songs",
@@ -120,23 +120,19 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         method: "library.remove_songs",
     },
     CommandSpec {
-        invoke_name: "library_import_local_files",
-        method: "library.import_local_files",
+        invoke_name: "library_import_local_files_to_playlist",
+        method: "library.import_local_files_to_playlist",
     },
     CommandSpec {
-        invoke_name: "library_import_local_folder",
-        method: "library.import_local_folder",
-    },
-    CommandSpec {
-        invoke_name: "library_remove_import",
-        method: "library.remove_import",
+        invoke_name: "library_import_local_folder_to_playlist",
+        method: "library.import_local_folder_to_playlist",
     },
 ];
 
 pub(crate) const UI_EVENTS_COMMAND: &str = "subscribe_ui_events";
 
 pub(crate) fn is_complete() -> bool {
-    COMMANDS.len() == 31
+    COMMANDS.len() == 30
         && COMMANDS.iter().all(|spec| {
             !spec.invoke_name.is_empty()
                 && !spec.method.is_empty()
@@ -160,7 +156,7 @@ mod tests {
     #[test]
     fn stable_command_contract_is_exactly_the_native_set() {
         assert!(is_complete());
-        assert_eq!(COMMANDS.len(), 31);
+        assert_eq!(COMMANDS.len(), 30);
         assert_eq!(
             COMMANDS[0],
             CommandSpec {
@@ -169,10 +165,10 @@ mod tests {
             }
         );
         assert_eq!(
-            COMMANDS[30],
+            COMMANDS[29],
             CommandSpec {
-                invoke_name: "library_remove_import",
-                method: "library.remove_import"
+                invoke_name: "library_import_local_folder_to_playlist",
+                method: "library.import_local_folder_to_playlist"
             }
         );
         assert_eq!(UI_EVENTS_COMMAND, "subscribe_ui_events");

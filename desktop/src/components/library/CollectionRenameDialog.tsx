@@ -1,7 +1,7 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { useState } from 'react';
 
-interface CollectionRenameDialogProps {
+interface PlaylistRenameDialogProps {
   open: boolean;
   initialName: string;
   pending: boolean;
@@ -10,21 +10,21 @@ interface CollectionRenameDialogProps {
   onSubmit: (name: string) => Promise<void>;
 }
 
-export function CollectionRenameDialog({
+export function PlaylistRenameDialog({
   open,
   initialName,
   pending,
   error,
   onOpenChange,
   onSubmit,
-}: CollectionRenameDialogProps) {
+}: PlaylistRenameDialogProps) {
   const [name, setName] = useState(initialName);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const submit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
-      setValidationError('Enter a collection name.');
+      setValidationError('Enter a playlist name.');
       return;
     }
     setValidationError(null);
@@ -47,8 +47,8 @@ export function CollectionRenameDialog({
         <Dialog aria-label={`Rename ${initialName}`}>
           <div className="dialog-heading">
             <div>
-              <p className="eyebrow">COLLECTION</p>
-              <h2>Rename collection</h2>
+              <p className="eyebrow">PLAYLIST</p>
+              <h2>Rename playlist</h2>
             </div>
             <button
               className="icon-button"
@@ -68,7 +68,7 @@ export function CollectionRenameDialog({
             }}
           >
             <label>
-              Collection name
+              Playlist name
               <input
                 autoFocus
                 value={name}

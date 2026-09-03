@@ -10,9 +10,9 @@ import type {
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
   DetailRequest,
-  LibraryCollectionSummary,
+  LibraryPlaylistSummary,
   LibraryNavigation,
-  LibraryImport,
+  LibraryPlaylistImportResult,
   PlaybackCommandAck,
   PlaybackPrepare,
   PlaybackSession,
@@ -58,15 +58,14 @@ export interface CommandRequestMap {
   set_diagnostics_enabled: DiagnosticsSetEnabled;
   start_calibration: CalibrationStart;
   cancel_calibration: CalibrationCancel;
-  library_list_collections: undefined;
-  library_create_collection: { name: string };
-  library_rename_collection: { collectionId: string; name: string };
-  library_delete_collection: { collectionId: string };
-  library_add_songs: { collectionId: string; songIds: string[] };
-  library_remove_songs: { collectionId: string; songIds: string[] };
-  library_import_local_files: undefined;
-  library_import_local_folder: undefined;
-  library_remove_import: { sourceId: string };
+  library_list_playlists: undefined;
+  library_create_playlist: { name: string };
+  library_rename_playlist: { playlistId: string; name: string };
+  library_delete_playlist: { playlistId: string };
+  library_add_songs: { playlistId: string; songIds: string[] };
+  library_remove_songs: { playlistId: string; songIds: string[] };
+  library_import_local_files_to_playlist: { playlistId: string };
+  library_import_local_folder_to_playlist: { playlistId: string };
 }
 
 export interface CommandResponseMap {
@@ -92,15 +91,14 @@ export interface CommandResponseMap {
   set_diagnostics_enabled: DiagnosticsEnabled;
   start_calibration: CalibrationStartAck;
   cancel_calibration: CalibrationCancelAck;
-  library_list_collections: LibraryNavigation;
-  library_create_collection: LibraryCollectionSummary;
-  library_rename_collection: LibraryCollectionSummary;
-  library_delete_collection: boolean;
-  library_add_songs: LibraryCollectionSummary;
-  library_remove_songs: LibraryCollectionSummary;
-  library_import_local_files: LibraryImport;
-  library_import_local_folder: LibraryImport;
-  library_remove_import: LibraryImport;
+  library_list_playlists: LibraryNavigation;
+  library_create_playlist: LibraryPlaylistSummary;
+  library_rename_playlist: LibraryPlaylistSummary;
+  library_delete_playlist: boolean;
+  library_add_songs: LibraryPlaylistSummary;
+  library_remove_songs: LibraryPlaylistSummary;
+  library_import_local_files_to_playlist: LibraryPlaylistImportResult;
+  library_import_local_folder_to_playlist: LibraryPlaylistImportResult;
 }
 
 export type DesktopCommandName = keyof CommandRequestMap;

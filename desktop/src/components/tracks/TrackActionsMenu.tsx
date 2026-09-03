@@ -11,10 +11,10 @@ interface TrackActionsMenuProps {
 
 export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
   const [open, setOpen] = useState(false);
-  const [collectionIds, setCollectionIds] = useState<string[]>([]);
+  const [playlistIds, setPlaylistIds] = useState<string[]>([]);
   const onOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
-    if (nextOpen) setCollectionIds([...useStore.getState().libraryNavigation.collectionOrder]);
+    if (nextOpen) setPlaylistIds([...useStore.getState().libraryNavigation.playlistOrder]);
   };
 
   return (
@@ -31,47 +31,45 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
           aria-label={`Actions for ${row.title}`}
           onAction={(key) => {
             const state = useStore.getState();
-            if (key === 'remove-current' && state.library.source.kind === 'collection') {
+            if (key === 'remove-current' && state.library.source.kind === 'playlist') {
               void state
-                .removeSongFromCollection(state.library.source.id, row.song_id)
+                .removeSongFromPlaylist(state.library.source.id, row.song_id)
                 .catch(() => undefined);
               return;
             }
-            if (key.startsWith('collection:')) {
+            if (key.startsWith('playlist:')) {
               void state
-                .addSongToCollection(key.slice('collection:'.length), row.song_id)
+                .addSongToPlaylist(key.slice('playlist:'.length), row.song_id)
                 .catch(() => undefined);
             }
           }}
         >
-          {collectionIds.length === 0 ? (
-            <MenuItem id="no-collections" isDisabled className="library-menu-item">
+          {playlistIds.length === 0 ? (
+            <MenuItem id="no-playlists" isDisabled className="library-menu-item">
               <ListPlus size={15} aria-hidden="true" />
-              <span>No collections yet</span>
+              <span>No playlists yet</span>
             </MenuItem>
           ) : (
-            collectionIds.map((collectionId) => {
-              const collection = useStore
-                .getState()
-                .libraryNavigation.collectionsById.get(collectionId);
-              if (!collection) return null;
+            playlistIds.map((playlistId) => {
+              const playlist = useStore.getState().libraryNavigation.playlistsById.get(playlistId);
+              if (!playlist) return null;
               return (
                 <MenuItem
-                  key={collectionId}
-                  id={`collection:${collectionId}`}
+                  key={playlistId}
+                  id={`playlist:${playlistId}`}
                   className="library-menu-item"
                 >
                   <ListPlus size={15} aria-hidden="true" />
-                  <span>Add to {collection.name}</span>
-                  <small>{collection.song_count}</small>
+                  <span>Add to {playlist.name}</span>
+                  <small>{playlist.song_count}</small>
                 </MenuItem>
               );
             })
           )}
-          {useStore.getState().library.source.kind === 'collection' && (
+          {useStore.getState().library.source.kind === 'playlist' && (
             <MenuItem id="remove-current" className="library-menu-item is-danger">
               <MinusCircle size={15} aria-hidden="true" />
-              <span>Remove from this collection</span>
+              <span>Remove from playlist</span>
             </MenuItem>
           )}
         </Menu>

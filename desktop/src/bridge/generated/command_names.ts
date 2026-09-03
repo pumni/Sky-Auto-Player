@@ -24,15 +24,14 @@ export const COMMANDS = {
   setDiagnosticsEnabled: 'set_diagnostics_enabled',
   startCalibration: 'start_calibration',
   cancelCalibration: 'cancel_calibration',
-  libraryListCollections: 'library_list_collections',
-  libraryCreateCollection: 'library_create_collection',
-  libraryRenameCollection: 'library_rename_collection',
-  libraryDeleteCollection: 'library_delete_collection',
+  libraryListPlaylists: 'library_list_playlists',
+  libraryCreatePlaylist: 'library_create_playlist',
+  libraryRenamePlaylist: 'library_rename_playlist',
+  libraryDeletePlaylist: 'library_delete_playlist',
   libraryAddSongs: 'library_add_songs',
   libraryRemoveSongs: 'library_remove_songs',
-  libraryImportLocalFiles: 'library_import_local_files',
-  libraryImportLocalFolder: 'library_import_local_folder',
-  libraryRemoveImport: 'library_remove_import',
+  libraryImportLocalFilesToPlaylist: 'library_import_local_files_to_playlist',
+  libraryImportLocalFolderToPlaylist: 'library_import_local_folder_to_playlist',
 } as const;
 
 export const UI_EVENTS_COMMAND = 'subscribe_ui_events' as const;

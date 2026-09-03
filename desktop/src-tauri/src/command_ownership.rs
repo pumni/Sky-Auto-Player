@@ -132,10 +132,6 @@ pub(crate) const COMMAND_OWNERS: &[(&str, CommandOwner)] = &[
         crate::ipc_contract::COMMANDS[29].method,
         CommandOwner::Native,
     ),
-    (
-        crate::ipc_contract::COMMANDS[30].method,
-        CommandOwner::Native,
-    ),
 ];
 
 /// Native handlers are enumerated separately from policy so the matrix cannot
@@ -172,10 +168,9 @@ pub(crate) const NATIVE_HANDLER_METHODS: &[&str] = &[
     crate::ipc_contract::COMMANDS[27].method,
     crate::ipc_contract::COMMANDS[28].method,
     crate::ipc_contract::COMMANDS[29].method,
-    crate::ipc_contract::COMMANDS[30].method,
 ];
 
-const REQUIRED_COMMANDS: [&str; 31] = [
+const REQUIRED_COMMANDS: [&str; 30] = [
     crate::ipc_contract::COMMANDS[0].method,
     crate::ipc_contract::COMMANDS[1].method,
     crate::ipc_contract::COMMANDS[2].method,
@@ -206,7 +201,6 @@ const REQUIRED_COMMANDS: [&str; 31] = [
     crate::ipc_contract::COMMANDS[27].method,
     crate::ipc_contract::COMMANDS[28].method,
     crate::ipc_contract::COMMANDS[29].method,
-    crate::ipc_contract::COMMANDS[30].method,
 ];
 
 pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
@@ -242,13 +236,13 @@ mod tests {
 
     #[test]
     fn every_current_desktop_method_has_exactly_one_native_owner() {
-        assert_eq!(COMMAND_OWNERS.len(), 31);
+        assert_eq!(COMMAND_OWNERS.len(), 30);
         assert_eq!(
             COMMAND_OWNERS
                 .iter()
                 .filter(|(_, owner)| *owner == CommandOwner::Native)
                 .count(),
-            31
+            30
         );
         for (method, owner) in COMMAND_OWNERS {
             assert_eq!(owner_for(method), Some(*owner));
@@ -260,7 +254,7 @@ mod tests {
         );
         assert_eq!(owner_for("unknown"), None);
         assert!(matrix_is_complete());
-        assert_eq!(NATIVE_HANDLER_METHODS.len(), 31);
+        assert_eq!(NATIVE_HANDLER_METHODS.len(), 30);
         for method in NATIVE_HANDLER_METHODS {
             assert_eq!(owner_for(method), Some(CommandOwner::Native));
             assert!(

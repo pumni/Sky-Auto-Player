@@ -17,10 +17,9 @@ import type {
   CatalogSearchRequest,
   CatalogViewportDto,
   CatalogViewportRequest,
-  LibraryCollectionSummaryDto,
+  LibraryPlaylistSummaryDto,
+  LibraryPlaylistImportResultDto,
   LibraryNavigationDto,
-  LibraryImportedSourceDto,
-  LibraryImportDto,
   LibrarySource as GeneratedLibrarySource,
   DiagnosticsBackendStatus,
   DiagnosticsEnabledDto,
@@ -92,10 +91,9 @@ export type SongDetail = Omit<SongDetailDto, 'risk'> & { risk: RiskSummary };
 export type ViewportRequest = CatalogViewportRequest;
 export type ViewportResult = Omit<CatalogViewportDto, 'items'> & { items: SongRow[] };
 export type LibrarySource = GeneratedLibrarySource;
-export type LibraryCollectionSummary = LibraryCollectionSummaryDto;
+export type LibraryPlaylistSummary = LibraryPlaylistSummaryDto;
 export type LibraryNavigation = LibraryNavigationDto;
-export type LibraryImportedSource = LibraryImportedSourceDto;
-export type LibraryImport = LibraryImportDto;
+export type LibraryPlaylistImportResult = LibraryPlaylistImportResultDto;
 export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   theme: ThemeId;
   update_preferences: UpdatePreferences;
@@ -163,14 +161,13 @@ export interface DesktopBridge {
   setLibraryViewport(request: ViewportRequest): Promise<ViewportResult>;
   setSongLiked(request: SetSongLikedRequest): Promise<CatalogSetLikedDto>;
   listLibraryNavigation(): Promise<LibraryNavigation>;
-  createCollection(name: string): Promise<LibraryCollectionSummary>;
-  renameCollection(collectionId: string, name: string): Promise<LibraryCollectionSummary>;
-  deleteCollection(collectionId: string): Promise<boolean>;
-  addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollectionSummary>;
-  removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollectionSummary>;
-  importLocalFiles(): Promise<LibraryImport>;
-  importLocalFolder(): Promise<LibraryImport>;
-  removeImport(sourceId: string): Promise<LibraryImport>;
+  createPlaylist(name: string): Promise<LibraryPlaylistSummary>;
+  renamePlaylist(playlistId: string, name: string): Promise<LibraryPlaylistSummary>;
+  deletePlaylist(playlistId: string): Promise<boolean>;
+  addSongsToPlaylist(playlistId: string, songIds: string[]): Promise<LibraryPlaylistSummary>;
+  removeSongsFromPlaylist(playlistId: string, songIds: string[]): Promise<LibraryPlaylistSummary>;
+  importLocalFilesToPlaylist(playlistId: string): Promise<LibraryPlaylistImportResult>;
+  importLocalFolderToPlaylist(playlistId: string): Promise<LibraryPlaylistImportResult>;
   getSettings(): Promise<Settings>;
   patchSettings(patch: SettingsPatch): Promise<Settings>;
   checkForUpdate(): Promise<UpdateCheck>;

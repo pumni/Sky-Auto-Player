@@ -11,10 +11,9 @@ use crate::commands::{
     CalibrationStartRequest, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto,
     CatalogSearchDto, CatalogSearchRequest, CatalogSetLikedDto, CatalogSetLikedRequest,
     CatalogSourceId, CatalogViewportDto, CatalogViewportRequest, DiagnosticsEnabledDto,
-    DiagnosticsSetEnabledRequest, LibraryCollectionIdRequest, LibraryCollectionSongsRequest,
-    LibraryCollectionSummaryDto, LibraryCreateCollectionRequest, LibraryImportDto,
-    LibraryImportedSourceAvailability, LibraryImportedSourceDto, LibraryNavigationDto,
-    LibraryRemoveImportRequest, LibraryRenameCollectionRequest, LibrarySource, PlaybackAdmission,
+    DiagnosticsSetEnabledRequest, LibraryCreatePlaylistRequest, LibraryNavigationDto,
+    LibraryPlaylistIdRequest, LibraryPlaylistImportResultDto, LibraryPlaylistSongsRequest,
+    LibraryPlaylistSummaryDto, LibraryRenamePlaylistRequest, LibrarySource, PlaybackAdmission,
     PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision, PlaybackDecisionAcceptanceDto,
     PlaybackDefaultsDto, PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest,
     PlaybackSessionDto, PlaybackSessionState, PlaybackStartRequest, PreparedPlaybackDto,
@@ -1315,12 +1314,14 @@ struct CatalogMetadata {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeLibraryImportRequest {
+    pub playlist_id: String,
     pub paths: Vec<String>,
 }
 
 #[derive(Default)]
 struct CatalogState {
     index: CatalogIndex,
+    primary_membership: BTreeSet<String>,
     imported_membership: HashMap<String, BTreeSet<String>>,
     imported_status: Vec<ImportedSourceCatalogStatus>,
 }
@@ -1474,46 +1475,41 @@ impl NativeDesktopRuntime {
                     song_ids: request.song_ids,
                 }))
             }
-            "library.list_collections" => encode_result(self.list_collections()),
-            "library.create_collection" => {
-                let request: LibraryCreateCollectionRequest =
+            "library.list_playlists" => encode_result(self.list_playlists()),
+            "library.create_playlist" => {
+                let request: LibraryCreatePlaylistRequest =
                     serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.create_collection(request))
+                encode_result(self.create_playlist(request))
             }
-            "library.rename_collection" => {
-                let request: LibraryRenameCollectionRequest =
+            "library.rename_playlist" => {
+                let request: LibraryRenamePlaylistRequest =
                     serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.rename_collection(request))
+                encode_result(self.rename_playlist(request))
             }
-            "library.delete_collection" => {
-                let request: LibraryCollectionIdRequest =
+            "library.delete_playlist" => {
+                let request: LibraryPlaylistIdRequest =
                     serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.delete_collection(request))
+                encode_result(self.delete_playlist(request))
             }
             "library.add_songs" => {
-                let request: LibraryCollectionSongsRequest =
+                let request: LibraryPlaylistSongsRequest =
                     serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.add_collection_songs(request))
+                encode_result(self.add_playlist_songs(request))
             }
             "library.remove_songs" => {
-                let request: LibraryCollectionSongsRequest =
+                let request: LibraryPlaylistSongsRequest =
                     serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.remove_collection_songs(request))
+                encode_result(self.remove_playlist_songs(request))
             }
-            "library.import_local_files" => {
+            "library.import_local_files_to_playlist" => {
                 let request: NativeLibraryImportRequest =
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.import_paths(request, ImportedSourceKind::File))
             }
-            "library.import_local_folder" => {
+            "library.import_local_folder_to_playlist" => {
                 let request: NativeLibraryImportRequest =
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.import_paths(request, ImportedSourceKind::Folder))
-            }
-            "library.remove_import" => {
-                let request: LibraryRemoveImportRequest =
-                    serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.remove_import(request))
             }
             "settings.get" => encode_result(self.settings_dto()),
             "settings.patch" => {
@@ -1762,6 +1758,7 @@ impl NativeDesktopRuntime {
                     .index
                     .replace_entries(composition.entries)
                     .map_err(catalog_error)?;
+                catalog.primary_membership = composition.primary_membership;
                 catalog.imported_membership = composition.imported_membership;
                 catalog.imported_status = composition.imported_status;
                 return Ok(snapshot);
@@ -1783,22 +1780,35 @@ impl NativeDesktopRuntime {
             .index
             .replace_entries(composition.entries)
             .map_err(catalog_error)?;
+        catalog.primary_membership = composition.primary_membership;
         catalog.imported_membership = composition.imported_membership;
         catalog.imported_status = composition.imported_status;
         drop(catalog);
         self.invalidate_analysis_cache();
         self.playback.invalidate_catalog(snapshot.generation);
+        let primary_total = self.primary_catalog_total(snapshot.generation)?;
         self.publish(UiEvent::CatalogChanged {
             v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: CatalogChangedPayload {
                 generation: snapshot.generation,
-                total: snapshot.total as u64,
+                total: primary_total as u64,
             },
         })?;
         Ok(CatalogReloadDto {
             generation: snapshot.generation,
-            total: snapshot.total as u64,
+            total: primary_total as u64,
         })
+    }
+
+    fn primary_catalog_total(&self, generation: u64) -> Result<usize, String> {
+        let catalog = self
+            .catalog
+            .lock()
+            .map_err(|_| "native catalog lock poisoned".to_string())?;
+        catalog
+            .index
+            .count_allowed_ids(&catalog.primary_membership, Some(generation))
+            .map_err(catalog_error)
     }
 
     fn catalog_composition(&self) -> Result<CatalogComposition, String> {
@@ -1814,7 +1824,7 @@ impl NativeDesktopRuntime {
             .map_err(catalog_error)
     }
 
-    fn list_collections(&self) -> Result<LibraryNavigationDto, String> {
+    fn list_playlists(&self) -> Result<LibraryNavigationDto, String> {
         self.ensure_catalog_loaded()?;
         let catalog = self
             .catalog
@@ -1825,13 +1835,13 @@ impl NativeDesktopRuntime {
             .lock()
             .map_err(|_| "native library manifest lock poisoned".to_string())?;
         let generation = catalog.index.generation();
-        let collections = manifest
+        let playlists = manifest
             .snapshot()
             .collections
             .iter()
             .map(|collection| {
                 let ids = collection.song_ids.iter().cloned().collect::<BTreeSet<_>>();
-                LibraryCollectionSummaryDto {
+                LibraryPlaylistSummaryDto {
                     id: collection.id.clone(),
                     name: collection.name.clone(),
                     song_count: catalog
@@ -1841,27 +1851,20 @@ impl NativeDesktopRuntime {
                 }
             })
             .collect();
-        Ok(LibraryNavigationDto {
-            collections,
-            imported_sources: catalog
-                .imported_status
-                .iter()
-                .map(imported_source_dto)
-                .collect(),
-        })
+        Ok(LibraryNavigationDto { playlists })
     }
 
-    fn collection_summary(
+    fn playlist_summary(
         &self,
         collection: sky_app_core::library::Collection,
-    ) -> Result<LibraryCollectionSummaryDto, String> {
+    ) -> Result<LibraryPlaylistSummaryDto, String> {
         self.ensure_catalog_loaded()?;
         let catalog = self
             .catalog
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())?;
         let ids = collection.song_ids.iter().cloned().collect::<BTreeSet<_>>();
-        Ok(LibraryCollectionSummaryDto {
+        Ok(LibraryPlaylistSummaryDto {
             id: collection.id,
             name: collection.name,
             song_count: catalog
@@ -1871,10 +1874,10 @@ impl NativeDesktopRuntime {
         })
     }
 
-    fn create_collection(
+    fn create_playlist(
         &self,
-        request: LibraryCreateCollectionRequest,
-    ) -> Result<LibraryCollectionSummaryDto, String> {
+        request: LibraryCreatePlaylistRequest,
+    ) -> Result<LibraryPlaylistSummaryDto, String> {
         let id = opaque_native_id()?;
         let collection = self
             .library_manifest
@@ -1882,65 +1885,66 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native library manifest lock poisoned".to_string())?
             .create_collection(id, request.name)
             .map_err(library_error)?;
-        self.collection_summary(collection)
+        self.playlist_summary(collection)
     }
 
-    fn rename_collection(
+    fn rename_playlist(
         &self,
-        request: LibraryRenameCollectionRequest,
-    ) -> Result<LibraryCollectionSummaryDto, String> {
+        request: LibraryRenamePlaylistRequest,
+    ) -> Result<LibraryPlaylistSummaryDto, String> {
         let collection = self
             .library_manifest
             .lock()
             .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .rename_collection(&request.collection_id, request.name)
+            .rename_collection(&request.playlist_id, request.name)
             .map_err(library_error)?;
-        self.collection_summary(collection)
+        self.playlist_summary(collection)
     }
 
-    fn delete_collection(&self, request: LibraryCollectionIdRequest) -> Result<bool, String> {
+    fn delete_playlist(&self, request: LibraryPlaylistIdRequest) -> Result<bool, String> {
         self.library_manifest
             .lock()
             .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .delete_collection(&request.collection_id)
+            .delete_collection(&request.playlist_id)
             .map_err(library_error)
     }
 
-    fn add_collection_songs(
+    fn add_playlist_songs(
         &self,
-        request: LibraryCollectionSongsRequest,
-    ) -> Result<LibraryCollectionSummaryDto, String> {
+        request: LibraryPlaylistSongsRequest,
+    ) -> Result<LibraryPlaylistSummaryDto, String> {
         let collection = self
             .library_manifest
             .lock()
             .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .add_songs(&request.collection_id, &request.song_ids)
+            .add_songs(&request.playlist_id, &request.song_ids)
             .map_err(library_error)?;
-        self.collection_summary(collection)
+        self.playlist_summary(collection)
     }
 
-    fn remove_collection_songs(
+    fn remove_playlist_songs(
         &self,
-        request: LibraryCollectionSongsRequest,
-    ) -> Result<LibraryCollectionSummaryDto, String> {
+        request: LibraryPlaylistSongsRequest,
+    ) -> Result<LibraryPlaylistSummaryDto, String> {
         let collection = self
             .library_manifest
             .lock()
             .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .remove_songs(&request.collection_id, &request.song_ids)
+            .remove_songs(&request.playlist_id, &request.song_ids)
             .map_err(library_error)?;
-        self.collection_summary(collection)
+        self.playlist_summary(collection)
     }
 
     fn import_paths(
         &self,
         request: NativeLibraryImportRequest,
         kind: ImportedSourceKind,
-    ) -> Result<LibraryImportDto, String> {
+    ) -> Result<LibraryPlaylistImportResultDto, String> {
         const MAX_IMPORT_SELECTIONS: usize = 1_024;
         if request.paths.len() > MAX_IMPORT_SELECTIONS {
             return Err("invalid_params: import selection is too large".into());
         }
+
         let mut imports = Vec::with_capacity(request.paths.len());
         for raw_path in request.paths {
             let path = PathBuf::from(raw_path);
@@ -1956,62 +1960,53 @@ impl NativeDesktopRuntime {
                 return Err("invalid_params: import source has an unsupported type".into());
             }
             let canonical_path = canonical.to_string_lossy().into_owned();
-            let source_id = imported_source_id(&canonical_path, kind);
             imports.push(ImportedSourceRef {
-                source_id,
+                source_id: imported_source_id(&canonical_path, kind),
                 canonical_path,
                 kind,
             });
         }
-        let source_ids = imports
-            .iter()
-            .map(|import| import.source_id.clone())
-            .collect::<Vec<_>>();
-        let added = self
-            .library_manifest
-            .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .register_imports(imports)
-            .map_err(library_error)?;
-        let snapshot = if added > 0 {
-            self.reload()?
-        } else {
-            let snapshot = self.ensure_catalog_loaded()?;
-            CatalogReloadDto {
-                generation: snapshot.generation,
-                total: snapshot.total as u64,
-            }
-        };
-        Ok(LibraryImportDto {
-            source_ids,
-            imported_count: added as u64,
-            catalog_generation: snapshot.generation,
-        })
-    }
 
-    fn remove_import(
-        &self,
-        request: LibraryRemoveImportRequest,
-    ) -> Result<LibraryImportDto, String> {
-        let removed = self
-            .library_manifest
-            .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .remove_import(&request.source_id)
-            .map_err(library_error)?;
-        let snapshot = if removed {
-            self.reload()?
-        } else {
-            let snapshot = self.ensure_catalog_loaded()?;
-            CatalogReloadDto {
-                generation: snapshot.generation,
-                total: snapshot.total as u64,
-            }
+        // Resolve the selected native paths before touching the manifest. The
+        // resulting IDs are opaque and path-free at the application boundary.
+        let composition = self
+            .catalog_source
+            .catalog_composition_with_imports(&imports)
+            .map_err(catalog_error)?;
+        let song_ids = imports
+            .iter()
+            .filter_map(|import| composition.imported_membership.get(&import.source_id))
+            .flat_map(|ids| ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let song_ids = song_ids.into_iter().collect::<Vec<_>>();
+
+        let (playlist, has_new_import) = {
+            let mut manifest = self
+                .library_manifest
+                .lock()
+                .map_err(|_| "native library manifest lock poisoned".to_string())?;
+            let has_new_import = imports.iter().any(|import| {
+                !manifest.snapshot().imports.iter().any(|existing| {
+                    existing
+                        .canonical_path
+                        .eq_ignore_ascii_case(&import.canonical_path)
+                })
+            });
+            let playlist = manifest
+                .import_and_add_songs(&request.playlist_id, imports, &song_ids)
+                .map_err(library_error)?;
+            (playlist, has_new_import)
         };
-        Ok(LibraryImportDto {
-            source_ids: removed.then_some(request.source_id).into_iter().collect(),
-            imported_count: u64::from(removed),
-            catalog_generation: snapshot.generation,
+
+        let generation = if has_new_import {
+            self.reload()?.generation
+        } else {
+            self.ensure_catalog_loaded()?.generation
+        };
+        Ok(LibraryPlaylistImportResultDto {
+            playlist: self.playlist_summary(playlist)?,
+            imported_song_count: song_ids.len() as u64,
+            catalog_generation: generation,
         })
     }
 
@@ -2024,10 +2019,16 @@ impl NativeDesktopRuntime {
             } => Some(settings.liked_songs.ids().clone()),
             LibrarySource::Smart {
                 id: CatalogSourceId::All,
-            } => None,
-            LibrarySource::Collection { id } => {
+            } => {
+                let catalog = self
+                    .catalog
+                    .lock()
+                    .map_err(|_| "native catalog lock poisoned".to_string())?;
+                Some(catalog.primary_membership.clone())
+            }
+            LibrarySource::Playlist { id } => {
                 if !sky_app_core::library::is_valid_collection_id(id) {
-                    return Err("invalid_params: collection source ID is invalid".into());
+                    return Err("invalid_params: playlist source ID is invalid".into());
                 }
                 let manifest = self
                     .library_manifest
@@ -2039,27 +2040,11 @@ impl NativeDesktopRuntime {
                         .collections
                         .iter()
                         .find(|collection| collection.id == *id)
-                        .ok_or_else(|| "library collection was not found".to_string())?
+                        .ok_or_else(|| "library playlist was not found".to_string())?
                         .song_ids
                         .iter()
                         .cloned()
                         .collect(),
-                )
-            }
-            LibrarySource::Imported { id } => {
-                if !sky_app_core::library::is_valid_collection_id(id) {
-                    return Err("invalid_params: imported source ID is invalid".into());
-                }
-                let catalog = self
-                    .catalog
-                    .lock()
-                    .map_err(|_| "native catalog lock poisoned".to_string())?;
-                Some(
-                    catalog
-                        .imported_membership
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| "library import source was not found".to_string())?,
                 )
             }
         };
@@ -2757,20 +2742,6 @@ fn opaque_native_id() -> Result<String, String> {
 
 fn library_error(error: LibraryError) -> String {
     format!("library operation failed: {error}")
-}
-
-fn imported_source_dto(source: &ImportedSourceCatalogStatus) -> LibraryImportedSourceDto {
-    LibraryImportedSourceDto {
-        source_id: source.source_id.clone(),
-        kind: source.kind.into(),
-        display_name: source.display_name.clone(),
-        song_count: source.song_count as u64,
-        availability: if source.available {
-            LibraryImportedSourceAvailability::Available
-        } else {
-            LibraryImportedSourceAvailability::Missing
-        },
-    }
 }
 
 fn is_supported_catalog_path(path: &Path) -> bool {
@@ -5321,7 +5292,7 @@ mod tests {
     }
 
     #[test]
-    fn native_library_manifest_commands_persist_and_compose_imports_without_paths() {
+    fn native_playlist_import_commits_membership_and_import_reference_together() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -5335,13 +5306,9 @@ mod tests {
 
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
         let listed = runtime
-            .dispatch("library.list_collections", serde_json::json!({}))
-            .expect("list collections");
-        assert_eq!(
-            listed["collections"].as_array().expect("collections").len(),
-            0
-        );
-        assert_eq!(listed["imported_sources"].as_array().map(Vec::len), Some(0));
+            .dispatch("library.list_playlists", serde_json::json!({}))
+            .expect("list playlists");
+        assert_eq!(listed["playlists"].as_array().expect("playlists").len(), 0);
         let initial_bootstrap = runtime
             .dispatch("app.bootstrap", serde_json::json!({}))
             .expect("initial bootstrap");
@@ -5366,60 +5333,64 @@ mod tests {
 
         let created = runtime
             .dispatch(
-                "library.create_collection",
+                "library.create_playlist",
                 serde_json::json!({"name":"Practice"}),
             )
-            .expect("create collection");
-        let collection_id = created["id"].as_str().expect("collection ID").to_owned();
+            .expect("create playlist");
+        let playlist_id = created["id"].as_str().expect("playlist ID").to_owned();
         assert_eq!(created["name"], "Practice");
         runtime
             .dispatch(
-                "library.rename_collection",
-                serde_json::json!({"collectionId":collection_id,"name":"Morning"}),
+                "library.rename_playlist",
+                serde_json::json!({"playlistId":playlist_id,"name":"Morning"}),
             )
-            .expect("rename collection");
+            .expect("rename playlist");
         runtime
             .dispatch(
                 "library.add_songs",
                 serde_json::json!({
-                    "collectionId":collection_id,
+                    "playlistId":playlist_id,
                     "songIds":[primary_id]
                 }),
             )
-            .expect("add song to collection");
+            .expect("add song to playlist");
         let listed = runtime
-            .dispatch("library.list_collections", serde_json::json!({}))
-            .expect("list updated collections");
-        assert_eq!(listed["collections"][0]["name"], "Morning");
-        assert_eq!(listed["collections"][0]["song_count"], 1);
-        assert!(listed["collections"][0].get("song_ids").is_none());
+            .dispatch("library.list_playlists", serde_json::json!({}))
+            .expect("list updated playlists");
+        assert_eq!(listed["playlists"][0]["name"], "Morning");
+        assert_eq!(listed["playlists"][0]["song_count"], 1);
+        assert!(listed["playlists"][0].get("song_ids").is_none());
 
         let imported = runtime
             .dispatch(
-                "library.import_local_files",
-                serde_json::json!({"paths":[root.join("imports/local.txt")]}),
+                "library.import_local_files_to_playlist",
+                serde_json::json!({
+                    "playlistId":playlist_id,
+                    "paths":[root.join("imports/local.txt")]
+                }),
             )
-            .expect("import local file");
-        assert_eq!(imported["imported_count"], 1);
+            .expect("import local file to playlist");
+        assert_eq!(imported["imported_song_count"], 1);
+        assert_eq!(imported["playlist"]["name"], "Morning");
+        assert_eq!(imported["playlist"]["song_count"], 2);
         assert!(imported.get("canonical_path").is_none());
-        let listed = runtime
-            .dispatch("library.list_collections", serde_json::json!({}))
-            .expect("list imported sources");
-        assert_eq!(
-            listed["imported_sources"][0]["source_id"],
-            imported["source_ids"][0]
-        );
-        assert_eq!(listed["imported_sources"][0]["kind"], "file");
-        assert_eq!(listed["imported_sources"][0]["display_name"], "local.txt");
-        assert_eq!(listed["imported_sources"][0]["song_count"], 1);
-        assert_eq!(listed["imported_sources"][0]["availability"], "available");
 
         let generation = imported["catalog_generation"].as_u64().expect("generation");
-        let source_id = imported["source_ids"][0]
-            .as_str()
-            .expect("source ID")
-            .to_owned();
         let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query":"local",
+                    "offset":0,
+                    "limit":10,
+                    "generation":generation,
+                    "source":{"kind":"playlist","id":playlist_id}
+                }),
+            )
+            .expect("search playlist local song");
+        assert_eq!(search["total"], 1);
+
+        let all_songs = runtime
             .dispatch(
                 "catalog.search",
                 serde_json::json!({
@@ -5430,43 +5401,21 @@ mod tests {
                     "source":{"kind":"smart","id":"all"}
                 }),
             )
-            .expect("search imported song");
-        assert_eq!(search["total"], 1);
-
-        let imported_search = runtime
-            .dispatch(
-                "catalog.search",
-                serde_json::json!({
-                    "query":"local",
-                    "offset":0,
-                    "limit":10,
-                    "generation":generation,
-                    "source":{"kind":"imported","id":source_id}
-                }),
-            )
-            .expect("search imported source");
-        assert_eq!(imported_search["total"], 1);
-
-        let removed_import = runtime
-            .dispatch(
-                "library.remove_import",
-                serde_json::json!({"sourceId":source_id}),
-            )
-            .expect("remove import reference");
-        assert_eq!(removed_import["imported_count"], 1);
+            .expect("search primary catalog");
+        assert_eq!(all_songs["total"], 0);
         assert!(root.join("imports/local.txt").exists());
         runtime
             .dispatch(
-                "library.delete_collection",
-                serde_json::json!({"collectionId":collection_id}),
+                "library.delete_playlist",
+                serde_json::json!({"playlistId":playlist_id}),
             )
-            .expect("delete collection");
+            .expect("delete playlist");
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn native_missing_import_is_visible_but_does_not_break_all_songs() {
+    fn native_missing_import_does_not_break_all_songs_or_navigation() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -5494,11 +5443,9 @@ mod tests {
 
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
         let listed = runtime
-            .dispatch("library.list_collections", serde_json::json!({}))
-            .expect("list missing source");
-        assert_eq!(listed["imported_sources"][0]["source_id"], source_id);
-        assert_eq!(listed["imported_sources"][0]["song_count"], 0);
-        assert_eq!(listed["imported_sources"][0]["availability"], "missing");
+            .dispatch("library.list_playlists", serde_json::json!({}))
+            .expect("list playlists with missing import");
+        assert_eq!(listed["playlists"].as_array().map(Vec::len), Some(0));
         assert!(
             !listed
                 .to_string()

@@ -297,6 +297,56 @@ impl<S: LibraryManifestStore> LibraryManifestService<S> {
         Ok(added)
     }
 
+    /// Commit imported asset references and their target playlist membership as
+    /// one manifest transaction. The caller resolves the selected paths to
+    /// stable song IDs before entering this method; a failed save therefore
+    /// cannot leave an import reference without its playlist membership.
+    pub fn import_and_add_songs(
+        &mut self,
+        playlist_id: &str,
+        imports: Vec<ImportedSourceRef>,
+        song_ids: &[String],
+    ) -> Result<Collection, LibraryError> {
+        validate_collection_id(playlist_id)?;
+        validate_song_ids(song_ids)?;
+        for import in &imports {
+            validate_import(import)?;
+        }
+
+        let mut next = self.current.clone();
+        for import in imports {
+            if !next.imports.iter().any(|existing| {
+                existing
+                    .canonical_path
+                    .eq_ignore_ascii_case(&import.canonical_path)
+            }) {
+                next.imports.push(import);
+            }
+        }
+        if next.imports.len() > MAX_IMPORTED_SOURCES {
+            return Err(LibraryError::TooManyImportedSources);
+        }
+
+        let playlist = next
+            .collections
+            .iter_mut()
+            .find(|item| item.id == playlist_id)
+            .ok_or(LibraryError::CollectionNotFound)?;
+        for song_id in song_ids {
+            if !playlist.song_ids.contains(song_id) {
+                playlist.song_ids.push(song_id.clone());
+            }
+        }
+        if playlist.song_ids.len() > MAX_COLLECTION_SONGS {
+            return Err(LibraryError::TooManyCollectionSongs);
+        }
+        let result = playlist.clone();
+        if next != self.current {
+            self.commit(next)?;
+        }
+        Ok(result)
+    }
+
     pub fn remove_import(&mut self, source_id: &str) -> Result<bool, LibraryError> {
         validate_import_source_id(source_id)?;
         let mut next = self.current.clone();
@@ -448,6 +498,7 @@ mod tests {
     #[derive(Default)]
     struct MemoryManifestStore {
         value: std::sync::Mutex<Option<LibraryManifestV1>>,
+        saves: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl LibraryManifestStore for MemoryManifestStore {
@@ -465,6 +516,7 @@ mod tests {
         }
 
         fn save(&self, manifest: &LibraryManifestV1) -> Result<(), LibraryError> {
+            self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *self.value.lock().expect("manifest lock") = Some(manifest.clone());
             Ok(())
         }
@@ -501,5 +553,38 @@ mod tests {
                 .unwrap_err(),
             LibraryError::EmptyCollectionName
         );
+    }
+
+    #[test]
+    fn import_and_add_songs_commits_import_reference_and_membership_once() {
+        let saves = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let store = MemoryManifestStore {
+            saves: saves.clone(),
+            ..Default::default()
+        };
+        let mut service = LibraryManifestService::load(store).expect("manifest service");
+        let playlist_id = "0123456789abcdef0123456789abcdef";
+        service
+            .create_collection(playlist_id, "Practice")
+            .expect("playlist");
+        saves.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let song_id = "abcdefabcdefabcdefabcdefabcdefab".to_owned();
+        let updated = service
+            .import_and_add_songs(
+                playlist_id,
+                vec![ImportedSourceRef {
+                    source_id: "fedcba9876543210fedcba9876543210".to_owned(),
+                    canonical_path: r"C:\Music\local.json".to_owned(),
+                    kind: ImportedSourceKind::File,
+                }],
+                std::slice::from_ref(&song_id),
+            )
+            .expect("atomic import");
+
+        assert_eq!(saves.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(updated.song_ids, [song_id]);
+        assert_eq!(service.snapshot().imports.len(), 1);
+        assert_eq!(service.snapshot().collections[0].song_ids.len(), 1);
     }
 }

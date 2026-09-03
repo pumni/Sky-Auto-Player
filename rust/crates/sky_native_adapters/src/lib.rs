@@ -522,6 +522,7 @@ pub struct FileCatalogSource {
 #[derive(Debug, Clone, Default)]
 pub struct CatalogComposition {
     pub entries: Vec<CatalogSourceEntry>,
+    pub primary_membership: BTreeSet<String>,
     pub imported_membership: HashMap<String, BTreeSet<String>>,
     pub imported_status: Vec<ImportedSourceCatalogStatus>,
 }
@@ -551,6 +552,11 @@ impl FileCatalogSource {
             entries: self.entries()?,
             ..Default::default()
         };
+        composition.primary_membership = composition
+            .entries
+            .iter()
+            .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
+            .collect();
 
         for import in imports {
             let path = PathBuf::from(&import.canonical_path);
@@ -1477,6 +1483,7 @@ mod tests {
                 },
             ])
             .expect("catalog composition");
+        assert_eq!(composition.primary_membership.len(), 1);
         assert_eq!(composition.imported_status.len(), 2);
         assert_eq!(composition.imported_status[0].song_count, 2);
         assert!(composition.imported_status[0].available);

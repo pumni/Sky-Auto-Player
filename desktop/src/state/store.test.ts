@@ -189,18 +189,17 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
   });
 
-  it('loads native navigation summaries and keeps membership out of catalog pages', async () => {
+  it('loads playlist navigation summaries and keeps membership out of catalog pages', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
 
     expect(store.getState().libraryNavigation.loadState).toBe('ready');
-    expect(store.getState().libraryNavigation.collectionOrder).toHaveLength(0);
-    expect(store.getState().libraryNavigation.importOrder).toHaveLength(0);
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
 
-    await act(async () => store.getState().createCollection('Practice'));
-    const collectionId = store.getState().library.source.id;
-    expect(store.getState().library.source).toEqual({ kind: 'collection', id: collectionId });
-    expect(store.getState().libraryNavigation.collectionsById.get(collectionId)).toMatchObject({
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)).toMatchObject({
       name: 'Practice',
       song_count: 0,
     });
@@ -209,75 +208,62 @@ describe('desktop store', () => {
     const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
     const pagesBeforeMembership = store.getState().library.pages;
-    await act(async () => store.getState().addSongToCollection(collectionId, first.song_id));
+    await act(async () => store.getState().addSongToPlaylist(playlistId, first.song_id));
     expect(store.getState().library.pages).toBe(pagesBeforeMembership);
-    expect(store.getState().libraryNavigation.collectionsById.get(collectionId)?.song_count).toBe(
-      1,
-    );
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.song_count).toBe(1);
 
     await act(async () =>
-      store.getState().selectLibrarySource({ kind: 'collection', id: collectionId }),
+      store.getState().selectLibrarySource({ kind: 'playlist', id: playlistId }),
     );
     expect(store.getState().library.resultTotal).toBe(1);
     expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
-    await act(async () => store.getState().removeSongFromCollection(collectionId, first.song_id));
+    await act(async () => store.getState().removeSongFromPlaylist(playlistId, first.song_id));
     expect(store.getState().library.resultTotal).toBe(0);
 
-    await act(async () => store.getState().renameCollection(collectionId, 'Morning'));
-    expect(store.getState().libraryNavigation.collectionsById.get(collectionId)?.name).toBe(
-      'Morning',
-    );
-    await act(async () => store.getState().deleteCollection(collectionId));
+    await act(async () => store.getState().renamePlaylist(playlistId, 'Morning'));
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Morning');
+    await act(async () => store.getState().deletePlaylist(playlistId));
     expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'all' });
-    expect(store.getState().libraryNavigation.collectionOrder).toHaveLength(0);
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
   });
 
-  it('selects imported sources and removes only their native reference', async () => {
+  it('imports local songs directly into a target playlist without exposing paths', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
 
-    await act(async () => store.getState().importLocalFolder());
-    const sourceId = store.getState().libraryNavigation.importOrder[0];
-    expect(sourceId).toBeDefined();
-    expect(store.getState().libraryNavigation.importsById.get(sourceId!)).toMatchObject({
-      kind: 'folder',
-      display_name: 'Imported folder',
-      song_count: 2,
-      availability: 'available',
-    });
-
-    await act(async () =>
-      store.getState().selectLibrarySource({ kind: 'imported', id: sourceId! }),
-    );
-    expect(store.getState().library.source).toEqual({ kind: 'imported', id: sourceId });
-    expect(store.getState().library.resultTotal).toBe(2);
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    await act(async () => store.getState().importLocalFolderToPlaylist(playlistId));
 
     const navigationJson = JSON.stringify({
-      collections: [...store.getState().libraryNavigation.collectionsById.values()],
-      imports: [...store.getState().libraryNavigation.importsById.values()],
+      playlists: [...store.getState().libraryNavigation.playlistsById.values()],
     });
     expect(navigationJson).not.toContain('C:\\');
     expect(navigationJson).not.toContain('D:\\');
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(2);
+    expect(rowAt(store, 0)?.title).toBe('Local Song B');
 
-    await act(async () => store.getState().removeImport(sourceId!));
-    expect(store.getState().libraryNavigation.importOrder).toHaveLength(0);
-    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'all' });
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     expect(store.getState().library.resultTotal).toBe(500);
+    expect(rowAt(store, 0)?.title).not.toBe('Local Song B');
   });
 
-  it('treats an import cancellation as a no-op', async () => {
+  it('treats a playlist import cancellation as a no-op', async () => {
     const bridge = createMockBridge();
-    bridge.importLocalFolder = async () => ({
-      source_ids: [],
-      imported_count: 0,
-      catalog_generation: 1,
-    });
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    await act(async () => store.getState().importLocalFolder());
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    bridge.importLocalFolderToPlaylist = async () => ({
+      playlist: { id: playlistId, name: 'Practice', song_count: 0 },
+      imported_song_count: 0,
+      catalog_generation: 1,
+    });
+    await act(async () => store.getState().importLocalFolderToPlaylist(playlistId));
 
     expect(store.getState().library.generation).toBe(1);
-    expect(store.getState().libraryNavigation.importOrder).toHaveLength(0);
+    expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(1);
     expect(store.getState().libraryNavigation.lastError).toBeNull();
   });
 

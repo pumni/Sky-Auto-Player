@@ -1,4 +1,5 @@
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { PlaylistAddSongsMenu } from './PlaylistAddSongsMenu';
 import { TrackTable } from './TrackTable';
 
 interface TrackBrowserProps {
@@ -11,16 +12,8 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
   const loading = useStore((store: DesktopStore) => store.library.loading);
   const error = useStore((store: DesktopStore) => store.library.error);
   const sourceName = useStore((store: DesktopStore) => {
-    if (store.library.source.kind === 'collection') {
-      return (
-        store.libraryNavigation.collectionsById.get(store.library.source.id)?.name ?? 'Collection'
-      );
-    }
-    if (store.library.source.kind === 'imported') {
-      return (
-        store.libraryNavigation.importsById.get(store.library.source.id)?.display_name ??
-        'Local source'
-      );
+    if (store.library.source.kind === 'playlist') {
+      return store.libraryNavigation.playlistsById.get(store.library.source.id)?.name ?? 'Playlist';
     }
     return store.library.source.id === 'liked' ? 'Liked Songs' : 'All Songs';
   });
@@ -34,6 +27,9 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
             {loading ? 'Updating…' : `${resultTotal} songs`}
           </span>
         </div>
+        {source.kind === 'playlist' && (
+          <PlaylistAddSongsMenu playlistId={source.id} useStore={useStore} />
+        )}
       </header>
       {error && (
         <p className="inline-error" role="status">
@@ -43,11 +39,11 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
       {!loading && resultTotal === 0 ? (
         <div className="empty-state">
           <strong>
-            {source.kind === 'collection' ? 'This collection is empty' : 'No songs found'}
+            {source.kind === 'playlist' ? 'Add songs to this playlist' : 'No songs found'}
           </strong>
           <span className="muted">
-            {source.kind === 'collection'
-              ? 'Add songs from All Songs or Liked Songs.'
+            {source.kind === 'playlist'
+              ? 'Choose from All Songs or import local files.'
               : 'Try another search or reload the library.'}
           </span>
         </div>

@@ -118,16 +118,14 @@ test('Liked Songs is a real source with Player Bar save behavior', async ({ page
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
 });
 
-test('Library collections support create, rename, delete, and membership actions', async ({
-  page,
-}) => {
+test('Playlists support create, rename, delete, and membership actions', async ({ page }) => {
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Add to Library' }).click();
-  await page.getByRole('menuitem', { name: 'New collection' }).click();
+  await navigator.getByRole('button', { name: 'Add to Your Library' }).click();
+  await page.getByRole('menuitem', { name: 'Create playlist' }).click();
 
-  const createDialog = page.getByRole('dialog', { name: 'New collection' });
-  await createDialog.getByLabel('Collection name').fill('Practice');
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
   await expect(createDialog).toBeHidden();
   await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
@@ -136,60 +134,73 @@ test('Library collections support create, rename, delete, and membership actions
   await page.getByRole('button', { name: 'More actions for Practice' }).click();
   await page.getByRole('menuitem', { name: 'Rename' }).click();
   const renameDialog = page.getByRole('dialog', { name: 'Rename Practice' });
-  await renameDialog.getByLabel('Collection name').fill('Morning Practice');
+  await renameDialog.getByLabel('Playlist name').fill('Morning Practice');
   await renameDialog.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Morning Practice' })).toBeVisible();
 
   await page.getByRole('button', { name: 'More actions for Morning Practice' }).click();
-  await page.getByRole('menuitem', { name: 'Delete collection' }).click();
+  await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
   const deleteDialog = page.getByRole('dialog', { name: /Delete/ });
   await expect(deleteDialog).toContainText('Songs and local files will not be deleted');
-  await deleteDialog.getByRole('button', { name: 'Delete collection' }).click();
+  await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
   await expect(
     navigator.getByRole('button', { name: 'Morning Practice 0', exact: true }),
   ).toBeHidden();
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
 });
 
-test('imported sources filter songs and can be removed without disk deletion', async ({ page }) => {
+test('Add songs keeps local imports inside the selected playlist', async ({ page }) => {
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
 
-  await navigator.getByRole('button', { name: 'Add to Library' }).click();
-  await page.getByRole('menuitem', { name: 'New collection' }).click();
-  const createDialog = page.getByRole('dialog', { name: 'New collection' });
-  await createDialog.getByLabel('Collection name').fill('Practice');
+  await navigator.getByRole('button', { name: 'Add to Your Library' }).click();
+  await page.getByRole('menuitem', { name: 'Create playlist' }).click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
   await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
 
-  await navigator.getByRole('button', { name: 'Add to Library' }).click();
-  await page.getByRole('menuitem', { name: 'Import folder…' }).click();
-  const imported = navigator.getByRole('button', { name: 'Imported folder 2', exact: true });
-  await expect(imported).toBeVisible();
-  await expect(imported).toContainText('2');
-  await imported.click();
-  await expect(page.getByRole('heading', { name: 'Imported folder' })).toBeVisible();
-  const importedSong = page.getByRole('row', { name: /Aurora Landing/ });
-  await expect(importedSong).toBeVisible();
-
-  await importedSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
-  await page.getByRole('menuitem', { name: /Add to Practice/ }).click();
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
+  await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
+  await page.getByRole('menuitem', { name: 'Add to Practice' }).click();
   await expect(navigator.getByRole('button', { name: 'Practice 1', exact: true })).toBeVisible();
   await navigator.getByRole('button', { name: 'Practice 1', exact: true }).click();
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
 
-  const collectionSong = page.getByRole('row', { name: /Aurora Landing/ });
-  await collectionSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
-  await page.getByRole('menuitem', { name: 'Remove from this collection' }).click();
-  await expect(page.getByText('This collection is empty')).toBeVisible();
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Import files…' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice 2', exact: true })).toBeVisible();
+  await expect(navigator.getByText('Local')).toHaveCount(0);
 
-  await imported.click();
-  await navigator.getByRole('button', { name: 'More actions for Imported folder' }).click();
-  await page.getByRole('menuitem', { name: 'Remove from Library' }).click();
-  const removeDialog = page.getByRole('dialog', { name: /Remove/ });
-  await expect(removeDialog).toContainText('Files on disk will not be deleted');
-  await removeDialog.getByRole('button', { name: 'Remove from Library' }).click();
-  await expect(imported).toBeHidden();
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Import folder…' }).click();
+  await expect(navigator.getByRole('button', { name: 'Practice 3', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'All Songs' }).click();
+  await expect(page.getByText('500 songs')).toBeVisible();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Practice 3', exact: true }).click();
+  await page
+    .getByRole('row', { name: /Aurora Landing/ })
+    .getByRole('button', {
+      name: 'More actions for Aurora Landing',
+    })
+    .click();
+  await page.getByRole('menuitem', { name: 'Remove from playlist' }).click();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'More actions for Practice' }).click();
+  await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+  const deleteDialog = page.getByRole('dialog', { name: /Delete/ });
+  await expect(deleteDialog).toContainText('local files will not be deleted');
+  await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
+  await expect(navigator.getByRole('button', { name: /Practice/ })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
 });
 
@@ -201,7 +212,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  await expect(navigator.getByRole('button', { name: 'Add to Library' })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Add to Your Library' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
   await expect(collapsedLabels).toHaveCount(2);
   expect(

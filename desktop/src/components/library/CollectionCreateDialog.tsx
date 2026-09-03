@@ -1,7 +1,7 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { useState } from 'react';
 
-interface CollectionCreateDialogProps {
+interface PlaylistCreateDialogProps {
   open: boolean;
   pending: boolean;
   error: string | null;
@@ -9,20 +9,20 @@ interface CollectionCreateDialogProps {
   onSubmit: (name: string) => Promise<void>;
 }
 
-export function CollectionCreateDialog({
+export function PlaylistCreateDialog({
   open,
   pending,
   error,
   onOpenChange,
   onSubmit,
-}: CollectionCreateDialogProps) {
+}: PlaylistCreateDialogProps) {
   const [name, setName] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const submit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
-      setValidationError('Enter a collection name.');
+      setValidationError('Enter a playlist name.');
       return;
     }
     setValidationError(null);
@@ -42,16 +42,16 @@ export function CollectionCreateDialog({
       className="modal-backdrop"
     >
       <Modal className="library-dialog">
-        <Dialog aria-label="New collection">
+        <Dialog aria-label="New playlist">
           <div className="dialog-heading">
             <div>
               <p className="eyebrow">YOUR LIBRARY</p>
-              <h2>New collection</h2>
+              <h2>New playlist</h2>
             </div>
             <button
               className="icon-button"
               type="button"
-              aria-label="Close new collection dialog"
+              aria-label="Close new playlist dialog"
               onClick={() => onOpenChange(false)}
               disabled={pending}
             >
@@ -66,17 +66,17 @@ export function CollectionCreateDialog({
             }}
           >
             <label>
-              Collection name
+              Playlist name
               <input
                 autoFocus
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 aria-invalid={validationError !== null}
-                aria-describedby={validationError ? 'collection-create-error' : undefined}
+                aria-describedby={validationError ? 'playlist-create-error' : undefined}
               />
             </label>
             {(validationError || error) && (
-              <p id="collection-create-error" className="inline-error" role="alert">
+              <p id="playlist-create-error" className="inline-error" role="alert">
                 {validationError ?? error}
               </p>
             )}
