@@ -1,6 +1,6 @@
 # ADR-0006: V4 Clean Distribution, Installation, and Update Boundary
 
-Status: proposed
+Status: accepted
 
 Date: 2026-09-03
 
@@ -87,7 +87,7 @@ bounded DTO/events to the UI.
 
 ### 5. V4 uses a new permanent application identity
 
-The proposed permanent identifier is:
+The permanent identifier is:
 
 ```text
 io.github.pumni.skyautoplayer
