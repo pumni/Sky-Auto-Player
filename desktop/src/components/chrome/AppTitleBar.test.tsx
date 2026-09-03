@@ -77,5 +77,60 @@ describe('AppTitleBar', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Restore window' })).toBeVisible(),
     );
+
+    await act(async () => {
+      maximized = false;
+      onResize?.();
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Maximize window' })).toBeVisible(),
+    );
+  });
+
+  it('settles a delayed restore state after the first resize query', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    let onResize: (() => void) | undefined;
+    const isMaximized = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const controls: WindowControls = {
+      minimize: async () => undefined,
+      toggleMaximize: async () => undefined,
+      close: async () => undefined,
+      isMaximized,
+      onResize: async (listener) => {
+        onResize = listener;
+        return () => undefined;
+      },
+    };
+
+    render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Maximize window' })).toBeVisible(),
+    );
+
+    await act(async () => {
+      onResize?.();
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Restore window' })).toBeVisible(),
+    );
+
+    await act(async () => {
+      frames.shift()?.(0);
+      frames.shift()?.(0);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Maximize window' })).toBeVisible(),
+    );
+    expect(isMaximized).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
   });
 });

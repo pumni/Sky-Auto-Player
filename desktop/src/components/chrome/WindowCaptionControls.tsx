@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WindowControls } from '../../platform/windowControls';
 
 interface WindowCaptionControlsProps {
@@ -8,28 +8,46 @@ interface WindowCaptionControlsProps {
 export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) {
   const [maximized, setMaximized] = useState(false);
   const [windowActive, setWindowActive] = useState(() => document.hasFocus());
+  const disposedRef = useRef(false);
+
+  const refreshMaximized = useCallback(() => {
+    void controls.isMaximized().then((value) => {
+      if (!disposedRef.current) setMaximized(value);
+    });
+  }, [controls]);
+
+  const refreshSettled = useCallback(() => {
+    refreshMaximized();
+
+    const requestFrame = window.requestAnimationFrame;
+    if (typeof requestFrame !== 'function') {
+      window.setTimeout(refreshMaximized, 50);
+      return;
+    }
+
+    requestFrame(() => {
+      if (disposedRef.current) return;
+      requestFrame(() => {
+        if (!disposedRef.current) refreshMaximized();
+      });
+    });
+  }, [refreshMaximized]);
 
   useEffect(() => {
-    let disposed = false;
+    disposedRef.current = false;
     let unsubscribe: (() => void) | undefined;
 
-    const refresh = () => {
-      void controls.isMaximized().then((value) => {
-        if (!disposed) setMaximized(value);
-      });
-    };
-
-    refresh();
-    void controls.onResize(refresh).then((cleanup) => {
-      if (disposed) cleanup();
+    refreshMaximized();
+    void controls.onResize(refreshSettled).then((cleanup) => {
+      if (disposedRef.current) cleanup();
       else unsubscribe = cleanup;
     });
 
     return () => {
-      disposed = true;
+      disposedRef.current = true;
       unsubscribe?.();
     };
-  }, [controls]);
+  }, [controls, refreshMaximized, refreshSettled]);
 
   useEffect(() => {
     const activate = () => setWindowActive(true);
@@ -65,7 +83,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label={maximizeLabel}
         title={maximizeLabel}
         data-tauri-drag-region="false"
-        onClick={() => void controls.toggleMaximize()}
+        onClick={() => void controls.toggleMaximize().finally(refreshSettled)}
       >
         <span
           className={`caption-glyph ${maximized ? 'caption-glyph-restore' : 'caption-glyph-maximize'}`}
