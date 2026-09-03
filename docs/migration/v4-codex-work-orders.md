@@ -3,8 +3,8 @@
 Date: 2026-09-03
 
 This file is the execution queue for heavy implementation work intended to run locally on Windows.
-The governing architecture is `docs/adr/ADR-0006-v4-distribution-installation-update.md`; the phase
-plan is `docs/migration/v4-clean-distribution-plan.md`.
+The governing architecture is `docs/adr/ADR-0006-v4-distribution-installation-update.md`; the execution
+specification is `docs/migration/v4-clean-distribution-execution.md`.
 
 ## Global instructions for every work order
 
