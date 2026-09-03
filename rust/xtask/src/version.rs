@@ -1,12 +1,16 @@
 use crate::{Result, repo};
-use pep440_rs::Version;
-use std::str::FromStr;
+use semver::Version;
 
 pub fn parse(value: &str) -> Result<Version> {
     if value.is_empty() || value.trim() != value || value.starts_with(['v', 'V']) {
-        return Err(format!("invalid PEP-440 version: {value:?}").into());
+        return Err(format!("invalid SemVer version: {value:?}").into());
     }
-    Version::from_str(value).map_err(|error| format!("invalid PEP-440 version: {error}").into())
+    let parsed =
+        Version::parse(value).map_err(|error| format!("invalid SemVer version: {error}"))?;
+    if !parsed.build.is_empty() {
+        return Err(format!("SemVer build metadata is not allowed: {value:?}").into());
+    }
+    Ok(parsed)
 }
 
 pub fn check(tag: Option<&str>) -> Result<()> {
@@ -17,7 +21,7 @@ pub fn check(tag: Option<&str>) -> Result<()> {
         check_tag(tag, &version, &parsed)?;
     }
     println!("version={version}");
-    println!("is_prerelease={}", parsed.any_prerelease());
+    println!("is_prerelease={}", !parsed.pre.is_empty());
     Ok(())
 }
 
@@ -41,47 +45,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preserves_project_prerelease_corpus() {
+    fn accepts_v4_semver_prerelease_corpus() {
         let values = [
-            ("3.5.0.dev1", true),
-            ("3.5.0a1", true),
-            ("3.5.0-alpha1", true),
-            ("3.5.0b1", true),
-            ("3.5.0-beta1", true),
-            ("3.5.0rc1", true),
-            ("3.5.0", false),
+            ("4.0.0-alpha.1", true),
+            ("4.0.0-beta.1", true),
+            ("4.0.0-rc.1", true),
+            ("4.0.0", false),
         ];
         for (value, expected) in values {
-            assert_eq!(parse(value).unwrap().any_prerelease(), expected, "{value}");
+            assert_eq!(!parse(value).unwrap().pre.is_empty(), expected, "{value}");
         }
     }
 
     #[test]
-    fn rejects_untrusted_tag_forms() {
-        assert!(parse(" 3.5.0").is_err());
-        assert!(parse("v3.5.0").is_err());
+    fn rejects_pep440_and_untrusted_forms() {
+        for value in [
+            " 4.0.0",
+            "v4.0.0",
+            "4.0.0rc1",
+            "4.0",
+            "4.0.0+local",
+            "4.0.0-alpha.1+build",
+        ] {
+            assert!(parse(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn release_tag_rejects_semver_build_metadata() {
+        for version in ["4.0.0+local", "4.0.0-alpha.1+build"] {
+            let parsed = Version::parse(version).unwrap();
+            assert!(parse(version).is_err(), "Cargo version: {version}");
+            assert!(
+                check_tag(&format!("v{version}"), version, &parsed).is_err(),
+                "release tag: v{version}"
+            );
+        }
     }
 
     #[test]
     fn release_tag_requires_exact_cargo_text() {
-        let version = "3.5.0";
+        let version = "4.0.0-alpha.1";
         let parsed = parse(version).unwrap();
-        assert!(check_tag("v3.5.0", version, &parsed).is_ok());
+        assert!(check_tag("v4.0.0-alpha.1", version, &parsed).is_ok());
         for tag in [
-            "3.5.0",
-            "V3.5.0",
-            "v3.5",
-            "v3.5.00",
-            "v3.5.0+local",
-            "v3.5.0rc1",
+            "4.0.0-alpha.1",
+            "V4.0.0-alpha.1",
+            "v4.0.0",
+            "v4.0.00-alpha.1",
+            "v4.0.0-alpha1",
+            "v4.0.0rc1",
         ] {
             assert!(check_tag(tag, version, &parsed).is_err(), "{tag}");
         }
     }
 
     #[test]
-    fn release_tag_keeps_exact_prerelease_text() {
-        for version in ["3.5.0.dev1", "3.5.0a1", "3.5.0b1", "3.5.0rc1"] {
+    fn release_tag_keeps_exact_semver_prerelease_text() {
+        for version in ["4.0.0-alpha.1", "4.0.0-beta.1", "4.0.0-rc.1"] {
             let parsed = parse(version).unwrap();
             assert!(check_tag(&format!("v{version}"), version, &parsed).is_ok());
         }

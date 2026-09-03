@@ -382,6 +382,10 @@ mod tests {
         tempfile_like::TempDir::new()
     }
 
+    fn project_version() -> String {
+        repo::project_version(&repo::root()).expect("project version")
+    }
+
     mod tempfile_like {
         use std::path::{Path, PathBuf};
         pub struct TempDir(PathBuf);
@@ -436,7 +440,13 @@ mod tests {
         ] {
             fs::write(temp.path().join(name), name.as_bytes()).unwrap();
         }
-        write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+        write(
+            temp.path(),
+            &project_version(),
+            &"a".repeat(40),
+            &"a".repeat(40),
+        )
+        .unwrap();
         let written: Value =
             serde_json::from_slice(&fs::read(temp.path().join("MANIFEST.json")).unwrap()).unwrap();
         assert_ne!(
@@ -468,7 +478,13 @@ mod tests {
             ] {
                 fs::write(temp.path().join(name), name.as_bytes()).unwrap();
             }
-            write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+            write(
+                temp.path(),
+                &project_version(),
+                &"a".repeat(40),
+                &"a".repeat(40),
+            )
+            .unwrap();
             let path = temp.path().join(relative);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
@@ -488,7 +504,13 @@ mod tests {
         ] {
             fs::write(temp.path().join(name), name.as_bytes()).unwrap();
         }
-        write(temp.path(), "3.5.0", &"a".repeat(40), &"a".repeat(40)).unwrap();
+        write(
+            temp.path(),
+            &project_version(),
+            &"a".repeat(40),
+            &"a".repeat(40),
+        )
+        .unwrap();
         let mut manifest: Value =
             serde_json::from_slice(&fs::read(temp.path().join("MANIFEST.json")).unwrap()).unwrap();
         manifest["native_build_commit"] = json!("b".repeat(40));
@@ -511,7 +533,7 @@ mod tests {
             fs::write(temp.path().join(name), name.as_bytes()).unwrap();
         }
         let payload = json!({
-            "schema_version": 2, "app": APP_NAME, "version": "3.5.0", "executable": PRIMARY_EXE,
+            "schema_version": 2, "app": APP_NAME, "version": project_version(), "executable": PRIMARY_EXE,
             "dirty_worktree": false, "files": [{"path":"../escape", "size":0, "sha256":"0".repeat(64)}]
         });
         fs::write(

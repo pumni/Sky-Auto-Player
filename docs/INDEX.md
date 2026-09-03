@@ -42,6 +42,8 @@ not open every architecture page by default.
 - [../SECURITY.md](../SECURITY.md) — canonical security policy and disclosure process.
 - [distribution-and-update.md](distribution-and-update.md) — public package, native updater,
   integrity/provenance, rollback, and release contract.
+- [v4-tauri-packaging.md](v4-tauri-packaging.md) — v4 local Tauri NSIS/updater artifact qualification
+  and current-user packaging contract.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 - [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — historical evidence for
   the completed product/runtime Python retirement; not a tooling instruction.

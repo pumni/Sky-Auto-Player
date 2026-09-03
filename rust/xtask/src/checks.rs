@@ -1,4 +1,4 @@
-use crate::{Result, audits, branding, process, repo, supply_chain};
+use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -223,6 +223,92 @@ fn tauri_feature_contract(root: &Path) -> Result<()> {
         "[xtask] Tauri feature contract: PASS (default={:?}, dev={:?})",
         resolution.default, resolution.dev
     );
+    Ok(())
+}
+
+fn legacy_release_guard_source(source: &str) -> Result<()> {
+    for marker in [
+        "name: Block v4+ tags from legacy v3 release workflow",
+        "$tag = $env:GITHUB_REF_NAME",
+        r#"$tag -match '^v(?<major>\d+)\.'"#,
+        "$major -ge 4",
+        "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete",
+        "WO-04/WO-07",
+    ] {
+        if !source.contains(marker) {
+            return Err(format!(
+                "legacy release workflow is missing the v4 isolation guard marker: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn legacy_release_guard(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/release.yml");
+    legacy_release_guard_source(&fs::read_to_string(&path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    println!("[xtask] legacy v3 release workflow v4 guard: PASS");
+    Ok(())
+}
+
+fn packaged_ci_contract_source(source: &str) -> Result<()> {
+    let normalized = source.replace("\r\n", "\n");
+    let start = normalized
+        .find("  packaged:\n")
+        .ok_or("CI workflow is missing the packaged job")?;
+    let end = normalized[start..]
+        .find("\n  status:\n")
+        .map(|offset| start + offset)
+        .ok_or("CI workflow packaged job is missing the status boundary")?;
+    let packaged = &normalized[start..end];
+
+    for marker in [
+        "name: Packaged v4 Tauri NSIS qualification",
+        "bun install --frozen-lockfile",
+        "bun run build",
+        "bun run tauri signer generate",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "bun run tauri build --ci --config",
+        "cargo xtask verify-tauri-bundle",
+        "current-user install, launch, and uninstall",
+        "sky_desktop_shell.exe",
+        "uninstall.exe",
+        "actions/upload-artifact@",
+    ] {
+        if !packaged.contains(marker) {
+            return Err(format!(
+                "canonical v4 packaged CI is missing the Tauri qualification marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for forbidden in [
+        "cargo xtask dist",
+        "verify-dist",
+        "Sky-Auto-Player-v",
+        "Sky-Auto-Player-Updater.exe",
+        "MANIFEST.json",
+        "PORTABLE_ARTIFACT",
+        "portable",
+    ] {
+        if packaged.contains(forbidden) {
+            return Err(format!(
+                "canonical v4 packaged CI must not contain the legacy v3 artifact marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn packaged_ci_contract(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/ci.yml");
+    packaged_ci_contract_source(&fs::read_to_string(&path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
     Ok(())
 }
 
@@ -1528,6 +1614,9 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
                 );
             }
             branding::validate(&root)?;
+            tauri_bundle::validate_config(&root)?;
+            legacy_release_guard(&root)?;
+            packaged_ci_contract(&root)?;
             retirement(&root)?;
         }
         "rust" => {
@@ -1753,6 +1842,64 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
         );
         let error = tauri_feature_contract_manifest(&source).unwrap_err();
         assert!(error.contains("desktop-runtime must not contain `tauri/custom-protocol`"));
+    }
+
+    #[test]
+    fn legacy_release_guard_requires_the_v4_fail_closed_contract() {
+        let source = r#"
+      - name: Block v4+ tags from legacy v3 release workflow
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -match '^v(?<major>\d+)\.') {
+            $major = [int64]$Matches.major
+            if ($major -ge 4) {
+              throw "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete: $tag"
+            }
+          }
+      # WO-04/WO-07
+"#;
+        assert!(legacy_release_guard_source(source).is_ok());
+        assert!(
+            legacy_release_guard_source(&source.replace("$major -ge 4", "$major -gt 4")).is_err()
+        );
+    }
+
+    #[test]
+    fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
+        let source = r#"
+  packaged:
+    name: Packaged v4 Tauri NSIS qualification
+    steps:
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run tauri signer generate
+        env: { TAURI_SIGNING_PRIVATE_KEY: test }
+      - run: bun run tauri build --ci --config test.json
+      - run: cargo xtask verify-tauri-bundle
+      - name: Qualify current-user install, launch, and uninstall
+        run: check sky_desktop_shell.exe uninstall.exe
+      - uses: actions/upload-artifact@v7
+  status:
+        "#;
+        assert!(packaged_ci_contract_source(source).is_ok());
+        let crlf_source = source.replace('\n', "\r\n");
+        assert!(packaged_ci_contract_source(&crlf_source).is_ok());
+        for forbidden in [
+            "cargo xtask dist",
+            "verify-dist",
+            "Sky-Auto-Player-v",
+            "Sky-Auto-Player-Updater.exe",
+            "MANIFEST.json",
+            "PORTABLE_ARTIFACT",
+            "portable",
+        ] {
+            let source_with_legacy_marker =
+                source.replace("  status:", &format!("  # {forbidden}\n  status:"));
+            assert!(
+                packaged_ci_contract_source(&source_with_legacy_marker).is_err(),
+                "{forbidden}"
+            );
+        }
     }
 
     #[test]

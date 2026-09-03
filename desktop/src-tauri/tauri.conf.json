@@ -1,8 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sky Auto Player",
-  "version": "3.5.0",
-  "identifier": "com.skyautoplayer.desktop",
+  "identifier": "io.github.pumni.skyautoplayer",
   "build": {
     "beforeDevCommand": "bun run dev -- --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:1420",
@@ -30,8 +29,14 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "icon": ["icons/icon.ico"],
-    "targets": "all"
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

@@ -38,6 +38,18 @@ jobs:
           fetch-tags: false
           persist-credentials: false
 
+      # Temporary WO-01 isolation guard. Replace this with the dedicated v4
+      # release authority delivered by WO-04/WO-07.
+      - name: Block v4+ tags from legacy v3 release workflow
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -match '^v(?<major>\d+)\.') {
+            $major = [int64]$Matches.major
+            if ($major -ge 4) {
+              throw "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete: $tag"
+            }
+          }
+
       - name: Fetch Wave-6 retirement baseline commit for static checks
         run: |
           $ledger = Get-Content "docs/migration/wave6-tooling-retirement-ledger.json" -Raw | ConvertFrom-Json
