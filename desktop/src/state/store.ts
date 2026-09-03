@@ -143,7 +143,7 @@ export interface DesktopStore {
   selectSong: (songId: string) => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
   selectLibrarySource: (source: LibrarySource) => Promise<void>;
-  beginPlaylistAdd: (playlistId: string) => Promise<void>;
+  openPlaylistAdd: (playlistId: string) => Promise<void>;
   exitPlaylistAdd: () => Promise<void>;
   loadLibraryNavigation: () => Promise<void>;
   createPlaylist: (name: string) => Promise<void>;
@@ -1196,7 +1196,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         await get().search('', source);
       },
 
-      async beginPlaylistAdd(playlistId) {
+      async openPlaylistAdd(playlistId) {
         const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
         const current = get().library;
         if (sourceKey(current.source) !== sourceKey(playlistSource)) {

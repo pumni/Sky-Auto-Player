@@ -111,12 +111,10 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
         className={`player-timeline${selectedSongId ? '' : ' is-disabled'}`}
         aria-label={progressLabel}
       >
-        {selectedSongId && (
-          <div className="player-timeline-labels">
-            <span>{formatPlayerDuration(currentUs)}</span>
-            <span>{formatPlayerDuration(totalUs)}</span>
-          </div>
-        )}
+        <div className="player-timeline-labels" aria-hidden={!selectedSongId}>
+          <span>{selectedSongId ? formatPlayerDuration(currentUs) : ''}</span>
+          <span>{selectedSongId ? formatPlayerDuration(totalUs) : ''}</span>
+        </div>
         <progress
           value={selectedSongId ? currentUs : 0}
           max={selectedSongId ? totalUs || 1 : 1}
@@ -124,23 +122,25 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           aria-disabled={!selectedSongId}
         />
       </div>
-      {playback.prepared && !active && (
-        <span className="player-transport-status" role="status">
-          {playback.prepared.admission === 'confirmation_required'
-            ? 'Awaiting confirmation'
-            : 'Preparing playback'}
-        </span>
-      )}
-      {playback.prepared?.admission === 'blocked' && (
-        <span className="player-message player-message-danger" role="alert">
-          {playback.prepared.error_message}
-        </span>
-      )}
-      {playback.error && !playback.prepared && (
-        <span className="player-message player-message-danger" role="alert">
-          {playback.error}
-        </span>
-      )}
+      <div className="player-transport-status-slot">
+        {playback.prepared && !active && (
+          <span className="player-transport-status" role="status">
+            {playback.prepared.admission === 'confirmation_required'
+              ? 'Awaiting confirmation'
+              : 'Preparing playback'}
+          </span>
+        )}
+        {playback.prepared?.admission === 'blocked' && (
+          <span className="player-message player-message-danger" role="alert">
+            {playback.prepared.error_message}
+          </span>
+        )}
+        {playback.error && !playback.prepared && (
+          <span className="player-message player-message-danger" role="alert">
+            {playback.error}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

@@ -127,8 +127,17 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
   await expect(createDialog).toBeHidden();
-  await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('0 songs')).toBeVisible();
+
+  await page.getByRole('button', { name: 'More actions for Practice' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Add songs' })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Add songs' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(navigator.locator('.library-nav-action-row.is-active')).toContainText('Practice');
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
 
   await page.getByRole('button', { name: 'More actions for Practice' }).click();
   await page.getByRole('menuitem', { name: 'Rename' }).click();
@@ -143,7 +152,7 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await expect(deleteDialog).toContainText('Songs and local files will not be deleted');
   await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
   await expect(
-    navigator.getByRole('button', { name: 'Morning Practice 0', exact: true }),
+    navigator.getByRole('button', { name: 'Morning Practice', exact: true }),
   ).toBeHidden();
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
 });
@@ -156,38 +165,39 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
-  await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
   await expect(page.getByText('Adding songs')).toBeVisible();
   await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
-  await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
   await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
   await page.getByRole('menuitem', { name: 'Add to Practice' }).click();
-  await expect(navigator.getByRole('button', { name: 'Practice 1', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Back to playlist' }).click();
-  await navigator.getByRole('button', { name: 'Practice 1', exact: true }).click();
+  await navigator.getByRole('button', { name: 'Practice', exact: true }).click();
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.getByText('1 song')).toBeVisible();
 
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Import files…' }).click();
   await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
   await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
-  await expect(navigator.getByRole('button', { name: 'Practice 2', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   await expect(navigator.getByText('Local')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Import folder…' }).click();
-  await expect(navigator.getByRole('button', { name: 'Practice 3', exact: true })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'All Songs' }).click();
   await expect(page.getByText('500 songs')).toBeVisible();
   await expect(page.getByRole('row', { name: /Local Song B/ })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Practice 3', exact: true }).click();
+  await page.getByRole('button', { name: 'Practice', exact: true }).click();
   await page
     .getByRole('row', { name: /Aurora Landing/ })
     .getByRole('button', {
@@ -339,7 +349,9 @@ test('Player Bar communicates the no-selection state without actionable playback
 
   await expect(primary).toBeDisabled();
   await expect(player.getByText('Select a song from your Library')).toBeVisible();
-  await expect(labels).toHaveCount(0);
+  await expect(labels).toHaveCount(1);
+  await expect(labels).toHaveAttribute('aria-hidden', 'true');
+  expect(await labels.textContent()).toBe('');
   await expect(player.getByRole('progressbar')).toHaveAttribute('aria-disabled', 'true');
 
   await player.getByRole('button', { name: 'Configure playback profile' }).click();
@@ -349,6 +361,31 @@ test('Player Bar communicates the no-selection state without actionable playback
     }),
   ).toBeDisabled();
   await page.keyboard.press('Escape');
+});
+
+test('Player transport geometry stays fixed when song timing labels appear', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const measure = async () => {
+    const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
+    const timelineBox = await player.locator('.player-timeline').boundingBox();
+    expect(playBox).not.toBeNull();
+    expect(timelineBox).not.toBeNull();
+    if (!playBox || !timelineBox) throw new Error('player geometry is unavailable');
+    return {
+      playCenterY: playBox.y + playBox.height / 2,
+      timelineY: timelineBox.y,
+    };
+  };
+
+  const idleGeometry = await measure();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await expect(player.locator('.player-timeline-labels')).toHaveAttribute('aria-hidden', 'false');
+  const selectedGeometry = await measure();
+
+  expect(Math.abs(selectedGeometry.playCenterY - idleGeometry.playCenterY)).toBeLessThanOrEqual(1);
+  expect(Math.abs(selectedGeometry.timelineY - idleGeometry.timelineY)).toBeLessThanOrEqual(1);
 });
 
 test('Titlebar search and Player primary control share the application center axis', async ({

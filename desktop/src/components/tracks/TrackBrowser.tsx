@@ -53,7 +53,9 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
           </span>
         </div>
         {isPlaylist && !isPlaylistAddMode && (
-          <PlaylistAddSongsMenu playlistId={source.id} useStore={useStore} />
+          <div className="playlist-actions">
+            <PlaylistAddSongsMenu playlistId={source.id} useStore={useStore} />
+          </div>
         )}
       </header>
       {error && (

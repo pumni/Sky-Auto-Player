@@ -8,7 +8,7 @@ interface PlaylistAddSongsMenuProps {
 }
 
 export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsMenuProps) {
-  const beginPlaylistAdd = useStore((store) => store.beginPlaylistAdd);
+  const openPlaylistAdd = useStore((store) => store.openPlaylistAdd);
   const importFiles = useStore((store) => store.importLocalFilesToPlaylist);
   const importFolder = useStore((store) => store.importLocalFolderToPlaylist);
   const pending = useStore((store) => store.libraryNavigation.pendingMutations);
@@ -23,7 +23,7 @@ export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsM
         <Menu aria-label="Add songs">
           <MenuItem
             id="browse-all-songs"
-            onAction={() => void beginPlaylistAdd(playlistId)}
+            onAction={() => void openPlaylistAdd(playlistId)}
             className="library-menu-item"
           >
             <ListMusic size={15} aria-hidden="true" />

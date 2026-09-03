@@ -25,6 +25,7 @@ export function LibraryNavigator({
   const source = useStore((store: DesktopStore) => store.library.source);
   const navigation = useStore((store: DesktopStore) => store.libraryNavigation);
   const selectLibrarySource = useStore((store: DesktopStore) => store.selectLibrarySource);
+  const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
   const createPlaylist = useStore((store: DesktopStore) => store.createPlaylist);
   const renamePlaylist = useStore((store: DesktopStore) => store.renamePlaylist);
   const deletePlaylist = useStore((store: DesktopStore) => store.deletePlaylist);
@@ -45,23 +46,25 @@ export function LibraryNavigator({
     <nav className="library-navigator" aria-label="Library">
       <div className="library-navigator-heading">
         {!collapsed && <h2>Your Library</h2>}
-        {!collapsed && (
-          <LibraryAddMenu triggerRef={addTriggerRef} onNewPlaylist={() => setCreateOpen(true)} />
-        )}
-        <button
-          className="icon-button library-collapse-button"
-          type="button"
-          aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
-          title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
-          aria-pressed={collapsed}
-          onClick={onToggleCollapsed}
-        >
-          {collapsed ? (
-            <ChevronRight size={17} aria-hidden="true" />
-          ) : (
-            <ChevronLeft size={17} aria-hidden="true" />
+        <div className="library-heading-actions">
+          {!collapsed && (
+            <LibraryAddMenu triggerRef={addTriggerRef} onNewPlaylist={() => setCreateOpen(true)} />
           )}
-        </button>
+          <button
+            className="icon-button library-collapse-button"
+            type="button"
+            aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
+            title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
+            aria-pressed={collapsed}
+            onClick={onToggleCollapsed}
+          >
+            {collapsed ? (
+              <ChevronRight size={17} aria-hidden="true" />
+            ) : (
+              <ChevronLeft size={17} aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="library-primary-items">
@@ -117,6 +120,7 @@ export function LibraryNavigator({
                     navigation.pendingMutations.has(`playlist:${id}:delete`)
                   }
                   onSelect={() => void selectLibrarySource({ kind: 'playlist', id })}
+                  onAddSongs={() => void openPlaylistAdd(id)}
                   onRename={() => setRenameId(id)}
                   onDelete={() => setDeleteId(id)}
                 />

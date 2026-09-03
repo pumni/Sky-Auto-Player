@@ -92,6 +92,13 @@ body.is-resizing * {
   padding: 0 4px 0 8px;
 }
 
+.library-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .library-navigator-heading h2 {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -502,6 +509,12 @@ body.is-resizing * {
   gap: 8px;
 }
 
+.playlist-actions {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
+
 .track-browser-heading {
   display: grid;
   min-width: 0;
@@ -530,7 +543,7 @@ body.is-resizing * {
 
 .playlist-add-songs-button {
   min-height: 30px;
-  padding-inline: 7px;
+  padding-inline: 0;
   border: 0;
   color: var(--text-secondary);
   background: transparent;

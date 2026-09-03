@@ -263,7 +263,7 @@ describe('desktop store', () => {
     const playlistId = store.getState().library.source.id;
     requests.length = 0;
 
-    await act(async () => store.getState().beginPlaylistAdd(playlistId));
+    await act(async () => store.getState().openPlaylistAdd(playlistId));
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
     expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });

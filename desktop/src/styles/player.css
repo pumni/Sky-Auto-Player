@@ -83,11 +83,15 @@
 }
 
 .player-transport {
+  position: relative;
   grid-column: 2;
   grid-row: 1;
   display: grid;
   width: 100%;
   min-width: 0;
+  min-height: 63px;
+  grid-template-rows: 40px 18px;
+  align-content: center;
   gap: 5px;
 }
 
@@ -136,14 +140,30 @@
   text-align: center;
 }
 
+.player-transport-status-slot {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 3px);
+  left: 0;
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  gap: 2px;
+  pointer-events: none;
+}
+
 .player-timeline {
   display: grid;
+  grid-template-rows: 11px 4px;
   min-width: 0;
+  min-height: 18px;
   gap: 3px;
 }
 
 .player-timeline-labels {
   display: flex;
+  height: 11px;
+  line-height: 11px;
   justify-content: space-between;
   color: var(--text-tertiary);
   font-family: 'Cascadia Mono', Consolas, monospace;
@@ -178,6 +198,10 @@
 
 .player-timeline.is-disabled {
   color: var(--text-tertiary);
+}
+
+.player-timeline.is-disabled .player-timeline-labels {
+  visibility: hidden;
 }
 
 .player-timeline progress[aria-disabled='true'] {
