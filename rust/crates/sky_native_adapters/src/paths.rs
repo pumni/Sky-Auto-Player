@@ -216,8 +216,11 @@ impl AppPaths {
 
     /// Assert that all mutable data roots are strictly separated from `install_root`.
     ///
-    /// Returns an error if any mutable root resides inside `install_root`.
+    /// Returns an error if:
+    /// - Any mutable root is not an absolute path.
+    /// - Any mutable root lexically or canonically resides inside `install_root`.
     pub fn assert_clean_boundary(&self) -> Result<(), String> {
+        let canonical_install = fs::canonicalize(&self.install_root).ok();
         let roots = [
             ("config_root", &self.config_root),
             ("data_root", &self.data_root),
@@ -226,12 +229,37 @@ impl AppPaths {
             ("user_music_root", &self.user_music_root),
         ];
         for (name, path) in roots {
+            if !path.is_absolute() {
+                return Err(format!(
+                    "v4 architecture violation: {name} ('{}') must be an absolute path",
+                    path.display()
+                ));
+            }
             if path.starts_with(&self.install_root) {
                 return Err(format!(
-                    "v4 architecture violation: {name} ({}) must not reside inside install root ({})",
+                    "v4 architecture violation: {name} ('{}') must not reside inside install root ('{}')",
                     path.display(),
                     self.install_root.display()
                 ));
+            }
+            if let Some(ref install_canon) = canonical_install {
+                if let Ok(path_canon) = fs::canonicalize(path) {
+                    if path_canon.starts_with(install_canon) {
+                        return Err(format!(
+                            "v4 architecture violation: {name} ('{}') canonically resolves inside install root ('{}')",
+                            path.display(),
+                            self.install_root.display()
+                        ));
+                    }
+                } else if let Some(violating_ancestor) =
+                    canonical_ancestor_within(path, install_canon)
+                {
+                    return Err(format!(
+                        "v4 architecture violation: {name} ancestor ('{}') canonically resolves inside install root ('{}')",
+                        violating_ancestor.display(),
+                        self.install_root.display()
+                    ));
+                }
             }
         }
         Ok(())
@@ -241,11 +269,12 @@ impl AppPaths {
     ///
     /// Fails closed if:
     /// - `SKY_INSTALL_ROOT` fails strict canonicalization.
+    /// - Any environment override is relative or escapes clean boundary.
     /// - The resolved mutable roots violate `assert_clean_boundary()`.
     pub fn resolve() -> Result<Self, String> {
         let install_root = resolve_install_root()?;
-        let app_data_root = resolve_app_data_root()?;
-        let user_music_root = resolve_user_music_root(&app_data_root);
+        let app_data_root = resolve_app_data_root(&install_root)?;
+        let user_music_root = resolve_user_music_root(&app_data_root, &install_root)?;
 
         let paths = Self {
             config_root: app_data_root.clone(),
@@ -326,37 +355,112 @@ fn resolve_install_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "executable has no install root".into())
 }
 
-fn resolve_app_data_root() -> Result<PathBuf, String> {
+fn canonical_ancestor_within(path: &Path, base_canon: &Path) -> Option<PathBuf> {
+    let mut ancestor = path;
+    while !ancestor.exists() {
+        ancestor = ancestor.parent()?;
+    }
+    if fs::canonicalize(ancestor).is_ok_and(|canon| canon.starts_with(base_canon)) {
+        return Some(ancestor.to_path_buf());
+    }
+    None
+}
+
+fn normalize_and_validate_override(
+    raw: &Path,
+    install_root: &Path,
+    var_name: &str,
+) -> Result<PathBuf, String> {
+    if !raw.is_absolute() {
+        return Err(format!(
+            "invalid {var_name}: override path must be absolute, relative overrides are not permitted ('{}')",
+            raw.display()
+        ));
+    }
+    if raw.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(format!(
+            "invalid {var_name}: override path must not contain parent directory traversal ('..'): '{}'",
+            raw.display()
+        ));
+    }
+    if raw.starts_with(install_root) {
+        return Err(format!(
+            "invalid {var_name}: override path ('{}') must not reside inside install root ('{}')",
+            raw.display(),
+            install_root.display()
+        ));
+    }
+    if let Ok(install_canon) = fs::canonicalize(install_root) {
+        if let Ok(raw_canon) = fs::canonicalize(raw) {
+            if raw_canon.starts_with(&install_canon) {
+                return Err(format!(
+                    "invalid {var_name}: override path ('{}') canonically resolves inside install root ('{}')",
+                    raw.display(),
+                    install_root.display()
+                ));
+            }
+        } else if let Some(violating_ancestor) = canonical_ancestor_within(raw, &install_canon) {
+            return Err(format!(
+                "invalid {var_name}: override path ancestor ('{}') canonically resolves inside install root ('{}')",
+                violating_ancestor.display(),
+                install_root.display()
+            ));
+        }
+    }
+    Ok(raw.to_path_buf())
+}
+
+fn resolve_app_data_root(install_root: &Path) -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("SKY_APP_DATA_ROOT") {
-        return Ok(PathBuf::from(value));
+        let raw = PathBuf::from(value);
+        return normalize_and_validate_override(&raw, install_root, "SKY_APP_DATA_ROOT");
     }
     #[cfg(windows)]
     {
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            return Ok(PathBuf::from(local).join(V4_APP_IDENTIFIER));
+            let path = PathBuf::from(local);
+            if !path.is_absolute() {
+                return Err(format!(
+                    "invalid LOCALAPPDATA: path must be absolute ('{}')",
+                    path.display()
+                ));
+            }
+            return Ok(path.join(V4_APP_IDENTIFIER));
         }
         if let Some(roaming) = std::env::var_os("APPDATA") {
-            return Ok(PathBuf::from(roaming).join(V4_APP_IDENTIFIER));
+            let path = PathBuf::from(roaming);
+            if !path.is_absolute() {
+                return Err(format!(
+                    "invalid APPDATA: path must be absolute ('{}')",
+                    path.display()
+                ));
+            }
+            return Ok(path.join(V4_APP_IDENTIFIER));
         }
         Err("neither LOCALAPPDATA nor APPDATA is available in environment".into())
     }
     #[cfg(not(windows))]
     {
         if let Some(home) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join(V4_APP_IDENTIFIER));
+            let path = PathBuf::from(home);
+            if !path.is_absolute() {
+                return Err(format!(
+                    "invalid HOME: path must be absolute ('{}')",
+                    path.display()
+                ));
+            }
+            return Ok(path.join(".local").join("share").join(V4_APP_IDENTIFIER));
         }
         Err("HOME is unavailable in environment".into())
     }
 }
 
-fn resolve_user_music_root(app_data_root: &Path) -> PathBuf {
+fn resolve_user_music_root(app_data_root: &Path, install_root: &Path) -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("SKY_SONGS_DIR") {
-        return PathBuf::from(value);
+        let raw = PathBuf::from(value);
+        return normalize_and_validate_override(&raw, install_root, "SKY_SONGS_DIR");
     }
-    app_data_root.join(DEFAULT_SONGS_SUBDIR)
+    Ok(app_data_root.join(DEFAULT_SONGS_SUBDIR))
 }
 
 #[cfg(test)]
@@ -511,6 +615,127 @@ mod tests {
         let snap_deleted = snapshot_directory(&temp).expect("snapshot deleted");
         assert_ne!(snap1, snap_deleted);
         assert_eq!(snap_deleted.len(), 1);
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn assert_clean_boundary_rejects_relative_roots() {
+        let install_root = PathBuf::from(r"C:\Program Files\Sky Auto Player");
+        let relative = PathBuf::from(".");
+        let paths = AppPaths::from_app_data_root(install_root, relative);
+        let err = paths.assert_clean_boundary().unwrap_err();
+        assert!(err.contains("must be an absolute path"), "{err}");
+    }
+
+    static RESOLVER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn set(pairs: &[(&'static str, &std::path::Path)]) -> Self {
+            let mut vars = Vec::new();
+            for (key, val) in pairs {
+                vars.push((*key, std::env::var_os(key)));
+                unsafe {
+                    std::env::set_var(key, val);
+                }
+            }
+            Self { vars }
+        }
+
+        fn set_raw(pairs: &[(&'static str, &str)]) -> Self {
+            let mut vars = Vec::new();
+            for (key, val) in pairs {
+                vars.push((*key, std::env::var_os(key)));
+                unsafe {
+                    std::env::set_var(key, val);
+                }
+            }
+            Self { vars }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, prev) in &self.vars {
+                match prev {
+                    Some(val) => unsafe {
+                        std::env::set_var(key, val);
+                    },
+                    None => unsafe {
+                        std::env::remove_var(key);
+                    },
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_relative_app_data_root_override() {
+        let _lock = RESOLVER_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::set_raw(&[("SKY_APP_DATA_ROOT", ".")]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("relative overrides are not permitted")
+                || err.contains("must be absolute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_relative_songs_dir_override() {
+        let _lock = RESOLVER_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::set_raw(&[("SKY_SONGS_DIR", "songs")]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("relative overrides are not permitted")
+                || err.contains("must be absolute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_absolute_app_data_root_inside_install_root() {
+        let _lock = RESOLVER_TEST_LOCK.lock().unwrap();
+        let temp = std::env::temp_dir().join(format!("sky-resolver-inside-{}", std::process::id()));
+        let install_root = temp.join("install");
+        let nested_app_data = install_root.join("data");
+        fs::create_dir_all(&install_root).unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("SKY_INSTALL_ROOT", &install_root),
+            ("SKY_APP_DATA_ROOT", &nested_app_data),
+        ]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("must not reside inside install root")
+                || err.contains("canonically resolves inside install root"),
+            "unexpected error: {err}"
+        );
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_accepts_valid_external_absolute_app_data_override() {
+        let _lock = RESOLVER_TEST_LOCK.lock().unwrap();
+        let temp = std::env::temp_dir().join(format!("sky-resolver-valid-{}", std::process::id()));
+        let install_root = temp.join("install");
+        let external_app_data = temp.join("app_data");
+        fs::create_dir_all(&install_root).unwrap();
+        fs::create_dir_all(&external_app_data).unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("SKY_INSTALL_ROOT", &install_root),
+            ("SKY_APP_DATA_ROOT", &external_app_data),
+        ]);
+        let paths = AppPaths::resolve().expect("valid external override must succeed");
+        assert_eq!(paths.config_root(), external_app_data.as_path());
+        assert_eq!(paths.data_root(), external_app_data.as_path());
+        assert!(!paths.config_root().starts_with(&install_root));
+        assert!(paths.assert_clean_boundary().is_ok());
 
         let _ = fs::remove_dir_all(&temp);
     }

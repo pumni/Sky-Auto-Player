@@ -162,3 +162,107 @@ fn v4_adapters_operate_with_immutable_install_payload_snapshot_proof() {
 
     let _ = fs::remove_dir_all(&temp);
 }
+
+#[test]
+fn v4_production_resolver_fails_closed_on_relative_or_nested_overrides() {
+    struct EnvCleanup {
+        vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl EnvCleanup {
+        fn set(pairs: &[(&'static str, &std::path::Path)]) -> Self {
+            let mut vars = Vec::new();
+            for (k, v) in pairs {
+                vars.push((*k, std::env::var_os(k)));
+                unsafe {
+                    std::env::set_var(k, v);
+                }
+            }
+            Self { vars }
+        }
+        fn set_raw(pairs: &[(&'static str, &str)]) -> Self {
+            let mut vars = Vec::new();
+            for (k, v) in pairs {
+                vars.push((*k, std::env::var_os(k)));
+                unsafe {
+                    std::env::set_var(k, v);
+                }
+            }
+            Self { vars }
+        }
+    }
+    impl Drop for EnvCleanup {
+        fn drop(&mut self) {
+            for (k, prev) in &self.vars {
+                match prev {
+                    Some(val) => unsafe {
+                        std::env::set_var(k, val);
+                    },
+                    None => unsafe {
+                        std::env::remove_var(k);
+                    },
+                }
+            }
+        }
+    }
+
+    // 1. Relative SKY_APP_DATA_ROOT=. rejected
+    {
+        let _guard = EnvCleanup::set_raw(&[("SKY_APP_DATA_ROOT", ".")]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("relative overrides are not permitted")
+                || err.contains("must be absolute"),
+            "unexpected: {err}"
+        );
+    }
+
+    // 2. Relative SKY_SONGS_DIR=songs rejected
+    {
+        let _guard = EnvCleanup::set_raw(&[("SKY_SONGS_DIR", "songs")]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("relative overrides are not permitted")
+                || err.contains("must be absolute"),
+            "unexpected: {err}"
+        );
+    }
+
+    // 3. Absolute mutable root inside install root rejected
+    {
+        let temp = std::env::temp_dir().join(format!("sky-contract-inside-{}", std::process::id()));
+        let install_root = temp.join("install");
+        let nested_app_data = install_root.join("data");
+        fs::create_dir_all(&install_root).unwrap();
+
+        let _guard = EnvCleanup::set(&[
+            ("SKY_INSTALL_ROOT", &install_root),
+            ("SKY_APP_DATA_ROOT", &nested_app_data),
+        ]);
+        let err = AppPaths::resolve().unwrap_err();
+        assert!(
+            err.contains("must not reside inside install root")
+                || err.contains("canonically resolves inside install root"),
+            "unexpected: {err}"
+        );
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    // 4. Valid external absolute override accepted
+    {
+        let temp = std::env::temp_dir().join(format!("sky-contract-valid-{}", std::process::id()));
+        let install_root = temp.join("install");
+        let external_app_data = temp.join("app_data");
+        fs::create_dir_all(&install_root).unwrap();
+        fs::create_dir_all(&external_app_data).unwrap();
+
+        let _guard = EnvCleanup::set(&[
+            ("SKY_INSTALL_ROOT", &install_root),
+            ("SKY_APP_DATA_ROOT", &external_app_data),
+        ]);
+        let paths = AppPaths::resolve().expect("valid external override must succeed");
+        assert_eq!(paths.config_root(), external_app_data.as_path());
+        assert!(!paths.config_root().starts_with(&install_root));
+        assert!(paths.assert_clean_boundary().is_ok());
+        let _ = fs::remove_dir_all(&temp);
+    }
+}
