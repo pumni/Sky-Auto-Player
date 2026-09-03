@@ -1,4 +1,5 @@
 use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
+use sky_native_adapters::AppPaths;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -155,7 +156,7 @@ struct AppStateInner {
     activity: ActivityCoordinator,
     test_seams: Mutex<TestSeams>,
     #[cfg(any(test, feature = "tauri-test"))]
-    install_root_override: Mutex<Option<PathBuf>>,
+    paths_override: Mutex<Option<AppPaths>>,
     closing: AtomicBool,
     gui_smoke_exit: AtomicBool,
     gui_smoke_failed: AtomicBool,
@@ -171,7 +172,7 @@ impl Default for AppState {
                 activity: ActivityCoordinator::default(),
                 test_seams: Mutex::new(TestSeams::Disabled),
                 #[cfg(any(test, feature = "tauri-test"))]
-                install_root_override: Mutex::new(None),
+                paths_override: Mutex::new(None),
                 closing: AtomicBool::new(false),
                 gui_smoke_exit: AtomicBool::new(false),
                 gui_smoke_failed: AtomicBool::new(false),
@@ -196,25 +197,23 @@ impl AppState {
             .lock()
             .map_err(|_| "native test-seam state poisoned".to_string())?;
         #[cfg(any(test, feature = "tauri-test"))]
-        let install_root = self
+        let paths = self
             .inner
-            .install_root_override
+            .paths_override
             .lock()
-            .map_err(|_| "native install-root override state poisoned".to_string())?
+            .map_err(|_| "native paths override state poisoned".to_string())?
             .clone();
         #[cfg(not(any(test, feature = "tauri-test")))]
-        let install_root = None;
-        let install_root = match install_root {
-            Some(path) => path,
-            None => crate::native_runtime::resolve_install_root()?,
+        let paths = None;
+        let paths = match paths {
+            Some(p) => p,
+            None => sky_native_adapters::AppPaths::resolve()?,
         };
-        let runtime = Arc::new(
-            NativeDesktopRuntime::from_install_root_with_activity_and_seams(
-                install_root,
-                self.activity(),
-                test_seams,
-            )?,
-        );
+        let runtime = Arc::new(NativeDesktopRuntime::from_paths_with_activity_and_seams(
+            paths,
+            self.activity(),
+            test_seams,
+        )?);
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
@@ -271,14 +270,21 @@ impl AppState {
 
     #[cfg(any(test, feature = "tauri-test"))]
     #[allow(dead_code)]
-    pub(crate) fn with_test_install_root(install_root: PathBuf) -> Self {
+    pub(crate) fn with_test_paths(paths: AppPaths) -> Self {
         let state = Self::default();
         *state
             .inner
-            .install_root_override
+            .paths_override
             .lock()
-            .expect("test install-root state poisoned") = Some(install_root);
+            .expect("test paths state poisoned") = Some(paths);
         state
+    }
+
+    #[cfg(any(test, feature = "tauri-test"))]
+    #[allow(dead_code)]
+    pub(crate) fn with_test_install_root(install_root: PathBuf) -> Self {
+        let paths = AppPaths::from_app_data_root(install_root.clone(), install_root);
+        Self::with_test_paths(paths)
     }
 
     pub fn should_exit_after_close(&self) -> bool {

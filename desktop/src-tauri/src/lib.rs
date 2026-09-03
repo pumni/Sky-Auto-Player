@@ -252,21 +252,24 @@ pub fn selftest_packaged_shell() -> i32 {
         eprintln!("packaged shell selftest startup guard failed: {error}");
         return 2;
     }
-    let runtime =
-        match native_runtime::NativeDesktopRuntime::from_install_root_with_activity_and_seams(
-            native_runtime::resolve_install_root().unwrap_or_else(|error| {
-                eprintln!("packaged shell selftest install root failed: {error}");
-                std::process::exit(2);
-            }),
-            app_state::ActivityCoordinator::default(),
-            TestSeams::SafePackage,
-        ) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                eprintln!("packaged native selftest could not start runtime: {error}");
-                return 2;
-            }
-        };
+    let paths = match sky_native_adapters::AppPaths::resolve() {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("packaged shell selftest path resolution failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity_and_seams(
+        paths,
+        app_state::ActivityCoordinator::default(),
+        TestSeams::SafePackage,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("packaged native selftest could not start runtime: {error}");
+            return 2;
+        }
+    };
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         let result = match runtime.bootstrap() {
             Ok(bootstrap) if !bootstrap.native_build.native_build_commit.is_empty() => 0,
@@ -442,18 +445,19 @@ mod ipc_tests {
         }
     }
 
-    fn test_install_root() -> (PathBuf, TestInstallRoot) {
+    fn test_install_root() -> (sky_native_adapters::AppPaths, TestInstallRoot) {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("sky-desktop-ipc-{suffix}"));
-        fs::create_dir_all(root.join("songs")).expect("test songs root");
-        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("test config");
+        let paths = sky_native_adapters::AppPaths::from_test_sandbox(&root);
+        paths.ensure_mutable_directories().expect("test dirs");
+        fs::write(paths.settings_path(), "{\"schema_version\":3}\n").expect("test config");
         let source_song =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..\\..\\songs\\blue.json");
-        fs::copy(source_song, root.join("songs/blue.json")).expect("test song");
-        (root.clone(), TestInstallRoot(root))
+        fs::copy(source_song, paths.user_music_root().join("blue.json")).expect("test song");
+        (paths, TestInstallRoot(root))
     }
 
     fn request(
@@ -480,9 +484,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_params_envelope() {
-        let (install_root, _cleanup) = test_install_root();
+        let (paths, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::with_test_install_root(install_root))
+            .manage(AppState::with_test_paths(paths))
             .invoke_handler(tauri::generate_handler![super::commands::search_songs])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock Tauri app");
@@ -515,9 +519,9 @@ mod ipc_tests {
 
     #[test]
     fn generated_tauri_handler_decodes_native_playback_payloads() {
-        let (install_root, _cleanup) = test_install_root();
+        let (paths, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::with_test_install_root(install_root))
+            .manage(AppState::with_test_paths(paths))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
@@ -596,9 +600,9 @@ mod ipc_tests {
 
     #[test]
     fn native_settings_patch_invalidates_prepared_plan() {
-        let (install_root, _cleanup) = test_install_root();
+        let (paths, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()
-            .manage(AppState::with_test_install_root(install_root))
+            .manage(AppState::with_test_paths(paths))
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
