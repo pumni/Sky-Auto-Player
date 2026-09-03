@@ -55,6 +55,8 @@ export interface DiagnosticsLogLine {
 
 export interface LibraryState {
   source: LibrarySource;
+  searchSource: LibrarySource;
+  playlistAddMode: { playlistId: string } | null;
   query: string;
   generation: number;
   catalogTotal: number;
@@ -141,6 +143,8 @@ export interface DesktopStore {
   selectSong: (songId: string) => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
   selectLibrarySource: (source: LibrarySource) => Promise<void>;
+  beginPlaylistAdd: (playlistId: string) => Promise<void>;
+  exitPlaylistAdd: () => Promise<void>;
   loadLibraryNavigation: () => Promise<void>;
   createPlaylist: (name: string) => Promise<void>;
   renamePlaylist: (playlistId: string, name: string) => Promise<void>;
@@ -439,8 +443,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
           pages,
           indexById,
           catalogTotal:
-            current.source.kind === 'smart' &&
-            current.source.id === 'all' &&
+            current.searchSource.kind === 'smart' &&
+            current.searchSource.id === 'all' &&
             current.query.trim() === ''
               ? result.total
               : current.catalogTotal,
@@ -502,7 +506,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       try {
         await Promise.all(
           offsets.map((offset) =>
-            loadPage(current.query, current.source, offset, current.generation, token),
+            loadPage(current.query, current.searchSource, offset, current.generation, token),
           ),
         );
       } catch (error) {
@@ -518,6 +522,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
       fatal: null,
       library: {
         source: { kind: 'smart', id: 'all' },
+        searchSource: { kind: 'smart', id: 'all' },
+        playlistAddMode: null,
         query: '',
         generation: 0,
         catalogTotal: 0,
@@ -843,11 +849,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const current = get().library;
         const nextQuery = query ?? current.query;
         const nextSource = source ?? current.source;
+        const nextSearchSource: LibrarySource =
+          nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
+            ? { kind: 'smart', id: 'all' }
+            : nextSource;
         const token = current.searchRequestGeneration + 1;
         set({
           library: {
             ...current,
             source: nextSource,
+            searchSource: nextSearchSource,
             query: nextQuery,
             pages: new Map(),
             indexById: new Map(),
@@ -858,13 +869,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
           },
         });
         try {
-          const result = await loadPage(nextQuery, nextSource, 0, current.generation, token);
+          const result = await loadPage(nextQuery, nextSearchSource, 0, current.generation, token);
           if (get().library.searchRequestGeneration !== token) return;
           set({
             library: {
               ...get().library,
               catalogTotal:
-                nextSource.kind === 'smart' && nextSource.id === 'all' && nextQuery.trim() === ''
+                nextSearchSource.kind === 'smart' &&
+                nextSearchSource.id === 'all' &&
+                nextQuery.trim() === ''
                   ? result.total
                   : get().library.catalogTotal,
               likedTotal: result.liked_total,
@@ -974,7 +987,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (result.items.length === 0) return;
           const latest = get().library;
           const cachedPages = pageCache.get(
-            cacheKey(latest.source, latest.query, latest.generation),
+            cacheKey(latest.searchSource, latest.query, latest.generation),
           );
           if (cachedPages) {
             const updatesByPage = new Map<number, SongRow[]>();
@@ -1170,16 +1183,59 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       async selectLibrarySource(source) {
-        if (sourceKey(get().library.source) !== sourceKey(source)) {
+        const current = get().library;
+        if (sourceKey(current.source) !== sourceKey(source) || current.playlistAddMode !== null) {
           detailRequestToken += 1;
           prepareRequestEpoch += 1;
           set({
-            library: { ...get().library, selectedSongId: null },
+            library: { ...get().library, selectedSongId: null, playlistAddMode: null },
             details: { bySongId: new Map() },
             playback: { ...get().playback, prepared: null },
           });
         }
         await get().search('', source);
+      },
+
+      async beginPlaylistAdd(playlistId) {
+        const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
+        const current = get().library;
+        if (sourceKey(current.source) !== sourceKey(playlistSource)) {
+          await get().selectLibrarySource(playlistSource);
+        }
+        detailRequestToken += 1;
+        prepareRequestEpoch += 1;
+        const latest = get().library;
+        set({
+          library: {
+            ...latest,
+            source: playlistSource,
+            playlistAddMode: { playlistId },
+            selectedSongId: null,
+          },
+          details: { bySongId: new Map() },
+          playback: { ...get().playback, prepared: null },
+        });
+        await get().search('', playlistSource);
+      },
+
+      async exitPlaylistAdd() {
+        const current = get().library;
+        const playlistId = current.playlistAddMode?.playlistId;
+        if (!playlistId) return;
+        detailRequestToken += 1;
+        prepareRequestEpoch += 1;
+        const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
+        set({
+          library: {
+            ...current,
+            source: playlistSource,
+            playlistAddMode: null,
+            selectedSongId: null,
+          },
+          details: { bySongId: new Map() },
+          playback: { ...get().playback, prepared: null },
+        });
+        await get().search('', playlistSource);
       },
 
       async setSongLiked(songId, liked) {

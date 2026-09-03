@@ -135,7 +135,7 @@ body.is-resizing * {
   grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: center;
   min-height: 42px;
-  margin-top: 12px;
+  margin-top: 0;
   padding: 0 8px;
   gap: 8px;
   border: 0;
@@ -158,6 +158,20 @@ body.is-resizing * {
 .library-nav-item-icon {
   display: grid;
   place-items: center;
+  color: var(--text-secondary);
+}
+
+.library-nav-item[data-icon-tone='liked'] .library-nav-item-icon,
+.library-nav-item.is-active .library-nav-item-icon {
+  color: var(--accent);
+}
+
+.library-nav-item:hover .library-nav-item-icon {
+  color: var(--text-primary);
+}
+
+.library-nav-item[data-icon-tone='liked']:hover .library-nav-item-icon,
+.library-nav-item.is-active:hover .library-nav-item-icon {
   color: var(--accent);
 }
 
@@ -182,15 +196,31 @@ body.is-resizing * {
   min-width: 0;
 }
 
+.library-primary-items,
+.library-section-items {
+  display: grid;
+  gap: 4px;
+}
+
 .library-nav-action-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
   min-width: 0;
+  border-radius: var(--radius-control);
 }
 
-.library-nav-action-row .library-nav-item {
-  margin-top: 4px;
+.library-nav-action-row:hover {
+  background: var(--surface-hover);
+}
+
+.library-nav-action-row.is-active {
+  background: var(--surface-selected);
+}
+
+.library-nav-action-row .library-nav-item:hover,
+.library-nav-action-row .library-nav-item.is-active {
+  background: transparent;
 }
 
 .library-more-button {
@@ -201,6 +231,12 @@ body.is-resizing * {
   border: 0;
   background: transparent;
   opacity: 0;
+}
+
+.library-more-button:hover,
+.library-more-button:focus-visible {
+  color: var(--text-primary);
+  background: var(--surface-hover);
 }
 
 .library-nav-action-row:hover .library-more-button,
@@ -263,9 +299,8 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
+  width: 30px;
   min-height: 30px;
-  gap: 5px;
   padding-inline: 7px;
   border: 0;
   color: var(--text-secondary);
@@ -458,6 +493,53 @@ body.is-resizing * {
   gap: 12px;
   margin-bottom: 10px;
   padding-inline: 18px;
+}
+
+.track-browser.is-playlist .track-browser-header {
+  display: grid;
+  align-items: start;
+  justify-content: stretch;
+  gap: 8px;
+}
+
+.track-browser-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.track-browser-back-button {
+  justify-self: start;
+  min-height: 26px;
+  margin-bottom: 2px;
+  padding: 0 6px;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 11px;
+}
+
+.track-browser-back-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.track-browser.is-playlist .playlist-add-songs-button {
+  justify-self: start;
+}
+
+.playlist-add-songs-button {
+  min-height: 30px;
+  padding-inline: 7px;
+  border: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+}
+
+.playlist-add-songs-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
 }
 
 .track-browser-header h1 {

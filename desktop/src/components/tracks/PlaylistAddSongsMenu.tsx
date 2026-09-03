@@ -8,14 +8,14 @@ interface PlaylistAddSongsMenuProps {
 }
 
 export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsMenuProps) {
-  const selectLibrarySource = useStore((store) => store.selectLibrarySource);
+  const beginPlaylistAdd = useStore((store) => store.beginPlaylistAdd);
   const importFiles = useStore((store) => store.importLocalFilesToPlaylist);
   const importFolder = useStore((store) => store.importLocalFolderToPlaylist);
   const pending = useStore((store) => store.libraryNavigation.pendingMutations);
 
   return (
     <MenuTrigger>
-      <Button className="button button-primary playlist-add-songs-button">
+      <Button className="button playlist-add-songs-button">
         <Plus size={16} aria-hidden="true" />
         <span>Add songs</span>
       </Button>
@@ -23,7 +23,7 @@ export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsM
         <Menu aria-label="Add songs">
           <MenuItem
             id="browse-all-songs"
-            onAction={() => void selectLibrarySource({ kind: 'smart', id: 'all' })}
+            onAction={() => void beginPlaylistAdd(playlistId)}
             className="library-menu-item"
           >
             <ListMusic size={15} aria-hidden="true" />

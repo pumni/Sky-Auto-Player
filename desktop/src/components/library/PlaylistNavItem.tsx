@@ -21,7 +21,7 @@ export function PlaylistNavItem({
   onDelete,
 }: PlaylistNavItemProps) {
   return (
-    <div className="library-nav-action-row">
+    <div className={`library-nav-action-row${active ? ' is-active' : ''}`}>
       <LibraryNavItem
         label={playlist.name}
         active={active}

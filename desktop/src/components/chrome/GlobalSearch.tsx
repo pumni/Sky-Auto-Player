@@ -8,14 +8,23 @@ interface GlobalSearchProps {
 
 export function GlobalSearch({ useStore }: GlobalSearchProps) {
   const query = useStore((store: DesktopStore) => store.library.query);
-  return <SearchInput key={query} query={query} useStore={useStore} />;
+  const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
+  return (
+    <SearchInput
+      key={`${query}:${playlistAddMode?.playlistId ?? 'library'}`}
+      query={query}
+      useStore={useStore}
+      playlistAddMode={playlistAddMode !== null}
+    />
+  );
 }
 
 interface SearchInputProps extends GlobalSearchProps {
   query: string;
+  playlistAddMode: boolean;
 }
 
-function SearchInput({ query, useStore }: SearchInputProps) {
+function SearchInput({ query, useStore, playlistAddMode }: SearchInputProps) {
   const search = useStore((store) => store.search);
   const [draft, setDraft] = useState(query);
 
@@ -29,14 +38,16 @@ function SearchInput({ query, useStore }: SearchInputProps) {
   return (
     <label className="global-search" data-tauri-drag-region="false">
       <Search size={16} aria-hidden="true" />
-      <span className="visually-hidden">Search library</span>
+      <span className="visually-hidden">
+        {playlistAddMode ? 'Search All Songs' : 'Search library'}
+      </span>
       <input
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="Search library…"
+        placeholder={playlistAddMode ? 'Search All Songs…' : 'Search library…'}
         type="search"
         spellCheck={false}
-        aria-label="Search library"
+        aria-label={playlistAddMode ? 'Search All Songs' : 'Search library'}
         data-tauri-drag-region="false"
       />
       <kbd aria-hidden="true">/</kbd>

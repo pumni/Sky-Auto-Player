@@ -90,7 +90,7 @@ test('All Songs clears search while retaining the catalog count', async ({ page 
   const navigatorItem = page.getByRole('button', { name: 'All Songs' });
   await expect(navigatorItem).toContainText('500');
   await page.getByLabel('Search library').fill('Moonlit');
-  await expect(page.getByText('1 songs')).toBeVisible();
+  await expect(page.getByText('1 song')).toBeVisible();
   await expect(navigatorItem).toContainText('500');
   await navigatorItem.click();
   await expect(page.getByLabel('Search library')).toHaveValue('');
@@ -121,8 +121,7 @@ test('Liked Songs is a real source with Player Bar save behavior', async ({ page
 test('Playlists support create, rename, delete, and membership actions', async ({ page }) => {
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Add to Your Library' }).click();
-  await page.getByRole('menuitem', { name: 'Create playlist' }).click();
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
 
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
@@ -153,8 +152,7 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
 
-  await navigator.getByRole('button', { name: 'Add to Your Library' }).click();
-  await page.getByRole('menuitem', { name: 'Create playlist' }).click();
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
@@ -162,11 +160,15 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
 
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Practice 0', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
   await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
   await page.getByRole('menuitem', { name: 'Add to Practice' }).click();
   await expect(navigator.getByRole('button', { name: 'Practice 1', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
   await navigator.getByRole('button', { name: 'Practice 1', exact: true }).click();
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
 
@@ -212,7 +214,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  await expect(navigator.getByRole('button', { name: 'Add to Your Library' })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
   await expect(collapsedLabels).toHaveCount(2);
   expect(
@@ -336,8 +338,8 @@ test('Player Bar communicates the no-selection state without actionable playback
   const labels = player.locator('.player-timeline-labels');
 
   await expect(primary).toBeDisabled();
-  await expect(labels).toContainText('--:--');
-  expect(await labels.textContent()).not.toContain('0:00');
+  await expect(player.getByText('Select a song from your Library')).toBeVisible();
+  await expect(labels).toHaveCount(0);
   await expect(player.getByRole('progressbar')).toHaveAttribute('aria-disabled', 'true');
 
   await player.getByRole('button', { name: 'Configure playback profile' }).click();

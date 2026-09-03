@@ -6,6 +6,7 @@ interface LibraryNavItemProps {
   children: ReactNode;
   count?: number;
   icon: ReactNode;
+  iconTone?: 'default' | 'liked';
   label: string;
   onPress?: () => void;
 }
@@ -16,12 +17,14 @@ export function LibraryNavItem({
   children,
   count,
   icon,
+  iconTone = 'default',
   label,
   onPress,
 }: LibraryNavItemProps) {
   return (
     <button
       className={`library-nav-item${active ? ' is-active' : ''}`}
+      data-icon-tone={iconTone}
       type="button"
       aria-current={active ? 'page' : undefined}
       onClick={onPress}

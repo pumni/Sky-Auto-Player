@@ -12,6 +12,7 @@ interface TrackActionsMenuProps {
 export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
   const [open, setOpen] = useState(false);
   const [playlistIds, setPlaylistIds] = useState<string[]>([]);
+  const playlistAddMode = useStore((store) => store.library.playlistAddMode);
   const onOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (nextOpen) setPlaylistIds([...useStore.getState().libraryNavigation.playlistOrder]);
@@ -31,7 +32,11 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
           aria-label={`Actions for ${row.title}`}
           onAction={(key) => {
             const state = useStore.getState();
-            if (key === 'remove-current' && state.library.source.kind === 'playlist') {
+            if (
+              key === 'remove-current' &&
+              state.library.source.kind === 'playlist' &&
+              state.library.playlistAddMode === null
+            ) {
               void state
                 .removeSongFromPlaylist(state.library.source.id, row.song_id)
                 .catch(() => undefined);
@@ -66,7 +71,7 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
               );
             })
           )}
-          {useStore.getState().library.source.kind === 'playlist' && (
+          {useStore.getState().library.source.kind === 'playlist' && playlistAddMode === null && (
             <MenuItem id="remove-current" className="library-menu-item is-danger">
               <MinusCircle size={15} aria-hidden="true" />
               <span>Remove from playlist</span>

@@ -204,7 +204,7 @@
 
 .player-profile {
   position: relative;
-  width: min(190px, calc(100% - 42px));
+  width: 32px;
   min-width: 0;
 }
 
@@ -236,45 +236,21 @@
 }
 
 .profile-summary-button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-  gap: 7px;
-  padding: 5px 7px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  color: var(--text-tertiary);
   background: transparent;
-  text-align: left;
 }
 
 .profile-summary-button:hover {
-  background: var(--surface-hover);
+  color: var(--text-primary);
+  background: transparent;
 }
 
 .profile-summary-button > span {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.profile-summary-button strong,
-.profile-summary-button small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profile-summary-button strong {
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.profile-summary-button small {
-  color: var(--text-tertiary);
-  font-size: 10px;
+  display: none;
 }
 
 .profile-popover {
@@ -392,14 +368,6 @@
     padding-inline: 10px;
   }
 
-  .player-profile {
-    width: 148px;
-  }
-
-  .profile-summary-button small {
-    display: none;
-  }
-
   .player-admission {
     right: 10px;
     left: 10px;
@@ -423,21 +391,6 @@
 
   .transport-actions .player-primary-action {
     width: 38px;
-  }
-
-  .player-profile {
-    width: 34px;
-  }
-
-  .profile-summary-button {
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    padding: 0;
-  }
-
-  .profile-summary-button > span {
-    display: none;
   }
 
   .player-tools {
@@ -476,22 +429,6 @@
 
 .player-tool-button[aria-pressed='true'] {
   color: var(--accent);
-}
-
-.player-profile {
-  width: 32px;
-}
-
-.profile-summary-button {
-  width: 32px;
-  min-height: 32px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.profile-summary-button > span {
-  display: none;
 }
 
 .player-tools {

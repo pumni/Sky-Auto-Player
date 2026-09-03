@@ -111,10 +111,12 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
         className={`player-timeline${selectedSongId ? '' : ' is-disabled'}`}
         aria-label={progressLabel}
       >
-        <div className="player-timeline-labels">
-          <span>{selectedSongId ? formatPlayerDuration(currentUs) : '--:--'}</span>
-          <span>{selectedSongId ? formatPlayerDuration(totalUs) : '--:--'}</span>
-        </div>
+        {selectedSongId && (
+          <div className="player-timeline-labels">
+            <span>{formatPlayerDuration(currentUs)}</span>
+            <span>{formatPlayerDuration(totalUs)}</span>
+          </div>
+        )}
         <progress
           value={selectedSongId ? currentUs : 0}
           max={selectedSongId ? totalUs || 1 : 1}

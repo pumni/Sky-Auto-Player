@@ -1,9 +1,9 @@
 import { ChevronLeft, ChevronRight, Heart, Music2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { PlaylistCreateDialog } from './CollectionCreateDialog';
-import { PlaylistNavItem } from './CollectionNavItem';
-import { PlaylistRenameDialog } from './CollectionRenameDialog';
+import { PlaylistCreateDialog } from './PlaylistCreateDialog';
+import { PlaylistNavItem } from './PlaylistNavItem';
+import { PlaylistRenameDialog } from './PlaylistRenameDialog';
 import { LibraryAddMenu } from './LibraryAddMenu';
 import { LibraryConfirmDialog } from './LibraryConfirmDialog';
 import { LibraryNavItem } from './LibraryNavItem';
@@ -71,6 +71,7 @@ export function LibraryNavigator({
           active={source.kind === 'smart' && source.id === 'liked'}
           count={likedTotal}
           icon={<Heart size={18} />}
+          iconTone="liked"
           onPress={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
         >
           Liked Songs

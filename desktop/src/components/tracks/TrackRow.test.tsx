@@ -7,6 +7,7 @@ import { createDesktopStore } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
 import { TrackRow, VirtualTrackRow, formatDuration } from './TrackRow';
 import { TrackTable } from './TrackTable';
+import { formatSongCount } from './trackFormatting';
 
 const row: SongRow = {
   song_id: 'a'.repeat(32),
@@ -62,6 +63,12 @@ describe('Track Browser primitives', () => {
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(renderedRow);
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it('formats song counts with singular grammar', () => {
+    expect(formatSongCount(0)).toBe('0 songs');
+    expect(formatSongCount(1)).toBe('1 song');
+    expect(formatSongCount(2)).toBe('2 songs');
   });
 
   it('does not present pending or failed metadata as final risk data', () => {

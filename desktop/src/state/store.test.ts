@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SettingsPatch } from '../bridge/DesktopBridge';
+import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
 import { createDesktopStore, selectRowAtIndex, selectSelectedDetail } from './store';
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
@@ -247,6 +247,37 @@ describe('desktop store', () => {
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     expect(store.getState().library.resultTotal).toBe(500);
     expect(rowAt(store, 0)?.title).not.toBe('Local Song B');
+  });
+
+  it('keeps the playlist selected while browsing All Songs to add', async () => {
+    const bridge = createMockBridge();
+    const requests: SearchRequest[] = [];
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    requests.length = 0;
+
+    await act(async () => store.getState().beginPlaylistAdd(playlistId));
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.resultTotal).toBe(500);
+
+    requests.length = 0;
+    await act(async () => store.getState().search('Song 1'));
+    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'all' });
+
+    await act(async () => store.getState().exitPlaylistAdd());
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.playlistAddMode).toBeNull();
+    expect(store.getState().library.searchSource).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(0);
   });
 
   it('treats a playlist import cancellation as a no-op', async () => {
