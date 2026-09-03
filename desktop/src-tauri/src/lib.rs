@@ -252,21 +252,24 @@ pub fn selftest_packaged_shell() -> i32 {
         eprintln!("packaged shell selftest startup guard failed: {error}");
         return 2;
     }
-    let runtime =
-        match native_runtime::NativeDesktopRuntime::from_install_root_with_activity_and_seams(
-            native_runtime::resolve_install_root().unwrap_or_else(|error| {
-                eprintln!("packaged shell selftest install root failed: {error}");
-                std::process::exit(2);
-            }),
-            app_state::ActivityCoordinator::default(),
-            TestSeams::SafePackage,
-        ) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                eprintln!("packaged native selftest could not start runtime: {error}");
-                return 2;
-            }
-        };
+    let paths = match sky_native_adapters::AppPaths::resolve() {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("packaged shell selftest path resolution failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity_and_seams(
+        paths,
+        app_state::ActivityCoordinator::default(),
+        TestSeams::SafePackage,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("packaged native selftest could not start runtime: {error}");
+            return 2;
+        }
+    };
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         let result = match runtime.bootstrap() {
             Ok(bootstrap) if !bootstrap.native_build.native_build_commit.is_empty() => 0,

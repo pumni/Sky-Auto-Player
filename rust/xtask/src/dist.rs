@@ -477,11 +477,24 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
             "normal"
         }
     ));
+    let smoke_app_data = std::env::temp_dir().join(format!(
+        "sky-xtask-packaged-smoke-appdata-{}-{}",
+        std::process::id(),
+        if python_unavailable {
+            "restricted"
+        } else {
+            "normal"
+        }
+    ));
     if smoke_dir.exists() {
         fs::remove_dir_all(&smoke_dir)?;
     }
+    if smoke_app_data.exists() {
+        fs::remove_dir_all(&smoke_app_data)?;
+    }
+    fs::create_dir_all(&smoke_app_data)?;
     copy_tree(release_dir, &smoke_dir)?;
-    let phase_log = smoke_dir.join("gui-smoke-phases.log");
+    let phase_log = smoke_app_data.join("gui-smoke-phases.log");
     let _ = fs::remove_file(&phase_log);
     let path_value = if python_unavailable {
         let system_root = std::env::var_os("SystemRoot")
@@ -505,6 +518,11 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
             "SKY_GUI_SMOKE_PHASE_LOG".into(),
             phase_log.display().to_string(),
         ),
+        (
+            "SKY_APP_DATA_ROOT".into(),
+            smoke_app_data.display().to_string(),
+        ),
+        ("LOCALAPPDATA".into(), smoke_app_data.display().to_string()),
     ];
     let result = (|| -> Result<()> {
         process::run_owned_timeout(
@@ -537,6 +555,7 @@ fn run_packaged_selftests(release_dir: &Path, python_unavailable: bool) -> Resul
         eprintln!("[xtask] packaged smoke failure: {error}");
     }
     let cleanup = fs::remove_dir_all(&smoke_dir);
+    let _ = fs::remove_dir_all(&smoke_app_data);
     cleanup?;
     if let Some(error) = result_error {
         return Err(error);
