@@ -20,8 +20,9 @@ const row: SongRow = {
 describe('Track Browser primitives', () => {
   afterEach(() => cleanup());
 
-  it('formats duration and exposes note and risk semantics', () => {
+  it('formats duration and exposes note and liked semantics', () => {
     const onSelect = vi.fn();
+    const onToggleLiked = vi.fn();
     expect(formatDuration(null)).toBe('—');
     expect(formatDuration(125_000_000)).toBe('2:05');
 
@@ -33,6 +34,7 @@ describe('Track Browser primitives', () => {
         start={276}
         onFocus={vi.fn()}
         onSelect={onSelect}
+        onToggleLiked={onToggleLiked}
       />,
     );
 
@@ -41,8 +43,12 @@ describe('Track Browser primitives', () => {
       'false',
     );
     expect(screen.getByRole('gridcell', { name: '—' })).toBeInTheDocument();
-    expect(screen.getByRole('gridcell', { name: 'High' })).toBeInTheDocument();
     expect(screen.getByRole('gridcell', { name: '2:05' })).toBeInTheDocument();
+    const likeButton = screen.getByRole('button', { name: 'Add Liminal Garden to Liked Songs' });
+    expect(likeButton).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(likeButton);
+    expect(onToggleLiked).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('row', { name: /Liminal Garden/ }));
     expect(onSelect).toHaveBeenCalledOnce();
   });
@@ -72,8 +78,8 @@ describe('Track Browser primitives', () => {
       </>,
     );
 
-    expect(screen.getAllByRole('gridcell', { name: 'Metadata loading' })).toHaveLength(3);
-    expect(screen.getAllByRole('gridcell', { name: 'Metadata unavailable' })).toHaveLength(3);
+    expect(screen.getAllByRole('gridcell', { name: 'Metadata loading' })).toHaveLength(2);
+    expect(screen.getAllByRole('gridcell', { name: 'Metadata unavailable' })).toHaveLength(2);
     expect(screen.queryByText('Unknown')).toBeNull();
     expect(document.querySelectorAll('.risk-dot')).toHaveLength(0);
   });
@@ -81,7 +87,7 @@ describe('Track Browser primitives', () => {
   it('renders loading placeholders for unloaded rows', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({
-      library: { ...store.getState().library, rows: [], resultTotal: 3, loading: true },
+      library: { ...store.getState().library, pages: new Map(), resultTotal: 3, loading: true },
     });
 
     render(<TrackTable useStore={store} />);
@@ -96,7 +102,7 @@ describe('Track Browser primitives', () => {
   it('renders an explicit no-results state', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({
-      library: { ...store.getState().library, rows: [], resultTotal: 0, loading: false },
+      library: { ...store.getState().library, pages: new Map(), resultTotal: 0, loading: false },
     });
 
     render(<TrackBrowser useStore={store} />);

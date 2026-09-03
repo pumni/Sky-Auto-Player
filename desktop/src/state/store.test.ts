@@ -2,7 +2,11 @@ import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type { SettingsPatch } from '../bridge/DesktopBridge';
-import { createDesktopStore } from './store';
+import { createDesktopStore, selectRowAtIndex } from './store';
+
+function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
+  return selectRowAtIndex(store.getState().library, index);
+}
 
 describe('desktop store', () => {
   it('boots, searches, selects a song, and applies a catalog event', async () => {
@@ -11,17 +15,17 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().initialize());
     expect(store.getState().bootstrapState).toBe('ready');
-    expect(store.getState().library.rows.length).toBeGreaterThan(0);
+    expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
     expect(store.getState().library.catalogTotal).toBe(500);
 
-    const first = store.getState().library.rows[0];
+    const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
     await act(async () => store.getState().selectSong(first.song_id));
     expect(store.getState().detail.value?.song_id).toBe(first.song_id);
 
     await act(async () => store.getState().reloadLibrary());
     expect(store.getState().library.generation).toBe(2);
-    expect(store.getState().library.rows).toHaveLength(500);
+    expect(store.getState().library.resultTotal).toBe(500);
 
     await act(async () => store.getState().patchSettings({ theme: 'slate', verboseHud: true }));
     expect(store.getState().settings?.theme).toBe('slate');
@@ -49,7 +53,7 @@ describe('desktop store', () => {
     releaseSlow?.();
     await slow;
     expect(store.getState().library.query).toBe('Aurora');
-    expect(store.getState().library.rows[0]?.title).toBe('Aurora Landing');
+    expect(rowAt(store, 0)?.title).toBe('Aurora Landing');
   });
 
   it('loads and selects a song beyond the native page limit', async () => {
@@ -64,12 +68,35 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setViewport(390, 410));
-    await waitFor(() => expect(store.getState().library.rows[400]?.title).toBe('Song 401'));
+    await waitFor(() => expect(rowAt(store, 400)?.title).toBe('Song 401'));
 
-    await act(async () => store.getState().selectSong(store.getState().library.rows[400]!.song_id));
+    await act(async () => store.getState().selectSong(rowAt(store, 400)!.song_id));
     expect(store.getState().detail.value?.title).toBe('Song 401');
     expect(requestedOffsets).toContain(200);
     expect(requestedOffsets).toContain(400);
+  });
+
+  it('reuses deep detail from the bounded song cache', async () => {
+    const bridge = createMockBridge();
+    const originalDetail = bridge.getSongDetail;
+    let detailCalls = 0;
+    bridge.getSongDetail = async (request) => {
+      detailCalls += 1;
+      return originalDetail(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    await act(async () => store.getState().selectSong(songB.song_id));
+    await act(async () => store.getState().selectSong(songA.song_id));
+
+    expect(detailCalls).toBe(2);
+    expect(store.getState().detail.value?.song_id).toBe(songA.song_id);
+    expect(store.getState().details.bySongId.size).toBe(2);
   });
 
   it('clears selected detail and rejects an older detail response after catalog.changed', async () => {
@@ -84,7 +111,7 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const first = store.getState().library.rows[0];
+    const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
 
     const detail = store.getState().selectSong(first.song_id);
@@ -114,23 +141,25 @@ describe('desktop store', () => {
     expect(viewportSongIds).toHaveLength(21);
     expect(store.getState().library.resultTotal).toBe(488);
     expect(store.getState().library.catalogTotal).toBe(500);
-    expect(store.getState().library.rows[200]?.title).toBe('Song 212');
+    expect(rowAt(store, 200)?.title).toBe('Song 212');
   });
 
   it('persists liked source state through the native bridge contract', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
-    const first = store.getState().library.rows[0];
+    const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
+    const rowsById = store.getState().library.rowsById;
 
     await act(async () => store.getState().setSongLiked(first.song_id, true));
     expect(store.getState().library.likedTotal).toBe(1);
-    expect(store.getState().library.rows[0]?.liked).toBe(true);
+    expect(rowAt(store, 0)?.liked).toBe(true);
+    expect(store.getState().library.rowsById).toBe(rowsById);
 
     await act(async () => store.getState().selectLibrarySource('liked'));
     expect(store.getState().library.source).toBe('liked');
     expect(store.getState().library.resultTotal).toBe(1);
-    expect(store.getState().library.rows[0]?.song_id).toBe(first.song_id);
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
   });
 
   it('serializes settings mutations in user-intent order and preserves fields', async () => {
@@ -165,7 +194,8 @@ describe('desktop store', () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const [songA, songB] = store.getState().library.rows;
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
     if (!songA || !songB) throw new Error('mock library is too small');
 
     await act(async () => store.getState().selectSong(songA.song_id));
@@ -189,7 +219,8 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const [songA, songB] = store.getState().library.rows;
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
     if (!songA || !songB) throw new Error('mock library is too small');
 
     await act(async () => store.getState().selectSong(songA.song_id));
@@ -204,7 +235,8 @@ describe('desktop store', () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const [songA, songB] = store.getState().library.rows;
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
     if (!songA || !songB) throw new Error('mock library is too small');
 
     await act(async () => store.getState().selectSong(songA.song_id));
@@ -261,7 +293,7 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const first = store.getState().library.rows[0];
+    const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
     await act(async () => store.getState().selectSong(first.song_id));
     await act(async () => store.getState().prepareSelectedPlayback());
@@ -275,7 +307,8 @@ describe('desktop store', () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const [songA, songB] = store.getState().library.rows;
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
     if (!songA || !songB) throw new Error('mock library is too small');
 
     await act(async () => store.getState().selectSong(songA.song_id));

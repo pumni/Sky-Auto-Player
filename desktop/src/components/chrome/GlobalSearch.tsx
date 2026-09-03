@@ -8,10 +8,16 @@ interface GlobalSearchProps {
 
 export function GlobalSearch({ useStore }: GlobalSearchProps) {
   const query = useStore((store: DesktopStore) => store.library.query);
-  const search = useStore((store: DesktopStore) => store.search);
-  const [draft, setDraft] = useState(query);
+  return <SearchInput key={query} query={query} useStore={useStore} />;
+}
 
-  useEffect(() => setDraft(query), [query]);
+interface SearchInputProps extends GlobalSearchProps {
+  query: string;
+}
+
+function SearchInput({ query, useStore }: SearchInputProps) {
+  const search = useStore((store) => store.search);
+  const [draft, setDraft] = useState(query);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {

@@ -15,12 +15,11 @@ type UtilityTabsProps = ComponentProps<typeof Tabs> & {
 const UtilityTabs = Tabs as unknown as ComponentType<UtilityTabsProps>;
 
 interface UtilityPaneProps {
-  mode: 'pane' | 'overlay';
   utilityTriggerRef: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
 }
 
-export function UtilityPane({ mode, utilityTriggerRef, useStore }: UtilityPaneProps) {
+export function UtilityPane({ utilityTriggerRef, useStore }: UtilityPaneProps) {
   const utility = useStore((store) => store.utility);
   const closeUtility = useStore((store) => store.closeUtility);
   const setUtilityView = useStore((store) => store.setUtilityView);
@@ -36,7 +35,7 @@ export function UtilityPane({ mode, utilityTriggerRef, useStore }: UtilityPanePr
 
   return (
     <section
-      className={`utility-surface utility-${mode}`}
+      className="utility-surface"
       role="region"
       aria-label={`Utility: ${utility.activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details'}`}
       onKeyDown={(event) => {

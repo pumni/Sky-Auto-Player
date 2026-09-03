@@ -15,13 +15,9 @@ interface AppProps {
 }
 
 export function App({ bridge }: AppProps) {
-  const storeRef = useRef<ReturnType<typeof createDesktopStore> | null>(null);
   const utilityTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const useStore = useMemo(() => {
-    if (storeRef.current === null) storeRef.current = createDesktopStore(bridge);
-    return storeRef.current;
-  }, [bridge]);
+  const useStore = useMemo(() => createDesktopStore(bridge), [bridge]);
   const bootstrap = useStore((store) => store.bootstrap);
   const settingsOpen = useStore((store) => store.settingsOpen);
   const windowControls = useMemo(() => createWindowControls(), []);

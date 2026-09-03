@@ -8,7 +8,7 @@
 
 .track-table-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 72px 82px 76px;
+  grid-template-columns: 36px minmax(0, 1fr) 72px 32px 76px;
   align-items: center;
   min-width: 0;
   gap: 8px;
@@ -83,19 +83,10 @@
   text-align: right;
 }
 
-.track-cell-risk {
+.track-cell-liked {
   display: flex;
   align-items: center;
-  min-width: 0;
-  gap: 6px;
-  color: var(--risk-color);
-  font-size: 12px;
-}
-
-.track-cell-risk > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  justify-content: center;
 }
 
 .track-metadata-status {
@@ -107,18 +98,30 @@
   font-size: 11px;
 }
 
-.track-cell-risk.metadata-pending,
-.track-cell-risk.metadata-error {
+.track-like-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   color: var(--text-tertiary);
+  background: transparent;
+  opacity: 0;
 }
 
-.risk-dot {
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--risk-color);
+.track-like-button:hover,
+.track-like-button:focus-visible,
+.track-like-button.is-liked {
+  color: var(--accent);
+  background: var(--surface-hover);
+  opacity: 1;
+}
+
+.track-row:hover .track-like-button,
+.track-row:focus-within .track-like-button {
+  opacity: 1;
 }
 
 .track-row-placeholder {
@@ -129,12 +132,16 @@
 
 @media (max-width: 1040px) {
   .track-table-row {
-    grid-template-columns: 32px minmax(0, 1fr) 72px 76px;
+    grid-template-columns: 32px minmax(0, 1fr) 32px 76px;
     padding-inline: 12px;
   }
 
   .track-cell-notes {
     display: none;
+  }
+
+  .track-cell-liked {
+    grid-column: 3;
   }
 }
 

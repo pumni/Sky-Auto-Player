@@ -1,8 +1,8 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
-import { TrackRow } from './TrackRow';
+import { selectRowAtIndex, type DesktopStore, type DesktopStoreHook } from '../../state/store';
+import { VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
 
 interface TrackTableProps {
@@ -12,9 +12,7 @@ interface TrackTableProps {
 export function TrackTable({ useStore }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
-  const rows = useStore((store: DesktopStore) => store.library.rows);
-  const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
-  const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
+  const resultTotal = useStore((store) => store.library.resultTotal);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -40,6 +38,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
         ];
   const first = renderedItems[0]?.index ?? 0;
   const last = renderedItems.at(-1)?.index ?? -1;
+  const activeRow = useStore((store) => selectRowAtIndex(store.library, activeIndex));
 
   useEffect(() => {
     void setViewport(first, last);
@@ -51,18 +50,17 @@ export function TrackTable({ useStore }: TrackTableProps) {
 
   useEffect(() => {
     if (pendingKeyboardIndex.current !== activeIndex) return;
-    const row = rows[activeIndex];
+    const row = activeRow ?? selectRowAtIndex(useStore.getState().library, activeIndex);
     if (!row) return;
     pendingKeyboardIndex.current = null;
     void selectSong(row.song_id);
-  }, [activeIndex, rows, selectSong]);
+  }, [activeIndex, activeRow, selectSong, useStore]);
 
-  const activeRow = rows[activeIndex];
   const moveActive = (nextIndex: number) => {
     const next = Math.max(0, Math.min(resultTotal - 1, nextIndex));
     setActiveIndex(next);
     virtualizer.scrollToIndex(next, { align: 'auto' });
-    const row = rows[next];
+    const row = selectRowAtIndex(useStore.getState().library, next);
     if (row) {
       pendingKeyboardIndex.current = null;
       void selectSong(row.song_id);
@@ -73,9 +71,10 @@ export function TrackTable({ useStore }: TrackTableProps) {
   };
 
   const onTableKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (resultTotal === 0) return;
-    const selectedIndex = selectedSongId
-      ? rows.findIndex((row) => row?.song_id === selectedSongId)
+    if (resultTotal === 0 || event.target !== event.currentTarget) return;
+    const state = useStore.getState();
+    const selectedIndex = state.library.selectedSongId
+      ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
       : -1;
     const current = selectedIndex >= 0 ? selectedIndex : activeIndex;
     if (event.key === 'ArrowDown') {
@@ -91,7 +90,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
       event.preventDefault();
       moveActive(resultTotal - 1);
     } else if (event.key === 'Enter' || event.key === ' ') {
-      const row = rows[current];
+      const row = selectRowAtIndex(state.library, current);
       if (row) {
         event.preventDefault();
         setActiveIndex(current);
@@ -118,37 +117,17 @@ export function TrackTable({ useStore }: TrackTableProps) {
       <TrackTableHeader />
       <div className="track-table-virtual-inner" style={{ height: virtualizer.getTotalSize() }}>
         {renderedItems.map((virtualRow) => {
-          const row = rows[virtualRow.index];
-          if (!row) {
-            return (
-              <div
-                key={`loading-${virtualRow.index}`}
-                className="track-table-row track-row track-row-placeholder"
-                role="row"
-                aria-busy="true"
-                aria-rowindex={virtualRow.index + 2}
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                <span className="track-cell track-cell-index" role="gridcell">
-                  {virtualRow.index + 1}
-                </span>
-                <span className="track-cell track-cell-title" role="gridcell">
-                  Loading song…
-                </span>
-              </div>
-            );
-          }
           return (
-            <TrackRow
-              key={row.song_id}
-              row={row}
+            <VirtualTrackRow
+              key={virtualRow.index}
               index={virtualRow.index}
-              selected={row.song_id === selectedSongId}
               start={virtualRow.start}
+              useStore={useStore}
               onFocus={() => setActiveIndex(virtualRow.index)}
               onSelect={() => {
                 setActiveIndex(virtualRow.index);
-                void selectSong(row.song_id);
+                const row = selectRowAtIndex(useStore.getState().library, virtualRow.index);
+                if (row) void selectSong(row.song_id);
               }}
             />
           );

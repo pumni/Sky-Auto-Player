@@ -87,7 +87,7 @@ describe('desktop application shell', () => {
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
   });
 
-  it('opens utility diagnostics as a bounded overlay and closes with Escape', async () => {
+  it('opens the docked utility diagnostics and closes with Escape', async () => {
     render(<App bridge={createMockBridge()} />);
     await screen.findByRole('row', { name: /Aurora Landing/ });
 

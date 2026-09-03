@@ -45,7 +45,6 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
   useEffect(() => {
     if (open) {
       wasOpen.current = true;
-      setCategory('playback');
       dialogRef.current?.focus();
     } else if (wasOpen.current) {
       wasOpen.current = false;
