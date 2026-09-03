@@ -1,4 +1,5 @@
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 
 interface SongDetailsViewProps {
   useStore: DesktopStoreHook;
@@ -12,10 +13,15 @@ function durationLabel(durationUs: number): string {
 export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const detail = useStore((store: DesktopStore) => store.detail);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
+  const scrollRef = useScrollVisibility<HTMLElement>();
 
   if (!selectedSongId) {
     return (
-      <section className="song-details-view utility-empty" aria-labelledby="song-details-title">
+      <section
+        ref={scrollRef}
+        className="song-details-view utility-empty"
+        aria-labelledby="song-details-title"
+      >
         <h3 id="song-details-title">Song Details</h3>
         <p className="muted">Select a song to view details.</p>
       </section>
@@ -24,7 +30,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
 
   if (detail.state === 'loading') {
     return (
-      <section className="song-details-view" aria-live="polite">
+      <section ref={scrollRef} className="song-details-view" aria-live="polite">
         <h3>Song Details</h3>
         <p className="muted">Reading metadata…</p>
       </section>
@@ -33,7 +39,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
 
   if (detail.state === 'fatal' || !detail.value) {
     return (
-      <section className="song-details-view" role="alert">
+      <section ref={scrollRef} className="song-details-view" role="alert">
         <h3>Metadata unavailable</h3>
         <p className="inline-error">{detail.error}</p>
       </section>
@@ -42,7 +48,11 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
 
   const song = detail.value;
   return (
-    <section className="song-details-view" aria-labelledby="song-details-title">
+    <section
+      ref={scrollRef}
+      className="song-details-view scroll-surface"
+      aria-labelledby="song-details-title"
+    >
       <div className="song-details-heading">
         <h3 id="song-details-title" title={song.title}>
           {song.title}

@@ -217,29 +217,50 @@ impl CatalogIndex {
         limit: usize,
         generation: Option<u64>,
     ) -> Result<CatalogPage, CatalogError> {
+        self.search_with_allowed_ids(ranker, query, offset, limit, generation, None)
+    }
+
+    pub fn search_with_allowed_ids<R: FuzzyRanker>(
+        &self,
+        ranker: &R,
+        query: &str,
+        offset: usize,
+        limit: usize,
+        generation: Option<u64>,
+        allowed_song_ids: Option<&BTreeSet<String>>,
+    ) -> Result<CatalogPage, CatalogError> {
         self.check_generation(generation)?;
         validate_window(query, offset, limit)?;
         let normalized = normalize_query(query)?;
+        let candidates = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                allowed_song_ids.is_none_or(|ids| ids.contains(&entry.row.song_id))
+            })
+            .collect::<Vec<_>>();
         let indices = if normalized.is_empty() {
-            (0..self.entries.len()).collect::<Vec<_>>()
-        } else if normalized.chars().count() == 1 {
-            self.entries
+            candidates
                 .iter()
-                .enumerate()
-                .filter_map(|(index, entry)| {
-                    entry.search_key.contains(&normalized).then_some(index)
-                })
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>()
+        } else if normalized.chars().count() == 1 {
+            candidates
+                .iter()
+                .filter_map(|entry| entry.1.search_key.contains(&normalized).then_some(entry.0))
                 .collect()
         } else {
-            let keys = self
-                .entries
+            let keys = candidates
                 .iter()
-                .map(|entry| entry.search_key.clone())
+                .map(|(_, entry)| entry.search_key.clone())
                 .collect::<Vec<_>>();
             let mut ranked = Vec::new();
-            for index in ranker.rank(&normalized, &keys, FUZZY_SCORE_CUTOFF) {
-                if index < self.entries.len() && !ranked.contains(&index) {
-                    ranked.push(index);
+            for candidate_index in ranker.rank(&normalized, &keys, FUZZY_SCORE_CUTOFF) {
+                if let Some((index, _)) = candidates.get(candidate_index)
+                    && !ranked.contains(index)
+                {
+                    ranked.push(*index);
                 }
             }
             ranked
@@ -258,6 +279,35 @@ impl CatalogIndex {
             total,
             generation: self.generation,
         })
+    }
+
+    pub fn song_ids_in_range(
+        &self,
+        first: usize,
+        last: usize,
+        generation: Option<u64>,
+    ) -> Result<Vec<String>, CatalogError> {
+        self.check_generation(generation)?;
+        if first > last || last >= self.entries.len() {
+            return Err(CatalogError::InvalidLimit);
+        }
+        Ok(self.entries[first..=last]
+            .iter()
+            .map(|entry| entry.row.song_id.clone())
+            .collect())
+    }
+
+    pub fn count_allowed_ids(
+        &self,
+        allowed_song_ids: &BTreeSet<String>,
+        generation: Option<u64>,
+    ) -> Result<usize, CatalogError> {
+        self.check_generation(generation)?;
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| allowed_song_ids.contains(&entry.row.song_id))
+            .count())
     }
 
     pub fn search_substrings(

@@ -176,6 +176,7 @@ fn run_inner(gui_smoke: bool) {
             commands::get_song_detail,
             commands::reload_library,
             commands::set_library_viewport,
+            commands::set_song_liked,
             commands::get_settings,
             commands::patch_settings,
             commands::check_for_update,

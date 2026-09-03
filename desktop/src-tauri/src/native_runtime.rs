@@ -9,13 +9,14 @@ use crate::app_state::{ActivityCoordinator, ActivityReservationError, PhysicalAc
 use crate::commands::{
     BootstrapDto, CalibrationCancelAckDto, CalibrationCancelRequest, CalibrationStartAckDto,
     CalibrationStartRequest, CatalogDetailRequest, CatalogReloadDto, CatalogRowDto,
-    CatalogSearchDto, CatalogSearchRequest, CatalogViewportDto, CatalogViewportRequest,
-    DiagnosticsEnabledDto, DiagnosticsSetEnabledRequest, PlaybackAdmission, PlaybackCommandAckDto,
-    PlaybackConfigDto, PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto,
-    PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto,
-    PlaybackSessionState, PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto,
-    RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckDto, UpdateHandoffDto,
-    UpdatePreferencesDto, UpdatePreferencesPatch,
+    CatalogSearchDto, CatalogSearchRequest, CatalogSetLikedDto, CatalogSetLikedRequest,
+    CatalogSourceId, CatalogViewportDto, CatalogViewportRequest, DiagnosticsEnabledDto,
+    DiagnosticsSetEnabledRequest, PlaybackAdmission, PlaybackCommandAckDto, PlaybackConfigDto,
+    PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto, PlaybackPendingControl,
+    PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto, PlaybackSessionState,
+    PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto, RiskSummaryDto, SettingsDto,
+    SettingsPatch, SongDetailDto, UpdateCheckDto, UpdateHandoffDto, UpdatePreferencesDto,
+    UpdatePreferencesPatch,
 };
 use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
@@ -1282,6 +1283,7 @@ pub(crate) struct NativeDesktopRuntime {
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     catalog_source: FileCatalogSource,
     catalog: Mutex<CatalogIndex>,
+    metadata_cache: Mutex<HashMap<String, CatalogMetadata>>,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
     calibration: Arc<NativeCalibrationService>,
@@ -1290,6 +1292,25 @@ pub(crate) struct NativeDesktopRuntime {
     test_seams: TestSeams,
     ready_emitted: AtomicBool,
     closed: AtomicBool,
+}
+
+#[derive(Debug, Clone)]
+struct CatalogMetadata {
+    duration_us: Option<u64>,
+    note_count: Option<u64>,
+    risk_level: String,
+    state: &'static str,
+}
+
+impl CatalogMetadata {
+    fn error() -> Self {
+        Self {
+            duration_us: None,
+            note_count: None,
+            risk_level: "unknown".into(),
+            state: "error",
+        }
+    }
 }
 
 impl NativeDesktopRuntime {
@@ -1354,6 +1375,7 @@ impl NativeDesktopRuntime {
             settings: Mutex::new(settings),
             catalog_source: FileCatalogSource::new(songs_dir),
             catalog: Mutex::new(CatalogIndex::default()),
+            metadata_cache: Mutex::new(HashMap::new()),
             events,
             playback,
             calibration,
@@ -1392,6 +1414,11 @@ impl NativeDesktopRuntime {
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.search(request))
             }
+            "catalog.set_liked" => {
+                let request: CatalogSetLikedRequest =
+                    serde_json::from_value(params).map_err(json_error)?;
+                encode_result(self.set_song_liked(request))
+            }
             "catalog.detail" => {
                 let request: NativeCatalogDetailRequest =
                     serde_json::from_value(params).map_err(json_error)?;
@@ -1409,6 +1436,7 @@ impl NativeDesktopRuntime {
                     first_index: request.first_index,
                     last_index: request.last_index,
                     selected_song_id: request.selected_song_id,
+                    song_ids: request.song_ids,
                 }))
             }
             "settings.get" => encode_result(self.settings_dto()),
@@ -1557,6 +1585,7 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native settings lock poisoned".to_string())?;
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?;
         self.playback.invalidate_settings();
+        self.invalidate_metadata_cache();
         if update_preferences_changed {
             let mut update = self
                 .update_state
@@ -1658,6 +1687,7 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native catalog lock poisoned".to_string())?
             .replace_entries(entries)
             .map_err(catalog_error)?;
+        self.invalidate_metadata_cache();
         self.playback.invalidate_catalog(snapshot.generation);
         self.publish(UiEvent::CatalogChanged {
             v: crate::DESKTOP_PROTOCOL_VERSION,
@@ -1674,35 +1704,54 @@ impl NativeDesktopRuntime {
 
     fn search(&self, request: CatalogSearchRequest) -> Result<CatalogSearchDto, String> {
         self.ensure_catalog_loaded()?;
+        let settings = self.settings_snapshot()?;
+        let liked_ids =
+            (request.source == CatalogSourceId::Liked).then(|| settings.liked_songs.ids().clone());
         let catalog = self
             .catalog
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())?;
+        let liked_total = catalog
+            .count_allowed_ids(settings.liked_songs.ids(), request.generation)
+            .map_err(catalog_error)?;
         let page = catalog
-            .search(
+            .search_with_allowed_ids(
                 &WRatioRanker,
                 &request.query,
                 request.offset as usize,
                 request.limit as usize,
                 request.generation,
+                liked_ids.as_ref(),
             )
             .map_err(catalog_error)?;
+        let cache = self
+            .metadata_cache
+            .lock()
+            .map_err(|_| "native metadata cache lock poisoned".to_string())?;
         Ok(CatalogSearchDto {
             items: page
                 .items
                 .into_iter()
                 .map(|row| CatalogRowDto {
-                    song_id: row.song_id,
+                    liked: settings.liked_songs.contains(&row.song_id),
+                    song_id: row.song_id.clone(),
                     title: row.title,
-                    duration_us: None,
-                    note_count: None,
-                    risk_level: "unknown".into(),
-                    metadata_state: "pending".into(),
+                    duration_us: cache.get(&row.song_id).and_then(|value| value.duration_us),
+                    note_count: cache.get(&row.song_id).and_then(|value| value.note_count),
+                    risk_level: cache
+                        .get(&row.song_id)
+                        .map(|value| value.risk_level.clone())
+                        .unwrap_or_else(|| "unknown".into()),
+                    metadata_state: cache
+                        .get(&row.song_id)
+                        .map(|value| value.state.into())
+                        .unwrap_or_else(|| "pending".into()),
                 })
                 .collect(),
             offset: request.offset,
             limit: request.limit,
             total: page.total as u64,
+            liked_total: liked_total as u64,
             generation: page.generation,
         })
     }
@@ -1787,43 +1836,180 @@ impl NativeDesktopRuntime {
 
     fn set_viewport(&self, request: CatalogViewportRequest) -> Result<CatalogViewportDto, String> {
         self.ensure_catalog_loaded()?;
-        let catalog = self
-            .catalog
-            .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())?;
-        let snapshot = catalog.snapshot();
-        if snapshot.generation != request.generation {
-            return Err("catalog generation is stale".into());
+        if request.song_ids.len() > 2_000 {
+            return Err("catalog viewport contains too many metadata hydration IDs".into());
         }
-        if snapshot.total == 0 {
-            if request.first_index != 0
-                || request.last_index != -1
-                || request.selected_song_id.is_some()
-            {
-                return Err("empty catalog viewport must be 0..-1 with no selected song".into());
+        let entries = {
+            let catalog = self
+                .catalog
+                .lock()
+                .map_err(|_| "native catalog lock poisoned".to_string())?;
+            let snapshot = catalog.snapshot();
+            if snapshot.generation != request.generation {
+                return Err("catalog generation is stale".into());
             }
-        } else if request.last_index < request.first_index as i64
-            || request.last_index as u64 >= snapshot.total as u64
-            || request
-                .last_index
-                .saturating_sub(request.first_index as i64)
-                .saturating_add(1)
-                > 2_000
-        {
-            return Err("catalog viewport is outside bounded index range".into());
+            let song_ids = if request.song_ids.is_empty() {
+                if snapshot.total == 0 {
+                    if request.first_index != 0
+                        || request.last_index != -1
+                        || request.selected_song_id.is_some()
+                    {
+                        return Err(
+                            "empty catalog viewport must be 0..-1 with no selected song".into()
+                        );
+                    }
+                    Vec::new()
+                } else {
+                    if request.last_index < request.first_index as i64
+                        || request.last_index as u64 >= snapshot.total as u64
+                        || request
+                            .last_index
+                            .saturating_sub(request.first_index as i64)
+                            .saturating_add(1)
+                            > 2_000
+                    {
+                        return Err("catalog viewport is outside bounded index range".into());
+                    }
+                    catalog
+                        .song_ids_in_range(
+                            request.first_index as usize,
+                            request.last_index as usize,
+                            Some(request.generation),
+                        )
+                        .map_err(catalog_error)?
+                }
+            } else {
+                request.song_ids.clone()
+            };
+            if let Some(song_id) = &request.selected_song_id {
+                catalog
+                    .canonical_path_for_song_id(song_id, Some(request.generation))
+                    .map_err(catalog_error)?;
+            }
+            song_ids
+                .into_iter()
+                .map(|song_id| {
+                    catalog
+                        .entry_for_song_id(&song_id, Some(request.generation))
+                        .map(|entry| (entry.row.song_id, entry.row.title, entry.canonical_path))
+                        .map_err(catalog_error)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let settings = self.settings_snapshot()?;
+        let policy = self.timing_policy(
+            settings.playback_defaults.fps,
+            settings.playback_defaults.hold_frames,
+        )?;
+        let mut cache = self
+            .metadata_cache
+            .lock()
+            .map_err(|_| "native metadata cache lock poisoned".to_string())?;
+        for (song_id, title, path) in &entries {
+            if cache.contains_key(song_id) {
+                continue;
+            }
+            let metadata = self.hydrate_metadata(Path::new(path), title, &settings, &policy);
+            cache.insert(song_id.clone(), metadata);
         }
-        if let Some(song_id) = &request.selected_song_id {
-            catalog
-                .canonical_path_for_song_id(song_id, Some(request.generation))
-                .map_err(catalog_error)?;
-        }
+        let items = entries
+            .into_iter()
+            .filter_map(|(song_id, title, _)| {
+                cache.get(&song_id).map(|metadata| CatalogRowDto {
+                    liked: settings.liked_songs.contains(&song_id),
+                    song_id,
+                    title,
+                    duration_us: metadata.duration_us,
+                    note_count: metadata.note_count,
+                    risk_level: metadata.risk_level.clone(),
+                    metadata_state: metadata.state.into(),
+                })
+            })
+            .collect();
         Ok(CatalogViewportDto {
             accepted: true,
             generation: request.generation,
             first_index: request.first_index,
             last_index: request.last_index,
             selected_song_id: request.selected_song_id,
+            items,
         })
+    }
+
+    fn set_song_liked(
+        &self,
+        request: CatalogSetLikedRequest,
+    ) -> Result<CatalogSetLikedDto, String> {
+        self.ensure_catalog_loaded()?;
+        {
+            let catalog = self
+                .catalog
+                .lock()
+                .map_err(|_| "native catalog lock poisoned".to_string())?;
+            catalog
+                .canonical_path_for_song_id(&request.song_id, request.generation)
+                .map_err(catalog_error)?;
+        }
+        let mut settings = self
+            .settings
+            .lock()
+            .map_err(|_| "native settings lock poisoned".to_string())?;
+        settings
+            .reload()
+            .map_err(|error| format!("native settings reload failed: {error}"))?;
+        settings
+            .set_song_liked(&request.song_id, request.liked)
+            .map_err(settings_error)?;
+        let liked_total = self
+            .catalog
+            .lock()
+            .map_err(|_| "native catalog lock poisoned".to_string())?
+            .count_allowed_ids(settings.snapshot().liked_songs.ids(), request.generation)
+            .map_err(catalog_error)?;
+        Ok(CatalogSetLikedDto {
+            song_id: request.song_id,
+            liked: request.liked,
+            total: liked_total as u64,
+        })
+    }
+
+    fn invalidate_metadata_cache(&self) {
+        if let Ok(mut cache) = self.metadata_cache.lock() {
+            cache.clear();
+        }
+    }
+
+    fn hydrate_metadata(
+        &self,
+        path: &Path,
+        fallback: &str,
+        settings: &ApplicationSettings,
+        policy: &MaterializedTimingPolicy,
+    ) -> CatalogMetadata {
+        let result = (|| -> Result<CatalogMetadata, String> {
+            let bytes = fs::read(path).map_err(|error| format!("song read failed: {error}"))?;
+            let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
+            let schedule =
+                build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, policy)
+                    .map_err(|error| error.to_string())?;
+            let risk = analyze_schedule_with_context(
+                &schedule,
+                Some(&song.notes),
+                settings.playback_defaults.hold_frames,
+                settings.playback_defaults.tempo_scale,
+            );
+            let risk_level = match risk.severity.as_str() {
+                "low" | "medium" | "high" => risk.severity,
+                _ => return Err("song risk analysis returned an unknown level".into()),
+            };
+            Ok(CatalogMetadata {
+                duration_us: Some(schedule.source_duration_us),
+                note_count: Some(song.notes.len() as u64),
+                risk_level,
+                state: "ready",
+            })
+        })();
+        result.unwrap_or_else(|_| CatalogMetadata::error())
     }
 
     fn prepare_playback(
@@ -3751,6 +3937,7 @@ struct NativeCatalogViewportRequest {
     first_index: u64,
     last_index: i64,
     selected_song_id: Option<String>,
+    song_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4564,6 +4751,97 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-library-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/hydrate.json"),
+            r#"{"name":"Hydrate","songNotes":[{"time":0,"key":"Key0"},{"time":100,"key":"Key1"}]}"#,
+        )
+        .expect("song");
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let bootstrap = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        let generation = bootstrap["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": "",
+                    "offset": 0,
+                    "limit": 10,
+                    "generation": generation,
+                    "source": "all"
+                }),
+            )
+            .expect("search");
+        let song_id = search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned();
+        assert_eq!(search["items"][0]["metadata_state"], "pending");
+
+        let viewport = runtime
+            .dispatch(
+                "catalog.set_viewport",
+                serde_json::json!({
+                    "generation": generation,
+                    "firstIndex": 0,
+                    "lastIndex": 0,
+                    "selectedSongId": null,
+                    "songIds": [song_id.clone()]
+                }),
+            )
+            .expect("viewport hydration");
+        assert_eq!(viewport["items"][0]["metadata_state"], "ready");
+        assert_eq!(viewport["items"][0]["note_count"], 2);
+        assert!(viewport["items"][0]["duration_us"].as_u64().is_some());
+
+        let liked = runtime
+            .dispatch(
+                "catalog.set_liked",
+                serde_json::json!({
+                    "songId": song_id,
+                    "liked": true,
+                    "generation": generation
+                }),
+            )
+            .expect("like");
+        assert_eq!(liked["liked"], true);
+        assert_eq!(liked["total"], 1);
+        runtime.shutdown();
+
+        let restarted = NativeDesktopRuntime::from_install_root(root.clone()).expect("restart");
+        let bootstrap = restarted.bootstrap().expect("restart bootstrap");
+        let liked_search = restarted
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": "",
+                    "offset": 0,
+                    "limit": 10,
+                    "generation": bootstrap.catalog_generation,
+                    "source": "liked"
+                }),
+            )
+            .expect("liked search");
+        assert_eq!(liked_search["total"], 1);
+        assert_eq!(liked_search["items"][0]["liked"], true);
+        assert_eq!(liked_search["items"][0]["metadata_state"], "pending");
+        restarted.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn snapshot(session_id: &str, seq: u64) -> UiEvent {
         UiEvent::PlaybackSnapshot {
             v: 1,
@@ -5365,6 +5643,7 @@ mod tests {
                     offset: 0,
                     limit: 10,
                     generation: Some(bootstrap.catalog_generation),
+                    source: crate::commands::CatalogSourceId::All,
                 })
                 .expect("search");
             let detail = runtime

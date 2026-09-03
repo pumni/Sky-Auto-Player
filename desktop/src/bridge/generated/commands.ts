@@ -17,6 +17,7 @@ import type {
   PlaybackStart,
   PreparedPlayback,
   SearchRequest,
+  SetSongLikedRequest,
   SearchResult,
   Settings,
   SettingsPatch,
@@ -38,6 +39,7 @@ export interface CommandRequestMap {
   get_song_detail: DetailRequest;
   reload_library: undefined;
   set_library_viewport: ViewportRequest;
+  set_song_liked: SetSongLikedRequest;
   get_settings: undefined;
   patch_settings: SettingsPatch;
   check_for_update: undefined;
@@ -62,6 +64,7 @@ export interface CommandResponseMap {
   get_song_detail: SongDetail;
   reload_library: { generation: number; total: number };
   set_library_viewport: ViewportResult;
+  set_song_liked: import('./CatalogSetLikedDto').CatalogSetLikedDto;
   get_settings: Settings;
   patch_settings: Settings;
   check_for_update: UpdateCheck;

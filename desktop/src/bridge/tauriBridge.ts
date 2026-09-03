@@ -47,6 +47,7 @@ export function createTauriBridge(): DesktopBridge {
     getSongDetail: (request: DetailRequest) => call(COMMANDS.getSongDetail, request),
     reloadLibrary: () => call(COMMANDS.reloadLibrary),
     setLibraryViewport: (request: ViewportRequest) => call(COMMANDS.setLibraryViewport, request),
+    setSongLiked: (request) => call(COMMANDS.setSongLiked, request),
     getSettings: () => call(COMMANDS.getSettings),
     patchSettings: (patch: SettingsPatch) => call(COMMANDS.patchSettings, patch),
     checkForUpdate: () => call(COMMANDS.checkForUpdate),

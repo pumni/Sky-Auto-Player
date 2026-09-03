@@ -1,5 +1,6 @@
 import {
   CircleStop,
+  Heart,
   Music2,
   PanelRight,
   Pause,
@@ -34,6 +35,11 @@ function admissionDecisionLabel(decision: PlaybackDecisionId, label: string): st
 export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
   const playback = useStore((store: DesktopStore) => store.playback);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
+  const selectedSongLiked = useStore(
+    (store: DesktopStore) =>
+      store.library.rows.find((row) => row?.song_id === store.library.selectedSongId)?.liked ??
+      false,
+  );
   const detail = useStore((store: DesktopStore) => store.detail);
   const selectedTitle = useStore(
     (store: DesktopStore) =>
@@ -53,6 +59,7 @@ export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
   const patchSettings = useStore((store: DesktopStore) => store.patchSettings);
   const utility = useStore((store: DesktopStore) => store.utility);
   const toggleUtility = useStore((store: DesktopStore) => store.toggleUtility);
+  const setSongLiked = useStore((store: DesktopStore) => store.setSongLiked);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
@@ -140,6 +147,22 @@ export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
           <strong title={selectedTitle}>{selectedTitle}</strong>
           <span className="muted">{trackSubtitle}</span>
         </div>
+        {selectedSongId && (
+          <button
+            className={`icon-button player-like-button${selectedSongLiked ? ' is-liked' : ''}`}
+            type="button"
+            aria-label={selectedSongLiked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+            aria-pressed={selectedSongLiked}
+            title={selectedSongLiked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+            onClick={() => void setSongLiked(selectedSongId, !selectedSongLiked)}
+          >
+            <Heart
+              size={16}
+              fill={selectedSongLiked ? 'currentColor' : 'none'}
+              aria-hidden="true"
+            />
+          </button>
+        )}
         {playback.prepared?.risk.level &&
           ['medium', 'high'].includes(playback.prepared.risk.level) && (
             <span

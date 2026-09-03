@@ -1,6 +1,7 @@
 import { Activity } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 
 interface DiagnosticsViewProps {
   useStore: DesktopStoreHook;
@@ -41,9 +42,16 @@ function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples
 
 export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const diagnostics = useStore((store: DesktopStore) => store.diagnostics);
+  const scrollRef = useScrollVisibility<HTMLDivElement>();
+  const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
+  const logsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   return (
-    <div className="diagnostics-view" aria-labelledby="diagnostics-title">
+    <div
+      ref={scrollRef}
+      className="diagnostics-view scroll-surface"
+      aria-labelledby="diagnostics-title"
+    >
       <h3 id="diagnostics-title" className="visually-hidden">
         Runtime diagnostics
       </h3>
@@ -81,7 +89,11 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         <TabPanel id="timing" className="diagnostics-panel">
           <TimingPlot samples={diagnostics.samples} />
         </TabPanel>
-        <TabPanel id="events" className="diagnostics-panel diagnostics-scroll">
+        <TabPanel
+          ref={eventsScrollRef}
+          id="events"
+          className="diagnostics-panel diagnostics-scroll scroll-surface"
+        >
           {diagnostics.events.length === 0 ? (
             <p className="muted">No events recorded.</p>
           ) : (
@@ -99,7 +111,11 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
             </ol>
           )}
         </TabPanel>
-        <TabPanel id="logs" className="diagnostics-panel diagnostics-scroll">
+        <TabPanel
+          ref={logsScrollRef}
+          id="logs"
+          className="diagnostics-panel diagnostics-scroll scroll-surface"
+        >
           {diagnostics.logs.length === 0 ? (
             <p className="muted">No logs recorded.</p>
           ) : (

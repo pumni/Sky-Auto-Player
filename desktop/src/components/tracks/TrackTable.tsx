@@ -1,6 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { TrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
 
@@ -10,6 +11,7 @@ interface TrackTableProps {
 
 export function TrackTable({ useStore }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
   const rows = useStore((store: DesktopStore) => store.library.rows);
   const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
@@ -100,8 +102,11 @@ export function TrackTable({ useStore }: TrackTableProps) {
 
   return (
     <div
-      ref={parentRef}
-      className="track-table"
+      ref={(element) => {
+        parentRef.current = element;
+        scrollVisibilityRef.current = element;
+      }}
+      className="track-table scroll-surface"
       role="grid"
       aria-label="Songs"
       aria-rowcount={resultTotal + 1}

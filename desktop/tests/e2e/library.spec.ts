@@ -28,6 +28,7 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
     element.scrollTop = 400 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
+  await expect(list).toHaveClass(/is-scrolling/);
   const song = page.getByRole('row', { name: /Song 401/ });
   await expect(song).toBeVisible();
   await song.click();
@@ -48,6 +49,26 @@ test('All Songs clears search while retaining the catalog count', async ({ page 
   await expect(navigatorItem).toContainText('500');
 });
 
+test('Liked Songs is a real source with Player Bar save behavior', async ({ page }) => {
+  await page.goto('/');
+  const song = page.getByRole('row', { name: /Aurora Landing/ });
+  await song.click();
+  const likeButton = page.getByRole('button', { name: 'Add to Liked Songs' });
+  await likeButton.click();
+  await expect(page.getByRole('button', { name: 'Remove from Liked Songs' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  const likedNavItem = page.locator('.library-navigator').getByRole('button', {
+    name: 'Liked Songs',
+  });
+  await expect(likedNavItem).toContainText('1');
+
+  await likedNavItem.click();
+  await expect(page.getByRole('heading', { name: 'Liked Songs' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+});
+
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
@@ -63,6 +84,11 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   if (navigatorPane && trackPane && playerBar) {
     expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(8);
     expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(8);
+  }
+  const titlebar = await page.locator('.app-titlebar').boundingBox();
+  expect(titlebar).not.toBeNull();
+  if (titlebar && navigatorPane) {
+    expect(Math.round(navigatorPane.y - (titlebar.y + titlebar.height))).toBe(0);
   }
   const dimensions = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,

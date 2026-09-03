@@ -40,6 +40,34 @@ h3 {
 .muted {
   color: var(--text-tertiary);
 }
+.scroll-surface {
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+.scroll-surface.is-scrolling {
+  scrollbar-color: var(--border-strong) transparent;
+}
+.scroll-surface::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.scroll-surface::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-surface::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  background-clip: padding-box;
+}
+.scroll-surface.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: padding-box;
+}
+.scroll-surface.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: padding-box;
+}
 .eyebrow {
   color: var(--text-tertiary);
   font-size: 11px;

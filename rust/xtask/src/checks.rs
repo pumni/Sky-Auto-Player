@@ -1355,9 +1355,9 @@ fn command_names_source(root: &Path) -> Result<String> {
         };
         commands.push(rest[..end].to_owned());
     }
-    if commands.len() != 21 {
+    if commands.len() != 22 {
         return Err(format!(
-            "IPC registry contains {} commands; expected 21",
+            "IPC registry contains {} commands; expected 22",
             commands.len()
         )
         .into());

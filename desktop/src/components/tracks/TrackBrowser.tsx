@@ -6,6 +6,7 @@ interface TrackBrowserProps {
 }
 
 export function TrackBrowser({ useStore }: TrackBrowserProps) {
+  const source = useStore((store: DesktopStore) => store.library.source);
   const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const loading = useStore((store: DesktopStore) => store.library.loading);
   const error = useStore((store: DesktopStore) => store.library.error);
@@ -14,7 +15,7 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
     <section className="track-browser" aria-labelledby="track-browser-title">
       <header className="track-browser-header">
         <div>
-          <h1 id="track-browser-title">All Songs</h1>
+          <h1 id="track-browser-title">{source === 'liked' ? 'Liked Songs' : 'All Songs'}</h1>
           <span className="track-browser-count">
             {loading ? 'Updating…' : `${resultTotal} songs`}
           </span>

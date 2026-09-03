@@ -68,6 +68,7 @@ function row(index: number, title: string): SearchResult['items'][number] {
     note_count: 128 + index * 9,
     risk_level: index % 5 === 0 ? 'medium' : 'low',
     metadata_state: 'ready',
+    liked: false,
   };
 }
 
@@ -99,6 +100,7 @@ export function createMockBridge(): DesktopBridge {
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
   let calibration: { operationId: string; state: CalibrationStateId } | null = null;
+  const likedSongIds = new Set<string>();
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
@@ -182,14 +184,19 @@ export function createMockBridge(): DesktopBridge {
     },
     async searchSongs(request: SearchRequest) {
       const query = request.query.trim().toLocaleLowerCase();
+      const sourceRows =
+        request.source === 'liked' ? rows.filter((item) => likedSongIds.has(item.song_id)) : rows;
       const filtered = query
-        ? rows.filter((item) => item.title.toLocaleLowerCase().includes(query))
-        : rows;
+        ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
+        : sourceRows;
       return {
-        items: filtered.slice(request.offset, request.offset + request.limit),
+        items: filtered
+          .slice(request.offset, request.offset + request.limit)
+          .map((item) => ({ ...item, liked: likedSongIds.has(item.song_id) })),
         offset: request.offset,
         limit: request.limit,
         total: filtered.length,
+        liked_total: likedSongIds.size,
         generation,
       };
     },
@@ -237,7 +244,21 @@ export function createMockBridge(): DesktopBridge {
         first_index: request.firstIndex,
         last_index: request.lastIndex,
         selected_song_id: request.selectedSongId,
+        items: (request.songIds.length > 0
+          ? request.songIds
+              .map((songId) => rows.find((item) => item.song_id === songId))
+              .filter((item): item is (typeof rows)[number] => item !== undefined)
+          : rows.slice(request.firstIndex, request.lastIndex + 1)
+        ).map((item) => ({ ...item, liked: likedSongIds.has(item.song_id) })),
       };
+    },
+    async setSongLiked(request) {
+      if (!rows.some((item) => item.song_id === request.songId)) {
+        throw new Error('song was not found');
+      }
+      if (request.liked) likedSongIds.add(request.songId);
+      else likedSongIds.delete(request.songId);
+      return { song_id: request.songId, liked: request.liked, total: likedSongIds.size };
     },
     async getSettings() {
       return settings;

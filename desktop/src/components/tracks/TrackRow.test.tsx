@@ -14,6 +14,7 @@ const row: SongRow = {
   note_count: null,
   risk_level: 'high',
   metadata_state: 'ready',
+  liked: false,
 };
 
 describe('Track Browser primitives', () => {

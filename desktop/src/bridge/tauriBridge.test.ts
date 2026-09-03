@@ -16,13 +16,14 @@ describe('Tauri command bridge', () => {
 
   it('uses the Rust command parameter name for every payload command', async () => {
     const bridge = createTauriBridge();
-    const search = { query: 'Aurora', offset: 0, limit: 200 } as const;
+    const search = { query: 'Aurora', offset: 0, limit: 200, source: 'all' } as const;
     const detail = { songId: 'song-1' } as const;
     const viewport = {
       generation: 4,
       firstIndex: 10,
       lastIndex: 30,
       selectedSongId: null,
+      songIds: [] as string[],
     } as const;
     const patch = { theme: 'slate' as const };
 

@@ -7,8 +7,8 @@
   min-width: 0;
   height: var(--titlebar-height);
   padding-left: 10px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--chrome);
+  border-bottom: 0;
+  background: var(--canvas);
 }
 
 .app-titlebar-brand {

@@ -8,6 +8,7 @@ export const COMMANDS = {
   getSongDetail: 'get_song_detail',
   reloadLibrary: 'reload_library',
   setLibraryViewport: 'set_library_viewport',
+  setSongLiked: 'set_song_liked',
   getSettings: 'get_settings',
   patchSettings: 'patch_settings',
   checkForUpdate: 'check_for_update',

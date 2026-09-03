@@ -15,6 +15,17 @@ pub struct CatalogSearchRequest {
     pub offset: u64,
     pub limit: u16,
     pub generation: Option<u64>,
+    #[serde(default)]
+    pub source: CatalogSourceId,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogSourceId {
+    #[default]
+    All,
+    Liked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -35,6 +46,17 @@ pub struct CatalogViewportRequest {
     pub first_index: u64,
     pub last_index: i64,
     pub selected_song_id: Option<String>,
+    pub song_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct CatalogSetLikedRequest {
+    pub song_id: String,
+    pub liked: bool,
+    pub generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -265,6 +287,7 @@ pub struct CatalogRowDto {
     pub note_count: Option<u64>,
     pub risk_level: String,
     pub metadata_state: String,
+    pub liked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -274,6 +297,7 @@ pub struct CatalogSearchDto {
     pub offset: u64,
     pub limit: u16,
     pub total: u64,
+    pub liked_total: u64,
     pub generation: u64,
 }
 
@@ -388,6 +412,15 @@ pub struct CatalogViewportDto {
     pub first_index: u64,
     pub last_index: i64,
     pub selected_song_id: Option<String>,
+    pub items: Vec<CatalogRowDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CatalogSetLikedDto {
+    pub song_id: String,
+    pub liked: bool,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -532,6 +565,14 @@ pub async fn set_library_viewport(
     params: CatalogViewportRequest,
 ) -> Result<CatalogViewportDto, String> {
     blocking_request(state, "catalog.set_viewport", params).await
+}
+
+#[tauri::command]
+pub async fn set_song_liked(
+    state: State<'_, AppState>,
+    params: CatalogSetLikedRequest,
+) -> Result<CatalogSetLikedDto, String> {
+    blocking_request(state, "catalog.set_liked", params).await
 }
 
 #[tauri::command]

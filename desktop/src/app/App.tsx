@@ -82,6 +82,7 @@ export function App({ bridge }: AppProps) {
         query: '',
         offset: 0,
         limit: 200,
+        source: 'all',
         ...(generation > 0 ? { generation } : {}),
       });
       if (

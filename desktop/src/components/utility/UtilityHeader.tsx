@@ -12,7 +12,6 @@ export function UtilityHeader({ activeView, onClose }: UtilityHeaderProps) {
   return (
     <header className="utility-header">
       <div>
-        <p className="eyebrow">UTILITY</p>
         <h2>{title}</h2>
       </div>
       <button

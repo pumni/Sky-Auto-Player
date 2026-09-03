@@ -32,6 +32,10 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         method: "catalog.set_viewport",
     },
     CommandSpec {
+        invoke_name: "set_song_liked",
+        method: "catalog.set_liked",
+    },
+    CommandSpec {
         invoke_name: "get_settings",
         method: "settings.get",
     },
@@ -96,7 +100,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
 pub(crate) const UI_EVENTS_COMMAND: &str = "subscribe_ui_events";
 
 pub(crate) fn is_complete() -> bool {
-    COMMANDS.len() == 21
+    COMMANDS.len() == 22
         && COMMANDS.iter().all(|spec| {
             !spec.invoke_name.is_empty()
                 && !spec.method.is_empty()
@@ -120,7 +124,7 @@ mod tests {
     #[test]
     fn stable_command_contract_is_exactly_the_native_set() {
         assert!(is_complete());
-        assert_eq!(COMMANDS.len(), 21);
+        assert_eq!(COMMANDS.len(), 22);
         assert_eq!(
             COMMANDS[0],
             CommandSpec {
@@ -129,7 +133,7 @@ mod tests {
             }
         );
         assert_eq!(
-            COMMANDS[20],
+            COMMANDS[21],
             CommandSpec {
                 invoke_name: "cancel_calibration",
                 method: "calibration.cancel"

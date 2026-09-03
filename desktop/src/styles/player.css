@@ -54,6 +54,21 @@
   font-size: 11px;
 }
 
+.player-like-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  width: 30px;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+.player-like-button:hover,
+.player-like-button.is-liked {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
 .player-risk {
   flex: 0 0 auto;
   color: var(--risk-color);

@@ -6,6 +6,7 @@
 
 use serde_json::{Map, Value};
 use sky_app_core::catalog::{CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource};
+use sky_app_core::library::LikedSongs;
 use sky_app_core::settings::{
     ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
     DEFAULT_SONGS_DIR, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
@@ -531,6 +532,8 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     settings.verbose_hud = raw_bool(raw, "verbose_hud", false);
     settings.songs_dir = raw_string(raw, "songs_dir", DEFAULT_SONGS_DIR);
     settings.allow_title_fallback = raw_bool(raw, "allow_title_fallback", false);
+    settings.liked_songs =
+        LikedSongs::from_persisted(raw_string_list(raw.get("liked_song_ids")).unwrap_or_default());
     settings.sky_process_names =
         raw_string_list(raw.get("sky_process_names")).unwrap_or_else(|| {
             DEFAULT_PROCESS_NAMES
@@ -889,6 +892,20 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         "allow_title_fallback".into(),
         Value::from(settings.allow_title_fallback),
     );
+    if !settings.liked_songs.is_empty() || raw.contains_key("liked_song_ids") {
+        raw.insert(
+            "liked_song_ids".into(),
+            Value::Array(
+                settings
+                    .liked_songs
+                    .ids()
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        );
+    }
     raw.insert("hotkeys".into(), serde_json::json!({"pause": settings.hotkeys.pause, "skip": settings.hotkeys.skip, "quit": settings.hotkeys.quit, "refocus": settings.hotkeys.refocus, "panic": settings.hotkeys.panic}));
     raw.insert("safety".into(), serde_json::json!({"prompt_on_medium_risk": settings.safety.prompt_on_medium_risk, "prompt_on_high_risk": settings.safety.prompt_on_high_risk}));
     let mut update = raw

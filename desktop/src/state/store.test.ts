@@ -96,22 +96,41 @@ describe('desktop store', () => {
     expect(store.getState().detail.value).toBeNull();
   });
 
-  it('does not send filtered-result indices as full-catalog viewport hints', async () => {
+  it('hydrates filtered-result song IDs without confusing them with catalog indices', async () => {
     const bridge = createMockBridge();
     let viewportCalls = 0;
+    let viewportSongIds: string[] = [];
     const originalViewport = bridge.setLibraryViewport;
     bridge.setLibraryViewport = async (request) => {
       viewportCalls += 1;
+      viewportSongIds = request.songIds;
       return originalViewport(request);
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().search('Song'));
     await act(async () => store.getState().setViewport(200, 220));
-    expect(viewportCalls).toBe(0);
+    expect(viewportCalls).toBe(1);
+    expect(viewportSongIds).toHaveLength(21);
     expect(store.getState().library.resultTotal).toBe(488);
     expect(store.getState().library.catalogTotal).toBe(500);
     expect(store.getState().library.rows[200]?.title).toBe('Song 212');
+  });
+
+  it('persists liked source state through the native bridge contract', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const first = store.getState().library.rows[0];
+    if (!first) throw new Error('mock library is empty');
+
+    await act(async () => store.getState().setSongLiked(first.song_id, true));
+    expect(store.getState().library.likedTotal).toBe(1);
+    expect(store.getState().library.rows[0]?.liked).toBe(true);
+
+    await act(async () => store.getState().selectLibrarySource('liked'));
+    expect(store.getState().library.source).toBe('liked');
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(store.getState().library.rows[0]?.song_id).toBe(first.song_id);
   });
 
   it('serializes settings mutations in user-intent order and preserves fields', async () => {
