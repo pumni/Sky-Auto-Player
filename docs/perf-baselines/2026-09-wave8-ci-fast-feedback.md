@@ -353,7 +353,7 @@ Variant C preserves the benefits of Variant B while restoring object-level compi
 
 ### 6.3 Empirical Measurements: Variant C (`sccache` + Target Pruning)
 
-| Metric | Control A (Main #562) | Variant B (Manual #564) | Variant C (Cold Dispatch #567) | Variant C (Warm Dispatch #568) | Impact / Delta (Variant C Warm) |
+| Metric | Control A Main (#562 save-enabled) | Variant B (Manual #564) | Variant C (Cold Dispatch #567) | Variant C (Warm Dispatch #568) | Impact / Delta (Variant C Warm) |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | **Commit SHA** | `81bb7c2f1dff` | `f6ca8063e810` | `8cc535bf2595` | `8cc535bf2595` | Exact candidate HEAD |
 | **Trigger** | `push` (main) | `workflow_dispatch` | `workflow_dispatch` | `workflow_dispatch` | Branch ref cache isolation |
@@ -361,12 +361,16 @@ Variant C preserves the benefits of Variant B while restoring object-level compi
 | **Sccache hits / hit rate — `validate`** | N/A | N/A | 70 hits (9%) | **582 hits (79%)** | **79% object reuse** |
 | **Dist build — `packaged`** | 8m00s | 10m22s | 10m24s | **7m02s** | **-3m20s vs B / -58s vs A** |
 | **Restricted tests — `validate`** | 7m03s | 11m13s | 11m15s | **8m00s** | **-3m13s vs B (-28%)** |
-| **Post-save — `validate`** | 6m31s (391s) | 15s | 51s | **52s** | **-5m39s vs Control A** |
-| **Post-save — `packaged`** | ~2m19s (139s) | 32s | 33s | **33s** | **-1m46s vs Control A** |
+| **Post Rust-cache overhead — `validate`** | 6m31s (391s save) | 15s (save) | 51s (save attempt) | **52s (contention/attempt)** | **-5m39s vs Control A** |
+| **Post Rust-cache overhead — `packaged`** | ~2m19s (139s save) | 32s (save) | 33s (save) | **33s (contention/attempt)** | **-1m46s vs Control A** |
 | **Post Set up sccache overhead** | N/A | N/A | 1s | **1s** | Negligible overhead |
 | **Job total — `packaged`** | 9m37s | 11m52s | 12m00s | **8m36s** | **-3m16s vs B / -1m01s vs A** |
 | **Job total — `validate`** | 15m35s | 12m32s | 14m40s | **10m49s** | **-4m46s vs A / -1m43s vs B** |
 | **Required-gate Wall-Clock** | **15m40s** | **13m00s** | **15m03s** | **11m11s** | **-4m29s vs A (-29%)** |
+
+*Note on Control & Cache Provenance*:
+- **Control #562** represents a normal main-branch run under Control A: it restored ~1.5 GB target cache and executed full post-job save (391s in validate, 139s in packaged); it is a save-enabled baseline, not a cold-cache baseline.
+- **Post Rust-cache in #568**: Both jobs completed Cargo dependency cleanup and attempted save under 33s / 52s; concurrent execution resulted in cache reservation contention (`Unable to reserve cache ... another job may be creating this cache`), with total post-job tail remaining in tens of seconds rather than multi-minute delays.
 
 #### Authoritative Artifacts for CI-FAST-3 Variant C:
 - **PR Run #566 (`33705285415`)**:
