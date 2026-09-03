@@ -1503,8 +1503,14 @@ fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run(group: &str) -> Result<()> {
+pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> bool {
+    flag || env_val.map(|v| v.trim()) == Some("1")
+}
+
+pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
     let root = repo::root();
+    let env_val = std::env::var("SKY_CHECK_SKIP_SUPPLY_CHAIN").ok();
+    let skip_supply_chain = should_skip_supply_chain(skip_supply_chain, env_val.as_deref());
     match group {
         "static" => {
             audits::agent_context::run(&root)?;
@@ -1513,7 +1519,13 @@ pub fn run(group: &str) -> Result<()> {
             audits::security::run(&root)?;
             audits::zero_python::run(&root)?;
             tauri_feature_contract(&root)?;
-            supply_chain::run(None)?;
+            if !skip_supply_chain {
+                supply_chain::run(None)?;
+            } else {
+                println!(
+                    "[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)"
+                );
+            }
             branding::validate(&root)?;
             retirement(&root)?;
         }
@@ -1637,9 +1649,9 @@ pub fn run(group: &str) -> Result<()> {
             bindings()?;
         }
         "all" => {
-            run("static")?;
-            run("rust")?;
-            run("desktop")?;
+            run("static", skip_supply_chain)?;
+            run("rust", skip_supply_chain)?;
+            run("desktop", skip_supply_chain)?;
         }
         other => return Err(format!("unknown check group: {other}").into()),
     }
@@ -1863,5 +1875,29 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn should_skip_supply_chain_fails_closed() {
+        // Absent env var and flag false -> do not skip
+        assert!(!should_skip_supply_chain(false, None));
+
+        // Explicit flag true -> skip
+        assert!(should_skip_supply_chain(true, None));
+        assert!(should_skip_supply_chain(true, Some("0")));
+        assert!(should_skip_supply_chain(true, Some("false")));
+
+        // Env var exactly "1" -> skip
+        assert!(should_skip_supply_chain(false, Some("1")));
+        assert!(should_skip_supply_chain(false, Some(" 1 ")));
+
+        // Ambiguous / falsey / arbitrary env vars -> fail closed (do NOT skip)
+        assert!(!should_skip_supply_chain(false, Some("0")));
+        assert!(!should_skip_supply_chain(false, Some("false")));
+        assert!(!should_skip_supply_chain(false, Some("FALSE")));
+        assert!(!should_skip_supply_chain(false, Some("true")));
+        assert!(!should_skip_supply_chain(false, Some("")));
+        assert!(!should_skip_supply_chain(false, Some("yes")));
+        assert!(!should_skip_supply_chain(false, Some("2")));
     }
 }
