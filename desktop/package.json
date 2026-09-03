@@ -15,11 +15,13 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --profile dist",
+    "tauri:build": "tauri build --ci -- --profile dist",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test && bun run build:web"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-process": "2.3.1",
+    "@tauri-apps/plugin-updater": "2.11.0",
     "@tanstack/react-virtual": "3.14.10",
     "lucide-react": "1.34.0",
     "react": "19.2.8",

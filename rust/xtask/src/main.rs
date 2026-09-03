@@ -9,6 +9,7 @@ mod manifest;
 mod process;
 mod repo;
 mod supply_chain;
+mod tauri_bundle;
 mod update_trust;
 mod version;
 
@@ -18,7 +19,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-dist --release-dir <dir>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> [--summary <path>]\n  cargo xtask verify-dist --release-dir <dir>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -192,6 +193,32 @@ fn main() -> Result<()> {
                 release_dir
                     .ok_or("verify-dist requires --release-dir <dir>")?
                     .as_ref(),
+            )
+        }
+        "verify-tauri-bundle" => {
+            let mut bundle_dir = None;
+            let mut summary = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--bundle-dir" => {
+                        bundle_dir = Some(required_value(&args, &mut i, "--bundle-dir")?)
+                    }
+                    "--summary" => summary = Some(required_value(&args, &mut i, "--summary")?),
+                    option => {
+                        return Err(format!("unknown verify-tauri-bundle option: {option}").into());
+                    }
+                }
+                i += 1;
+            }
+            tauri_bundle::verify(
+                &repo::root(),
+                Path::new(
+                    bundle_dir
+                        .ok_or("verify-tauri-bundle requires --bundle-dir <dir>")?
+                        .as_str(),
+                ),
+                summary.as_deref().map(Path::new),
             )
         }
         _ => {

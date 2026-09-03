@@ -1,4 +1,4 @@
-use crate::{Result, audits, branding, process, repo, supply_chain};
+use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -1528,6 +1528,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
                 );
             }
             branding::validate(&root)?;
+            tauri_bundle::validate_config(&root)?;
             retirement(&root)?;
         }
         "rust" => {
