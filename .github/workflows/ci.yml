@@ -504,6 +504,10 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Build pinned desktop frontend
+        working-directory: desktop
+        run: bun run build
+
       - name: Construct Python-unavailable canonical environment
         run: |
           $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")

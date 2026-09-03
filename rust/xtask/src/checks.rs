@@ -266,6 +266,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
         "bun install --frozen-lockfile",
+        "bun run build",
         "bun run tauri signer generate",
         "TAURI_SIGNING_PRIVATE_KEY",
         "bun run tauri build --ci --config",
@@ -1869,6 +1870,7 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     name: Packaged v4 Tauri NSIS qualification
     steps:
       - run: bun install --frozen-lockfile
+      - run: bun run build
       - run: bun run tauri signer generate
         env: { TAURI_SIGNING_PRIVATE_KEY: test }
       - run: bun run tauri build --ci --config test.json
