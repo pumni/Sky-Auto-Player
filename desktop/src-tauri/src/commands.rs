@@ -35,6 +35,7 @@ pub enum CatalogSourceId {
 pub enum LibrarySource {
     Smart { id: CatalogSourceId },
     Collection { id: String },
+    Imported { id: String },
 }
 
 impl Default for LibrarySource {
@@ -443,10 +444,10 @@ pub struct CatalogSetLikedDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct LibraryCollectionDto {
+pub struct LibraryCollectionSummaryDto {
     pub id: String,
     pub name: String,
-    pub song_ids: Vec<String>,
+    pub song_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -455,6 +456,14 @@ pub struct LibraryCollectionDto {
 pub enum LibraryImportedSourceKind {
     File,
     Folder,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryImportedSourceAvailability {
+    Available,
+    Missing,
 }
 
 impl From<ImportedSourceKind> for LibraryImportedSourceKind {
@@ -469,17 +478,17 @@ impl From<ImportedSourceKind> for LibraryImportedSourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LibraryImportedSourceDto {
-    pub id: String,
+    pub source_id: String,
     pub kind: LibraryImportedSourceKind,
     pub display_name: String,
-    pub available: bool,
+    pub song_count: u64,
+    pub availability: LibraryImportedSourceAvailability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct LibraryCollectionsDto {
-    pub collections: Vec<LibraryCollectionDto>,
-    pub imported_source_count: u64,
+pub struct LibraryNavigationDto {
+    pub collections: Vec<LibraryCollectionSummaryDto>,
     pub imported_sources: Vec<LibraryImportedSourceDto>,
 }
 
@@ -688,7 +697,7 @@ pub async fn set_song_liked(
 #[tauri::command]
 pub async fn library_list_collections(
     state: State<'_, AppState>,
-) -> Result<LibraryCollectionsDto, String> {
+) -> Result<LibraryNavigationDto, String> {
     blocking_request(state, "library.list_collections", serde_json::json!({})).await
 }
 
@@ -696,7 +705,7 @@ pub async fn library_list_collections(
 pub async fn library_create_collection(
     state: State<'_, AppState>,
     params: LibraryCreateCollectionRequest,
-) -> Result<LibraryCollectionDto, String> {
+) -> Result<LibraryCollectionSummaryDto, String> {
     blocking_request(state, "library.create_collection", params).await
 }
 
@@ -704,7 +713,7 @@ pub async fn library_create_collection(
 pub async fn library_rename_collection(
     state: State<'_, AppState>,
     params: LibraryRenameCollectionRequest,
-) -> Result<LibraryCollectionDto, String> {
+) -> Result<LibraryCollectionSummaryDto, String> {
     blocking_request(state, "library.rename_collection", params).await
 }
 
@@ -720,7 +729,7 @@ pub async fn library_delete_collection(
 pub async fn library_add_songs(
     state: State<'_, AppState>,
     params: LibraryCollectionSongsRequest,
-) -> Result<LibraryCollectionDto, String> {
+) -> Result<LibraryCollectionSummaryDto, String> {
     blocking_request(state, "library.add_songs", params).await
 }
 
@@ -728,7 +737,7 @@ pub async fn library_add_songs(
 pub async fn library_remove_songs(
     state: State<'_, AppState>,
     params: LibraryCollectionSongsRequest,
-) -> Result<LibraryCollectionDto, String> {
+) -> Result<LibraryCollectionSummaryDto, String> {
     blocking_request(state, "library.remove_songs", params).await
 }
 

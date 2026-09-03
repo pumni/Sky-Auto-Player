@@ -17,8 +17,8 @@ import type {
   CatalogSearchRequest,
   CatalogViewportDto,
   CatalogViewportRequest,
-  LibraryCollectionDto,
-  LibraryCollectionsDto,
+  LibraryCollectionSummaryDto,
+  LibraryNavigationDto,
   LibraryImportedSourceDto,
   LibraryImportDto,
   LibrarySource as GeneratedLibrarySource,
@@ -92,8 +92,8 @@ export type SongDetail = Omit<SongDetailDto, 'risk'> & { risk: RiskSummary };
 export type ViewportRequest = CatalogViewportRequest;
 export type ViewportResult = Omit<CatalogViewportDto, 'items'> & { items: SongRow[] };
 export type LibrarySource = GeneratedLibrarySource;
-export type LibraryCollection = LibraryCollectionDto;
-export type LibraryCollections = LibraryCollectionsDto;
+export type LibraryCollectionSummary = LibraryCollectionSummaryDto;
+export type LibraryNavigation = LibraryNavigationDto;
 export type LibraryImportedSource = LibraryImportedSourceDto;
 export type LibraryImport = LibraryImportDto;
 export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
@@ -162,12 +162,12 @@ export interface DesktopBridge {
   reloadLibrary(): Promise<{ generation: number; total: number }>;
   setLibraryViewport(request: ViewportRequest): Promise<ViewportResult>;
   setSongLiked(request: SetSongLikedRequest): Promise<CatalogSetLikedDto>;
-  listCollections(): Promise<LibraryCollections>;
-  createCollection(name: string): Promise<LibraryCollection>;
-  renameCollection(collectionId: string, name: string): Promise<LibraryCollection>;
+  listLibraryNavigation(): Promise<LibraryNavigation>;
+  createCollection(name: string): Promise<LibraryCollectionSummary>;
+  renameCollection(collectionId: string, name: string): Promise<LibraryCollectionSummary>;
   deleteCollection(collectionId: string): Promise<boolean>;
-  addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection>;
-  removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollection>;
+  addSongs(collectionId: string, songIds: string[]): Promise<LibraryCollectionSummary>;
+  removeSongs(collectionId: string, songIds: string[]): Promise<LibraryCollectionSummary>;
   importLocalFiles(): Promise<LibraryImport>;
   importLocalFolder(): Promise<LibraryImport>;
   removeImport(sourceId: string): Promise<LibraryImport>;

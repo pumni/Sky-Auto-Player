@@ -10,8 +10,8 @@ import type {
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
   DetailRequest,
-  LibraryCollection,
-  LibraryCollections,
+  LibraryCollectionSummary,
+  LibraryNavigation,
   LibraryImport,
   PlaybackCommandAck,
   PlaybackPrepare,
@@ -92,12 +92,12 @@ export interface CommandResponseMap {
   set_diagnostics_enabled: DiagnosticsEnabled;
   start_calibration: CalibrationStartAck;
   cancel_calibration: CalibrationCancelAck;
-  library_list_collections: LibraryCollections;
-  library_create_collection: LibraryCollection;
-  library_rename_collection: LibraryCollection;
+  library_list_collections: LibraryNavigation;
+  library_create_collection: LibraryCollectionSummary;
+  library_rename_collection: LibraryCollectionSummary;
   library_delete_collection: boolean;
-  library_add_songs: LibraryCollection;
-  library_remove_songs: LibraryCollection;
+  library_add_songs: LibraryCollectionSummary;
+  library_remove_songs: LibraryCollectionSummary;
   library_import_local_files: LibraryImport;
   library_import_local_folder: LibraryImport;
   library_remove_import: LibraryImport;

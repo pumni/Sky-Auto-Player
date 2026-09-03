@@ -45,10 +45,10 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton
             ref={profileTriggerRef}
-            className="profile-summary-button"
+            className="player-tool-button profile-summary-button"
             type="button"
-            aria-label="Configure timing profile"
-            title="Configure timing profile"
+            aria-label="Configure playback profile"
+            title="Configure playback profile"
           >
             <SlidersHorizontal size={15} aria-hidden="true" />
             <span>
@@ -86,7 +86,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         </DialogTrigger>
       </div>
       <button
-        className="icon-button player-utility-button"
+        className="icon-button player-tool-button player-utility-button"
         type="button"
         aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
         title={utility.open ? 'Close utility panel' : 'Open utility panel'}

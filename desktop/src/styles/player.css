@@ -1,7 +1,7 @@
 .player-bar {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(360px, 620px) minmax(220px, 1fr);
+  grid-template-columns: minmax(150px, 1fr) minmax(280px, 520px) minmax(80px, 1fr);
   align-items: center;
   min-width: 0;
   gap: 8px;
@@ -449,4 +449,51 @@
   .resizable-separator span {
     transition: none;
   }
+}
+
+.player-tool-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+.player-tool-button:hover {
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.player-tool-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.player-tool-button[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.player-profile {
+  width: 32px;
+}
+
+.profile-summary-button {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.profile-summary-button > span {
+  display: none;
+}
+
+.player-tools {
+  gap: 4px;
 }

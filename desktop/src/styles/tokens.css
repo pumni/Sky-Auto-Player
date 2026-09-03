@@ -28,6 +28,7 @@
   --space-5: 20px;
   --space-6: 24px;
   --titlebar-height: 48px;
-  --player-height: 88px;
+  --player-height: 80px;
+  --min-track-browser-width: 420px;
   --workbench-gap: 8px;
 }

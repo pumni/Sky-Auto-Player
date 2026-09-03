@@ -1,17 +1,17 @@
 # Library V1 Native Contract
 
-This contract is the native foundation for the stacked Collections and Local
-Import work. It does not add frontend controls until the persistence and
-catalog semantics are complete.
+This contract covers the native-backed Collections and Local Import workflow
+used by the Windows desktop Library Navigator.
 
 ## Ownership
 
 `LibraryManifestV1` is native library data stored beside the application
 settings in `library-manifest.json`. It contains collection membership and
 explicit imported references. The native layer canonicalizes and validates
-paths; React receives only opaque IDs, display names, availability, names, song
-IDs, counts, and catalog generation. Canonical paths never enter frontend
-state, browser storage, or path-bearing DTOs.
+paths; React receives only opaque IDs, display names, availability, collection
+names, counts, catalog rows, and catalog generation. Collection membership and
+canonical paths never enter frontend state, browser storage, or path-bearing
+DTOs.
 
 Import is reference-only. Registering an existing file or folder does not
 copy, move, or delete it. Removing an import removes only the manifest
@@ -48,10 +48,10 @@ The native command names are:
 - `library.remove_import`
 
 `library.list_collections` also returns the path-free `imported_sources`
-projection. Each item contains an opaque `id`, `kind`, native-derived
-`display_name`, and current `available` state so a future Import Manager can
-remove or explain missing references after restart without retaining
-filesystem paths in React.
+projection. Each item contains `source_id`, `kind`, native-derived
+`display_name`, `song_count`, and `availability` (`available` or `missing`).
+This lets the navigator remove or explain missing references after restart
+without retaining filesystem paths in React.
 
 The two import commands open the native Tauri file dialog and return
 path-free results. Catalog composition combines the configured songs
@@ -64,11 +64,16 @@ enum:
 ```text
 { kind: smart, id: all | liked }
 { kind: collection, id: collection-id }
+{ kind: imported, id: source-id }
 ```
 
-Collection search validates the opaque collection ID and resolves its song ID
-allow-list in native state before calling the existing catalog primitive.
+Collection and imported-source searches validate their opaque IDs and resolve
+their song ID allow-lists in native state before calling the existing catalog
+primitive. Imported membership and the composed catalog are rebuilt together
+for one catalog generation. Missing imports remain visible with zero songs and
+do not prevent All Songs from loading.
 
-Collections and local import remain intentionally UI-gated until the next
-stacked implementation adds source selection, collection navigation, and
-native-backed mutation workflows.
+Removing an import removes only its native manifest reference; it never deletes
+or moves the referenced file or folder. Collection mutations return summaries,
+not full membership arrays, so the navigator remains bounded independently of
+collection size.

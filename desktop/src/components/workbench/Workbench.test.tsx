@@ -5,6 +5,7 @@ import {
   DEFAULT_NAVIGATOR_WIDTH,
   COMPACT_NAVIGATOR_WIDTH,
   getNavigatorWidthMax,
+  LEGACY_WORKBENCH_V3_STORAGE_KEY,
   LEGACY_WORKBENCH_STORAGE_KEY,
   LEGACY_WORKBENCH_V1_STORAGE_KEY,
   loadWorkbenchLayout,
@@ -24,9 +25,9 @@ describe('ResizableSeparator', () => {
       <ResizableSeparator
         label="Resize library navigator"
         value={260}
-        min={220}
-        max={360}
-        defaultValue={260}
+        min={200}
+        max={340}
+        defaultValue={DEFAULT_NAVIGATOR_WIDTH}
         onChange={onChange}
         onCommit={onCommit}
       />,
@@ -41,9 +42,9 @@ describe('ResizableSeparator', () => {
       <ResizableSeparator
         label="Resize library navigator"
         value={268}
-        min={220}
-        max={360}
-        defaultValue={260}
+        min={200}
+        max={340}
+        defaultValue={DEFAULT_NAVIGATOR_WIDTH}
         onChange={onChange}
         onCommit={onCommit}
       />,
@@ -56,11 +57,11 @@ describe('ResizableSeparator', () => {
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize library navigator' }), {
       key: 'Home',
     });
-    expect(onChange).toHaveBeenLastCalledWith(220);
+    expect(onChange).toHaveBeenLastCalledWith(200);
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize library navigator' }), {
       key: 'End',
     });
-    expect(onChange).toHaveBeenLastCalledWith(360);
+    expect(onChange).toHaveBeenLastCalledWith(340);
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize library navigator' }), {
       key: 'Enter',
     });
@@ -74,9 +75,9 @@ describe('ResizableSeparator', () => {
       <ResizableSeparator
         label="Resize utility pane"
         value={360}
-        min={320}
-        max={480}
-        defaultValue={360}
+        min={280}
+        max={440}
+        defaultValue={320}
         direction={-1}
         onChange={onChange}
         onCommit={onCommit}
@@ -90,9 +91,9 @@ describe('ResizableSeparator', () => {
       <ResizableSeparator
         label="Resize utility pane"
         value={352}
-        min={320}
-        max={480}
-        defaultValue={360}
+        min={280}
+        max={440}
+        defaultValue={320}
         direction={-1}
         onChange={onChange}
         onCommit={onCommit}
@@ -107,20 +108,38 @@ describe('ResizableSeparator', () => {
 describe('workbench layout persistence', () => {
   afterEach(() => window.localStorage.clear());
 
-  it('loads valid v3 values and clamps them to current bounds', () => {
+  it('loads valid v4 values and clamps them to current bounds', () => {
     window.localStorage.setItem(
       WORKBENCH_STORAGE_KEY,
       JSON.stringify({
-        version: 3,
+        version: 4,
         navigatorPreference: 'expanded',
         expandedNavigatorWidth: 640,
+        utilityWidth: 490,
+      }),
+    );
+    expect(loadWorkbenchLayout()).toEqual({
+      version: 4,
+      navigatorPreference: 'expanded',
+      expandedNavigatorWidth: 340,
+      utilityWidth: 440,
+    });
+  });
+
+  it('soft-migrates valid v3 geometry without persisting presentation state', () => {
+    window.localStorage.setItem(
+      LEGACY_WORKBENCH_V3_STORAGE_KEY,
+      JSON.stringify({
+        version: 3,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 360,
         utilityWidth: 340,
       }),
     );
     expect(loadWorkbenchLayout()).toEqual({
-      version: 3,
+      version: 4,
       navigatorPreference: 'expanded',
-      expandedNavigatorWidth: 360,
+      expandedNavigatorWidth: 340,
       utilityWidth: 340,
     });
   });
@@ -131,10 +150,10 @@ describe('workbench layout persistence', () => {
       JSON.stringify({ version: 2, navigatorWidth: 280, utilityWidth: 490 }),
     );
     expect(loadWorkbenchLayout()).toEqual({
-      version: 3,
+      version: 4,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 280,
-      utilityWidth: 480,
+      utilityWidth: 440,
     });
   });
 
@@ -152,22 +171,22 @@ describe('workbench layout persistence', () => {
     window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify({ version: 3 }));
     window.localStorage.removeItem(LEGACY_WORKBENCH_STORAGE_KEY);
     expect(loadWorkbenchLayout().expandedNavigatorWidth).toBe(DEFAULT_NAVIGATOR_WIDTH);
-    expect(loadWorkbenchLayout().utilityWidth).toBe(360);
+    expect(loadWorkbenchLayout().utilityWidth).toBe(320);
   });
 
   it('accounts for padding, separators, and the minimum track browser width', () => {
-    expect(getNavigatorWidthMax(900)).toBe(360);
-    expect(getNavigatorWidthMax(1200, 340)).toBe(348);
+    expect(getNavigatorWidthMax(900)).toBe(340);
+    expect(getNavigatorWidthMax(1200, 340)).toBe(340);
     expect(getNavigatorWidthMax(920, 320)).toBe(MIN_NAVIGATOR_WIDTH);
-    expect(getUtilityWidthMax(920)).toBe(336);
+    expect(getUtilityWidthMax(920)).toBe(412);
     const minimum = solveWorkbenchGeometry({
-      viewportWidth: 920,
+      viewportWidth: 800,
       navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
-      utilityWidth: getUtilityWidthMax(920),
+      utilityWidth: getUtilityWidthMax(800),
     });
-    expect(minimum.trackBrowserWidth).toBe(480);
+    expect(minimum.trackBrowserWidth).toBe(420);
     expect(minimum.fits).toBe(true);
-    expect(COMPACT_NAVIGATOR_WIDTH).toBe(72);
+    expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
   });
 });

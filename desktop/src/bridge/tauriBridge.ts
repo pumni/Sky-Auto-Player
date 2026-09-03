@@ -48,7 +48,7 @@ export function createTauriBridge(): DesktopBridge {
     reloadLibrary: () => call(COMMANDS.reloadLibrary),
     setLibraryViewport: (request: ViewportRequest) => call(COMMANDS.setLibraryViewport, request),
     setSongLiked: (request) => call(COMMANDS.setSongLiked, request),
-    listCollections: () => call(COMMANDS.libraryListCollections),
+    listLibraryNavigation: () => call(COMMANDS.libraryListCollections),
     createCollection: (name) => call(COMMANDS.libraryCreateCollection, { name }),
     renameCollection: (collectionId, name) =>
       call(COMMANDS.libraryRenameCollection, { collectionId, name }),

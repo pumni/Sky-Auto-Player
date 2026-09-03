@@ -1,7 +1,8 @@
-import { memo, type CSSProperties } from 'react';
+import { memo, type CSSProperties, type ReactNode } from 'react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectRowAtIndex } from '../../state/store';
+import { TrackActionsMenu } from './TrackActionsMenu';
 
 interface TrackRowProps {
   index: number;
@@ -11,6 +12,7 @@ interface TrackRowProps {
   onFocus?: () => void;
   onSelect: () => void;
   onToggleLiked?: () => void;
+  actions?: ReactNode;
 }
 
 export function formatDuration(durationUs: number | null): string {
@@ -36,6 +38,7 @@ export const TrackRow = memo(function TrackRow({
   onFocus,
   onSelect,
   onToggleLiked,
+  actions,
 }: TrackRowProps) {
   const style: CSSProperties = { transform: `translateY(${start}px)` };
   const metadata = row.metadata_state === 'ready' ? null : metadataStatus(row.metadata_state);
@@ -55,7 +58,8 @@ export const TrackRow = memo(function TrackRow({
         {index + 1}
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
-        {row.title}
+        <span className="track-title-text">{row.title}</span>
+        {actions}
       </span>
       <span className="track-cell track-cell-liked" role="gridcell">
         <button
@@ -150,6 +154,7 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
       start={start}
       onSelect={() => void selectSong(row.song_id)}
       onToggleLiked={() => void setSongLiked(row.song_id, !row.liked)}
+      actions={<TrackActionsMenu row={row} useStore={useStore} />}
     />
   );
 });
