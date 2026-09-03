@@ -19,9 +19,9 @@ describe('desktop application shell', () => {
     fireEvent.click(firstSong);
     await waitFor(() => expect(firstSong).toHaveAttribute('aria-selected', 'true'));
     expect(screen.queryByText('Medium timing risk')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Open song details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open utility panel' }));
     await waitFor(() =>
-      expect(screen.getByRole('dialog', { name: 'Song Details' })).toBeInTheDocument(),
+      expect(screen.getByRole('region', { name: 'Utility: Song Details' })).toBeInTheDocument(),
     );
     expect(screen.getByText('Medium timing risk')).toBeInTheDocument();
 
@@ -91,13 +91,17 @@ describe('desktop application shell', () => {
     render(<App bridge={createMockBridge()} />);
     await screen.findByRole('row', { name: /Aurora Landing/ });
 
-    const trigger = screen.getByRole('button', { name: 'Open diagnostics' });
+    const trigger = screen.getByRole('button', { name: 'Open utility panel' });
     fireEvent.click(trigger);
-    const dialog = await screen.findByRole('dialog', { name: 'Diagnostics' });
-    expect(dialog).toBeInTheDocument();
+    const utility = await screen.findByRole('region', { name: 'Utility: Song Details' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
+    const diagnostics = await screen.findByRole('region', { name: 'Utility: Diagnostics' });
+    expect(utility).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Performance' })).toBeInTheDocument();
-    fireEvent.keyDown(dialog, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Diagnostics' })).toBeNull());
+    fireEvent.keyDown(diagnostics, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Utility: Diagnostics' })).toBeNull(),
+    );
     expect(document.activeElement).toBe(trigger);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));

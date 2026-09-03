@@ -11,14 +11,14 @@ interface TrackTableProps {
 export function TrackTable({ useStore }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const rows = useStore((store: DesktopStore) => store.library.rows);
-  const total = useStore((store: DesktopStore) => store.library.total);
+  const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const [activeIndex, setActiveIndex] = useState(0);
   const pendingKeyboardIndex = useRef<number | null>(null);
   const virtualizer = useVirtualizer({
-    count: total,
+    count: resultTotal,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 46,
     overscan: 10,
@@ -28,11 +28,11 @@ export function TrackTable({ useStore }: TrackTableProps) {
     virtualItems.length > 0
       ? virtualItems
       : [
-          ...Array.from({ length: Math.min(total, 20) }, (_, index) => ({
+          ...Array.from({ length: Math.min(resultTotal, 20) }, (_, index) => ({
             index,
             start: index * 46,
           })),
-          ...(activeIndex >= 20 && activeIndex < total
+          ...(activeIndex >= 20 && activeIndex < resultTotal
             ? [{ index: activeIndex, start: activeIndex * 46 }]
             : []),
         ];
@@ -44,8 +44,8 @@ export function TrackTable({ useStore }: TrackTableProps) {
   }, [first, last, setViewport]);
 
   useEffect(() => {
-    setActiveIndex((current) => (total === 0 ? 0 : Math.min(current, total - 1)));
-  }, [total]);
+    setActiveIndex((current) => (resultTotal === 0 ? 0 : Math.min(current, resultTotal - 1)));
+  }, [resultTotal]);
 
   useEffect(() => {
     if (pendingKeyboardIndex.current !== activeIndex) return;
@@ -57,7 +57,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
 
   const activeRow = rows[activeIndex];
   const moveActive = (nextIndex: number) => {
-    const next = Math.max(0, Math.min(total - 1, nextIndex));
+    const next = Math.max(0, Math.min(resultTotal - 1, nextIndex));
     setActiveIndex(next);
     virtualizer.scrollToIndex(next, { align: 'auto' });
     const row = rows[next];
@@ -71,7 +71,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
   };
 
   const onTableKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (total === 0) return;
+    if (resultTotal === 0) return;
     const selectedIndex = selectedSongId
       ? rows.findIndex((row) => row?.song_id === selectedSongId)
       : -1;
@@ -87,7 +87,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
       moveActive(0);
     } else if (event.key === 'End') {
       event.preventDefault();
-      moveActive(total - 1);
+      moveActive(resultTotal - 1);
     } else if (event.key === 'Enter' || event.key === ' ') {
       const row = rows[current];
       if (row) {
@@ -104,7 +104,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
       className="track-table"
       role="grid"
       aria-label="Songs"
-      aria-rowcount={total + 1}
+      aria-rowcount={resultTotal + 1}
       aria-activedescendant={activeRow ? `song-row-${activeRow.song_id}` : undefined}
       aria-multiselectable="false"
       tabIndex={0}

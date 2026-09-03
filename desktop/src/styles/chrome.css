@@ -92,6 +92,11 @@
   min-height: 34px;
 }
 
+.app-titlebar-actions .icon-button {
+  border: 0;
+  background: transparent;
+}
+
 .window-caption-controls {
   display: flex;
   grid-column: 6;
@@ -119,6 +124,10 @@
 
 .caption-button:active {
   background: var(--surface-selected);
+}
+
+.caption-button:focus-visible {
+  outline-offset: -2px;
 }
 
 .caption-button-close:hover {

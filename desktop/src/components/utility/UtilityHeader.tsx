@@ -1,13 +1,13 @@
 import { X } from 'lucide-react';
+import { Tab, TabList } from 'react-aria-components';
 import type { UtilityView } from '../../state/store';
 
 interface UtilityHeaderProps {
   activeView: UtilityView;
   onClose: () => void;
-  onViewChange: (view: UtilityView) => void;
 }
 
-export function UtilityHeader({ activeView, onClose, onViewChange }: UtilityHeaderProps) {
+export function UtilityHeader({ activeView, onClose }: UtilityHeaderProps) {
   const title = activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details';
   return (
     <header className="utility-header">
@@ -24,24 +24,10 @@ export function UtilityHeader({ activeView, onClose, onViewChange }: UtilityHead
       >
         <X size={16} aria-hidden="true" />
       </button>
-      <div className="utility-view-tabs" role="tablist" aria-label="Utility views">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeView === 'details'}
-          onClick={() => onViewChange('details')}
-        >
-          Details
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeView === 'diagnostics'}
-          onClick={() => onViewChange('diagnostics')}
-        >
-          Runtime
-        </button>
-      </div>
+      <TabList className="utility-view-tabs" aria-label="Utility views">
+        <Tab id="details">Details</Tab>
+        <Tab id="diagnostics">Runtime</Tab>
+      </TabList>
     </header>
   );
 }

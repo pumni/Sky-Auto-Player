@@ -55,7 +55,8 @@ export interface DesktopStore {
   library: {
     query: string;
     generation: number;
-    total: number;
+    catalogTotal: number;
+    resultTotal: number;
     rows: SongRow[];
     selectedSongId: string | null;
     visibleRange: { first: number; last: number };
@@ -129,7 +130,7 @@ export interface DesktopStore {
   setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
   openUtility: (view: UtilityView) => void;
   closeUtility: () => void;
-  toggleUtility: (view: UtilityView) => void;
+  toggleUtility: () => void;
   setUtilityView: (view: UtilityView) => void;
   startCalibration: (mode?: CalibrationModeId) => Promise<void>;
   cancelCalibration: () => Promise<void>;
@@ -242,7 +243,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         library: {
           ...current,
           rows,
-          total: result.total,
+          catalogTotal: current.query.trim() === '' ? result.total : current.catalogTotal,
+          resultTotal: result.total,
           generation: result.generation,
         },
       });
@@ -288,7 +290,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const ensureRange = async (first: number, last: number, token: number): Promise<void> => {
       if (last < first) return;
       const current = get().library;
-      if (current.total === 0) return;
+      if (current.resultTotal === 0) return;
       const offsets: number[] = [];
       const firstPage = Math.floor(Math.max(0, first) / pageSize) * pageSize;
       const lastPage = Math.floor(Math.max(0, last) / pageSize) * pageSize;
@@ -311,7 +313,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
       library: {
         query: '',
         generation: 0,
-        total: 0,
+        catalogTotal: 0,
+        resultTotal: 0,
         rows: [],
         selectedSongId: null,
         visibleRange: { first: 0, last: 0 },
@@ -412,7 +415,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           {
             ...initialEventState,
             catalogGeneration: get().library.generation,
-            catalogTotal: get().library.total,
+            catalogTotal: get().library.catalogTotal,
             fatal: get().fatal,
           },
           event,
@@ -442,7 +445,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: {
               ...get().library,
               generation: eventState.catalogGeneration,
-              total: eventState.catalogTotal,
+              catalogTotal: eventState.catalogTotal,
+              resultTotal: eventState.catalogTotal,
               rows: [],
               selectedSongId: null,
               error: null,
@@ -624,7 +628,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             ...current,
             query: nextQuery,
             rows: [],
-            total: 0,
+            resultTotal: 0,
             loading: true,
             error: null,
             searchRequestGeneration: token,
@@ -637,7 +641,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
             library: {
               ...get().library,
               rows: get().library.rows,
-              total: result.total,
+              catalogTotal: nextQuery.trim() === '' ? result.total : get().library.catalogTotal,
+              resultTotal: result.total,
               generation: result.generation,
               loading: false,
               error: null,
@@ -1013,13 +1018,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
-      toggleUtility(view) {
+      toggleUtility() {
         const utility = get().utility;
-        if (utility.open && utility.activeView === view) {
+        if (utility.open) {
           get().closeUtility();
           return;
         }
-        get().openUtility(view);
+        get().openUtility(utility.activeView);
       },
 
       setUtilityView(view) {

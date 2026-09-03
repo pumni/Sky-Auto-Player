@@ -1,7 +1,7 @@
 import {
-  Activity,
   CircleStop,
   Music2,
+  PanelRight,
   Pause,
   Play,
   SkipForward,
@@ -14,7 +14,7 @@ import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface PlayerBarProps {
   useStore: DesktopStoreHook;
-  diagnosticsTriggerRef?: RefObject<HTMLButtonElement | null>;
+  utilityTriggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function formatDuration(value: number): string {
@@ -31,7 +31,7 @@ function admissionDecisionLabel(decision: PlaybackDecisionId, label: string): st
   return decision === 'dry_run' ? 'Test playback (no input)' : label;
 }
 
-export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
+export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
   const playback = useStore((store: DesktopStore) => store.playback);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
   const detail = useStore((store: DesktopStore) => store.detail);
@@ -93,7 +93,6 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
     : totalUs
       ? `Playback progress, ${formatDuration(currentUs)} of ${formatDuration(totalUs)}`
       : 'Playback progress unavailable';
-  const diagnosticsOpen = utility.open && utility.activeView === 'diagnostics';
 
   useEffect(() => {
     if (!admissionRequired) return;
@@ -298,14 +297,15 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
         </div>
 
         <button
-          className="icon-button player-diagnostics-button"
+          className="icon-button player-utility-button"
           type="button"
-          aria-label={diagnosticsOpen ? 'Close diagnostics' : 'Open diagnostics'}
-          aria-pressed={diagnosticsOpen}
-          ref={diagnosticsTriggerRef}
-          onClick={() => toggleUtility('diagnostics')}
+          aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
+          title={utility.open ? 'Close utility panel' : 'Open utility panel'}
+          aria-pressed={utility.open}
+          ref={utilityTriggerRef}
+          onClick={() => toggleUtility()}
         >
-          <Activity size={16} aria-hidden="true" />
+          <PanelRight size={16} aria-hidden="true" />
         </button>
       </div>
     </footer>

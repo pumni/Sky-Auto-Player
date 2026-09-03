@@ -24,6 +24,7 @@
   height: 36px;
   color: var(--text-tertiary);
   background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.02em;
@@ -97,6 +98,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.track-metadata-status {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.track-metadata-status.is-error {
+  font-size: 11px;
+}
+
+.track-cell-risk.metadata-pending,
+.track-cell-risk.metadata-error {
+  color: var(--text-tertiary);
 }
 
 .risk-dot {

@@ -8,8 +8,7 @@ import { useWorkbenchLayout } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
-  detailsTriggerRef?: RefObject<HTMLButtonElement | null>;
-  diagnosticsTriggerRef?: RefObject<HTMLButtonElement | null>;
+  utilityTriggerRef: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
 }
 
@@ -23,13 +22,11 @@ function useViewportWidth(): number {
   return width;
 }
 
-export function Workbench({ detailsTriggerRef, diagnosticsTriggerRef, useStore }: WorkbenchProps) {
+export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const viewportWidth = useViewportWidth();
   const utility = useStore((store) => store.utility);
   const utilityVisible = utility.open && viewportWidth >= 1280;
   const layout = useWorkbenchLayout(viewportWidth, utilityVisible);
-  const restoreFocusRef =
-    utility.activeView === 'diagnostics' ? diagnosticsTriggerRef : detailsTriggerRef;
 
   return (
     <main
@@ -54,7 +51,7 @@ export function Workbench({ detailsTriggerRef, diagnosticsTriggerRef, useStore }
         onCommit={(value) => layout.setNavigatorWidth(value, true)}
       />
       <WorkbenchPane className="track-browser-workbench-pane">
-        <TrackBrowser detailsTriggerRef={detailsTriggerRef} useStore={useStore} />
+        <TrackBrowser useStore={useStore} />
       </WorkbenchPane>
       {utilityVisible && (
         <>
@@ -72,20 +69,12 @@ export function Workbench({ detailsTriggerRef, diagnosticsTriggerRef, useStore }
             className="utility-workbench-pane"
             style={{ flex: `0 0 ${layout.utilityWidth}px` }}
           >
-            <UtilityPane
-              useStore={useStore}
-              mode="pane"
-              {...(restoreFocusRef ? { restoreFocusRef } : {})}
-            />
+            <UtilityPane useStore={useStore} mode="pane" utilityTriggerRef={utilityTriggerRef} />
           </WorkbenchPane>
         </>
       )}
       {utility.open && !utilityVisible && (
-        <UtilityPane
-          useStore={useStore}
-          mode="overlay"
-          {...(restoreFocusRef ? { restoreFocusRef } : {})}
-        />
+        <UtilityPane useStore={useStore} mode="overlay" utilityTriggerRef={utilityTriggerRef} />
       )}
     </main>
   );

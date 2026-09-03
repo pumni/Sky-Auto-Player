@@ -12,6 +12,7 @@ describe('desktop store', () => {
     await act(async () => store.getState().initialize());
     expect(store.getState().bootstrapState).toBe('ready');
     expect(store.getState().library.rows.length).toBeGreaterThan(0);
+    expect(store.getState().library.catalogTotal).toBe(500);
 
     const first = store.getState().library.rows[0];
     if (!first) throw new Error('mock library is empty');
@@ -108,6 +109,8 @@ describe('desktop store', () => {
     await act(async () => store.getState().search('Song'));
     await act(async () => store.getState().setViewport(200, 220));
     expect(viewportCalls).toBe(0);
+    expect(store.getState().library.resultTotal).toBe(488);
+    expect(store.getState().library.catalogTotal).toBe(500);
     expect(store.getState().library.rows[200]?.title).toBe('Song 212');
   });
 

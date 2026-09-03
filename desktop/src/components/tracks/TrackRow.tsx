@@ -20,8 +20,18 @@ function riskLabel(value: SongRow['risk_level']): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function metadataStatus(state: SongRow['metadata_state']): {
+  label: string;
+  value: string;
+} {
+  return state === 'pending'
+    ? { label: 'Metadata loading', value: '…' }
+    : { label: 'Metadata unavailable', value: 'Unavailable' };
+}
+
 export function TrackRow({ index, row, selected, start, onFocus, onSelect }: TrackRowProps) {
   const style: CSSProperties = { transform: `translateY(${start}px)` };
+  const metadata = row.metadata_state === 'ready' ? null : metadataStatus(row.metadata_state);
   return (
     <div
       id={`song-row-${row.song_id}`}
@@ -41,14 +51,49 @@ export function TrackRow({ index, row, selected, start, onFocus, onSelect }: Tra
         {row.title}
       </span>
       <span className="track-cell track-cell-notes" role="gridcell">
-        {row.note_count ?? '—'}
+        {metadata ? (
+          <span
+            className={`track-metadata-status is-${row.metadata_state}`}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </span>
+        ) : (
+          (row.note_count ?? '—')
+        )}
       </span>
-      <span className={`track-cell track-cell-risk risk-${row.risk_level}`} role="gridcell">
-        <span className="risk-dot" aria-hidden="true" />
-        <span>{riskLabel(row.risk_level)}</span>
+      <span
+        className={`track-cell track-cell-risk${metadata ? ` metadata-${row.metadata_state}` : ` risk-${row.risk_level}`}`}
+        role="gridcell"
+      >
+        {metadata ? (
+          <span
+            className={`track-metadata-status is-${row.metadata_state}`}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </span>
+        ) : (
+          <>
+            <span className="risk-dot" aria-hidden="true" />
+            <span>{riskLabel(row.risk_level)}</span>
+          </>
+        )}
       </span>
       <span className="track-cell track-cell-duration" role="gridcell">
-        {formatDuration(row.duration_us)}
+        {metadata ? (
+          <span
+            className={`track-metadata-status is-${row.metadata_state}`}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </span>
+        ) : (
+          formatDuration(row.duration_us)
+        )}
       </span>
     </div>
   );

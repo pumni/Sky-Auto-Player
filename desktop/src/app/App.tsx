@@ -16,8 +16,7 @@ interface AppProps {
 
 export function App({ bridge }: AppProps) {
   const storeRef = useRef<ReturnType<typeof createDesktopStore> | null>(null);
-  const diagnosticsTriggerRef = useRef<HTMLButtonElement>(null);
-  const detailsTriggerRef = useRef<HTMLButtonElement>(null);
+  const utilityTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const useStore = useMemo(() => {
     if (storeRef.current === null) storeRef.current = createDesktopStore(bridge);
@@ -229,12 +228,8 @@ export function App({ bridge }: AppProps) {
             settingsTriggerRef={settingsTriggerRef}
             windowControls={windowControls}
           />
-          <Workbench
-            useStore={useStore}
-            detailsTriggerRef={detailsTriggerRef}
-            diagnosticsTriggerRef={diagnosticsTriggerRef}
-          />
-          <PlayerBar useStore={useStore} diagnosticsTriggerRef={diagnosticsTriggerRef} />
+          <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+          <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
           <SettingsPanel
             bootstrap={bootstrap}
             useStore={useStore}

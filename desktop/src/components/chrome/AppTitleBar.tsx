@@ -32,7 +32,7 @@ export function AppTitleBar({
 
   return (
     <header className="app-titlebar" aria-label="Sky Auto Player" data-tauri-drag-region="deep">
-      <div className="app-titlebar-brand" data-tauri-drag-region="false">
+      <div className="app-titlebar-brand">
         <img
           className="app-titlebar-icon"
           src={brandMark32Url}

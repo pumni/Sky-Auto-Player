@@ -46,10 +46,41 @@ describe('Track Browser primitives', () => {
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
+  it('does not present pending or failed metadata as final risk data', () => {
+    const pending = { ...row, song_id: 'b'.repeat(32), metadata_state: 'pending' as const };
+    const failed = { ...row, song_id: 'c'.repeat(32), metadata_state: 'error' as const };
+
+    render(
+      <>
+        <TrackRow
+          row={pending}
+          index={0}
+          selected={false}
+          start={0}
+          onFocus={vi.fn()}
+          onSelect={vi.fn()}
+        />
+        <TrackRow
+          row={failed}
+          index={1}
+          selected={false}
+          start={46}
+          onFocus={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(screen.getAllByRole('gridcell', { name: 'Metadata loading' })).toHaveLength(3);
+    expect(screen.getAllByRole('gridcell', { name: 'Metadata unavailable' })).toHaveLength(3);
+    expect(screen.queryByText('Unknown')).toBeNull();
+    expect(document.querySelectorAll('.risk-dot')).toHaveLength(0);
+  });
+
   it('renders loading placeholders for unloaded rows', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({
-      library: { ...store.getState().library, rows: [], total: 3, loading: true },
+      library: { ...store.getState().library, rows: [], resultTotal: 3, loading: true },
     });
 
     render(<TrackTable useStore={store} />);
@@ -64,7 +95,7 @@ describe('Track Browser primitives', () => {
   it('renders an explicit no-results state', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({
-      library: { ...store.getState().library, rows: [], total: 0, loading: false },
+      library: { ...store.getState().library, rows: [], resultTotal: 0, loading: false },
     });
 
     render(<TrackBrowser useStore={store} />);

@@ -16,7 +16,7 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await page.getByLabel('Search library').fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
   await page.getByRole('row', { name: /Moonlit Village/ }).click();
-  await page.getByRole('button', { name: 'Open song details' }).click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
@@ -31,8 +31,21 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   const song = page.getByRole('row', { name: /Song 401/ });
   await expect(song).toBeVisible();
   await song.click();
-  await page.getByRole('button', { name: 'Open song details' }).click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Song 401' })).toBeVisible();
+});
+
+test('All Songs clears search while retaining the catalog count', async ({ page }) => {
+  await page.goto('/');
+  const navigatorItem = page.getByRole('button', { name: 'All Songs' });
+  await expect(navigatorItem).toContainText('500');
+  await page.getByLabel('Search library').fill('Moonlit');
+  await expect(page.getByText('1 songs')).toBeVisible();
+  await expect(navigatorItem).toContainText('500');
+  await navigatorItem.click();
+  await expect(page.getByLabel('Search library')).toHaveValue('');
+  await expect(page.getByText('500 songs')).toBeVisible();
+  await expect(navigatorItem).toContainText('500');
 });
 
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
@@ -85,12 +98,17 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
     expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
 
-    await page.getByRole('button', { name: 'Open diagnostics' }).click();
+    await page.getByRole('button', { name: 'Open utility panel' }).click();
+    await page.getByRole('tab', { name: 'Runtime' }).click();
     if (viewport.width >= 1280) {
-      await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toBeVisible();
+      await expect(
+        page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
+      ).toBeVisible();
       await expect(page.locator('.utility-workbench-pane')).toBeVisible();
     } else {
-      await expect(page.getByRole('dialog', { name: 'Diagnostics' })).toBeVisible();
+      await expect(
+        page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
+      ).toBeVisible();
     }
   }
 });
@@ -191,7 +209,7 @@ test('Library separator resizes by pointer and persists after reload', async ({ 
 test('selected Song Detail has no serious accessibility violations', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
-  await page.getByRole('button', { name: 'Open song details' }).click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Aurora Landing' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 });
@@ -320,8 +338,9 @@ test('Settings modal has no serious accessibility violations and closes accessib
 test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open diagnostics' }).click();
-  const panel = page.getByRole('region', { name: 'Diagnostics' });
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await page.getByRole('tab', { name: 'Runtime' }).click();
+  const panel = page.getByRole('region', { name: 'Utility: Diagnostics' });
   await expect(panel).toBeVisible();
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const panelBox = await panel.boundingBox();
@@ -334,12 +353,14 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await expectNoSeriousAccessibilityViolations(page);
   await panel.getByRole('button', { name: 'Close utility' }).click();
   await expect(panel).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
 });
 
 test('Diagnostics utility separator follows pointer and keyboard direction', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open diagnostics' }).click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await page.getByRole('tab', { name: 'Runtime' }).click();
   const separator = page.getByRole('separator', { name: 'Resize utility pane' });
   const initial = Number(await separator.getAttribute('aria-valuenow'));
   const box = await separator.boundingBox();
@@ -389,30 +410,29 @@ test('update indicator and typed update dialog expose safe handoff states', asyn
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  const trigger = page.getByRole('button', { name: 'Open diagnostics' });
+  const trigger = page.getByRole('button', { name: 'Open utility panel' });
   await trigger.click();
-  const drawer = page.getByRole('dialog', { name: 'Diagnostics' });
+  const drawer = page.getByRole('region', { name: 'Utility: Song Details' });
   await expect(drawer).toBeVisible();
-  await expect(drawer).toBeFocused();
-  await expect(drawer.getByRole('tab', { name: 'Performance' })).toBeVisible();
+  await expect(drawer).not.toHaveAttribute('aria-modal');
+  await drawer.getByRole('tab', { name: 'Details' }).focus();
+  await page.keyboard.press('ArrowRight');
+  const diagnosticsDrawer = page.getByRole('region', { name: 'Utility: Diagnostics' });
+  await expect(diagnosticsDrawer.getByRole('tab', { name: 'Performance' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
-
-  const focusables = drawer.locator('button, [tabindex]:not([tabindex="-1"])');
-  await focusables.last().focus();
-  await page.keyboard.press('Tab');
-  await expect(drawer.locator(':focus')).toHaveCount(1);
-  await focusables.first().focus();
-  await page.keyboard.press('Shift+Tab');
-  await expect(drawer.locator(':focus')).toHaveCount(1);
-
-  await drawer.getByRole('tab', { name: 'Timing' }).click();
-  await expect(drawer.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
-  await expect(drawer).toContainText(/No timing samples|Latest maximum lateness/);
-  await drawer.getByRole('tab', { name: 'Events' }).click();
+  await diagnosticsDrawer.getByRole('tab', { name: 'Timing' }).click();
+  await expect(
+    diagnosticsDrawer.getByRole('img', { name: /Maximum timing lateness/ }),
+  ).toBeVisible();
+  await expect(diagnosticsDrawer).toContainText(/No timing samples|Latest maximum lateness/);
+  await diagnosticsDrawer.getByRole('tab', { name: 'Events' }).click();
   await expectNoSeriousAccessibilityViolations(page);
-  await drawer.getByRole('button', { name: 'Close utility' }).click();
-  await expect(drawer).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Open diagnostics' })).toBeFocused();
+  await diagnosticsDrawer.getByRole('button', { name: 'Close utility' }).click();
+  await expect(diagnosticsDrawer).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
+  await trigger.click();
+  await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
 });
 
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
@@ -428,7 +448,7 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
   const longTitle = /A sheet with an intentionally long title/;
   await expect(page.getByRole('row', { name: longTitle })).toBeVisible();
   await page.getByRole('row', { name: longTitle }).click();
-  await page.getByRole('button', { name: 'Open song details' }).click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: longTitle })).toBeVisible();
   await expect(
     page.getByText(/This intentionally long timing-risk explanation verifies wrapping/),

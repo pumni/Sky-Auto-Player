@@ -7,11 +7,17 @@ interface LibraryNavigatorProps {
 }
 
 export function LibraryNavigator({ useStore }: LibraryNavigatorProps) {
-  const total = useStore((store: DesktopStore) => store.library.total);
+  const catalogTotal = useStore((store: DesktopStore) => store.library.catalogTotal);
+  const search = useStore((store: DesktopStore) => store.search);
   return (
     <nav className="library-navigator" aria-label="Library">
       <h2>Your Library</h2>
-      <LibraryNavItem active count={total} icon={<ListMusic size={18} />}>
+      <LibraryNavItem
+        active
+        count={catalogTotal}
+        icon={<ListMusic size={18} />}
+        onPress={() => void search('')}
+      >
         All Songs
       </LibraryNavItem>
     </nav>
