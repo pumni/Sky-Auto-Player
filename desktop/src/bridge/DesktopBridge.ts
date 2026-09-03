@@ -19,6 +19,7 @@ import type {
   CatalogViewportRequest,
   LibraryCollectionDto,
   LibraryCollectionsDto,
+  LibraryImportedSourceDto,
   LibraryImportDto,
   LibrarySource as GeneratedLibrarySource,
   DiagnosticsBackendStatus,
@@ -93,6 +94,7 @@ export type ViewportResult = Omit<CatalogViewportDto, 'items'> & { items: SongRo
 export type LibrarySource = GeneratedLibrarySource;
 export type LibraryCollection = LibraryCollectionDto;
 export type LibraryCollections = LibraryCollectionsDto;
+export type LibraryImportedSource = LibraryImportedSourceDto;
 export type LibraryImport = LibraryImportDto;
 export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   theme: ThemeId;

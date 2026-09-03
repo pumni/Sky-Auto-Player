@@ -23,6 +23,8 @@ export type { LibraryCollectionIdRequest } from './LibraryCollectionIdRequest';
 export type { LibraryCollectionSongsRequest } from './LibraryCollectionSongsRequest';
 export type { LibraryCollectionsDto } from './LibraryCollectionsDto';
 export type { LibraryCreateCollectionRequest } from './LibraryCreateCollectionRequest';
+export type { LibraryImportedSourceDto } from './LibraryImportedSourceDto';
+export type { LibraryImportedSourceKind } from './LibraryImportedSourceKind';
 export type { LibraryImportDto } from './LibraryImportDto';
 export type { LibraryRemoveImportRequest } from './LibraryRemoveImportRequest';
 export type { LibraryRenameCollectionRequest } from './LibraryRenameCollectionRequest';

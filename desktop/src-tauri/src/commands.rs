@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sky_app_core::library::ImportedSourceKind;
 use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
@@ -448,11 +449,38 @@ pub struct LibraryCollectionDto {
     pub song_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryImportedSourceKind {
+    File,
+    Folder,
+}
+
+impl From<ImportedSourceKind> for LibraryImportedSourceKind {
+    fn from(kind: ImportedSourceKind) -> Self {
+        match kind {
+            ImportedSourceKind::File => Self::File,
+            ImportedSourceKind::Folder => Self::Folder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LibraryImportedSourceDto {
+    pub id: String,
+    pub kind: LibraryImportedSourceKind,
+    pub display_name: String,
+    pub available: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LibraryCollectionsDto {
     pub collections: Vec<LibraryCollectionDto>,
     pub imported_source_count: u64,
+    pub imported_sources: Vec<LibraryImportedSourceDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

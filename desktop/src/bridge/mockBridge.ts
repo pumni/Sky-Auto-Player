@@ -276,6 +276,12 @@ export function createMockBridge(): DesktopBridge {
           song_ids: [...collection.song_ids],
         })),
         imported_source_count: importedSourceIds.length,
+        imported_sources: importedSourceIds.map((id) => ({
+          id,
+          kind: 'file' as const,
+          display_name: 'Imported source',
+          available: true,
+        })),
       };
     },
     async createCollection(name: string): Promise<LibraryCollection> {

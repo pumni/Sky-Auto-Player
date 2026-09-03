@@ -13,13 +13,13 @@ use crate::commands::{
     CatalogSourceId, CatalogViewportDto, CatalogViewportRequest, DiagnosticsEnabledDto,
     DiagnosticsSetEnabledRequest, LibraryCollectionDto, LibraryCollectionIdRequest,
     LibraryCollectionSongsRequest, LibraryCollectionsDto, LibraryCreateCollectionRequest,
-    LibraryImportDto, LibraryRemoveImportRequest, LibraryRenameCollectionRequest, LibrarySource,
-    PlaybackAdmission, PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision,
-    PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto, PlaybackPendingControl,
-    PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto, PlaybackSessionState,
-    PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto, RiskSummaryDto, SettingsDto,
-    SettingsPatch, SongDetailDto, UpdateCheckDto, UpdateHandoffDto, UpdatePreferencesDto,
-    UpdatePreferencesPatch,
+    LibraryImportDto, LibraryImportedSourceDto, LibraryRemoveImportRequest,
+    LibraryRenameCollectionRequest, LibrarySource, PlaybackAdmission, PlaybackCommandAckDto,
+    PlaybackConfigDto, PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto,
+    PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto,
+    PlaybackSessionState, PlaybackStartRequest, PreparedPlaybackDto, RiskDecisionDto,
+    RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckDto, UpdateHandoffDto,
+    UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
@@ -1797,6 +1797,12 @@ impl NativeDesktopRuntime {
                 .map(collection_dto)
                 .collect(),
             imported_source_count: manifest.snapshot().imports.len() as u64,
+            imported_sources: manifest
+                .snapshot()
+                .imports
+                .iter()
+                .map(imported_source_dto)
+                .collect(),
         })
     }
 
@@ -2667,6 +2673,30 @@ fn collection_dto(collection: sky_app_core::library::Collection) -> LibraryColle
         id: collection.id,
         name: collection.name,
         song_ids: collection.song_ids,
+    }
+}
+
+fn imported_source_dto(
+    source: &sky_app_core::library::ImportedSourceRef,
+) -> LibraryImportedSourceDto {
+    let path = Path::new(&source.canonical_path);
+    let display_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| match source.kind {
+            ImportedSourceKind::File => "Imported file".to_owned(),
+            ImportedSourceKind::Folder => "Imported folder".to_owned(),
+        });
+    LibraryImportedSourceDto {
+        id: source.source_id.clone(),
+        kind: source.kind.into(),
+        display_name,
+        available: match source.kind {
+            ImportedSourceKind::File => path.is_file(),
+            ImportedSourceKind::Folder => path.is_dir(),
+        },
     }
 }
 
@@ -5236,6 +5266,7 @@ mod tests {
             0
         );
         assert_eq!(listed["imported_source_count"], 0);
+        assert_eq!(listed["imported_sources"].as_array().map(Vec::len), Some(0));
 
         let created = runtime
             .dispatch(
@@ -5283,6 +5314,13 @@ mod tests {
             .dispatch("library.list_collections", serde_json::json!({}))
             .expect("list imported sources");
         assert_eq!(listed["imported_source_count"], 1);
+        assert_eq!(
+            listed["imported_sources"][0]["id"],
+            imported["source_ids"][0]
+        );
+        assert_eq!(listed["imported_sources"][0]["kind"], "file");
+        assert_eq!(listed["imported_sources"][0]["display_name"], "local.txt");
+        assert_eq!(listed["imported_sources"][0]["available"], true);
 
         let generation = imported["catalog_generation"].as_u64().expect("generation");
         let search = runtime

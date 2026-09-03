@@ -9,9 +9,9 @@ catalog semantics are complete.
 `LibraryManifestV1` is native library data stored beside the application
 settings in `library-manifest.json`. It contains collection membership and
 explicit imported references. The native layer canonicalizes and validates
-paths; React receives only opaque IDs, names, song IDs, counts, and catalog
-generation. Canonical paths never enter frontend state, browser storage, or
-path-bearing DTOs.
+paths; React receives only opaque IDs, display names, availability, names, song
+IDs, counts, and catalog generation. Canonical paths never enter frontend
+state, browser storage, or path-bearing DTOs.
 
 Import is reference-only. Registering an existing file or folder does not
 copy, move, or delete it. Removing an import removes only the manifest
@@ -46,6 +46,12 @@ The native command names are:
 - `library.import_local_files`
 - `library.import_local_folder`
 - `library.remove_import`
+
+`library.list_collections` also returns the path-free `imported_sources`
+projection. Each item contains an opaque `id`, `kind`, native-derived
+`display_name`, and current `available` state so a future Import Manager can
+remove or explain missing references after restart without retaining
+filesystem paths in React.
 
 The two import commands open the native Tauri file dialog and return
 path-free results. Catalog composition combines the configured songs
