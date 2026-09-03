@@ -252,6 +252,17 @@ fn default_config() -> Value {
     })
 }
 
+fn ensure_v3_portable_distribution(version_value: &str) -> Result<()> {
+    let parsed = version::parse(version_value)?;
+    if parsed.major >= 4 {
+        return Err(format!(
+            "cargo xtask dist is v3-only: the legacy portable distribution contract is retired from canonical v4 packaging (version {version_value}); use Tauri NSIS qualification"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn zip_tree(release_dir: &Path, destination: &Path) -> Result<String> {
     let file = fs::File::create(destination)?;
     let mut zip = ZipWriter::new(file);
@@ -308,6 +319,8 @@ pub fn build(output: &Path) -> Result<()> {
         return Err("cargo xtask dist requires Windows".into());
     }
     let root = repo::root();
+    let version_value = repo::project_version(&root)?;
+    ensure_v3_portable_distribution(&version_value)?;
     let output = safe_output(&root, output)?;
     if output.exists() {
         if has_reparse_component(&output)? {
@@ -317,8 +330,6 @@ pub fn build(output: &Path) -> Result<()> {
     }
     fs::create_dir_all(&output)?;
     let head = repo::git_head(&root, true)?;
-    let version_value = repo::project_version(&root)?;
-    version::parse(&version_value)?;
     let fingerprint = repo::source_fingerprint(&root)?;
     let env = env_overrides(&head, &fingerprint, &root)?;
     process::run(
@@ -634,6 +645,17 @@ mod tests {
         assert!(safe_output(&root, &root).is_err());
         assert!(safe_output(&root, &root.join(".")).is_err());
         assert!(safe_output(&root, Path::new("")).is_err());
+    }
+
+    #[test]
+    fn portable_distribution_is_v3_only() {
+        assert!(ensure_v3_portable_distribution("3.5.0").is_ok());
+        for version in ["4.0.0-alpha.1", "4.0.0", "5.0.0"] {
+            let error = ensure_v3_portable_distribution(version).unwrap_err();
+            let error = error.to_string();
+            assert!(error.contains("legacy portable distribution contract"));
+            assert!(error.contains("Tauri NSIS qualification"));
+        }
     }
 
     #[test]

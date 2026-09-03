@@ -440,7 +440,7 @@ jobs:
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job validate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
   packaged:
-    name: Packaged frozen unsigned app smoke
+    name: Packaged v4 Tauri NSIS qualification
     needs: changes
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
@@ -500,6 +500,10 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Install pinned desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
       - name: Construct Python-unavailable canonical environment
         run: |
           $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
@@ -528,39 +532,93 @@ jobs:
             "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           }
 
-      - name: Build and qualify exact portable artifact
+      - name: Build and sign Tauri NSIS test artifact
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          $output = Join-Path $env:RUNNER_TEMP "Sky Auto Player portable"
-          cargo xtask dist --profile dist --output $output
-          "SKY_PORTABLE_OUTPUT=$output" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test.key"
+          $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test-updater.json"
+          try {
+            Push-Location desktop
+            try {
+              bun run tauri signer generate --ci --password "" --force -w $keyPath
+              $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
+              $testPublicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
+              [ordered]@{
+                plugins = [ordered]@{
+                  updater = [ordered]@{
+                    pubkey = $testPublicKey
+                    endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
+                  }
+                }
+              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
+              $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
+              $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+              bun run tauri build --ci --config $configPath -- --profile dist
+            } finally {
+              Pop-Location
+            }
+            "SKY_TAURI_BUNDLE=$(Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis')" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          } finally {
+            Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+          }
 
-      - name: Verify packaged release tree
+      - name: Verify exact Tauri NSIS bundle
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          $version = (cargo xtask version check | Select-String '^version=').ToString().Substring(8)
-          cargo xtask verify-dist --release-dir (Join-Path $env:SKY_PORTABLE_OUTPUT "Sky-Auto-Player-v$version")
+          cargo xtask verify-tauri-bundle `
+            --bundle-dir $env:SKY_TAURI_BUNDLE `
+            --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
 
-      - name: Report exact portable artifact identity
-        shell: pwsh
+      - name: Report exact Tauri NSIS artifact identity
         run: |
-          $summary = Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PORTABLE_ARTIFACT_SUMMARY.json") -Raw | ConvertFrom-Json
+          $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
           @"
-          ## Exact portable artifact
-          - repo head: ``$($summary.repo_head)``
-          - ZIP: ``$($summary.artifact_name)`` ($($summary.artifact_size) bytes)
-          - ZIP SHA-256: ``$($summary.artifact_sha256)``
-          - MANIFEST SHA-256: ``$($summary.manifest_sha256)``
-          - portable files: $($summary.portable_file_count)
-          - managed entries: $($summary.managed_entry_count)
+          ## Tauri NSIS artifact
+          - identifier: ``$($summary.identifier)``
+          - version: ``$($summary.version)``
+          - installer: ``$($summary.installer)`` ($($summary.installer_size) bytes)
+          - updater signature: ``$($summary.updater_signature)`` ($($summary.signature_size) bytes)
+          - target: ``$($summary.target)``
+          - install mode: ``$($summary.install_mode)``
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-          Get-Content (Join-Path $env:SKY_PORTABLE_OUTPUT "PROVENANCE.json")
 
-      - name: Upload exact portable release candidate
+      - name: Qualify current-user install, launch, and uninstall
+        run: |
+          $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
+          $installer = Join-Path $env:SKY_TAURI_BUNDLE $summary.installer
+          $installRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-smoke-" + [guid]::NewGuid().ToString("N"))
+          $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
+          $uninstaller = Join-Path $installRoot "uninstall.exe"
+          $appProcess = $null
+          $installerRun = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+          if ($installerRun.ExitCode -ne 0) { throw "Tauri NSIS installer exited with $($installerRun.ExitCode)" }
+          try {
+            if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
+            if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
+            $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+            Start-Sleep -Seconds 5
+            if ($appProcess.HasExited) { throw "Packaged Tauri application exited during launch smoke (exit $($appProcess.ExitCode))" }
+            Stop-Process -Id $appProcess.Id -Force
+            $appProcess = $null
+            $uninstallerRun = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
+            if ($uninstallerRun.ExitCode -ne 0) { throw "Tauri uninstaller exited with $($uninstallerRun.ExitCode)" }
+            "Tauri NSIS install/launch/uninstall: PASS (installer=$($installerRun.ExitCode), uninstaller=$($uninstallerRun.ExitCode))" | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          } finally {
+            if ($null -ne $appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+          }
+
+      - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sky-auto-player-portable-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/Sky Auto Player portable
+          name: sky-auto-player-tauri-nsis-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            rust/target/dist/bundle/nsis
+            rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
           if-no-files-found: error
           retention-days: 14
 

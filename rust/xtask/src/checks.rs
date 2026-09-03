@@ -253,6 +253,63 @@ fn legacy_release_guard(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn packaged_ci_contract_source(source: &str) -> Result<()> {
+    let start = source
+        .find("  packaged:\n")
+        .ok_or("CI workflow is missing the packaged job")?;
+    let end = source[start..]
+        .find("\n  status:\n")
+        .map(|offset| start + offset)
+        .ok_or("CI workflow packaged job is missing the status boundary")?;
+    let packaged = &source[start..end];
+
+    for marker in [
+        "name: Packaged v4 Tauri NSIS qualification",
+        "bun install --frozen-lockfile",
+        "bun run tauri signer generate",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "bun run tauri build --ci --config",
+        "cargo xtask verify-tauri-bundle",
+        "current-user install, launch, and uninstall",
+        "sky_desktop_shell.exe",
+        "uninstall.exe",
+        "actions/upload-artifact@",
+    ] {
+        if !packaged.contains(marker) {
+            return Err(format!(
+                "canonical v4 packaged CI is missing the Tauri qualification marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for forbidden in [
+        "cargo xtask dist",
+        "verify-dist",
+        "Sky-Auto-Player-v",
+        "Sky-Auto-Player-Updater.exe",
+        "MANIFEST.json",
+        "PORTABLE_ARTIFACT",
+        "portable",
+    ] {
+        if packaged.contains(forbidden) {
+            return Err(format!(
+                "canonical v4 packaged CI must not contain the legacy v3 artifact marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn packaged_ci_contract(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/ci.yml");
+    packaged_ci_contract_source(&fs::read_to_string(&path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
+    Ok(())
+}
+
 fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
     [
         root.join("rust/Cargo.toml"),
@@ -1557,6 +1614,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
             legacy_release_guard(&root)?;
+            packaged_ci_contract(&root)?;
             retirement(&root)?;
         }
         "rust" => {
@@ -1802,6 +1860,41 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
         assert!(
             legacy_release_guard_source(&source.replace("$major -ge 4", "$major -gt 4")).is_err()
         );
+    }
+
+    #[test]
+    fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
+        let source = r#"
+  packaged:
+    name: Packaged v4 Tauri NSIS qualification
+    steps:
+      - run: bun install --frozen-lockfile
+      - run: bun run tauri signer generate
+        env: { TAURI_SIGNING_PRIVATE_KEY: test }
+      - run: bun run tauri build --ci --config test.json
+      - run: cargo xtask verify-tauri-bundle
+      - name: Qualify current-user install, launch, and uninstall
+        run: check sky_desktop_shell.exe uninstall.exe
+      - uses: actions/upload-artifact@v7
+  status:
+"#;
+        assert!(packaged_ci_contract_source(source).is_ok());
+        for forbidden in [
+            "cargo xtask dist",
+            "verify-dist",
+            "Sky-Auto-Player-v",
+            "Sky-Auto-Player-Updater.exe",
+            "MANIFEST.json",
+            "PORTABLE_ARTIFACT",
+            "portable",
+        ] {
+            let source_with_legacy_marker =
+                source.replace("  status:", &format!("  # {forbidden}\n  status:"));
+            assert!(
+                packaged_ci_contract_source(&source_with_legacy_marker).is_err(),
+                "{forbidden}"
+            );
+        }
     }
 
     #[test]

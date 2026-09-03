@@ -15,6 +15,10 @@ production updater key, or switching the runtime update path.
 - Updater output: the NSIS setup executable and its `.exe.sig` sidecar
 - Legacy `sky_updater`: retained and buildable until the later retirement work order
 
+The legacy `cargo xtask dist` portable assembler remains available for the
+v3-maintenance line but fails closed when run against the canonical v4 source.
+It is not a v4 packaging entry point.
+
 The Tauri config intentionally omits its optional `version` field so Cargo
 remains the single v4 version source. `cargo xtask check static` rejects
 version/config drift and any updater endpoint or trust key added during this
