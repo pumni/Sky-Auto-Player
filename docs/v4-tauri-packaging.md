@@ -27,7 +27,10 @@ non-production local fixture and must remain outside the repository:
 
 ```powershell
 $keyPath = Join-Path $env:TEMP "sky-auto-player-v4-test.key"
-bunx tauri signer generate --ci --password "" --force -w $keyPath
+Push-Location desktop
+bun install --frozen-lockfile
+bun run tauri signer generate --ci --password "" --force -w $keyPath
+Pop-Location
 $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 $testConfigPath = Join-Path $env:TEMP "sky-auto-player-v4-test-updater.json"

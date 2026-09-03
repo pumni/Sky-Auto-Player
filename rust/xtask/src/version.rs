@@ -5,7 +5,12 @@ pub fn parse(value: &str) -> Result<Version> {
     if value.is_empty() || value.trim() != value || value.starts_with(['v', 'V']) {
         return Err(format!("invalid SemVer version: {value:?}").into());
     }
-    Version::parse(value).map_err(|error| format!("invalid SemVer version: {error}").into())
+    let parsed =
+        Version::parse(value).map_err(|error| format!("invalid SemVer version: {error}"))?;
+    if !parsed.build.is_empty() {
+        return Err(format!("SemVer build metadata is not allowed: {value:?}").into());
+    }
+    Ok(parsed)
 }
 
 pub fn check(tag: Option<&str>) -> Result<()> {
@@ -54,8 +59,27 @@ mod tests {
 
     #[test]
     fn rejects_pep440_and_untrusted_forms() {
-        for value in [" 4.0.0", "v4.0.0", "4.0.0rc1", "4.0"] {
+        for value in [
+            " 4.0.0",
+            "v4.0.0",
+            "4.0.0rc1",
+            "4.0",
+            "4.0.0+local",
+            "4.0.0-alpha.1+build",
+        ] {
             assert!(parse(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn release_tag_rejects_semver_build_metadata() {
+        for version in ["4.0.0+local", "4.0.0-alpha.1+build"] {
+            let parsed = Version::parse(version).unwrap();
+            assert!(parse(version).is_err(), "Cargo version: {version}");
+            assert!(
+                check_tag(&format!("v{version}"), version, &parsed).is_err(),
+                "release tag: v{version}"
+            );
         }
     }
 

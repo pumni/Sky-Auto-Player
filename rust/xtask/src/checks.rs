@@ -226,6 +226,33 @@ fn tauri_feature_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn legacy_release_guard_source(source: &str) -> Result<()> {
+    for marker in [
+        "name: Block v4+ tags from legacy v3 release workflow",
+        "$tag = $env:GITHUB_REF_NAME",
+        r#"$tag -match '^v(?<major>\d+)\.'"#,
+        "$major -ge 4",
+        "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete",
+        "WO-04/WO-07",
+    ] {
+        if !source.contains(marker) {
+            return Err(format!(
+                "legacy release workflow is missing the v4 isolation guard marker: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn legacy_release_guard(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/release.yml");
+    legacy_release_guard_source(&fs::read_to_string(&path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    println!("[xtask] legacy v3 release workflow v4 guard: PASS");
+    Ok(())
+}
+
 fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
     [
         root.join("rust/Cargo.toml"),
@@ -1529,6 +1556,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            legacy_release_guard(&root)?;
             retirement(&root)?;
         }
         "rust" => {
@@ -1754,6 +1782,26 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
         );
         let error = tauri_feature_contract_manifest(&source).unwrap_err();
         assert!(error.contains("desktop-runtime must not contain `tauri/custom-protocol`"));
+    }
+
+    #[test]
+    fn legacy_release_guard_requires_the_v4_fail_closed_contract() {
+        let source = r#"
+      - name: Block v4+ tags from legacy v3 release workflow
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -match '^v(?<major>\d+)\.') {
+            $major = [int64]$Matches.major
+            if ($major -ge 4) {
+              throw "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete: $tag"
+            }
+          }
+      # WO-04/WO-07
+"#;
+        assert!(legacy_release_guard_source(source).is_ok());
+        assert!(
+            legacy_release_guard_source(&source.replace("$major -ge 4", "$major -gt 4")).is_err()
+        );
     }
 
     #[test]
