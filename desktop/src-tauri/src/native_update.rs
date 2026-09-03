@@ -319,6 +319,8 @@ impl<R: Runtime> UpdateService<R> {
             .map_err(|error| format!("update authority rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
             .restart_after_install(true);
+        #[cfg(feature = "tauri-update-fixture")]
+        let builder = builder.no_proxy();
         tauri::async_runtime::block_on(builder.build().map_err(|error| error.to_string())?.check())
             .map_err(|error| format!("update check failed: {error}"))
     }
