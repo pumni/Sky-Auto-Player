@@ -30,7 +30,7 @@ h1 {
   line-height: 1.2;
 }
 h2 {
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.25;
 }
 h3 {
@@ -90,11 +90,10 @@ h3 {
   background: var(--surface-hover);
 }
 .update-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  display: inline-grid;
+  place-items: center;
   min-height: 30px;
-  padding: 0 9px;
+  padding: 0;
   border: 1px solid var(--accent);
   border-radius: var(--radius-control);
   color: var(--text-primary);
@@ -160,4 +159,15 @@ h3 {
 }
 .risk-unknown {
   --risk-color: var(--text-tertiary);
+}
+
+@media (forced-colors: active) {
+  .button:focus-visible,
+  .icon-button:focus-visible,
+  .library-nav-item:focus-visible,
+  .track-details-trigger:focus-visible,
+  .utility-view-tabs button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
 }

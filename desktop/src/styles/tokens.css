@@ -1,6 +1,8 @@
 :root {
   --canvas: #0b1018;
+  --chrome: #0f151f;
   --surface-panel: #101722;
+  --surface-secondary: #0d141e;
   --surface-raised: #151e2b;
   --surface-hover: #1a2533;
   --surface-selected: #1b2636;
@@ -17,7 +19,8 @@
   --danger: #f05b62;
   --focus-ring: #9b8cff;
   --radius-control: 6px;
-  --radius-panel: 10px;
+  --radius-region: 8px;
+  --radius-panel: 8px;
   --radius-dialog: 12px;
   --space-1: 4px;
   --space-2: 8px;
@@ -25,7 +28,7 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
-  --topbar-height: 48px;
+  --titlebar-height: 48px;
   --player-height: 88px;
   --workbench-gap: 8px;
 }

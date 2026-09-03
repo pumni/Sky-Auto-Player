@@ -29,6 +29,7 @@ type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
 type CalibrationUiState =
   'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
+export type UtilityView = 'details' | 'diagnostics';
 
 export const MAX_DIAGNOSTIC_SAMPLES = 600;
 export const MAX_DIAGNOSTIC_EVENTS = 500;
@@ -66,8 +67,11 @@ export interface DesktopStore {
   settings: Settings | null;
   settingsState: LoadState;
   settingsOpen: boolean;
-  diagnostics: {
+  utility: {
     open: boolean;
+    activeView: UtilityView;
+  };
+  diagnostics: {
     enabled: boolean;
     samples: DiagnosticsSnapshot[];
     events: DiagnosticsEventLine[];
@@ -122,8 +126,11 @@ export interface DesktopStore {
   resumePlayback: () => Promise<void>;
   skipPlayback: () => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
-  setDiagnosticsOpen: (open: boolean) => void;
   setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
+  openUtility: (view: UtilityView) => void;
+  closeUtility: () => void;
+  toggleUtility: (view: UtilityView) => void;
+  setUtilityView: (view: UtilityView) => void;
   startCalibration: (mode?: CalibrationModeId) => Promise<void>;
   cancelCalibration: () => Promise<void>;
   setCalibrationOpen: (open: boolean) => void;
@@ -316,8 +323,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
       settings: null,
       settingsState: 'idle',
       settingsOpen: false,
-      diagnostics: {
+      utility: {
         open: false,
+        activeView: 'details',
+      },
+      diagnostics: {
         enabled: false,
         samples: [],
         events: [],
@@ -519,7 +529,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } else if (event.name === 'diagnostics.snapshot') {
           const current = get().diagnostics;
-          if (!current.enabled || !current.open) return;
+          if (!current.enabled) return;
           set({
             diagnostics: {
               ...current,
@@ -986,10 +996,41 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
-      setDiagnosticsOpen(open) {
-        if (get().diagnostics.open === open) return;
-        set({ diagnostics: { ...get().diagnostics, open } });
-        void get().setDiagnosticsEnabled(open);
+      openUtility(view) {
+        set({ utility: { open: true, activeView: view } });
+        if (view === 'diagnostics' && !get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(true);
+        } else if (view === 'details' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
+      },
+
+      closeUtility() {
+        const activeView = get().utility.activeView;
+        set({ utility: { ...get().utility, open: false } });
+        if (activeView === 'diagnostics' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
+      },
+
+      toggleUtility(view) {
+        const utility = get().utility;
+        if (utility.open && utility.activeView === view) {
+          get().closeUtility();
+          return;
+        }
+        get().openUtility(view);
+      },
+
+      setUtilityView(view) {
+        const current = get().utility;
+        if (current.activeView === view) return;
+        set({ utility: { ...current, activeView: view } });
+        if (view === 'diagnostics' && !get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(true);
+        } else if (view === 'details' && get().diagnostics.enabled) {
+          void get().setDiagnosticsEnabled(false);
+        }
       },
 
       async startCalibration(mode = 'quick') {

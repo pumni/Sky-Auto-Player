@@ -21,7 +21,7 @@
         "focus": true,
         "resizable": true,
         "maximizable": true,
-        "decorations": true,
+        "decorations": false,
         "transparent": false
       }
     ],

@@ -1,7 +1,6 @@
-import { Music2 } from 'lucide-react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
-interface SongInspectorProps {
+interface SongDetailsViewProps {
   useStore: DesktopStoreHook;
 }
 
@@ -10,36 +9,32 @@ function durationLabel(durationUs: number): string {
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
 }
 
-export function SongInspector({ useStore }: SongInspectorProps) {
+export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const detail = useStore((store: DesktopStore) => store.detail);
   const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
 
   if (!selectedSongId) {
     return (
-      <section className="inspector-panel inspector-empty" aria-labelledby="inspector-title">
-        <div className="empty-inspector-icon" aria-hidden="true">
-          <Music2 size={22} />
-        </div>
-        <h2 id="inspector-title">Choose a song</h2>
-        <p className="muted">
-          Select a sheet from Library to inspect timing risk and playback recommendations.
-        </p>
+      <section className="song-details-view utility-empty" aria-labelledby="song-details-title">
+        <h3 id="song-details-title">Song Details</h3>
+        <p className="muted">Select a song to view details.</p>
       </section>
     );
   }
 
   if (detail.state === 'loading') {
     return (
-      <section className="inspector-panel" aria-live="polite">
-        <h2>Reading metadata…</h2>
+      <section className="song-details-view" aria-live="polite">
+        <h3>Song Details</h3>
+        <p className="muted">Reading metadata…</p>
       </section>
     );
   }
 
   if (detail.state === 'fatal' || !detail.value) {
     return (
-      <section className="inspector-panel" role="alert">
-        <h2>Metadata unavailable</h2>
+      <section className="song-details-view" role="alert">
+        <h3>Metadata unavailable</h3>
         <p className="inline-error">{detail.error}</p>
       </section>
     );
@@ -47,37 +42,37 @@ export function SongInspector({ useStore }: SongInspectorProps) {
 
   const song = detail.value;
   return (
-    <section className="inspector-panel" aria-labelledby="inspector-title">
-      <div className="inspector-identity">
-        <div className="music-tile" aria-hidden="true">
-          <Music2 size={28} />
-        </div>
-        <div>
-          <h2 id="inspector-title">{song.title}</h2>
-          <p className="muted">
-            {song.format_label} · {durationLabel(song.duration_us)} · {song.note_count} notes
-          </p>
-        </div>
+    <section className="song-details-view" aria-labelledby="song-details-title">
+      <div className="song-details-heading">
+        <h3 id="song-details-title" title={song.title}>
+          {song.title}
+        </h3>
+        <p className="muted">
+          {song.format_label} · {durationLabel(song.duration_us)} · {song.note_count} notes
+        </p>
       </div>
-      <div className={`risk-summary risk-${song.risk.level}`}>
+
+      <section className={`utility-risk-summary risk-${song.risk.level}`}>
         <div>
-          <p className="eyebrow">TIMING RISK</p>
+          <span className="utility-section-label">TIMING RISK</span>
           <strong>{song.risk.headline}</strong>
         </div>
-        <span className="risk-word">{song.risk.level}</span>
-      </div>
+        <span className="utility-risk-level">{song.risk.level}</span>
+      </section>
+
       {song.risk.reasons.length > 0 && (
-        <div className="inspector-section">
-          <h3>Why this rating</h3>
+        <section className="utility-section">
+          <h4>Why this rating</h4>
           <ul>
             {song.risk.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
-      <div className="inspector-section recommendation">
-        <h3>Recommendation</h3>
+
+      <section className="utility-section">
+        <h4>Recommendation</h4>
         <p>{song.recommendation?.summary ?? 'No recommendation is available for this song.'}</p>
         {song.recommendation && (
           <dl className="recommendation-grid">
@@ -95,10 +90,11 @@ export function SongInspector({ useStore }: SongInspectorProps) {
             </div>
           </dl>
         )}
-      </div>
-      <p className="nonphysical-note">
-        Use the Player Bar below to test playback without input or request playback with the
-        selected settings.
+      </section>
+
+      <p className="utility-note">
+        Use the Player Bar to test playback without input or request playback with the selected
+        settings.
       </p>
     </section>
   );

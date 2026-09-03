@@ -297,7 +297,6 @@ describe('desktop store', () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
-    store.setState({ diagnostics: { ...store.getState().diagnostics, open: true } });
 
     for (let index = 0; index < 601; index += 1) {
       store.getState().applyEvent({
@@ -341,6 +340,21 @@ describe('desktop store', () => {
     expect(store.getState().diagnostics.samples).toHaveLength(600);
     expect(store.getState().diagnostics.events).toHaveLength(500);
     expect(store.getState().diagnostics.logs).toHaveLength(200);
+  });
+
+  it('keeps utility presentation state separate from diagnostics data', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+
+    store.getState().openUtility('diagnostics');
+    expect(store.getState().utility).toEqual({ open: true, activeView: 'diagnostics' });
+    await waitFor(() => expect(store.getState().diagnostics.enabled).toBe(true));
+
+    store.getState().setUtilityView('details');
+    expect(store.getState().utility).toEqual({ open: true, activeView: 'details' });
+    await waitFor(() => expect(store.getState().diagnostics.enabled).toBe(false));
+    store.getState().closeUtility();
+    expect(store.getState().utility.open).toBe(false);
   });
 
   it('bounds diagnostic event text by UTF-8 bytes', async () => {

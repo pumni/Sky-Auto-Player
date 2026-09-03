@@ -343,15 +343,15 @@ pub fn validate(root: &Path) -> Result<()> {
     }) {
         return Err("canonical branding plate color changed".into());
     }
-    let toolbar = fs::read_to_string(root.join("desktop/src/components/shell/Toolbar.tsx"))?;
+    let titlebar = fs::read_to_string(root.join("desktop/src/components/chrome/AppTitleBar.tsx"))?;
     for asset in [
         "app-icon-32.png",
         "app-icon-40.png",
         "app-icon-48.png",
         "app-icon-64.png",
     ] {
-        if !toolbar.contains(asset) {
-            return Err(format!("desktop toolbar is missing density asset {asset}").into());
+        if !titlebar.contains(asset) {
+            return Err(format!("desktop titlebar is missing density asset {asset}").into());
         }
     }
     for (name, size) in [

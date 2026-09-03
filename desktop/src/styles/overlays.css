@@ -12,8 +12,8 @@
 .settings-dialog {
   display: flex;
   flex-direction: column;
-  width: min(800px, calc(100vw - 32px));
-  height: min(640px, calc(100dvh - 32px));
+  width: min(820px, calc(100vw - 32px));
+  height: min(640px, calc(88dvh));
   min-height: 0;
   overflow: hidden;
   padding: var(--space-5);
@@ -34,6 +34,7 @@
 
 .dialog-heading h2 {
   margin-top: 2px;
+  font-size: 20px;
 }
 
 .settings-layout {
@@ -157,6 +158,40 @@
 
 .settings-note {
   color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.about-intro {
+  max-width: 520px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.about-details {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.about-details div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.about-details dt {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.about-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 12px;
 }
 

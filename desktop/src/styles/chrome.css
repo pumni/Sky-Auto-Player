@@ -1,0 +1,164 @@
+.app-titlebar {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) minmax(240px, 520px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-width: 0;
+  height: var(--titlebar-height);
+  padding-left: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--chrome);
+}
+
+.app-titlebar-brand {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+
+.app-titlebar-icon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}
+
+.titlebar-drag-space {
+  min-width: 0;
+  height: 100%;
+}
+
+.global-search {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  width: 100%;
+  width: min(520px, calc(100% - 440px));
+  min-width: 0;
+  height: 34px;
+  gap: 8px;
+  padding: 0 9px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--canvas);
+}
+
+.global-search:focus-within {
+  border-color: var(--focus-ring);
+}
+
+.global-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.global-search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.global-search kbd {
+  padding: 0 5px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.app-titlebar-actions {
+  display: flex;
+  grid-column: 5;
+  align-items: center;
+  justify-self: end;
+  min-width: 0;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.app-titlebar-actions .icon-button,
+.app-titlebar-actions .update-indicator {
+  flex: 0 0 34px;
+  width: 34px;
+  min-height: 34px;
+}
+
+.window-caption-controls {
+  display: flex;
+  grid-column: 6;
+  align-self: stretch;
+  height: var(--titlebar-height);
+  margin-left: 4px;
+}
+
+.caption-button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: var(--titlebar-height);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.caption-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.caption-button:active {
+  background: var(--surface-selected);
+}
+
+.caption-button-close:hover {
+  color: #fff;
+  background: #c42b36;
+}
+
+.caption-button-close:active {
+  background: #9e1f2a;
+}
+
+@media (max-width: 1100px) {
+  .app-titlebar {
+    grid-template-columns: 40px minmax(0, 1fr) minmax(220px, 360px) minmax(0, 1fr) auto auto;
+    padding-left: 6px;
+  }
+
+  .app-titlebar-actions {
+    gap: 2px;
+    margin-left: 4px;
+  }
+
+  .global-search kbd {
+    display: none;
+  }
+
+  .global-search {
+    width: min(360px, calc(100% - 420px));
+  }
+}
+
+@media (forced-colors: active) {
+  .caption-button:focus-visible,
+  .global-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .caption-button-close:hover {
+    color: HighlightText;
+    background: Highlight;
+  }
+}

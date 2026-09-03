@@ -1,0 +1,160 @@
+.track-table {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.track-table-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 72px 82px 76px;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.track-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 36px;
+  color: var(--text-tertiary);
+  background: var(--surface-panel);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.track-table-virtual-inner {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
+.track-row {
+  position: absolute;
+  inset-inline: 0;
+  height: 46px;
+  padding: 0 8px;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.track-row:hover {
+  background: var(--surface-hover);
+}
+
+.track-row.is-selected {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--surface-selected);
+}
+
+.track-cell {
+  min-width: 0;
+}
+
+.track-cell-index,
+.track-cell-notes,
+.track-cell-duration {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.track-cell-index {
+  text-align: center;
+}
+
+.track-cell-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-cell-notes,
+.track-cell-duration {
+  text-align: right;
+}
+
+.track-cell-risk {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  color: var(--risk-color);
+  font-size: 12px;
+}
+
+.track-cell-risk > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.risk-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--risk-color);
+}
+
+.track-row-placeholder {
+  color: var(--text-tertiary);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.track-table::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.track-table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.track-table::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--border-strong);
+  background-clip: padding-box;
+}
+
+.track-table::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: padding-box;
+}
+
+@media (max-width: 1040px) {
+  .track-table-row {
+    grid-template-columns: 32px minmax(0, 1fr) 72px 76px;
+  }
+
+  .track-cell-notes {
+    display: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .track-row.is-selected {
+    border-left-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .track-row:focus-visible,
+  .track-table:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

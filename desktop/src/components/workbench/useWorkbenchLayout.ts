@@ -1,27 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 
-export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v1';
-export const MIN_LIBRARY_WIDTH = 280;
-export const DEFAULT_LIBRARY_WIDTH = 344;
-export const MAX_LIBRARY_WIDTH = 520;
-export const MIN_UTILITY_WIDTH = 300;
-export const DEFAULT_UTILITY_WIDTH = 340;
+export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v2';
+export const LEGACY_WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v1';
+export const MIN_NAVIGATOR_WIDTH = 220;
+export const DEFAULT_NAVIGATOR_WIDTH = 260;
+export const MAX_NAVIGATOR_WIDTH = 360;
+export const MIN_UTILITY_WIDTH = 320;
+export const DEFAULT_UTILITY_WIDTH = 360;
 export const MAX_UTILITY_WIDTH = 480;
-const MIN_INSPECTOR_WIDTH = 360;
-const WORKBENCH_GUTTER = 8;
+export const MIN_TRACK_BROWSER_WIDTH = 480;
+export const WORKBENCH_GUTTER = 8;
 
-export interface WorkbenchLayoutState {
-  libraryWidth: number;
+export interface WorkbenchLayoutStateV2 {
+  version: 2;
+  navigatorWidth: number;
   utilityWidth: number;
-  utilityOpen: boolean;
-  version: 1;
 }
 
-export function getLibraryWidthMax(viewportWidth: number, utilityWidth = 0): number {
+export function getNavigatorWidthMax(viewportWidth: number, utilityWidth = 0): number {
   const utilitySpace = utilityWidth > 0 ? utilityWidth + WORKBENCH_GUTTER : 0;
-  const fixedWorkspaceSpace = MIN_INSPECTOR_WIDTH + WORKBENCH_GUTTER * 3;
-  const availableForLibrary = viewportWidth - fixedWorkspaceSpace - utilitySpace;
-  return Math.max(MIN_LIBRARY_WIDTH, Math.min(MAX_LIBRARY_WIDTH, availableForLibrary));
+  const workbenchPadding = WORKBENCH_GUTTER * 2;
+  const separators = utilityWidth > 0 ? WORKBENCH_GUTTER * 2 : WORKBENCH_GUTTER;
+  const availableForNavigator =
+    viewportWidth - workbenchPadding - separators - utilitySpace - MIN_TRACK_BROWSER_WIDTH;
+  return Math.max(
+    MIN_NAVIGATOR_WIDTH,
+    Math.min(MAX_NAVIGATOR_WIDTH, Math.floor(availableForNavigator)),
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -29,17 +34,17 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizedLayout(
-  candidate: Partial<WorkbenchLayoutState> | null | undefined,
-  libraryMax = MAX_LIBRARY_WIDTH,
-): WorkbenchLayoutState {
+  candidate: Partial<WorkbenchLayoutStateV2> | null | undefined,
+  navigatorMax = MAX_NAVIGATOR_WIDTH,
+): WorkbenchLayoutStateV2 {
   return {
-    version: 1,
-    libraryWidth: clamp(
-      typeof candidate?.libraryWidth === 'number' && Number.isFinite(candidate.libraryWidth)
-        ? candidate.libraryWidth
-        : DEFAULT_LIBRARY_WIDTH,
-      MIN_LIBRARY_WIDTH,
-      libraryMax,
+    version: 2,
+    navigatorWidth: clamp(
+      typeof candidate?.navigatorWidth === 'number' && Number.isFinite(candidate.navigatorWidth)
+        ? candidate.navigatorWidth
+        : DEFAULT_NAVIGATOR_WIDTH,
+      MIN_NAVIGATOR_WIDTH,
+      navigatorMax,
     ),
     utilityWidth: clamp(
       typeof candidate?.utilityWidth === 'number' && Number.isFinite(candidate.utilityWidth)
@@ -48,7 +53,6 @@ function normalizedLayout(
       MIN_UTILITY_WIDTH,
       MAX_UTILITY_WIDTH,
     ),
-    utilityOpen: candidate?.utilityOpen === true,
   };
 }
 
@@ -60,21 +64,38 @@ function storage(): Storage | null {
   }
 }
 
-export function loadWorkbenchLayout(libraryMax = MAX_LIBRARY_WIDTH): WorkbenchLayoutState {
+function readObject(key: string): Record<string, unknown> | null {
   try {
-    const raw = storage()?.getItem(WORKBENCH_STORAGE_KEY);
-    if (!raw) return normalizedLayout(null, libraryMax);
+    const raw = storage()?.getItem(key);
+    if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || (parsed as { version?: unknown }).version !== 1) {
-      return normalizedLayout(null, libraryMax);
-    }
-    return normalizedLayout(parsed as Partial<WorkbenchLayoutState>, libraryMax);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return normalizedLayout(null, libraryMax);
+    return null;
   }
 }
 
-function persistWorkbenchLayout(layout: WorkbenchLayoutState): void {
+export function loadWorkbenchLayout(navigatorMax = MAX_NAVIGATOR_WIDTH): WorkbenchLayoutStateV2 {
+  const current = readObject(WORKBENCH_STORAGE_KEY);
+  if (current?.version === 2) {
+    return normalizedLayout(current as Partial<WorkbenchLayoutStateV2>, navigatorMax);
+  }
+
+  const legacy = readObject(LEGACY_WORKBENCH_STORAGE_KEY);
+  if (legacy?.version === 1) {
+    return normalizedLayout(
+      {
+        navigatorWidth: legacy.libraryWidth as number,
+        utilityWidth: legacy.utilityWidth as number,
+      },
+      navigatorMax,
+    );
+  }
+
+  return normalizedLayout(null, navigatorMax);
+}
+
+function persistWorkbenchLayout(layout: WorkbenchLayoutStateV2): void {
   try {
     storage()?.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(layout));
   } catch {
@@ -83,10 +104,13 @@ function persistWorkbenchLayout(layout: WorkbenchLayoutState): void {
 }
 
 export function useWorkbenchLayout(viewportWidth: number, utilityVisible = false) {
-  const [layout, setLayout] = useState<WorkbenchLayoutState>(() =>
-    loadWorkbenchLayout(getLibraryWidthMax(viewportWidth)),
+  const [layout, setLayout] = useState<WorkbenchLayoutStateV2>(() =>
+    loadWorkbenchLayout(getNavigatorWidthMax(viewportWidth)),
   );
-  const libraryMax = getLibraryWidthMax(viewportWidth, utilityVisible ? layout.utilityWidth : 0);
+  const navigatorMax = getNavigatorWidthMax(
+    viewportWidth,
+    utilityVisible ? layout.utilityWidth : 0,
+  );
   const layoutRef = useRef(layout);
 
   useEffect(() => {
@@ -94,13 +118,13 @@ export function useWorkbenchLayout(viewportWidth: number, utilityVisible = false
   }, [layout]);
 
   useEffect(() => {
-    const next = normalizedLayout(layoutRef.current, libraryMax);
+    const next = normalizedLayout(layoutRef.current, navigatorMax);
     layoutRef.current = next;
     setLayout(next);
-  }, [libraryMax]);
+  }, [navigatorMax]);
 
-  const update = (patch: Partial<WorkbenchLayoutState>, persist = false) => {
-    const next = normalizedLayout({ ...layoutRef.current, ...patch }, libraryMax);
+  const update = (patch: Partial<WorkbenchLayoutStateV2>, persist = false) => {
+    const next = normalizedLayout({ ...layoutRef.current, ...patch }, navigatorMax);
     layoutRef.current = next;
     setLayout(next);
     if (persist) persistWorkbenchLayout(next);
@@ -108,10 +132,10 @@ export function useWorkbenchLayout(viewportWidth: number, utilityVisible = false
 
   return {
     ...layout,
-    libraryMax,
-    setLibraryWidth: (width: number, persist = false) => update({ libraryWidth: width }, persist),
+    navigatorMax,
+    setNavigatorWidth: (width: number, persist = false) =>
+      update({ navigatorWidth: width }, persist),
     setUtilityWidth: (width: number, persist = false) => update({ utilityWidth: width }, persist),
-    setUtilityOpen: (open: boolean, persist = false) => update({ utilityOpen: open }, persist),
-    resetLibraryWidth: () => update({ libraryWidth: DEFAULT_LIBRARY_WIDTH }, true),
+    resetNavigatorWidth: () => update({ navigatorWidth: DEFAULT_NAVIGATOR_WIDTH }, true),
   };
 }

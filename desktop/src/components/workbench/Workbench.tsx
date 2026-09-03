@@ -1,15 +1,16 @@
 import { useEffect, useState, type RefObject } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
-import { DiagnosticsPanel } from '../diagnostics/DiagnosticsPanel';
-import { LibraryPanel } from '../library/LibraryPanel';
-import { SongInspector } from '../inspector/SongInspector';
+import { LibraryNavigator } from '../library/LibraryNavigator';
+import { TrackBrowser } from '../tracks/TrackBrowser';
+import { UtilityPane } from '../utility/UtilityPane';
 import { ResizableSeparator } from './ResizableSeparator';
 import { useWorkbenchLayout } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
-  useStore: DesktopStoreHook;
+  detailsTriggerRef?: RefObject<HTMLButtonElement | null>;
   diagnosticsTriggerRef?: RefObject<HTMLButtonElement | null>;
+  useStore: DesktopStoreHook;
 }
 
 function useViewportWidth(): number {
@@ -22,40 +23,47 @@ function useViewportWidth(): number {
   return width;
 }
 
-export function Workbench({ useStore, diagnosticsTriggerRef }: WorkbenchProps) {
+export function Workbench({ detailsTriggerRef, diagnosticsTriggerRef, useStore }: WorkbenchProps) {
   const viewportWidth = useViewportWidth();
-  const diagnosticsOpen = useStore((store) => store.diagnostics.open);
-  const utilityVisible = diagnosticsOpen && viewportWidth >= 1280;
+  const utility = useStore((store) => store.utility);
+  const utilityVisible = utility.open && viewportWidth >= 1280;
   const layout = useWorkbenchLayout(viewportWidth, utilityVisible);
+  const restoreFocusRef =
+    utility.activeView === 'diagnostics' ? diagnosticsTriggerRef : detailsTriggerRef;
 
   return (
-    <main className={`workbench${utilityVisible ? ' has-utility' : ''}`}>
+    <main
+      className={`workbench${utilityVisible ? ' has-utility' : ''}${
+        utility.open && !utilityVisible ? ' has-overlay-utility' : ''
+      }`}
+      aria-label="Music sheet workbench"
+    >
       <WorkbenchPane
-        className="library-workbench-pane"
-        style={{ flex: `0 0 ${layout.libraryWidth}px` }}
+        className="navigator-workbench-pane"
+        style={{ flex: `0 0 ${layout.navigatorWidth}px` }}
       >
-        <LibraryPanel useStore={useStore} />
+        <LibraryNavigator useStore={useStore} />
       </WorkbenchPane>
       <ResizableSeparator
-        label="Resize library pane"
-        value={layout.libraryWidth}
-        min={280}
-        max={layout.libraryMax}
-        defaultValue={344}
-        onChange={(value) => layout.setLibraryWidth(value)}
-        onCommit={(value) => layout.setLibraryWidth(value, true)}
+        label="Resize library navigator"
+        value={layout.navigatorWidth}
+        min={220}
+        max={layout.navigatorMax}
+        defaultValue={260}
+        onChange={(value) => layout.setNavigatorWidth(value)}
+        onCommit={(value) => layout.setNavigatorWidth(value, true)}
       />
-      <WorkbenchPane className="inspector-workbench-pane">
-        <SongInspector useStore={useStore} />
+      <WorkbenchPane className="track-browser-workbench-pane">
+        <TrackBrowser detailsTriggerRef={detailsTriggerRef} useStore={useStore} />
       </WorkbenchPane>
       {utilityVisible && (
         <>
           <ResizableSeparator
-            label="Resize diagnostics pane"
+            label="Resize utility pane"
             value={layout.utilityWidth}
-            min={300}
+            min={320}
             max={480}
-            defaultValue={340}
+            defaultValue={360}
             direction={-1}
             onChange={(value) => layout.setUtilityWidth(value)}
             onCommit={(value) => layout.setUtilityWidth(value, true)}
@@ -64,15 +72,19 @@ export function Workbench({ useStore, diagnosticsTriggerRef }: WorkbenchProps) {
             className="utility-workbench-pane"
             style={{ flex: `0 0 ${layout.utilityWidth}px` }}
           >
-            <DiagnosticsPanel useStore={useStore} mode="pane" />
+            <UtilityPane
+              useStore={useStore}
+              mode="pane"
+              {...(restoreFocusRef ? { restoreFocusRef } : {})}
+            />
           </WorkbenchPane>
         </>
       )}
-      {diagnosticsOpen && !utilityVisible && (
-        <DiagnosticsPanel
+      {utility.open && !utilityVisible && (
+        <UtilityPane
           useStore={useStore}
           mode="overlay"
-          {...(diagnosticsTriggerRef ? { restoreFocusRef: diagnosticsTriggerRef } : {})}
+          {...(restoreFocusRef ? { restoreFocusRef } : {})}
         />
       )}
     </main>

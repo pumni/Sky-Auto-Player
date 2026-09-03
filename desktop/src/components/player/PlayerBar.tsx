@@ -51,8 +51,8 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
   const resume = useStore((store: DesktopStore) => store.resumePlayback);
   const skip = useStore((store: DesktopStore) => store.skipPlayback);
   const patchSettings = useStore((store: DesktopStore) => store.patchSettings);
-  const diagnosticsOpen = useStore((store: DesktopStore) => store.diagnostics.open);
-  const setDiagnosticsOpen = useStore((store: DesktopStore) => store.setDiagnosticsOpen);
+  const utility = useStore((store: DesktopStore) => store.utility);
+  const toggleUtility = useStore((store: DesktopStore) => store.toggleUtility);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
@@ -93,6 +93,7 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
     : totalUs
       ? `Playback progress, ${formatDuration(currentUs)} of ${formatDuration(totalUs)}`
       : 'Playback progress unavailable';
+  const diagnosticsOpen = utility.open && utility.activeView === 'diagnostics';
 
   useEffect(() => {
     if (!admissionRequired) return;
@@ -302,7 +303,7 @@ export function PlayerBar({ useStore, diagnosticsTriggerRef }: PlayerBarProps) {
           aria-label={diagnosticsOpen ? 'Close diagnostics' : 'Open diagnostics'}
           aria-pressed={diagnosticsOpen}
           ref={diagnosticsTriggerRef}
-          onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
+          onClick={() => toggleUtility('diagnostics')}
         >
           <Activity size={16} aria-hidden="true" />
         </button>

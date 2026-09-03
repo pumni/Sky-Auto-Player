@@ -12,42 +12,44 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
 
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('option', { name: /Aurora Landing/ })).toBeVisible();
-  await page.getByLabel('Search songs').fill('Moonlit');
-  await expect(page.getByRole('option', { name: /Moonlit Village/ })).toBeVisible();
-  await page.getByRole('option', { name: /Moonlit Village/ }).click();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await page.getByLabel('Search library').fill('Moonlit');
+  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+  await page.getByRole('row', { name: /Moonlit Village/ }).click();
+  await page.getByRole('button', { name: 'Open song details' }).click();
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
 test('virtualized library pages beyond the first 200 songs', async ({ page }) => {
   await page.goto('/');
-  const list = page.locator('.virtual-list');
+  const list = page.locator('.track-table');
   await expect(page.getByText('500 songs')).toBeVisible();
   await list.evaluate((element) => {
     element.scrollTop = 400 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
-  const song = page.getByRole('option', { name: /Song 401/ });
+  const song = page.getByRole('row', { name: /Song 401/ });
   await expect(song).toBeVisible();
   await song.click();
+  await page.getByRole('button', { name: 'Open song details' }).click();
   await expect(page.getByRole('heading', { name: 'Song 401' })).toBeVisible();
 });
 
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  await expect(page.getByRole('listbox', { name: 'Songs' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Choose a song' })).toBeVisible();
+  await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
-  const libraryPane = await page.locator('.library-workbench-pane').boundingBox();
-  const inspectorPane = await page.locator('.inspector-workbench-pane').boundingBox();
+  const navigatorPane = await page.locator('.navigator-workbench-pane').boundingBox();
+  const trackPane = await page.locator('.track-browser-workbench-pane').boundingBox();
   const playerBar = await page.getByRole('contentinfo', { name: 'Player controls' }).boundingBox();
-  expect(libraryPane).not.toBeNull();
-  expect(inspectorPane).not.toBeNull();
+  expect(navigatorPane).not.toBeNull();
+  expect(trackPane).not.toBeNull();
   expect(playerBar).not.toBeNull();
-  if (libraryPane && inspectorPane && playerBar) {
-    expect(Math.round(inspectorPane.x - (libraryPane.x + libraryPane.width))).toBe(8);
-    expect(Math.round(playerBar.y - (libraryPane.y + libraryPane.height))).toBe(8);
+  if (navigatorPane && trackPane && playerBar) {
+    expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(8);
+    expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(8);
   }
   const dimensions = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
@@ -58,6 +60,39 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
   expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('desktop workbench fits the supported viewport matrix', async ({ page }) => {
+  for (const viewport of [
+    { width: 920, height: 620 },
+    { width: 1200, height: 760 },
+    { width: 1280, height: 720 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await expect(page.locator('.app-titlebar')).toBeVisible();
+    await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
+    await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+
+    const dimensions = await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      documentHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+    }));
+    expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+    expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
+
+    await page.getByRole('button', { name: 'Open diagnostics' }).click();
+    if (viewport.width >= 1280) {
+      await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toBeVisible();
+      await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+    } else {
+      await expect(page.getByRole('dialog', { name: 'Diagnostics' })).toBeVisible();
+    }
+  }
 });
 
 test('Player Bar communicates the no-selection state without actionable playback', async ({
@@ -83,13 +118,13 @@ test('Player Bar communicates the no-selection state without actionable playback
   await page.keyboard.press('Escape');
 });
 
-test('Toolbar search and Player primary control share the application center axis', async ({
+test('Titlebar search and Player primary control share the application center axis', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/');
   const viewportCenter = 1920 / 2;
-  const searchBox = await page.getByLabel('Search songs').boundingBox();
+  const searchBox = await page.getByLabel('Search library').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play' }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();
@@ -98,7 +133,7 @@ test('Toolbar search and Player primary control share the application center axi
     expect(Math.abs(idleBox.x + idleBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
   }
 
-  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Play' }).click();
   await page
     .getByRole('group', { name: 'Playback confirmation' })
@@ -136,7 +171,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
-  const separator = page.getByRole('separator', { name: 'Resize library pane' });
+  const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   const initial = Number(await separator.getAttribute('aria-valuenow'));
   const box = await separator.boundingBox();
   expect(box).not.toBeNull();
@@ -147,7 +182,7 @@ test('Library separator resizes by pointer and persists after reload', async ({ 
   await page.mouse.up();
   await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 40));
   await page.reload();
-  await expect(page.getByRole('separator', { name: 'Resize library pane' })).toHaveAttribute(
+  await expect(page.getByRole('separator', { name: 'Resize library navigator' })).toHaveAttribute(
     'aria-valuenow',
     String(initial + 40),
   );
@@ -155,7 +190,8 @@ test('Library separator resizes by pointer and persists after reload', async ({ 
 
 test('selected Song Detail has no serious accessibility violations', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await page.getByRole('button', { name: 'Open song details' }).click();
   await expect(page.getByRole('heading', { name: 'Aurora Landing' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 });
@@ -163,7 +199,7 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
 test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  await page.getByRole('option', { name: /Aurora Landing/ }).click();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const progress = page.getByRole('progressbar', { name: /Playback progress/ });
   await expect(progress).toBeVisible();
   await expect(progress).toHaveAttribute('value', '0');
@@ -221,7 +257,14 @@ test('Settings modal has no serious accessibility violations and closes accessib
   const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
   expect(initialBox).not.toBeNull();
   await expect(dialog.getByLabel('Hold').locator('option[value="1"]')).toHaveText('1 frame');
-  for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Advanced', 'Playback']) {
+  for (const category of [
+    'Appearance',
+    'Diagnostics',
+    'Updates',
+    'Advanced',
+    'About',
+    'Playback',
+  ]) {
     await dialog.getByRole('button', { name: category, exact: true }).click();
     const nextBox = await dialog.boundingBox();
     const nextContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
@@ -257,6 +300,8 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
   await expectFocusClearance(dialog.getByLabel('Channel'));
   await expectFocusClearance(dialog.getByLabel('Skip version'));
+  await dialog.getByRole('button', { name: 'About', exact: true }).click();
+  await expect(dialog).toContainText('Native ABI');
   await expectNoSeriousAccessibilityViolations(page);
 
   const focusables = dialog.locator('button, select, input');
@@ -287,7 +332,7 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await panel.getByRole('tab', { name: 'Timing' }).click();
   await expect(panel.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
-  await panel.getByRole('button', { name: 'Close diagnostics' }).click();
+  await panel.getByRole('button', { name: 'Close utility' }).click();
   await expect(panel).toBeHidden();
 });
 
@@ -295,7 +340,7 @@ test('Diagnostics utility separator follows pointer and keyboard direction', asy
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open diagnostics' }).click();
-  const separator = page.getByRole('separator', { name: 'Resize diagnostics pane' });
+  const separator = page.getByRole('separator', { name: 'Resize utility pane' });
   const initial = Number(await separator.getAttribute('aria-valuenow'));
   const box = await separator.boundingBox();
   expect(box).not.toBeNull();
@@ -365,24 +410,25 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await expect(drawer).toContainText(/No timing samples|Latest maximum lateness/);
   await drawer.getByRole('tab', { name: 'Events' }).click();
   await expectNoSeriousAccessibilityViolations(page);
-  await drawer.getByRole('button', { name: 'Close diagnostics' }).click();
+  await drawer.getByRole('button', { name: 'Close utility' }).click();
   await expect(drawer).toBeHidden();
   await expect(page.getByRole('button', { name: 'Open diagnostics' })).toBeFocused();
 });
 
-test('long sheet titles remain contained in Library, Inspector, and Player Bar', async ({
+test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 920, height: 620 });
   await page.goto('/');
-  const list = page.locator('.virtual-list');
+  const list = page.locator('.track-table');
   await list.evaluate((element) => {
     element.scrollTop = 495 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const longTitle = /A sheet with an intentionally long title/;
-  await expect(page.getByRole('option', { name: longTitle })).toBeVisible();
-  await page.getByRole('option', { name: longTitle }).click();
+  await expect(page.getByRole('row', { name: longTitle })).toBeVisible();
+  await page.getByRole('row', { name: longTitle }).click();
+  await page.getByRole('button', { name: 'Open song details' }).click();
   await expect(page.getByRole('heading', { name: longTitle })).toBeVisible();
   await expect(
     page.getByText(/This intentionally long timing-risk explanation verifies wrapping/),
@@ -391,19 +437,19 @@ test('long sheet titles remain contained in Library, Inspector, and Player Bar',
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
     titleOverflowHandled: [
-      ...document.querySelectorAll('.song-row-title, .player-track-copy strong'),
+      ...document.querySelectorAll('.track-cell-title, .player-track-copy strong'),
     ].every((element) => {
       if (element.scrollWidth <= element.clientWidth) return true;
       const style = getComputedStyle(element);
       return style.overflow === 'hidden' && style.textOverflow === 'ellipsis';
     }),
-    inspectorReasonOverflow: [...document.querySelectorAll('.inspector-panel')].some(
+    utilityReasonOverflow: [...document.querySelectorAll('.song-details-view')].some(
       (element) => element.scrollWidth > element.clientWidth,
     ),
   }));
   expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth);
   expect(overflow.titleOverflowHandled).toBe(true);
-  expect(overflow.inspectorReasonOverflow).toBe(false);
+  expect(overflow.utilityReasonOverflow).toBe(false);
 });
 
 test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
