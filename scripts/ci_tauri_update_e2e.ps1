@@ -36,6 +36,7 @@ $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
 $bundleRoot = Join-Path $repoRoot 'rust/target/dist/bundle/nsis'
 $cargoSource = Get-Content -LiteralPath $candidateCargoPath -Raw
 $lockSource = Get-Content -LiteralPath $lockPath -Raw
+$candidateArchive = $null
 
 function Wait-ForPath {
   param([string]$Path, [int]$TimeoutSeconds = 180)
@@ -212,6 +213,9 @@ try {
     New-Item -ItemType File -Path $stopPath -Force | Out-Null
     Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
     Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+  }
+  if ($null -ne $candidateArchive) {
+    Remove-Item -LiteralPath $candidateArchive.FullName, ($candidateArchive.FullName + '.sig') -Force -ErrorAction SilentlyContinue
   }
   Set-Content -LiteralPath $candidateCargoPath -Value $cargoSource -Encoding utf8
   Set-Content -LiteralPath $lockPath -Value $lockSource -Encoding utf8
