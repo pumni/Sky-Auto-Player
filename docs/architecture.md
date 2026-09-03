@@ -15,7 +15,8 @@ sky_desktop_shell
         +--> sky_app_core          pure application/domain policies
         +--> sky_native_adapters   filesystem, Win32 and process adapters
         +--> sky_player            playback application/runtime service
-        +--> sky_updater           update transaction and handoff boundary
+        +--> Tauri updater plugin  signed update check/download/install
+        +--> sky_updater           retained legacy updater boundary
 ```
 
 `sky_app_core` remains inward and must not depend on Tauri, Win32, the desktop
@@ -32,10 +33,12 @@ router. `core.ready` remains a compatibility wire event name and is produced
 by the native runtime where the frontend contract requires it.
 
 The native runtime owns settings persistence, catalog indexing/search/detail,
-playback planning and control, diagnostics, update metadata/handoff
-orchestration, calibration orchestration, event delivery, and shutdown. The
-calibration measurement remains process-isolated in `native_calibration.exe`;
-the updater transaction remains owned by `sky_updater`.
+playback planning and control, diagnostics, update policy, calibration
+orchestration, event delivery, and shutdown. The calibration measurement
+remains process-isolated in `native_calibration.exe`. V4 update operations are
+owned by the Rust `UpdateService`, which invokes the official Tauri updater;
+`sky_updater` remains buildable for the legacy line until its retirement work
+order.
 
 ## Playback boundary
 
@@ -58,11 +61,13 @@ schema, host, protocol, provenance, buckets, quantiles, and timing envelope
 before atomic cache publication. Prepared playback is invalidated after an
 admitted successful publication.
 
-Update metadata and handoff are native application operations around the
-hardened `sky_updater` boundary. HTTPS/source allow-listing, manifest and hash
-validation, reparse-point protection, writable preflight, single-flight ready
-handoff, transactional apply, rollback, and interrupted recovery remain
-mandatory.
+The Rust `UpdateService` owns stable/beta authority selection, bounded update
+state/progress, playback admission, and the Tauri updater lifecycle. React
+never receives endpoint, key, artifact, or downgrade policy data. Production
+authority is fail-closed until WO-04 configures it; the signed packaged
+previous-v4 to candidate-v4 fixture is test-only. The retained
+`sky_updater` boundary continues to own the legacy line's transaction and
+recovery behavior.
 
 ## Evidence and repository tooling
 

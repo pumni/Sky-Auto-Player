@@ -22,5 +22,9 @@ fn main() {
         sky_desktop_shell_lib::run_gui_smoke();
         return;
     }
+    if args.iter().any(|arg| arg == "--selftest-desktop-update") {
+        sky_desktop_shell_lib::run_update_smoke();
+        return;
+    }
     sky_desktop_shell_lib::run();
 }

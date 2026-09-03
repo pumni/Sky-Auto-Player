@@ -402,8 +402,8 @@ export function createMockBridge(): DesktopBridge {
     async checkForUpdate(): Promise<UpdateCheck> {
       const result: UpdateCheck = {
         state: 'available',
-        current_version: '3.5.0-mock',
-        available_version: '3.6.0-mock',
+        current_version: '4.0.0-alpha.1-mock',
+        available_version: '4.0.0-alpha.2-mock',
         channel: settings.update_preferences.channel,
         release_notes: 'A deterministic update fixture for the desktop UI.',
         published_at: '2026-08-30T00:00:00Z',
@@ -452,12 +452,19 @@ export function createMockBridge(): DesktopBridge {
       const handoff: UpdateHandoff = {
         handoff_id: `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32),
         target_version: targetVersion,
-        state: 'handoff_ready',
+        state: 'installing',
       };
       emit({
         v: 1,
-        name: 'update.handoff_ready',
-        payload: { handoff_id: handoff.handoff_id, target_version: targetVersion },
+        name: 'update.progress',
+        payload: {
+          operation_id: handoff.handoff_id,
+          state: 'installing',
+          available_version: targetVersion,
+          completed: 1,
+          total: 1,
+          message: 'Installing update and restarting',
+        },
       });
       return handoff;
     },

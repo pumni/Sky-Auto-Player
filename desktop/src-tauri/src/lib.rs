@@ -17,6 +17,10 @@ pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
 
 use lifecycle::close_window;
 use native_runtime::TestSeams;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static UPDATE_SAFETY_LOG: OnceLock<PathBuf> = OnceLock::new();
 
 /// Write packaging-only GUI smoke phase markers when the release harness has
 /// explicitly requested them. The trace is intentionally file-based because
@@ -42,10 +46,33 @@ pub(crate) fn record_gui_smoke_phase(phase: &str) {
     let _ = file.flush();
 }
 
+/// Write packaging-only updater shutdown evidence when the release harness
+/// has explicitly requested it. This never exposes update internals to the
+/// frontend and is inert for normal launches.
+pub(crate) fn record_update_safety_phase(phase: &str) {
+    let path = UPDATE_SAFETY_LOG
+        .get()
+        .cloned()
+        .or_else(|| std::env::var_os("SKY_UPDATE_SAFETY_PHASE_LOG").map(PathBuf::from));
+    let Some(path) = path else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    use std::io::Write;
+    let _ = writeln!(file, "{phase}");
+    let _ = file.flush();
+}
+
 #[cfg(feature = "desktop-runtime")]
-type ShellRuntime = tauri::Wry;
+pub(crate) type ShellRuntime = tauri::Wry;
 #[cfg(all(not(feature = "desktop-runtime"), feature = "tauri-test"))]
-type ShellRuntime = tauri::test::MockRuntime;
+pub(crate) type ShellRuntime = tauri::test::MockRuntime;
 #[cfg(all(not(feature = "desktop-runtime"), not(feature = "tauri-test")))]
 compile_error!(
     "sky_desktop_shell requires either `desktop-runtime` for the real Tauri shell or `tauri-test` for MockRuntime"
@@ -55,7 +82,7 @@ compile_error!("`packaged-assets` requires `desktop-runtime`");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    run_inner(false);
+    run_inner(false, false);
 }
 
 /// Run the production shell with a packaging-only WebView smoke hook.
@@ -65,10 +92,22 @@ pub fn run() {
 /// exercises the production bridge and closes through the normal controlled
 /// lifecycle. No test command or alternate runtime is exposed to the user.
 pub fn run_gui_smoke() {
-    run_inner(true);
+    run_inner(true, false);
 }
 
-fn run_inner(gui_smoke: bool) {
+/// Run the real Tauri shell with an updater fixture-driven previous-v4 to
+/// candidate-v4 workflow. The entry point is hidden from the product UI and
+/// exists only for deterministic packaged qualification.
+pub fn run_update_smoke() {
+    run_inner(false, true);
+}
+
+fn run_inner(gui_smoke: bool, update_smoke: bool) {
+    let update_marker = update_smoke_marker("--selftest-update-marker");
+    let update_safety_marker = update_smoke_marker("--selftest-update-safety-marker");
+    if let Some(path) = update_safety_marker {
+        let _ = UPDATE_SAFETY_LOG.set(path);
+    }
     if gui_smoke {
         record_gui_smoke_phase("run_inner.enter");
         record_gui_smoke_phase("command_ownership.check.enter");
@@ -100,7 +139,7 @@ fn run_inner(gui_smoke: bool) {
     if gui_smoke {
         record_gui_smoke_phase("startup_update_guard.check.pass");
     }
-    let app_state = if gui_smoke {
+    let app_state = if gui_smoke || update_smoke {
         app_state::AppState::with_test_seams(TestSeams::SafePackage)
     } else {
         app_state::AppState::default()
@@ -114,8 +153,60 @@ fn run_inner(gui_smoke: bool) {
     }
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .setup(move |app| {
+            setup_state.configure_update_service(app.handle().clone())?;
+            if update_smoke {
+                let app_handle = app.handle().clone();
+                let update_state = setup_state.clone();
+                let marker = update_marker.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let result = (|| -> Result<bool, String> {
+                        let native = update_state.ensure_native_blocking()?;
+                        let check: commands::UpdateCheckDto = serde_json::from_value(
+                            native.dispatch("update.check", serde_json::json!({}))?,
+                        )
+                        .map_err(|error| format!("packaged update check response: {error}"))?;
+                        if let Some(target) = check.available_version {
+                            let _: commands::UpdateHandoffDto =
+                                serde_json::from_value(native.dispatch(
+                                    "update.begin_handoff",
+                                    serde_json::json!({"targetVersion": target}),
+                                )?)
+                                .map_err(|error| {
+                                    format!("packaged update install response: {error}")
+                                })?;
+                            Ok(false)
+                        } else if check.state == ui_events::UpdateState::Current {
+                            if let Some(marker) = marker.as_ref() {
+                                let _ = std::fs::write(
+                                    marker,
+                                    format!("update-complete:{}\n", env!("CARGO_PKG_VERSION")),
+                                );
+                            }
+                            native.shutdown();
+                            Ok(true)
+                        } else {
+                            Err(check
+                                .error
+                                .unwrap_or_else(|| "packaged update check was inconclusive".into()))
+                        }
+                    })();
+                    match result {
+                        Ok(true) => app_handle.exit(0),
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("packaged update smoke failed: {error}");
+                            if let Some(marker) = marker.as_ref() {
+                                let _ = std::fs::write(marker, format!("update-failed:{error}\n"));
+                            }
+                            app_handle.exit(1);
+                        }
+                    }
+                });
+            }
             #[cfg(windows)]
             {
                 use tauri::Manager;
@@ -242,6 +333,20 @@ fn run_inner(gui_smoke: bool) {
     result.expect("error while running Sky Auto Player desktop shell");
 }
 
+fn update_smoke_marker(flag: &str) -> Option<PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == flag {
+            let value = args.next()?;
+            if value.len() <= 4096 && !value.contains('\0') {
+                return Some(PathBuf::from(value));
+            }
+            return None;
+        }
+    }
+    None
+}
+
 /// Validate the release native desktop composition without constructing a WebView.
 ///
 /// This hidden, packaging-only entrypoint is used by the exact portable
@@ -314,9 +419,14 @@ pub fn selftest_packaged_shell() -> i32 {
                 serde_json::json!({"autoCheck": settings.update_preferences.auto_check}),
             )?)
             .map_err(|error| format!("update.preferences.patch response: {error}"))?;
-        let _update_check: commands::UpdateCheckDto =
-            serde_json::from_value(runtime.dispatch("update.check", serde_json::json!({}))?)
-                .map_err(|error| format!("update.check response: {error}"))?;
+        match runtime.dispatch("update.check", serde_json::json!({})) {
+            Ok(value) => {
+                let _update_check: commands::UpdateCheckDto = serde_json::from_value(value)
+                    .map_err(|error| format!("update.check response: {error}"))?;
+            }
+            Err(error) if error.starts_with("update_authority_not_configured") => {}
+            Err(error) => return Err(format!("unexpected update.check failure: {error}")),
+        }
         let _diagnostics: commands::DiagnosticsEnabledDto =
             serde_json::from_value(runtime.dispatch(
                 "diagnostics.set_enabled",

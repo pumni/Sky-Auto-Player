@@ -51,7 +51,7 @@ import type {
   UpdateHandoffDto,
   UpdateAvailablePayload,
   UpdateResultPayload,
-  UpdateHandoffReadyPayload,
+  UpdateProgressPayload,
 } from './generated';
 
 export type ThemeId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
@@ -127,7 +127,7 @@ export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
 export type UiEvent = GeneratedUiEvent;
 export type UpdateAvailable = UpdateAvailablePayload;
 export type UpdateResult = UpdateResultPayload;
-export type UpdateHandoffReady = UpdateHandoffReadyPayload;
+export type UpdateProgress = UpdateProgressPayload;
 export type PlaybackConfig = PlaybackConfigDto;
 export type PlaybackCommandAck = PlaybackCommandAckDto;
 export type PlaybackPrepare = PlaybackPrepareRequest;

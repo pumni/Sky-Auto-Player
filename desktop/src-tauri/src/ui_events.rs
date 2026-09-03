@@ -56,9 +56,10 @@ pub enum UpdateState {
     Checking,
     Current,
     Available,
+    Downloading,
+    Ready,
+    Installing,
     Error,
-    HandoffInProgress,
-    HandoffReady,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -86,9 +87,13 @@ pub struct UpdateResultPayload {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateHandoffReadyPayload {
-    pub handoff_id: String,
-    pub target_version: String,
+pub struct UpdateProgressPayload {
+    pub operation_id: String,
+    pub state: UpdateState,
+    pub available_version: String,
+    pub completed: u64,
+    pub total: Option<u64>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -334,10 +339,10 @@ pub enum UiEvent {
         v: u64,
         payload: UpdateResultPayload,
     },
-    #[serde(rename = "update.handoff_ready")]
-    UpdateHandoffReady {
+    #[serde(rename = "update.progress")]
+    UpdateProgress {
         v: u64,
-        payload: UpdateHandoffReadyPayload,
+        payload: UpdateProgressPayload,
     },
 }
 
@@ -496,11 +501,20 @@ impl UiEvent {
         Ok(())
     }
 
-    pub(crate) fn validate_update_handoff(
-        payload: &UpdateHandoffReadyPayload,
-    ) -> Result<(), String> {
-        validate_operation_id(&payload.handoff_id)?;
-        validate_text("target_version", &payload.target_version)
+    pub(crate) fn validate_update_progress(payload: &UpdateProgressPayload) -> Result<(), String> {
+        validate_session_id(&payload.operation_id)
+            .map_err(|_| "update operation_id is not an opaque ID".to_string())?;
+        validate_text("available_version", &payload.available_version)?;
+        validate_text("message", &payload.message)?;
+        if payload.completed > 2 * 1024 * 1024 * 1024 {
+            return Err("update progress exceeds the bounded artifact size".into());
+        }
+        if payload.total.is_some_and(|total| {
+            total == 0 || total > 2 * 1024 * 1024 * 1024 || payload.completed > total
+        }) {
+            return Err("update progress is outside bounds".into());
+        }
+        Ok(())
     }
 }
 

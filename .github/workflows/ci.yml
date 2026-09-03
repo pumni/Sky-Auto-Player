@@ -552,17 +552,22 @@ jobs:
                 plugins = [ordered]@{
                   updater = [ordered]@{
                     pubkey = $testPublicKey
+                    dangerousInsecureTransportProtocol = $true
                     endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
                   }
                 }
               } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
               $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
               $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
-              bun run tauri build --ci --config $configPath -- --profile dist
+              bun run tauri build --ci --config $configPath -- --profile dist --features tauri-update-fixture
             } finally {
               Pop-Location
             }
-            "SKY_TAURI_BUNDLE=$(Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis')" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+            $bundleDir = Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis'
+            "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+            $summary = Get-Content (Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/TAURI_ARTIFACT_SUMMARY.json') -Raw | ConvertFrom-Json
+            $installer = Join-Path $bundleDir $summary.installer
+            pwsh scripts/ci_tauri_update_e2e.ps1 -PreviousInstaller $installer -UpdaterConfigPath $configPath
           } finally {
             Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
