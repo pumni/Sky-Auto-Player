@@ -273,6 +273,11 @@ jobs:
     if: needs.changes.outputs.code_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
+      SCCACHE_GHA_VERSION: sky-ci-v1
 
     steps:
       - name: Start CI timing
@@ -309,6 +314,11 @@ jobs:
           if ($version -notmatch '^rustc 1\.98\.0\s') {
             throw "Expected stable Rust 1.98.0 from rust/rust-toolchain.toml, got: $version"
           }
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.17.0"
 
       - name: Rust cache
         id: rust-cache
@@ -367,7 +377,7 @@ jobs:
       - name: Construct Python-unavailable validation environment
         if: needs.changes.outputs.package_required == 'true'
         run: |
-          $required = @("cargo", "cargo-vet", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $required = @("cargo", "cargo-vet", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
           $toolDirectories = foreach ($name in $required) {
             $command = Get-Command $name -ErrorAction SilentlyContinue
             if ($command) { Split-Path -Parent $command.Source }
@@ -422,6 +432,10 @@ jobs:
             cargo xtask check desktop
           }
 
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
+
       - name: Report CI timing
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job validate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
@@ -432,6 +446,11 @@ jobs:
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
+      SCCACHE_GHA_VERSION: sky-ci-v1
 
     steps:
       - name: Start CI timing
@@ -460,6 +479,11 @@ jobs:
             throw "Expected stable Rust 1.98.0 for packaged build, got: $version"
           }
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.17.0"
+
       - name: Rust cache
         id: rust-cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -479,7 +503,7 @@ jobs:
 
       - name: Construct Python-unavailable canonical environment
         run: |
-          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc")
+          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
           $toolDirectories = foreach ($name in $required) {
             $command = Get-Command $name -ErrorAction SilentlyContinue
             if ($command) { Split-Path -Parent $command.Source }
@@ -540,6 +564,10 @@ jobs:
           path: ${{ runner.temp }}/Sky Auto Player portable
           if-no-files-found: error
           retention-days: 14
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
 
       - name: Report CI timing
         if: always()
