@@ -4,6 +4,8 @@ param(
   [string]$PreviousInstaller,
   [Parameter(Mandatory = $true)]
   [string]$UpdaterConfigPath,
+  [Parameter(Mandatory = $true)]
+  [string]$BundleDir,
   [switch]$KeepFixtureOnFailure
 )
 
@@ -33,7 +35,7 @@ $serverJob = $null
 $previousInstallerCopy = Join-Path $fixtureRoot 'previous-v4-setup.exe'
 $candidateCargoPath = Join-Path $desktopRoot 'src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
-$bundleRoot = Join-Path $repoRoot 'rust/target/dist/bundle/nsis'
+$bundleRoot = (Resolve-Path -LiteralPath $BundleDir -ErrorAction Stop).Path
 $cargoSource = Get-Content -LiteralPath $candidateCargoPath -Raw
 $lockSource = Get-Content -LiteralPath $lockPath -Raw
 $candidateArchive = $null

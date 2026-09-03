@@ -48,7 +48,6 @@ $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
   plugins = @{
     updater = @{
       pubkey = $testPublicKey
-      dangerousInsecureTransportProtocol = $true
       endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
     }
   }
@@ -76,17 +75,24 @@ identifier, target, install mode, and byte sizes in
 `TAURI_ARTIFACT_SUMMARY.json`. It rejects MSI, portable/updater ZIP, missing
 signatures, empty signatures, unexpected files, and version-naming drift.
 
+That command is the canonical package build: it uses the normal production
+feature set and the generated test key/example endpoint only to exercise
+artifact signing. It does not enable the updater fixture or insecure
+transport. The separate `updater_e2e` CI job builds both previous-v4 and
+candidate-v4 into a `RUNNER_TEMP` `CARGO_TARGET_DIR` with
+`tauri-update-fixture`; its loopback endpoint and insecure transport setting
+never enter the canonical bundle or upload path.
+
 Tauri’s updater signer reads the private key from environment variables; a
 `.env` file is not used for this operation. Do not commit the generated key,
 public key, updater metadata, installer, signature, or summary.
 
-The CI packaged qualification additionally runs
+The isolated CI updater qualification runs
 `scripts/ci_tauri_update_e2e.ps1`. It serves the signed candidate from a
 loopback fixture, installs the previous v4 package, and verifies the official
 Tauri updater reaches the candidate version after restart. The same evidence
 records the ordered native quiesce, key-release, state-persistence, and
-resource-close phases. The loopback transport and `tauri-update-fixture`
-feature are never part of a production build.
+resource-close phases.
 
 ## Acceptance boundary
 

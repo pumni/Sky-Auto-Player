@@ -255,6 +255,31 @@ fn legacy_release_guard(root: &Path) -> Result<()> {
 
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
+    let fixture_start = normalized
+        .find("  updater_e2e:\n")
+        .ok_or("CI workflow is missing the isolated updater fixture job")?;
+    let fixture_end = normalized[fixture_start..]
+        .find("\n  packaged:\n")
+        .map(|offset| fixture_start + offset)
+        .ok_or("CI workflow updater fixture job must precede the canonical packaged job")?;
+    let fixture = &normalized[fixture_start..fixture_end];
+    for marker in [
+        "name: Packaged v4 updater fixture qualification",
+        "CARGO_TARGET_DIR",
+        "tauri-update-fixture",
+        "dangerousInsecureTransportProtocol",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "-BundleDir",
+        "RUNNER_TEMP",
+    ] {
+        if !fixture.contains(marker) {
+            return Err(format!(
+                "isolated updater fixture CI is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
     let start = normalized
         .find("  packaged:\n")
         .ok_or("CI workflow is missing the packaged job")?;
@@ -266,6 +291,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
 
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
+        "Build and sign canonical Tauri NSIS artifact",
         "bun install --frozen-lockfile",
         "bun run build",
         "bun run tauri signer generate",
@@ -275,6 +301,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "current-user install, launch, and uninstall",
         "sky_desktop_shell.exe",
         "uninstall.exe",
+        "rust/target/dist/bundle/nsis",
         "actions/upload-artifact@",
     ] {
         if !packaged.contains(marker) {
@@ -286,6 +313,11 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     }
 
     for forbidden in [
+        "tauri-update-fixture",
+        "dangerousInsecureTransportProtocol",
+        "127.0.0.1:17845",
+        "CARGO_TARGET_DIR",
+        "--features",
         "cargo xtask dist",
         "verify-dist",
         "Sky-Auto-Player-v",
@@ -297,6 +329,18 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         if packaged.contains(forbidden) {
             return Err(format!(
                 "canonical v4 packaged CI must not contain the legacy v3 artifact marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    for marker in [
+        "needs: [changes, static, supply_chain, validate, updater_e2e, packaged]",
+        "UPDATER_E2E_RESULT",
+    ] {
+        if !normalized.contains(marker) {
+            return Err(format!(
+                "CI required gate is missing updater fixture integration marker: {marker}"
             )
             .into());
         }
@@ -1867,24 +1911,42 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     #[test]
     fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
         let source = r#"
+  updater_e2e:
+    name: Packaged v4 updater fixture qualification
+    env:
+      RUNNER_TEMP: runner-temp
+      CARGO_TARGET_DIR: runner-temp
+    steps:
+      - run: dangerousInsecureTransportProtocol = true
+      - run: bun run tauri build --features tauri-update-fixture
+      - run: pwsh scripts/ci_tauri_update_e2e.ps1 -BundleDir runner-temp
   packaged:
     name: Packaged v4 Tauri NSIS qualification
     steps:
+      - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run tauri signer generate
         env: { TAURI_SIGNING_PRIVATE_KEY: test }
       - run: bun run tauri build --ci --config test.json
       - run: cargo xtask verify-tauri-bundle
-      - name: Qualify current-user install, launch, and uninstall
-        run: check sky_desktop_shell.exe uninstall.exe
-      - uses: actions/upload-artifact@v7
+       - name: Qualify current-user install, launch, and uninstall
+         run: check sky_desktop_shell.exe uninstall.exe
+       - uses: actions/upload-artifact@v7
+         path: rust/target/dist/bundle/nsis
   status:
+    needs: [changes, static, supply_chain, validate, updater_e2e, packaged]
+    env: { UPDATER_E2E_RESULT: success }
         "#;
         assert!(packaged_ci_contract_source(source).is_ok());
         let crlf_source = source.replace('\n', "\r\n");
         assert!(packaged_ci_contract_source(&crlf_source).is_ok());
         for forbidden in [
+            "tauri-update-fixture",
+            "dangerousInsecureTransportProtocol",
+            "127.0.0.1:17845",
+            "CARGO_TARGET_DIR",
+            "--features",
             "cargo xtask dist",
             "verify-dist",
             "Sky-Auto-Player-v",
@@ -1900,6 +1962,26 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
                 "{forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn packaged_ci_contract_requires_the_isolated_fixture_job() {
+        let source = r#"
+  packaged:
+    name: Packaged v4 Tauri NSIS qualification
+    steps:
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run tauri signer generate
+      - run: bun run tauri build --ci --config test.json
+      - run: cargo xtask verify-tauri-bundle
+      - name: Qualify current-user install, launch, and uninstall
+        run: check sky_desktop_shell.exe uninstall.exe
+      - uses: actions/upload-artifact@v7
+  status:
+    needs: [changes, static, supply_chain, validate, packaged]
+        "#;
+        assert!(packaged_ci_contract_source(source).is_err());
     }
 
     #[test]

@@ -1364,6 +1364,7 @@ impl NativeDesktopRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
         Self::from_install_root_with_activity_and_seams(
             install_root,
@@ -1381,6 +1382,7 @@ impl NativeDesktopRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root_with_activity(
         install_root: PathBuf,
         activity: ActivityCoordinator,
@@ -1394,10 +1396,7 @@ impl NativeDesktopRuntime {
         test_seams: TestSeams,
     ) -> Result<Self, String> {
         Self::from_paths_with_activity_and_seams_and_update_service(
-            paths,
-            activity,
-            test_seams,
-            None,
+            paths, activity, test_seams, None,
         )
     }
 
@@ -1408,6 +1407,15 @@ impl NativeDesktopRuntime {
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     ) -> Result<Self, String> {
         paths.assert_clean_boundary()?;
+        Self::from_paths_internal(paths, activity, test_seams, update_service)
+    }
+
+    fn from_paths_internal(
+        paths: AppPaths,
+        activity: ActivityCoordinator,
+        test_seams: TestSeams,
+        update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
+    ) -> Result<Self, String> {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
         let settings = SettingsService::load(settings_store)
@@ -1467,6 +1475,7 @@ impl NativeDesktopRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root_with_activity_and_seams(
         install_root: PathBuf,
         activity: ActivityCoordinator,
@@ -1480,7 +1489,7 @@ impl NativeDesktopRuntime {
             install_root.join("logs"),
             install_root.join("songs"),
         );
-        Self::from_paths_with_activity_and_seams(paths, activity, test_seams)
+        Self::from_paths_internal(paths, activity, test_seams, None)
     }
 
     #[allow(dead_code)]
@@ -6607,10 +6616,10 @@ mod tests {
             .expect("start calibration");
 
         let deadline = Instant::now() + Duration::from_secs(3);
-        while runtime.activity.is_calibration_active() && Instant::now() < deadline {
+        while runtime.calibration.activity.is_calibration_active() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(!runtime.activity.is_calibration_active());
+        assert!(!runtime.calibration.activity.is_calibration_active());
         assert!(paths.calibration_cache_path().exists());
         assert!(!install_root.join(".cache").exists());
         assert!(!install_root.join("cache").exists());
