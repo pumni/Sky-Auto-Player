@@ -11,7 +11,6 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const playback = useStore((store) => store.playback);
   const selectedSongId = useStore((store) => store.library.selectedSongId);
   const selectedRow = useStore((store) => selectSongById(store.library, selectedSongId));
-  const detailDuration = useStore((store) => store.detail.value?.duration_us ?? null);
   const prepare = useStore((store) => store.prepareSelectedPlayback);
   const start = useStore((store) => store.startPreparedPlayback);
   const stop = useStore((store) => store.stopPlayback);
@@ -22,11 +21,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const active = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const snapshot = playback.snapshot;
   const selectedDurationUs =
-    playback.prepared?.song.duration_us ??
-    detailDuration ??
-    selectedRow?.duration_us ??
-    snapshot?.total_us ??
-    0;
+    playback.prepared?.song.duration_us ?? selectedRow?.duration_us ?? snapshot?.total_us ?? 0;
   const totalUs = snapshot?.total_us ?? selectedDurationUs;
   const currentUs = Math.min(Math.max(0, snapshot?.current_us ?? 0), totalUs || 0);
   const progressLabel = !selectedSongId

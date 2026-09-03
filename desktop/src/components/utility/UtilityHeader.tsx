@@ -11,11 +11,11 @@ export function UtilityHeader({ activeView, onClose }: UtilityHeaderProps) {
   const title = activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details';
   return (
     <header className="utility-header">
-      <div>
+      <div className="utility-header-title">
         <h2>{title}</h2>
       </div>
       <button
-        className="icon-button"
+        className="icon-button utility-close-button"
         type="button"
         aria-label="Close utility"
         title="Close utility"

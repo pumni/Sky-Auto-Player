@@ -1283,7 +1283,7 @@ pub(crate) struct NativeDesktopRuntime {
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     catalog_source: FileCatalogSource,
     catalog: Mutex<CatalogIndex>,
-    metadata_cache: Mutex<HashMap<String, CatalogMetadata>>,
+    analysis_cache: Mutex<HashMap<String, CachedSongAnalysis>>,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
     calibration: Arc<NativeCalibrationService>,
@@ -1296,6 +1296,7 @@ pub(crate) struct NativeDesktopRuntime {
 
 #[derive(Debug, Clone)]
 struct CatalogMetadata {
+    format_label: String,
     duration_us: Option<u64>,
     note_count: Option<u64>,
     risk_level: String,
@@ -1303,14 +1304,21 @@ struct CatalogMetadata {
 }
 
 impl CatalogMetadata {
-    fn error() -> Self {
+    fn error(format_label: String) -> Self {
         Self {
+            format_label,
             duration_us: None,
             note_count: None,
             risk_level: "unknown".into(),
             state: "error",
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct CachedSongAnalysis {
+    metadata: CatalogMetadata,
+    detail: Option<SongDetailDto>,
 }
 
 impl NativeDesktopRuntime {
@@ -1375,7 +1383,7 @@ impl NativeDesktopRuntime {
             settings: Mutex::new(settings),
             catalog_source: FileCatalogSource::new(songs_dir),
             catalog: Mutex::new(CatalogIndex::default()),
-            metadata_cache: Mutex::new(HashMap::new()),
+            analysis_cache: Mutex::new(HashMap::new()),
             events,
             playback,
             calibration,
@@ -1585,7 +1593,7 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native settings lock poisoned".to_string())?;
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?;
         self.playback.invalidate_settings();
-        self.invalidate_metadata_cache();
+        self.invalidate_analysis_cache();
         if update_preferences_changed {
             let mut update = self
                 .update_state
@@ -1687,7 +1695,7 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native catalog lock poisoned".to_string())?
             .replace_entries(entries)
             .map_err(catalog_error)?;
-        self.invalidate_metadata_cache();
+        self.invalidate_analysis_cache();
         self.playback.invalidate_catalog(snapshot.generation);
         self.publish(UiEvent::CatalogChanged {
             v: crate::DESKTOP_PROTOCOL_VERSION,
@@ -1725,27 +1733,40 @@ impl NativeDesktopRuntime {
             )
             .map_err(catalog_error)?;
         let cache = self
-            .metadata_cache
+            .analysis_cache
             .lock()
-            .map_err(|_| "native metadata cache lock poisoned".to_string())?;
+            .map_err(|_| "native analysis cache lock poisoned".to_string())?;
         Ok(CatalogSearchDto {
             items: page
                 .items
                 .into_iter()
-                .map(|row| CatalogRowDto {
-                    liked: settings.liked_songs.contains(&row.song_id),
-                    song_id: row.song_id.clone(),
-                    title: row.title,
-                    duration_us: cache.get(&row.song_id).and_then(|value| value.duration_us),
-                    note_count: cache.get(&row.song_id).and_then(|value| value.note_count),
-                    risk_level: cache
-                        .get(&row.song_id)
-                        .map(|value| value.risk_level.clone())
-                        .unwrap_or_else(|| "unknown".into()),
-                    metadata_state: cache
-                        .get(&row.song_id)
-                        .map(|value| value.state.into())
-                        .unwrap_or_else(|| "pending".into()),
+                .map(|row| {
+                    let metadata = cache.get(&row.song_id).map(|value| &value.metadata);
+                    let format_label = metadata
+                        .map(|value| value.format_label.clone())
+                        .or_else(|| {
+                            catalog
+                                .entry_for_song_id(&row.song_id, Some(page.generation))
+                                .ok()
+                                .map(|entry| {
+                                    format_label_for_path(Path::new(&entry.canonical_path))
+                                })
+                        })
+                        .unwrap_or_else(|| "UNKNOWN".into());
+                    CatalogRowDto {
+                        liked: settings.liked_songs.contains(&row.song_id),
+                        song_id: row.song_id.clone(),
+                        title: row.title,
+                        format_label,
+                        duration_us: metadata.and_then(|value| value.duration_us),
+                        note_count: metadata.and_then(|value| value.note_count),
+                        risk_level: metadata
+                            .map(|value| value.risk_level.clone())
+                            .unwrap_or_else(|| "unknown".into()),
+                        metadata_state: metadata
+                            .map(|value| value.state.into())
+                            .unwrap_or_else(|| "pending".into()),
+                    }
                 })
                 .collect(),
             offset: request.offset,
@@ -1758,80 +1779,49 @@ impl NativeDesktopRuntime {
 
     fn detail(&self, request: CatalogDetailRequest) -> Result<SongDetailDto, String> {
         self.ensure_catalog_loaded()?;
-        let catalog = self
-            .catalog
+        let entry = {
+            let catalog = self
+                .catalog
+                .lock()
+                .map_err(|_| "native catalog lock poisoned".to_string())?;
+            catalog
+                .entry_for_song_id(&request.song_id, request.generation)
+                .map_err(catalog_error)?
+        };
+        if let Some(detail) = self
+            .analysis_cache
             .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())?;
-        let entry = catalog
-            .entry_for_song_id(&request.song_id, request.generation)
-            .map_err(catalog_error)?;
+            .map_err(|_| "native analysis cache lock poisoned".to_string())?
+            .get(&request.song_id)
+            .and_then(|cached| cached.detail.clone())
+        {
+            return Ok(detail);
+        }
+
         let path = PathBuf::from(&entry.canonical_path);
-        let bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
         let fallback = path
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or(&entry.row.title);
-        let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
         let settings = self.settings_snapshot()?;
         let policy = self.timing_policy(
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
         )?;
-        let schedule =
-            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, &policy)
-                .map_err(|error| error.to_string())?;
-        let risk = analyze_schedule_with_context(
-            &schedule,
-            Some(&song.notes),
-            settings.playback_defaults.hold_frames,
-            settings.playback_defaults.tempo_scale,
-        );
-        let risk_level = match risk.severity.as_str() {
-            "low" | "medium" | "high" => risk.severity.clone(),
-            _ => "unknown".into(),
-        };
-        let recommendations = if risk_level == "unknown" {
-            Vec::new()
-        } else {
-            risk.recommendations.clone()
-        };
-        let reasons = if risk_level == "low" {
-            Vec::new()
-        } else {
-            recommendations.clone()
-        };
-        let recommendation =
-            (risk_level != "unknown").then(|| crate::commands::PlaybackRecommendationDto {
-                recommended_hold_frames: risk.suggested_hold_frames,
-                recommended_tempo_scale: risk.suggested_tempo_scale,
-                summary: recommendations
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "Keep the selected settings.".into()),
-            });
-        Ok(SongDetailDto {
-            song_id: entry.row.song_id,
-            title: entry.row.title,
-            duration_us: schedule.source_duration_us,
-            note_count: song.notes.len() as u64,
-            format_label: path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("unknown")
-                .to_ascii_uppercase(),
-            risk: RiskSummaryDto {
-                level: risk_level.clone(),
-                headline: match risk_level.as_str() {
-                    "low" => "Low timing risk".into(),
-                    "medium" => "Medium timing risk".into(),
-                    "high" => "High timing risk".into(),
-                    _ => "Risk unavailable".into(),
-                },
-                reasons,
-                recommendations,
-            },
-            recommendation,
-        })
+        let cached = self.analyze_song(
+            &path,
+            &entry.row.song_id,
+            &entry.row.title,
+            fallback,
+            &settings,
+            &policy,
+        )?;
+        let detail = cached
+            .detail
+            .clone()
+            .ok_or_else(|| "song detail analysis was unavailable".to_string())?;
+        self.cache_analysis(&request.song_id, cached);
+        Ok(detail)
     }
 
     fn set_viewport(&self, request: CatalogViewportRequest) -> Result<CatalogViewportDto, String> {
@@ -1901,28 +1891,40 @@ impl NativeDesktopRuntime {
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
         )?;
-        let mut cache = self
-            .metadata_cache
-            .lock()
-            .map_err(|_| "native metadata cache lock poisoned".to_string())?;
         for (song_id, title, path) in &entries {
-            if cache.contains_key(song_id) {
+            let already_cached = self
+                .analysis_cache
+                .lock()
+                .map_err(|_| "native analysis cache lock poisoned".to_string())?
+                .contains_key(song_id);
+            if already_cached {
                 continue;
             }
-            let metadata = self.hydrate_metadata(Path::new(path), title, &settings, &policy);
-            cache.insert(song_id.clone(), metadata);
+            let format_label = format_label_for_path(Path::new(path));
+            let analysis = self
+                .analyze_song(Path::new(path), song_id, title, title, &settings, &policy)
+                .unwrap_or_else(|_| CachedSongAnalysis {
+                    metadata: CatalogMetadata::error(format_label),
+                    detail: None,
+                });
+            self.cache_analysis(song_id, analysis);
         }
+        let cache = self
+            .analysis_cache
+            .lock()
+            .map_err(|_| "native analysis cache lock poisoned".to_string())?;
         let items = entries
             .into_iter()
             .filter_map(|(song_id, title, _)| {
-                cache.get(&song_id).map(|metadata| CatalogRowDto {
+                cache.get(&song_id).map(|analysis| CatalogRowDto {
                     liked: settings.liked_songs.contains(&song_id),
                     song_id,
                     title,
-                    duration_us: metadata.duration_us,
-                    note_count: metadata.note_count,
-                    risk_level: metadata.risk_level.clone(),
-                    metadata_state: metadata.state.into(),
+                    format_label: analysis.metadata.format_label.clone(),
+                    duration_us: analysis.metadata.duration_us,
+                    note_count: analysis.metadata.note_count,
+                    risk_level: analysis.metadata.risk_level.clone(),
+                    metadata_state: analysis.metadata.state.into(),
                 })
             })
             .collect();
@@ -1973,43 +1975,86 @@ impl NativeDesktopRuntime {
         })
     }
 
-    fn invalidate_metadata_cache(&self) {
-        if let Ok(mut cache) = self.metadata_cache.lock() {
+    fn invalidate_analysis_cache(&self) {
+        if let Ok(mut cache) = self.analysis_cache.lock() {
             cache.clear();
         }
     }
 
-    fn hydrate_metadata(
+    fn cache_analysis(&self, song_id: &str, analysis: CachedSongAnalysis) {
+        if let Ok(mut cache) = self.analysis_cache.lock() {
+            cache.insert(song_id.to_owned(), analysis);
+        }
+    }
+
+    fn analyze_song(
         &self,
         path: &Path,
+        song_id: &str,
+        title: &str,
         fallback: &str,
         settings: &ApplicationSettings,
         policy: &MaterializedTimingPolicy,
-    ) -> CatalogMetadata {
-        let result = (|| -> Result<CatalogMetadata, String> {
-            let bytes = fs::read(path).map_err(|error| format!("song read failed: {error}"))?;
-            let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
-            let schedule =
-                build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, policy)
-                    .map_err(|error| error.to_string())?;
-            let risk = analyze_schedule_with_context(
-                &schedule,
-                Some(&song.notes),
-                settings.playback_defaults.hold_frames,
-                settings.playback_defaults.tempo_scale,
-            );
-            let risk_level = match risk.severity.as_str() {
-                "low" | "medium" | "high" => risk.severity,
-                _ => return Err("song risk analysis returned an unknown level".into()),
-            };
-            Ok(CatalogMetadata {
+    ) -> Result<CachedSongAnalysis, String> {
+        let bytes = fs::read(path).map_err(|error| format!("song read failed: {error}"))?;
+        let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
+        let schedule =
+            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, policy)
+                .map_err(|error| error.to_string())?;
+        let risk = analyze_schedule_with_context(
+            &schedule,
+            Some(&song.notes),
+            settings.playback_defaults.hold_frames,
+            settings.playback_defaults.tempo_scale,
+        );
+        let risk_level = match risk.severity.as_str() {
+            "low" | "medium" | "high" => risk.severity.clone(),
+            _ => return Err("song risk analysis returned an unknown level".into()),
+        };
+        let recommendations = risk.recommendations.clone();
+        let reasons = if risk_level == "low" {
+            Vec::new()
+        } else {
+            recommendations.clone()
+        };
+        let recommendation = Some(crate::commands::PlaybackRecommendationDto {
+            recommended_hold_frames: risk.suggested_hold_frames,
+            recommended_tempo_scale: risk.suggested_tempo_scale,
+            summary: recommendations
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Keep the selected settings.".into()),
+        });
+        let format_label = format_label_for_path(path);
+        let detail = SongDetailDto {
+            song_id: song_id.to_owned(),
+            title: title.to_owned(),
+            duration_us: schedule.source_duration_us,
+            note_count: song.notes.len() as u64,
+            format_label: format_label.clone(),
+            risk: RiskSummaryDto {
+                level: risk_level.clone(),
+                headline: match risk_level.as_str() {
+                    "low" => "Low timing risk".into(),
+                    "medium" => "Medium timing risk".into(),
+                    "high" => "High timing risk".into(),
+                    _ => "Risk unavailable".into(),
+                },
+                reasons,
+                recommendations,
+            },
+            recommendation,
+        };
+        Ok(CachedSongAnalysis {
+            metadata: CatalogMetadata {
+                format_label,
                 duration_us: Some(schedule.source_duration_us),
                 note_count: Some(song.notes.len() as u64),
                 risk_level,
                 state: "ready",
-            })
-        })();
-        result.unwrap_or_else(|_| CatalogMetadata::error())
+            },
+            detail: Some(detail),
+        })
     }
 
     fn prepare_playback(
@@ -2439,6 +2484,13 @@ fn risk_summary(risk: &RiskReport) -> RiskSummaryDto {
         },
         recommendations: risk.recommendations.clone(),
     }
+}
+
+fn format_label_for_path(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown")
+        .to_ascii_uppercase()
 }
 
 fn blocked_playback_dto(
@@ -4790,6 +4842,7 @@ mod tests {
             .expect("song ID")
             .to_owned();
         assert_eq!(search["items"][0]["metadata_state"], "pending");
+        assert_eq!(search["items"][0]["format_label"], "JSON");
 
         let viewport = runtime
             .dispatch(
@@ -4806,6 +4859,27 @@ mod tests {
         assert_eq!(viewport["items"][0]["metadata_state"], "ready");
         assert_eq!(viewport["items"][0]["note_count"], 2);
         assert!(viewport["items"][0]["duration_us"].as_u64().is_some());
+
+        let hydrated_detail = runtime
+            .detail(crate::commands::CatalogDetailRequest {
+                song_id: song_id.clone(),
+                generation: Some(generation),
+            })
+            .expect("detail from hydrated analysis");
+        assert_eq!(hydrated_detail.format_label, "JSON");
+        let unavailable_path = root.join("songs/hydrate-unavailable.json");
+        fs::rename(root.join("songs/hydrate.json"), &unavailable_path).expect("hide source");
+        let cached_detail = runtime
+            .detail(crate::commands::CatalogDetailRequest {
+                song_id: song_id.clone(),
+                generation: Some(generation),
+            })
+            .expect("cached detail after source unavailable");
+        assert_eq!(
+            serde_json::to_value(cached_detail).expect("cached detail JSON"),
+            serde_json::to_value(hydrated_detail).expect("hydrated detail JSON")
+        );
+        fs::rename(&unavailable_path, root.join("songs/hydrate.json")).expect("restore source");
 
         let liked = runtime
             .dispatch(

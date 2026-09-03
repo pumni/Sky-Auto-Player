@@ -234,13 +234,21 @@ body.is-resizing * {
 
 .utility-header {
   display: grid;
+  grid-template-areas:
+    'title close'
+    'tabs tabs';
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   flex: 0 0 auto;
   min-width: 0;
   gap: 10px;
   margin-bottom: 12px;
-  padding: 16px 16px 0;
+  padding: 14px 10px 0 16px;
+}
+
+.utility-header-title {
+  grid-area: title;
+  min-width: 0;
 }
 
 .utility-header h2 {
@@ -248,9 +256,17 @@ body.is-resizing * {
   font-size: 16px;
 }
 
+.utility-close-button {
+  grid-area: close;
+  justify-self: end;
+  align-self: center;
+  border: 0;
+  background: transparent;
+}
+
 .utility-view-tabs {
   display: flex;
-  grid-column: 1 / -1;
+  grid-area: tabs;
   gap: 2px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -307,7 +323,16 @@ body.is-resizing * {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 0 16px 16px;
+  padding: 0 0 16px;
+}
+
+.song-details-view > *,
+.diagnostics-view > * {
+  margin-inline: 16px;
+}
+
+.song-details-view > .utility-empty {
+  margin-inline: 0;
 }
 
 .utility-empty {
@@ -421,6 +446,10 @@ body.is-resizing * {
 
 .diagnostics-view {
   gap: 0;
+}
+
+.diagnostics-view > .diagnostics-tabs {
+  margin-inline: 16px;
 }
 
 .diagnostics-tabs {

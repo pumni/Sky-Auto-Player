@@ -64,6 +64,7 @@ function row(index: number, title: string): SearchResult['items'][number] {
   return {
     song_id: mockId(index),
     title,
+    format_label: 'TXT',
     duration_us: 120_000_000 + index * 5_000_000,
     note_count: 128 + index * 9,
     risk_level: index % 5 === 0 ? 'medium' : 'low',

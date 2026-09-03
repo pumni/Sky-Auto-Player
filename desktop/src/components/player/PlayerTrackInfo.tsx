@@ -15,7 +15,6 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const playbackTitle = useStore((store) => store.playback.songTitle);
   const preparedSong = useStore((store) => store.playback.prepared?.song);
   const preparedRisk = useStore((store) => store.playback.prepared?.risk);
-  const detail = useStore((store) => store.detail);
   const active = useStore((store) =>
     ['starting', 'playing', 'paused', 'stopping'].includes(store.playback.state),
   );
@@ -24,16 +23,12 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const setSongLiked = useStore((store) => store.setSongLiked);
 
   const selectedTitle =
-    playbackTitle ??
-    preparedSong?.title ??
-    selectedRow?.title ??
-    detail.value?.title ??
-    'No song selected';
-  const selectedMetadata = detail.value
-    ? `${detail.value.format_label} · ${formatPlayerDuration(detail.value.duration_us)}`
-    : selectedRow?.metadata_state === 'ready' && selectedRow.duration_us !== null
-      ? `${selectedRow.note_count ?? '—'} notes · ${formatPlayerDuration(selectedRow.duration_us)}`
-      : 'Preparing metadata…';
+    playbackTitle ?? preparedSong?.title ?? selectedRow?.title ?? 'No song selected';
+  const selectedMetadata = selectedRow
+    ? `${selectedRow.format_label} · ${
+        selectedRow.duration_us === null ? '…' : formatPlayerDuration(selectedRow.duration_us)
+      } · ${selectedRow.note_count === null ? '…' : selectedRow.note_count} notes`
+    : 'Preparing metadata…';
   const trackSubtitle = !selectedSongId
     ? 'Choose a sheet from Library'
     : playbackError

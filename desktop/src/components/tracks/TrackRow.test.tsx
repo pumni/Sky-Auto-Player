@@ -1,15 +1,17 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { Profiler } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import { createDesktopStore } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
-import { TrackRow, formatDuration } from './TrackRow';
+import { TrackRow, VirtualTrackRow, formatDuration } from './TrackRow';
 import { TrackTable } from './TrackTable';
 
 const row: SongRow = {
   song_id: 'a'.repeat(32),
   title: 'Liminal Garden',
+  format_label: 'JSON',
   duration_us: 125_000_000,
   note_count: null,
   risk_level: 'high',
@@ -97,6 +99,59 @@ describe('Track Browser primitives', () => {
       'aria-busy',
       'true',
     );
+  });
+
+  it('keeps table selection updates outside the TrackTable render path', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    let tableRenders = 0;
+    function RenderProbe() {
+      tableRenders += 1;
+      return <TrackTable useStore={store} />;
+    }
+
+    render(<RenderProbe />);
+    const initialRenders = tableRenders;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('row', { name: /Aurora Landing/ }));
+    });
+
+    expect(store.getState().library.selectedSongId).toBe('0'.repeat(32));
+    expect(tableRenders).toBe(initialRenders);
+  });
+
+  it('updates only the previous and next selected virtual rows', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const updates = new Map<number, number>([
+      [0, 0],
+      [1, 0],
+      [2, 0],
+    ]);
+    const onRender = (id: string, phase: 'mount' | 'update' | 'nested-update') => {
+      if (phase !== 'mount') updates.set(Number(id), (updates.get(Number(id)) ?? 0) + 1);
+    };
+
+    render(
+      <>
+        {[0, 1, 2].map((index) => (
+          <Profiler key={index} id={String(index)} onRender={onRender}>
+            <VirtualTrackRow index={index} start={index * 46} useStore={store} />
+          </Profiler>
+        ))}
+      </>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('row', { name: /Aurora Landing/ }));
+    });
+    updates.forEach((_, index) => updates.set(index, 0));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('row', { name: /Blue Bird/ }));
+    });
+
+    expect(updates.get(0)).toBe(1);
+    expect(updates.get(1)).toBe(1);
+    expect(updates.get(2)).toBe(0);
   });
 
   it('renders an explicit no-results state', () => {

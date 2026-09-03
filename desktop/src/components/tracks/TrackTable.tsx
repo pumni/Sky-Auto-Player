@@ -15,7 +15,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const resultTotal = useStore((store) => store.library.resultTotal);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
   const pendingKeyboardIndex = useRef<number | null>(null);
   const virtualizer = useVirtualizer({
     count: resultTotal,
@@ -32,33 +32,41 @@ export function TrackTable({ useStore }: TrackTableProps) {
             index,
             start: index * 46,
           })),
-          ...(activeIndex >= 20 && activeIndex < resultTotal
-            ? [{ index: activeIndex, start: activeIndex * 46 }]
+          ...(keyboardIndex !== null && keyboardIndex >= 20 && keyboardIndex < resultTotal
+            ? [{ index: keyboardIndex, start: keyboardIndex * 46 }]
             : []),
         ];
   const first = renderedItems[0]?.index ?? 0;
   const last = renderedItems.at(-1)?.index ?? -1;
-  const activeRow = useStore((store) => selectRowAtIndex(store.library, activeIndex));
-
   useEffect(() => {
     void setViewport(first, last);
   }, [first, last, setViewport]);
 
   useEffect(() => {
-    setActiveIndex((current) => (resultTotal === 0 ? 0 : Math.min(current, resultTotal - 1)));
-  }, [resultTotal]);
-
-  useEffect(() => {
-    if (pendingKeyboardIndex.current !== activeIndex) return;
-    const row = activeRow ?? selectRowAtIndex(useStore.getState().library, activeIndex);
-    if (!row) return;
-    pendingKeyboardIndex.current = null;
-    void selectSong(row.song_id);
-  }, [activeIndex, activeRow, selectSong, useStore]);
+    const grid = parentRef.current;
+    if (!grid) return;
+    let selectedSongId: string | null | undefined;
+    const syncActiveDescendant = (nextSelectedSongId: string | null | undefined) => {
+      if (nextSelectedSongId === selectedSongId) return;
+      selectedSongId = nextSelectedSongId;
+      const row = selectRowAtIndex(
+        useStore.getState().library,
+        nextSelectedSongId
+          ? (useStore.getState().library.indexById.get(nextSelectedSongId) ?? -1)
+          : -1,
+      );
+      if (row) grid.setAttribute('aria-activedescendant', `song-row-${row.song_id}`);
+      else grid.removeAttribute('aria-activedescendant');
+    };
+    syncActiveDescendant(selectedSongId);
+    return useStore.subscribe((state) => {
+      syncActiveDescendant(state.library.selectedSongId);
+    });
+  }, [useStore]);
 
   const moveActive = (nextIndex: number) => {
     const next = Math.max(0, Math.min(resultTotal - 1, nextIndex));
-    setActiveIndex(next);
+    setKeyboardIndex(next);
     virtualizer.scrollToIndex(next, { align: 'auto' });
     const row = selectRowAtIndex(useStore.getState().library, next);
     if (row) {
@@ -66,7 +74,13 @@ export function TrackTable({ useStore }: TrackTableProps) {
       void selectSong(row.song_id);
     } else {
       pendingKeyboardIndex.current = next;
-      void setViewport(next, next);
+      void setViewport(next, next).then(() => {
+        if (pendingKeyboardIndex.current !== next) return;
+        const loadedRow = selectRowAtIndex(useStore.getState().library, next);
+        if (!loadedRow) return;
+        pendingKeyboardIndex.current = null;
+        void selectSong(loadedRow.song_id);
+      });
     }
   };
 
@@ -76,7 +90,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
     const selectedIndex = state.library.selectedSongId
       ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
       : -1;
-    const current = selectedIndex >= 0 ? selectedIndex : activeIndex;
+    const current = selectedIndex >= 0 ? selectedIndex : 0;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       moveActive(current + 1);
@@ -93,7 +107,6 @@ export function TrackTable({ useStore }: TrackTableProps) {
       const row = selectRowAtIndex(state.library, current);
       if (row) {
         event.preventDefault();
-        setActiveIndex(current);
         void selectSong(row.song_id);
       }
     }
@@ -109,7 +122,6 @@ export function TrackTable({ useStore }: TrackTableProps) {
       role="grid"
       aria-label="Songs"
       aria-rowcount={resultTotal + 1}
-      aria-activedescendant={activeRow ? `song-row-${activeRow.song_id}` : undefined}
       aria-multiselectable="false"
       tabIndex={0}
       onKeyDown={onTableKeyDown}
@@ -123,12 +135,6 @@ export function TrackTable({ useStore }: TrackTableProps) {
               index={virtualRow.index}
               start={virtualRow.start}
               useStore={useStore}
-              onFocus={() => setActiveIndex(virtualRow.index)}
-              onSelect={() => {
-                setActiveIndex(virtualRow.index);
-                const row = selectRowAtIndex(useStore.getState().library, virtualRow.index);
-                if (row) void selectSong(row.song_id);
-              }}
             />
           );
         })}

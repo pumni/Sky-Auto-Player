@@ -27,6 +27,7 @@
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+  padding-inline: 26px;
 }
 
 .track-table-virtual-inner {
@@ -37,7 +38,7 @@
 
 .track-row {
   position: absolute;
-  inset-inline: 0;
+  inset-inline: 8px;
   height: 46px;
   padding-inline: 18px;
   border-left: 2px solid transparent;
@@ -112,10 +113,15 @@
 }
 
 .track-like-button:hover,
-.track-like-button:focus-visible,
-.track-like-button.is-liked {
+.track-like-button:focus-visible {
   color: var(--accent);
   background: var(--surface-hover);
+  opacity: 1;
+}
+
+.track-like-button.is-liked {
+  color: var(--accent);
+  background: transparent;
   opacity: 1;
 }
 
@@ -134,6 +140,10 @@
   .track-table-row {
     grid-template-columns: 32px minmax(0, 1fr) 32px 76px;
     padding-inline: 12px;
+  }
+
+  .track-table-header {
+    padding-inline: 20px;
   }
 
   .track-cell-notes {

@@ -2,7 +2,7 @@ import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type { SettingsPatch } from '../bridge/DesktopBridge';
-import { createDesktopStore, selectRowAtIndex } from './store';
+import { createDesktopStore, selectRowAtIndex, selectSelectedDetail } from './store';
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
   return selectRowAtIndex(store.getState().library, index);
@@ -21,7 +21,7 @@ describe('desktop store', () => {
     const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
     await act(async () => store.getState().selectSong(first.song_id));
-    expect(store.getState().detail.value?.song_id).toBe(first.song_id);
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(first.song_id);
 
     await act(async () => store.getState().reloadLibrary());
     expect(store.getState().library.generation).toBe(2);
@@ -71,7 +71,7 @@ describe('desktop store', () => {
     await waitFor(() => expect(rowAt(store, 400)?.title).toBe('Song 401'));
 
     await act(async () => store.getState().selectSong(rowAt(store, 400)!.song_id));
-    expect(store.getState().detail.value?.title).toBe('Song 401');
+    expect(selectSelectedDetail(store.getState()).value?.title).toBe('Song 401');
     expect(requestedOffsets).toContain(200);
     expect(requestedOffsets).toContain(400);
   });
@@ -95,8 +95,35 @@ describe('desktop store', () => {
     await act(async () => store.getState().selectSong(songA.song_id));
 
     expect(detailCalls).toBe(2);
-    expect(store.getState().detail.value?.song_id).toBe(songA.song_id);
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(songA.song_id);
     expect(store.getState().details.bySongId.size).toBe(2);
+  });
+
+  it('does not start another detail request when the selected song is still loading', async () => {
+    const bridge = createMockBridge();
+    const originalDetail = bridge.getSongDetail;
+    let detailCalls = 0;
+    let releaseDetail: (() => void) | undefined;
+    bridge.getSongDetail = async (request) => {
+      detailCalls += 1;
+      await new Promise<void>((resolve) => {
+        releaseDetail = resolve;
+      });
+      return originalDetail(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+
+    const firstRequest = store.getState().selectSong(first.song_id);
+    await act(async () => Promise.resolve());
+    await act(async () => store.getState().selectSong(first.song_id));
+    expect(detailCalls).toBe(1);
+
+    releaseDetail?.();
+    await firstRequest;
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(first.song_id);
   });
 
   it('clears selected detail and rejects an older detail response after catalog.changed', async () => {
@@ -117,10 +144,10 @@ describe('desktop store', () => {
     const detail = store.getState().selectSong(first.song_id);
     await act(async () => store.getState().reloadLibrary());
     expect(store.getState().library.selectedSongId).toBeNull();
-    expect(store.getState().detail.value).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
     releaseDetail?.();
     await detail;
-    expect(store.getState().detail.value).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
   });
 
   it('hydrates filtered-result song IDs without confusing them with catalog indices', async () => {
@@ -149,12 +176,12 @@ describe('desktop store', () => {
     await act(async () => store.getState().initialize());
     const first = rowAt(store, 0);
     if (!first) throw new Error('mock library is empty');
-    const rowsById = store.getState().library.rowsById;
+    const indexById = store.getState().library.indexById;
 
     await act(async () => store.getState().setSongLiked(first.song_id, true));
     expect(store.getState().library.likedTotal).toBe(1);
     expect(rowAt(store, 0)?.liked).toBe(true);
-    expect(store.getState().library.rowsById).toBe(rowsById);
+    expect(store.getState().library.indexById).toBe(indexById);
 
     await act(async () => store.getState().selectLibrarySource('liked'));
     expect(store.getState().library.source).toBe('liked');

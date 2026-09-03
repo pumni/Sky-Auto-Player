@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { memo, type CSSProperties } from 'react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectRowAtIndex } from '../../state/store';
@@ -8,7 +8,7 @@ interface TrackRowProps {
   row: SongRow;
   selected: boolean;
   start: number;
-  onFocus: () => void;
+  onFocus?: () => void;
   onSelect: () => void;
   onToggleLiked?: () => void;
 }
@@ -28,7 +28,7 @@ function metadataStatus(state: SongRow['metadata_state']): {
     : { label: 'Metadata unavailable', value: 'Unavailable' };
 }
 
-export function TrackRow({
+export const TrackRow = memo(function TrackRow({
   index,
   row,
   selected,
@@ -103,21 +103,17 @@ export function TrackRow({
       </span>
     </div>
   );
-}
+});
 
 interface VirtualTrackRowProps {
   index: number;
   start: number;
-  onFocus: () => void;
-  onSelect: () => void;
   useStore: DesktopStoreHook;
 }
 
-export function VirtualTrackRow({
+export const VirtualTrackRow = memo(function VirtualTrackRow({
   index,
   start,
-  onFocus,
-  onSelect,
   useStore,
 }: VirtualTrackRowProps) {
   const row = useStore((store) => selectRowAtIndex(store.library, index));
@@ -125,6 +121,7 @@ export function VirtualTrackRow({
     (store) => selectRowAtIndex(store.library, index)?.song_id === store.library.selectedSongId,
   );
   const setSongLiked = useStore((store) => store.setSongLiked);
+  const selectSong = useStore((store) => store.selectSong);
 
   if (!row) {
     return (
@@ -151,9 +148,8 @@ export function VirtualTrackRow({
       index={index}
       selected={selected}
       start={start}
-      onFocus={onFocus}
-      onSelect={onSelect}
+      onSelect={() => void selectSong(row.song_id)}
       onToggleLiked={() => void setSongLiked(row.song_id, !row.liked)}
     />
   );
-}
+});

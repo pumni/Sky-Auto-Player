@@ -283,6 +283,7 @@ pub struct BootstrapDto {
 pub struct CatalogRowDto {
     pub song_id: String,
     pub title: String,
+    pub format_label: String,
     pub duration_us: Option<u64>,
     pub note_count: Option<u64>,
     pub risk_level: String,
