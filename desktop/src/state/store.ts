@@ -127,6 +127,7 @@ export interface DesktopStore {
     publishedAt: string | null;
     error: string | null;
     handoffId: string | null;
+    progress: { completed: number; total: number | null; message: string };
   };
   playback: {
     state: PlaybackUiState;
@@ -331,8 +332,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         return `Update ${event.payload.available_version} is available`;
       case 'update.result':
         return `Update check: ${event.payload.state}`;
-      case 'update.handoff_ready':
-        return `Update handoff ready for ${event.payload.target_version}`;
+      case 'update.progress':
+        return `${event.payload.message}: ${event.payload.completed} bytes`;
       case 'playback.state_changed':
         return `${event.payload.song_id} → ${event.payload.state}`;
       case 'playback.snapshot':
@@ -581,6 +582,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         publishedAt: null,
         error: null,
         handoffId: null,
+        progress: { completed: 0, total: null, message: '' },
       },
       playback: {
         state: 'idle',
@@ -832,13 +834,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: event.payload.error,
             },
           });
-        } else if (event.name === 'update.handoff_ready') {
+        } else if (event.name === 'update.progress') {
           set({
             update: {
               ...get().update,
-              state: 'handoff_ready',
-              handoffId: event.payload.handoff_id,
-              availableVersion: event.payload.target_version,
+              state: event.payload.state,
+              availableVersion: event.payload.available_version,
+              progress: {
+                completed: event.payload.completed,
+                total: event.payload.total,
+                message: event.payload.message,
+              },
               error: null,
             },
           });
@@ -1356,7 +1362,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async beginUpdateHandoff() {
         const targetVersion = get().update.availableVersion;
         if (!targetVersion) return;
-        set({ update: { ...get().update, state: 'handoff_in_progress', error: null } });
+        set({ update: { ...get().update, state: 'downloading', error: null } });
         try {
           const handoff = await bridge.beginUpdateHandoff(targetVersion);
           set({
@@ -1367,9 +1373,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: null,
             },
           });
-          // The native runtime has completed its authoritative handoff. Shutdown keeps
-          // the existing cleanup lifecycle in charge before the shell exits.
-          await bridge.shutdown();
         } catch (error) {
           set({
             update: {

@@ -16,6 +16,9 @@ packaged-assets = [
     "tauri/custom-protocol",
     "tauri/compression",
 ]
+# Local, signed updater fixture used only by the packaged previous-v4 to
+# candidate-v4 qualification. WO-04 supplies the production authority.
+tauri-update-fixture = []
 tauri-test = ["tauri/test", "sky_player/test-support"]
 
 [[bin]]
@@ -46,6 +49,7 @@ sky_updater = { path = "../../rust/crates/sky_updater" }
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 thiserror = "2"
 getrandom = "0.3"
+url = "2.5.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "=2.11.0"

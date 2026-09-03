@@ -1,4 +1,5 @@
 use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
+use crate::native_update::UpdateService;
 use sky_native_adapters::AppPaths;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +24,7 @@ impl Default for ActivityCoordinator {
 struct ActivityState {
     physical_playback: Option<String>,
     calibration_active: bool,
+    update_installing: bool,
     closing: bool,
 }
 
@@ -31,6 +33,7 @@ pub(crate) enum ActivityReservationError {
     Closing,
     CalibrationAlreadyActive,
     PhysicalPlaybackActive,
+    UpdateAlreadyActive,
 }
 
 impl std::fmt::Display for ActivityReservationError {
@@ -39,6 +42,7 @@ impl std::fmt::Display for ActivityReservationError {
             Self::Closing => "desktop application is closing",
             Self::CalibrationAlreadyActive => "a calibration operation is already active",
             Self::PhysicalPlaybackActive => "physical playback is active",
+            Self::UpdateAlreadyActive => "an update installation is already active",
         };
         formatter.write_str(message)
     }
@@ -71,6 +75,9 @@ impl ActivityCoordinator {
         if state.calibration_active {
             return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
+        if state.update_installing {
+            return Err(ActivityReservationError::UpdateAlreadyActive);
+        }
         if state.physical_playback.is_some() {
             return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
@@ -97,8 +104,34 @@ impl ActivityCoordinator {
         if state.physical_playback.is_some() {
             return Err(ActivityReservationError::PhysicalPlaybackActive);
         }
+        if state.update_installing {
+            return Err(ActivityReservationError::UpdateAlreadyActive);
+        }
         state.calibration_active = true;
         Ok(CalibrationReservation {
+            coordinator: self.clone(),
+        })
+    }
+
+    pub(crate) fn reserve_update(&self) -> Result<UpdateInstallLease, ActivityReservationError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActivityReservationError::Closing)?;
+        if state.closing {
+            return Err(ActivityReservationError::Closing);
+        }
+        if state.physical_playback.is_some() {
+            return Err(ActivityReservationError::PhysicalPlaybackActive);
+        }
+        if state.calibration_active {
+            return Err(ActivityReservationError::CalibrationAlreadyActive);
+        }
+        if state.update_installing {
+            return Err(ActivityReservationError::UpdateAlreadyActive);
+        }
+        state.update_installing = true;
+        Ok(UpdateInstallLease {
             coordinator: self.clone(),
         })
     }
@@ -114,6 +147,12 @@ impl ActivityCoordinator {
     pub(crate) fn release_calibration(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.calibration_active = false;
+        }
+    }
+
+    fn release_update(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.update_installing = false;
         }
     }
 
@@ -138,6 +177,16 @@ pub(crate) struct CalibrationReservation {
     coordinator: ActivityCoordinator,
 }
 
+pub(crate) struct UpdateInstallLease {
+    coordinator: ActivityCoordinator,
+}
+
+impl Drop for UpdateInstallLease {
+    fn drop(&mut self) {
+        self.coordinator.release_update();
+    }
+}
+
 impl Drop for CalibrationReservation {
     fn drop(&mut self) {
         self.coordinator.release_calibration();
@@ -151,6 +200,7 @@ pub struct AppState {
 
 struct AppStateInner {
     native: Mutex<Option<Arc<NativeDesktopRuntime>>>,
+    update_service: Mutex<Option<Arc<UpdateService<crate::ShellRuntime>>>>,
     settings_writes: Mutex<()>,
     coherence: Mutex<()>,
     activity: ActivityCoordinator,
@@ -167,6 +217,7 @@ impl Default for AppState {
         Self {
             inner: Arc::new(AppStateInner {
                 native: Mutex::new(None),
+                update_service: Mutex::new(None),
                 settings_writes: Mutex::new(()),
                 coherence: Mutex::new(()),
                 activity: ActivityCoordinator::default(),
@@ -209,11 +260,15 @@ impl AppState {
             Some(p) => p,
             None => sky_native_adapters::AppPaths::resolve()?,
         };
-        let runtime = Arc::new(NativeDesktopRuntime::from_paths_with_activity_and_seams(
-            paths,
-            self.activity(),
-            test_seams,
-        )?);
+        let runtime = Arc::new(
+            NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service(
+                paths,
+                self.activity(),
+                test_seams,
+                self.update_service()
+                    .map_err(|_| "native update service state poisoned".to_string())?,
+            )?,
+        );
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
@@ -228,6 +283,30 @@ impl AppState {
 
     pub(crate) fn activity(&self) -> ActivityCoordinator {
         self.inner.activity.clone()
+    }
+
+    pub(crate) fn configure_update_service(
+        &self,
+        app_handle: tauri::AppHandle<crate::ShellRuntime>,
+    ) -> Result<(), String> {
+        let service = Arc::new(UpdateService::new(app_handle, self.activity()));
+        *self
+            .inner
+            .update_service
+            .lock()
+            .map_err(|_| "native update service state poisoned".to_string())? = Some(service);
+        Ok(())
+    }
+
+    pub(crate) fn update_service(
+        &self,
+    ) -> Result<Option<Arc<UpdateService<crate::ShellRuntime>>>, String> {
+        Ok(self
+            .inner
+            .update_service
+            .lock()
+            .map_err(|_| "native update service state poisoned".to_string())?
+            .clone())
     }
 
     /// Serialize settings writes and playback starts at the application
@@ -343,6 +422,18 @@ mod tests {
         let playback = activity.reserve_playback("other").expect("released slot");
         drop(playback);
         assert!(!activity.is_calibration_active());
+    }
+
+    #[test]
+    fn update_installation_is_rejected_while_physical_playback_is_active() {
+        let activity = ActivityCoordinator::default();
+        let _playback = activity
+            .reserve_playback("session")
+            .expect("playback lease");
+        assert!(matches!(
+            activity.reserve_update(),
+            Err(ActivityReservationError::PhysicalPlaybackActive)
+        ));
     }
 
     #[test]

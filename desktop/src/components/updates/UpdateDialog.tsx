@@ -13,7 +13,7 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
   const handoff = useStore((store) => store.beginUpdateHandoff);
   if (!update.dialogOpen) return null;
   const available = update.state === 'available' && update.availableVersion;
-  const busy = update.state === 'checking' || update.state === 'handoff_in_progress';
+  const busy = ['checking', 'downloading', 'ready', 'installing'].includes(update.state);
   return (
     <ModalOverlay
       className="modal-backdrop"
@@ -87,18 +87,18 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
             ) : (
               <>
                 <h3>
-                  {update.state === 'handoff_in_progress'
-                    ? 'Preparing restart…'
-                    : update.state === 'handoff_ready'
-                      ? 'Restart handoff ready'
-                      : 'No update available'}
+                  {update.state === 'downloading'
+                    ? 'Downloading update…'
+                    : update.state === 'ready'
+                      ? 'Update ready to install'
+                      : update.state === 'installing'
+                        ? 'Installing update…'
+                        : 'No update available'}
                 </h3>
                 <p className="muted">
-                  {update.state === 'handoff_in_progress'
-                    ? 'The verified native updater is preparing its handoff.'
-                    : update.state === 'handoff_ready'
-                      ? 'The verified updater is ready. The application will close and restart.'
-                      : 'The installed application is up to date.'}
+                  {busy
+                    ? `${update.progress.message || 'The update is being applied.'}${update.progress.total ? ` (${update.progress.completed}/${update.progress.total} bytes)` : ''}`
+                    : 'The installed application is up to date.'}
                 </p>
                 {!busy && (
                   <button className="button" type="button" onClick={() => close(false)}>

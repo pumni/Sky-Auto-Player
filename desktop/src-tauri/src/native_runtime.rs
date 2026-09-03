@@ -1303,9 +1303,8 @@ pub(crate) struct NativeDesktopRuntime {
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
     calibration: Arc<NativeCalibrationService>,
-    update_state: Mutex<crate::native_update::NativeUpdateState>,
-    activity: ActivityCoordinator,
-    test_seams: TestSeams,
+    update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
+    pre_exit_safety: Arc<dyn Fn() + Send + Sync>,
     ready_emitted: AtomicBool,
     closed: AtomicBool,
 }
@@ -1365,6 +1364,7 @@ impl NativeDesktopRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
         Self::from_install_root_with_activity_and_seams(
             install_root,
@@ -1382,6 +1382,7 @@ impl NativeDesktopRuntime {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root_with_activity(
         install_root: PathBuf,
         activity: ActivityCoordinator,
@@ -1394,14 +1395,26 @@ impl NativeDesktopRuntime {
         activity: ActivityCoordinator,
         test_seams: TestSeams,
     ) -> Result<Self, String> {
+        Self::from_paths_with_activity_and_seams_and_update_service(
+            paths, activity, test_seams, None,
+        )
+    }
+
+    pub(crate) fn from_paths_with_activity_and_seams_and_update_service(
+        paths: AppPaths,
+        activity: ActivityCoordinator,
+        test_seams: TestSeams,
+        update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
+    ) -> Result<Self, String> {
         paths.assert_clean_boundary()?;
-        Self::from_paths_internal(paths, activity, test_seams)
+        Self::from_paths_internal(paths, activity, test_seams, update_service)
     }
 
     fn from_paths_internal(
         paths: AppPaths,
         activity: ActivityCoordinator,
         test_seams: TestSeams,
+        update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     ) -> Result<Self, String> {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
@@ -1422,6 +1435,28 @@ impl NativeDesktopRuntime {
             playback.clone(),
             test_seams,
         ));
+        let safety_activity = activity.clone();
+        let safety_calibration = calibration.clone();
+        let safety_playback = playback.clone();
+        let safety_events = events.clone();
+        let pre_exit_safety: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            safety_activity.begin_shutdown();
+            crate::record_update_safety_phase("activity.quiesced");
+            safety_calibration.shutdown();
+            safety_playback.shutdown(safety_events.clone());
+            crate::record_update_safety_phase("playback.keys_released");
+            // Settings mutations use the durable Native-owned store before
+            // this hook can run. The marker records that the close boundary
+            // has crossed the persistence phase.
+            crate::record_update_safety_phase("state.persisted");
+            if let Ok(mut events) = safety_events.lock() {
+                events.close();
+            }
+            crate::record_update_safety_phase("resources.closed");
+        });
+        if let Some(service) = &update_service {
+            service.set_pre_exit_safety(Arc::clone(&pre_exit_safety));
+        }
         Ok(Self {
             paths,
             settings: Mutex::new(settings),
@@ -1432,15 +1467,15 @@ impl NativeDesktopRuntime {
             events,
             playback,
             calibration,
-            update_state: Mutex::new(crate::native_update::NativeUpdateState::default()),
-            activity,
-            test_seams,
+            update_service,
+            pre_exit_safety,
             ready_emitted: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_install_root_with_activity_and_seams(
         install_root: PathBuf,
         activity: ActivityCoordinator,
@@ -1454,7 +1489,7 @@ impl NativeDesktopRuntime {
             install_root.join("logs"),
             install_root.join("songs"),
         );
-        Self::from_paths_internal(paths, activity, test_seams)
+        Self::from_paths_internal(paths, activity, test_seams, None)
     }
 
     #[allow(dead_code)]
@@ -1697,14 +1732,8 @@ impl NativeDesktopRuntime {
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?;
         self.playback.invalidate_settings();
         self.invalidate_analysis_cache();
-        if update_preferences_changed {
-            let mut update = self
-                .update_state
-                .lock()
-                .map_err(|_| "native update state lock poisoned".to_string())?;
-            update.candidate = None;
-            update.handoff_id = None;
-            update.handoff_starting = false;
+        if update_preferences_changed && let Some(update_service) = &self.update_service {
+            update_service.reset();
         }
         Ok(settings_dto(snapshot))
     }
@@ -1722,12 +1751,13 @@ impl NativeDesktopRuntime {
         settings
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
-        crate::native_update::check(
-            &mut settings,
-            &self.update_state,
-            self.test_seams,
-            |event| self.publish(event),
-        )
+        self.update_service
+            .as_ref()
+            .ok_or_else(|| {
+                "update_authority_not_configured: production authority is reserved for WO-04"
+                    .to_string()
+            })?
+            .check(&mut settings, |event| self.publish(event))
     }
 
     fn begin_update_handoff(&self, target_version: String) -> Result<UpdateHandoffDto, String> {
@@ -1735,14 +1765,13 @@ impl NativeDesktopRuntime {
             return Err("invalid_params: target_version is invalid".into());
         }
         let settings = self.settings_snapshot()?;
-        let result = crate::native_update::handoff(
-            self.paths.install_root(),
-            &self.update_state,
-            &settings,
-            &target_version,
-            |event| self.publish(event),
-        )?;
-        Ok(result)
+        self.update_service
+            .as_ref()
+            .ok_or_else(|| {
+                "update_authority_not_configured: production authority is reserved for WO-04"
+                    .to_string()
+            })?
+            .install(&settings, &target_version, |event| self.publish(event))
     }
 
     fn patch_update_preferences(
@@ -1770,10 +1799,8 @@ impl NativeDesktopRuntime {
                 ..Default::default()
             })
             .map_err(settings_error)?;
-        if let Ok(mut update) = self.update_state.lock() {
-            update.candidate = None;
-            update.handoff_id = None;
-            update.handoff_starting = false;
+        if let Some(update_service) = &self.update_service {
+            update_service.reset();
         }
         Ok(update_preferences_dto(snapshot))
     }
@@ -2560,13 +2587,8 @@ impl NativeDesktopRuntime {
     }
 
     pub(crate) fn shutdown(&self) {
-        self.activity.begin_shutdown();
         if !self.closed.swap(true, Ordering::AcqRel) {
-            self.calibration.shutdown();
-            self.playback.shutdown(self.events.clone());
-            if let Ok(mut events) = self.events.lock() {
-                events.close();
-            }
+            (self.pre_exit_safety)();
         }
     }
 }
@@ -4461,6 +4483,9 @@ fn calibration_activity_error(error: ActivityReservationError) -> String {
         ActivityReservationError::PhysicalPlaybackActive => {
             "playback_active: calibration cannot run during physical playback".into()
         }
+        ActivityReservationError::UpdateAlreadyActive => {
+            "update_active: calibration cannot run during update installation".into()
+        }
     }
 }
 
@@ -4472,6 +4497,9 @@ fn playback_activity_error(error: ActivityReservationError) -> String {
         }
         ActivityReservationError::PhysicalPlaybackActive => {
             "already_running: another physical playback session is active".into()
+        }
+        ActivityReservationError::UpdateAlreadyActive => {
+            "update_active: playback cannot run during update installation".into()
         }
     }
 }
@@ -4580,7 +4608,7 @@ fn validate_ui_event(event: &UiEvent) -> Result<(), String> {
         }
         UiEvent::UpdateAvailable { payload, .. } => UiEvent::validate_update_available(payload),
         UiEvent::UpdateResult { payload, .. } => UiEvent::validate_update_result(payload),
-        UiEvent::UpdateHandoffReady { payload, .. } => UiEvent::validate_update_handoff(payload),
+        UiEvent::UpdateProgress { payload, .. } => UiEvent::validate_update_progress(payload),
     }
 }
 
@@ -6588,10 +6616,10 @@ mod tests {
             .expect("start calibration");
 
         let deadline = Instant::now() + Duration::from_secs(3);
-        while runtime.activity.is_calibration_active() && Instant::now() < deadline {
+        while runtime.calibration.activity.is_calibration_active() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(!runtime.activity.is_calibration_active());
+        assert!(!runtime.calibration.activity.is_calibration_active());
         assert!(paths.calibration_cache_path().exists());
         assert!(!install_root.join(".cache").exists());
         assert!(!install_root.join("cache").exists());

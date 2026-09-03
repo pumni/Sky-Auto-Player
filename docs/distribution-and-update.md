@@ -1,8 +1,14 @@
 # Distribution and Update Model
 
-This is the normative contract for the unsigned-binary, portable Windows package and
-its user-triggered native updater. It tracks the native desktop Cargo version
-and is independent of the Rust playback dispatcher.
+This is the normative contract for the v3-maintenance unsigned-binary,
+portable Windows package and its legacy user-triggered native updater. It
+tracks the native desktop Cargo version and is independent of the Rust
+playback dispatcher.
+
+V4 uses the Tauri NSIS package and the Rust-owned `UpdateService` described in
+`v4-tauri-packaging.md`. V4 does not use this document's GitHub Releases,
+portable artifact, or `sky_updater` transaction path; its production update
+authority is fail-closed until WO-04 configures it.
 
 ## 1. Distribution
 

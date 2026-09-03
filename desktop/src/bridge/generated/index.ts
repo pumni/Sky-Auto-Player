@@ -68,7 +68,7 @@ export type { UpdateBeginHandoffRequest } from './UpdateBeginHandoffRequest';
 export type { UpdateChannel } from './UpdateChannel';
 export type { UpdateCheckDto } from './UpdateCheckDto';
 export type { UpdateHandoffDto } from './UpdateHandoffDto';
-export type { UpdateHandoffReadyPayload } from './UpdateHandoffReadyPayload';
+export type { UpdateProgressPayload } from './UpdateProgressPayload';
 export type { UpdatePreferencesPatch } from './UpdatePreferencesPatch';
 export type { UpdateResultPayload } from './UpdateResultPayload';
 export type { UpdateState } from './UpdateState';

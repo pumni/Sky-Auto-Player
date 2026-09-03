@@ -688,17 +688,17 @@ test('all supported themes round-trip through the settings surface', async ({ pa
   await expect(settingsButton).toBeFocused();
 });
 
-test('update indicator and typed update dialog expose safe handoff states', async ({ page }) => {
+test('update indicator and typed update dialog expose safe install states', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
-  const indicator = page.getByRole('button', { name: /Open update 3\.6\.0-mock/ });
+  const indicator = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });
   await expect(indicator).toBeVisible();
   await indicator.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'Software update' });
-  await expect(dialog).toContainText('Version 3.6.0-mock is available');
+  await expect(dialog).toContainText('Version 4.0.0-alpha.2-mock is available');
   await expectNoSeriousAccessibilityViolations(page);
   await dialog.getByRole('button', { name: 'Update and restart' }).click();
-  await expect(dialog).toContainText('Restart handoff ready');
+  await expect(dialog).toContainText('Installing update…');
   await expectNoSeriousAccessibilityViolations(page);
 });
 

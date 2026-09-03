@@ -439,6 +439,128 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job validate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
+  updater_e2e:
+    name: Packaged v4 updater fixture qualification
+    needs: changes
+    if: needs.changes.outputs.package_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
+      SCCACHE_GHA_VERSION: sky-ci-v1
+
+    steps:
+      - name: Start CI timing
+        run: |
+          "SKY_CI_JOB_STARTED_UPDATER_E2E=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Rust — install pinned stable toolchain for updater fixture
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc
+
+      - name: Rust — verify updater-fixture compiler
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $version = (rustc --version)
+          if ($version -notmatch '^rustc 1\.98\.0\s') {
+            throw "Expected stable Rust 1.98.0 for updater fixture, got: $version"
+          }
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.17.0"
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-targets: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Set up Bun for updater fixture frontend
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install pinned desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build pinned desktop frontend
+        working-directory: desktop
+        run: bun run build
+
+      - name: Configure isolated updater fixture target
+        run: |
+          $fixtureTarget = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-updater-fixture-target"
+          New-Item -ItemType Directory -Path $fixtureTarget -Force | Out-Null
+          "CARGO_TARGET_DIR=$fixtureTarget" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Build throwaway signed fixture and qualify previous-v4 to candidate-v4 update
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-fixture.key"
+          $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-fixture-updater.json"
+          $fixtureTarget = $env:CARGO_TARGET_DIR
+          $fixtureBundle = Join-Path $fixtureTarget "dist/bundle/nsis"
+          try {
+            Push-Location desktop
+            try {
+              bun run tauri signer generate --ci --password "" --force -w $keyPath
+              $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
+              $testPublicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
+              [ordered]@{
+                plugins = [ordered]@{
+                  updater = [ordered]@{
+                    pubkey = $testPublicKey
+                    dangerousInsecureTransportProtocol = $true
+                    endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
+                  }
+                }
+              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
+              $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
+              $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+              bun run tauri build --ci --config $configPath -- --profile dist --features tauri-update-fixture
+            } finally {
+              Pop-Location
+            }
+            $previousInstallers = @(Get-ChildItem -LiteralPath $fixtureBundle -Filter '*-setup.exe' -File)
+            if ($previousInstallers.Count -ne 1) {
+              throw "Expected exactly one throwaway previous-v4 installer, found $($previousInstallers.Count)"
+            }
+            pwsh scripts/ci_tauri_update_e2e.ps1 `
+              -PreviousInstaller $previousInstallers[0].FullName `
+              -UpdaterConfigPath $configPath `
+              -BundleDir $fixtureBundle
+          } finally {
+            Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+          }
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job updater-e2e -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
+
   packaged:
     name: Packaged v4 Tauri NSIS qualification
     needs: changes
@@ -536,7 +658,7 @@ jobs:
             "$name=" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           }
 
-      - name: Build and sign Tauri NSIS test artifact
+      - name: Build and sign canonical Tauri NSIS artifact
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
@@ -562,7 +684,12 @@ jobs:
             } finally {
               Pop-Location
             }
-            "SKY_TAURI_BUNDLE=$(Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis')" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+            $bundleDir = Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis'
+            "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+            $installers = @(Get-ChildItem -LiteralPath $bundleDir -Filter '*-setup.exe' -File)
+            if ($installers.Count -ne 1) {
+              throw "Expected exactly one freshly built Tauri NSIS installer, found $($installers.Count)"
+            }
           } finally {
             Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
@@ -637,7 +764,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, supply_chain, validate, packaged]
+    needs: [changes, static, supply_chain, validate, updater_e2e, packaged]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -657,6 +784,7 @@ jobs:
           STATIC_RESULT: ${{ needs.static.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
+          UPDATER_E2E_RESULT: ${{ needs.updater_e2e.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
         run: |
           set -euo pipefail
@@ -669,7 +797,13 @@ jobs:
             [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
           fi
           if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
-          if [[ "$PACKAGE_REQUIRED" == "true" ]]; then [[ "$PACKAGED_RESULT" == "success" ]]; else [[ "$PACKAGED_RESULT" == "skipped" ]]; fi
+          if [[ "$PACKAGE_REQUIRED" == "true" ]]; then
+            [[ "$UPDATER_E2E_RESULT" == "success" ]]
+            [[ "$PACKAGED_RESULT" == "success" ]]
+          else
+            [[ "$UPDATER_E2E_RESULT" == "skipped" ]]
+            [[ "$PACKAGED_RESULT" == "skipped" ]]
+          fi
           echo "CI status is green."
 
       - name: Report CI timing
