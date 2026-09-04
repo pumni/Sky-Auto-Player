@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "Authenticode signing target does not exist: $Path"
 }
+Write-Host "V4 Authenticode signer invoked: target=$Path"
 
 $mode = if ([string]::IsNullOrWhiteSpace($env:SKY_AUTHENTICODE_MODE)) {
     "production"
@@ -41,6 +42,8 @@ function Find-SignTool {
 }
 
 $signTool = Find-SignTool
+Write-Host "V4 Authenticode signer using signtool: $signTool"
+Write-Host "V4 Authenticode signer certificate thumbprint: $thumbprint"
 & $signTool sign /fd SHA256 /sha1 $thumbprint $Path
 if ($LASTEXITCODE -ne 0) {
     throw "signtool.exe failed to sign the Authenticode target"

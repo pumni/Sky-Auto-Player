@@ -348,7 +348,7 @@ mod tests {
                 "targets": [NSIS_TARGET],
                 "createUpdaterArtifacts": true,
                 "windows": {
-                    "signCommand": "pwsh -File ../scripts/sign_v4_authenticode.ps1 %1",
+                    "signCommand": "pwsh -File ../../scripts/sign_v4_authenticode.ps1 %1",
                     "nsis": {"installMode": CURRENT_USER_INSTALL_MODE}
                 }
             },

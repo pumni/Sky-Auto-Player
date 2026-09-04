@@ -34,7 +34,7 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "windows": {
-      "signCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/sign_v4_authenticode.ps1 %1",
+      "signCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/sign_v4_authenticode.ps1 %1",
       "nsis": {
         "installMode": "currentUser"
       }

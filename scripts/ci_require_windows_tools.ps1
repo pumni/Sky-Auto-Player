@@ -19,10 +19,28 @@ $toolNames = @(
     }
 )
 
+$resolvedTools = @{}
 $missing = @(
     foreach ($name in $toolNames) {
-        if ($null -eq (Get-Command $name -ErrorAction SilentlyContinue)) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        $source = if ($null -ne $command) { $command.Source }
+
+        if ([string]::IsNullOrWhiteSpace($source) -and $name -ieq 'signtool.exe') {
+            $kits = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue
+            if ($null -ne $kits -and -not [string]::IsNullOrWhiteSpace($kits.KitsRoot10)) {
+                $matches = @(Get-ChildItem -LiteralPath (Join-Path $kits.KitsRoot10 'bin') -Filter signtool.exe -File -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+                    Sort-Object FullName -Descending)
+                if ($matches.Count -gt 0) {
+                    $source = $matches[0].FullName
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($source)) {
             $name
+        } else {
+            $resolvedTools[$name] = $source
         }
     }
 )
@@ -31,7 +49,6 @@ if ($missing.Count -gt 0) {
 }
 
 foreach ($name in $toolNames) {
-    $command = Get-Command $name -ErrorAction Stop
-    Write-Host ("dependency: {0} -> {1}" -f $name, $command.Source)
+    Write-Host ("dependency: {0} -> {1}" -f $name, $resolvedTools[$name])
 }
 Write-Host ("Windows CI dependency preflight: PASS ({0} tool(s))" -f $toolNames.Count)
