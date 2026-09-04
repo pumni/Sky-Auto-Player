@@ -77,7 +77,6 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
         throw "Timed out after ${TimeoutSeconds}s creating the ephemeral V4 Authenticode test certificate"
     }
     Write-Host "Certificate worker exited (pid=$($process.Id), exit=$($process.ExitCode))"
-    $process.WaitForExit(1000) | Out-Null
     if ($process.ExitCode -ne 0) {
         $workerError = if (Test-Path -LiteralPath $errorPath) {
             ([IO.File]::ReadAllText($errorPath)).Trim()
@@ -86,13 +85,17 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
         }
         throw "Ephemeral V4 Authenticode certificate worker failed with exit code $($process.ExitCode): $workerError"
     }
+    Write-Host "Reading certificate worker result"
     $thumbprints = @(Get-Content -LiteralPath $resultPath -ErrorAction Stop |
         ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($thumbprints.Count -ne 1 -or $thumbprints[0] -notmatch '^[0-9a-fA-F]{40}$') {
         throw "Ephemeral V4 Authenticode certificate worker returned an invalid thumbprint"
     }
     $thumbprint = $thumbprints[0].Trim()
+    Write-Host "Certificate worker result read (thumbprint=$thumbprint)"
+    Write-Host "Loading certificate from CurrentUser/My"
     $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -ErrorAction Stop
+    Write-Host "Certificate loaded"
 
     $temporaryRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
         [IO.Path]::GetTempPath()
@@ -101,12 +104,16 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     }
     $certificatePath = Join-Path $temporaryRoot ("sky-v4-test-signing-" + [guid]::NewGuid().ToString("N") + ".cer")
     try {
+        Write-Host "Exporting certificate"
         Export-Certificate -Cert $certificate -FilePath $certificatePath -Type CERT | Out-Null
+        Write-Host "Importing certificate into CurrentUser/Root"
         Import-Certificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+        Write-Host "Certificate import completed"
     } finally {
         Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
     }
 
+    Write-Host "Writing certificate environment"
     "SKY_AUTHENTICODE_MODE=test" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     "SKY_AUTHENTICODE_TEST_THUMBPRINT=$thumbprint" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     Write-CertificateSetupEvidence 'PASS' "thumbprint=$thumbprint"
