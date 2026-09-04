@@ -28,6 +28,12 @@ if ($expectedThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
     throw "V4 Authenticode verification requires the exact approved signer thumbprint in $identityVariable"
 }
 $expectedThumbprint = $expectedThumbprint.ToUpperInvariant()
+if ($mode -eq "production") {
+    $testThumbprint = ([string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT).Trim().ToUpperInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($testThumbprint) -and $expectedThumbprint -eq $testThumbprint) {
+        throw "V4 production Authenticode verification rejects ephemeral CI test signer thumbprint"
+    }
+}
 
 function Resolve-TestPfxPath {
     $pfxPath = ([string]$env:SKY_AUTHENTICODE_TEST_PFX_PATH).Trim()
@@ -114,6 +120,9 @@ $records = foreach ($file in $files) {
     $statusType = $signature.Status.GetType()
     if ($statusType.IsEnum -and [Enum]::GetNames($statusType) -notcontains $platformStatus) {
         throw "Unknown Authenticode status for $($file.Name): $platformStatus"
+    }
+    if ($mode -eq "production" -and [string]$signature.SignerCertificate.Subject -match 'CI V4 Test Code Signing') {
+        throw "Production Authenticode verification rejects CI test certificate for $($file.Name)"
     }
     if ($mode -eq "production" -and $platformStatus -ne "Valid") {
         throw "Production Authenticode verification requires Windows status Valid for $($file.Name): $platformStatus"

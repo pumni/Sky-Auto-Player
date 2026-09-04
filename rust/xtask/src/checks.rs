@@ -495,6 +495,9 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "SKY_GH_PATH=$ghPath",
         "- name: Run Authenticode tamper regression",
         "scripts/test_v4_authenticode_integrity.ps1",
+        "- name: Run V4 production signing contract test",
+        "scripts/test_v4_production_signing_contract.ps1",
+        "V4 production signing contract test failed with exit code",
         "- name: Verify Tauri Authenticode signature",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
@@ -671,6 +674,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let decoded = STANDARD.decode(config_key)?;
     let decoded = String::from_utf8(decoded)?;
     PublicKey::decode(&decoded)?;
+    crate::updater_trust::inventory_public_trust_roots(root)?;
 
     let ci_path = root.join(".github/workflows/ci.yml");
     let ci = fs::read_to_string(&ci_path)?;
@@ -815,12 +819,14 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "/f $pfxPath",
         "/p $pfxPassword",
         "EphemeralKeySet",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "SKY_AUTHENTICODE_PROVIDER",
+        "SKY_AUTHENTICODE_PROVIDER_COMMAND",
     ] {
         if !signer.contains(marker) {
-            return Err(format!(
-                "v4 Authenticode signer is missing its required PFX marker: {marker}"
-            )
-            .into());
+            return Err(
+                format!("v4 Authenticode signer is missing its required marker: {marker}").into(),
+            );
         }
     }
     let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
@@ -839,6 +845,29 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             )
             .into());
         }
+    }
+    let contract_test =
+        fs::read_to_string(root.join("scripts/test_v4_production_signing_contract.ps1"))?;
+    for marker in [
+        "Unconfigured production mode fails closed",
+        "Production signing rejects test credentials",
+        "Production verification rejects CI test certificate",
+        "Production verification rejects test thumbprint",
+        "CI test certificate cannot satisfy production mode",
+    ] {
+        if !contract_test.contains(marker) {
+            return Err(format!(
+                "v4 production signing contract test is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let key_verifier = fs::read_to_string(root.join("scripts/verify_v4_updater_private_key.ps1"))?;
+    if !key_verifier.contains("updater-trust verify-private-key") {
+        return Err(
+            "v4 updater key verification script must delegate to updater-trust verify-private-key"
+                .into(),
+        );
     }
 
     let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
@@ -2593,6 +2622,9 @@ read_only=true
         # Tauri build failed with exit code
       - name: Run Authenticode tamper regression
         run: pwsh scripts/test_v4_authenticode_integrity.ps1
+      - name: Run V4 production signing contract test
+        run: pwsh scripts/test_v4_production_signing_contract.ps1
+        # V4 production signing contract test failed with exit code
       - name: Verify Tauri Authenticode signature
         run: pwsh scripts/verify_v4_authenticode.ps1
         # Authenticode verification failed with exit code
