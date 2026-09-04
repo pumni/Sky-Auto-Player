@@ -526,7 +526,7 @@ jobs:
         run: bun run build
 
       - name: Prepare bounded ephemeral Authenticode test certificate
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 120
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
       - name: Exercise non-production updater key rotation fixture
         run: pwsh scripts/test_v4_updater_key_rotation.ps1
@@ -634,7 +634,7 @@ jobs:
         run: bun run build
 
       - name: Prepare bounded ephemeral Authenticode test certificate
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 120
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
       - name: Construct Python-unavailable canonical environment
         run: |

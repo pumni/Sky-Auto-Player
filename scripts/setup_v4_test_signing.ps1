@@ -3,7 +3,7 @@ param(
     [string]$EnvFile,
     [Parameter(Mandatory = $false)]
     [ValidateRange(1, 300)]
-    [int]$TimeoutSeconds = 120
+    [int]$TimeoutSeconds = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,10 +62,16 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', $workerPath, '-OutputPath', $resultPath, '-CertificateSubject', ('"{0}"' -f $subject)
     ) -WindowStyle Hidden -RedirectStandardError $errorPath -PassThru
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $process.Refresh()
+    }
+    if (-not $process.HasExited) {
+        & taskkill.exe /PID $process.Id /T /F | Out-Null
         throw "Timed out after ${TimeoutSeconds}s creating the ephemeral V4 Authenticode test certificate"
     }
+    $process.WaitForExit(1000) | Out-Null
     if ($process.ExitCode -ne 0) {
         $workerError = if (Test-Path -LiteralPath $errorPath) {
             ([IO.File]::ReadAllText($errorPath)).Trim()

@@ -581,7 +581,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "scripts/test_v4_updater_key_rotation.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
         "scripts/ci_require_windows_tools.ps1",
-        "TimeoutSeconds 120",
+        "TimeoutSeconds 30",
         "SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS",
         "Packaged Tauri updater rotation",
         "cargo xtask sbom generate",
