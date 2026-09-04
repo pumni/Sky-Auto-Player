@@ -687,6 +687,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "X509ContentType]::Pfx",
         "EphemeralKeySet",
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "::add-mask::",
         "RUNNER_TEMP",
     ] {
         if !setup.contains(marker) {
@@ -695,6 +696,17 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             )
             .into());
         }
+    }
+    let mask_position = setup
+        .find("::add-mask::")
+        .ok_or("v4 Authenticode test PFX setup must mask the generated password")?;
+    let password_environment_position = setup
+        .find("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+        .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
+    if mask_position >= password_environment_position {
+        return Err(
+            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV".into(),
+        );
     }
     for forbidden in [
         "New-SelfSignedCertificate",

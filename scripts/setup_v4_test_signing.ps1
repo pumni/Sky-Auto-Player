@@ -148,6 +148,7 @@ try {
         $pfxCertificate.Dispose()
     }
 
+    Write-Output "::add-mask::$pfxPassword"
     Write-Host "Writing certificate environment"
     "SKY_AUTHENTICODE_MODE=test" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     "SKY_AUTHENTICODE_TEST_THUMBPRINT=$thumbprint" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
