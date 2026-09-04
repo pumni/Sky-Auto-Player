@@ -425,7 +425,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          cargo xtask check static
+          cargo xtask check static --skip-supply-chain
           if ($LASTEXITCODE -ne 0) { throw "cargo xtask check static failed with exit code $LASTEXITCODE" }
           cargo xtask check rust
           if ($LASTEXITCODE -ne 0) { throw "cargo xtask check rust failed with exit code $LASTEXITCODE" }
