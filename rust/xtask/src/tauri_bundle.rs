@@ -713,4 +713,121 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn ci_test_certificate_cannot_satisfy_production_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-tauri-auth-contract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let installer = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe");
+        let signature = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe.sig");
+        fs::write(&installer, b"installer").unwrap();
+        fs::write(&signature, b"test-signature\n").unwrap();
+        let summary = artifact_summary(&root, "4.0.0-alpha.1").unwrap();
+
+        let test_thumbprint = "11".repeat(20);
+        let prod_thumbprint = "22".repeat(20);
+
+        let test_evidence = json!({
+            "schema_version": 1,
+            "evidence_type": "authenticode-verification",
+            "mode": "test",
+            "expected_signer_thumbprint": test_thumbprint.clone(),
+            "files": [{
+                "name": summary.installer.clone(),
+                "status": "UnknownError",
+                "platform_status": "UnknownError",
+                "verification": "signature-valid-independent-cryptographic-integrity",
+                "trust_exception": "test-platform-status-not-used-for-integrity",
+                "integrity_verifier": "signedcms-spc-indirect-data-authenticode-hash",
+                "integrity_status": "Valid",
+                "signed_digest": "A".repeat(64),
+                "computed_digest": "a".repeat(64),
+                "signer_thumbprint": test_thumbprint.clone(),
+                "sha256": summary.installer_sha256.clone(),
+            }]
+        });
+
+        // Test mode accepts test evidence
+        assert!(
+            validate_authenticode_evidence_value(
+                &test_evidence,
+                &summary,
+                "test",
+                &test_thumbprint
+            )
+            .is_ok()
+        );
+
+        // Production mode rejects test evidence with expected_signer_thumbprint = prod_thumbprint
+        assert!(
+            validate_authenticode_evidence_value(
+                &test_evidence,
+                &summary,
+                "production",
+                &prod_thumbprint
+            )
+            .is_err()
+        );
+
+        // Production mode rejects test evidence even if expected_signer_thumbprint was set to test_thumbprint
+        assert!(
+            validate_authenticode_evidence_value(
+                &test_evidence,
+                &summary,
+                "production",
+                &test_thumbprint
+            )
+            .is_err()
+        );
+
+        // Forged mode: "production" while retaining trust_exception
+        let mut forged_mode = test_evidence.clone();
+        forged_mode["mode"] = json!("production");
+        assert!(
+            validate_authenticode_evidence_value(
+                &forged_mode,
+                &summary,
+                "production",
+                &test_thumbprint
+            )
+            .is_err()
+        );
+
+        // Forged mode: "production" without trust_exception but non-Valid platform status
+        let mut forged_no_exception = forged_mode.clone();
+        forged_no_exception["files"][0]["trust_exception"] = Value::Null;
+        assert!(
+            validate_authenticode_evidence_value(
+                &forged_no_exception,
+                &summary,
+                "production",
+                &test_thumbprint
+            )
+            .is_err()
+        );
+
+        // Forged platform_status: "Valid" but signer_thumbprint is test_thumbprint
+        let mut forged_valid_status = forged_no_exception.clone();
+        forged_valid_status["files"][0]["status"] = json!("Valid");
+        forged_valid_status["files"][0]["platform_status"] = json!("Valid");
+        assert!(
+            validate_authenticode_evidence_value(
+                &forged_valid_status,
+                &summary,
+                "production",
+                &prod_thumbprint
+            )
+            .is_err()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -22,7 +22,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust rotation-self-test --old-public <path> --new-public <path> --old-signature <path> --new-signature <path> --payload <path>\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|verify-private-key|rotation-self-test>\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -264,6 +264,48 @@ fn main() -> Result<()> {
                 Some("verify") => sbom::verify(&repo::root(), &artifact_dir, &output),
                 _ => Err("sbom requires generate or verify".into()),
             }
+        }
+        "updater-trust" if args.get(1).map(String::as_str) == Some("inventory") => {
+            updater_trust::print_inventory(&repo::root())
+        }
+        "updater-trust" if args.get(1).map(String::as_str) == Some("verify-private-key") => {
+            let mut key_file = None;
+            let mut password_env = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--key-file" => key_file = Some(required_value(&args, &mut i, "--key-file")?),
+                    "--password-env" => {
+                        password_env = Some(required_value(&args, &mut i, "--password-env")?)
+                    }
+                    option => {
+                        return Err(format!(
+                            "unknown updater-trust verify-private-key option: {option}"
+                        )
+                        .into());
+                    }
+                }
+                i += 1;
+            }
+            let key_file = key_file
+                .or_else(|| env::var("TAURI_SIGNING_PRIVATE_KEY_PATH").ok())
+                .ok_or(
+                    "verify-private-key requires --key-file <path> or TAURI_SIGNING_PRIVATE_KEY_PATH env var",
+                )?;
+            let password = if let Some(env_var) = password_env {
+                env::var(env_var).ok()
+            } else {
+                env::var("TAURI_SIGNING_PRIVATE_KEY_PASSWORD").ok()
+            };
+            updater_trust::verify_local_private_key(
+                &repo::root(),
+                Path::new(&key_file),
+                password.as_deref(),
+            )?;
+            println!(
+                "[xtask] Local updater private key matches canonical production v4 root (Key ID: F6355260A0C663D5)"
+            );
+            Ok(())
         }
         "updater-trust" if args.get(1).map(String::as_str) == Some("rotation-self-test") => {
             let mut old_public = None;

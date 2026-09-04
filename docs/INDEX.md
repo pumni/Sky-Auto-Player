@@ -46,6 +46,10 @@ not open every architecture page by default.
   and current-user packaging contract.
 - [v4-release-authority.md](v4-release-authority.md) — v4 immutable release namespace, static
   metadata, channel isolation, and read-only acceptance contract.
+- [v4-updater-key-custody.md](v4-updater-key-custody.md) — v4 updater trust root custody, backup,
+  loss, compromise, rotation, and recovery runbook.
+- [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md) — v4 production Authenticode
+  provider seam specification and contract.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 - [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — historical evidence for
   the completed product/runtime Python retirement; not a tooling instruction.
@@ -75,12 +79,10 @@ when a task touches those boundaries.
 - `docs/releases/` contains release-specific acceptance/history, not startup context.
 - `docs/perf-baselines/` contains named performance evidence. A baseline is evidence for the
   environment and revision it records, not a universal instruction.
-- Completed implementation plans, migration playbooks, superseded audits, and implementation briefs
-  live in Git history instead of the active documentation tree. Use `git log`, `git show`, or
-  repository history only when historical rationale is actually needed.
+- Completed plans, migration playbooks, superseded audits, and implementation briefs
+  live in Git history. Use `git log` or `git show` only when historical rationale is needed.
 
 ## Documentation maintenance
 
 Keep active docs about the current system. Convert durable decisions into ADRs or current architecture
-contracts; retire completed plans to Git history rather than accumulating prompt-shaped working notes.
-Keep this router concise and prefer source/tests/executable checks over additional routing layers.
+contracts; retire completed plans to Git history. Keep this router concise.
