@@ -14,6 +14,8 @@ $summaryPath = $env:GITHUB_STEP_SUMMARY
 $workerPath = $null
 $resultPath = $null
 $errorPath = $null
+$importOutputPath = $null
+$importErrorPath = $null
 
 function Write-CertificateSetupEvidence {
     param(
@@ -38,6 +40,8 @@ try {
     $workerPath = Join-Path $temporaryRoot ("sky-v4-test-signing-worker-" + [guid]::NewGuid().ToString("N") + ".ps1")
     $resultPath = Join-Path $temporaryRoot ("sky-v4-test-signing-result-" + [guid]::NewGuid().ToString("N") + ".txt")
     $errorPath = Join-Path $temporaryRoot ("sky-v4-test-signing-error-" + [guid]::NewGuid().ToString("N") + ".txt")
+    $importOutputPath = Join-Path $temporaryRoot ("sky-v4-test-signing-import-" + [guid]::NewGuid().ToString("N") + ".txt")
+    $importErrorPath = Join-Path $temporaryRoot ("sky-v4-test-signing-import-error-" + [guid]::NewGuid().ToString("N") + ".txt")
     $worker = @'
 param(
     [Parameter(Mandatory = $true)] [string]$OutputPath,
@@ -106,8 +110,35 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     try {
         Write-Host "Exporting certificate"
         Export-Certificate -Cert $certificate -FilePath $certificatePath -Type CERT | Out-Null
-        Write-Host "Importing certificate into CurrentUser/Root"
-        Import-Certificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+        Write-Host "Importing certificate into CurrentUser/Root via certutil"
+        $importProcess = Start-Process -FilePath 'certutil.exe' -ArgumentList @(
+            '-f', '-user', '-addstore', 'Root', $certificatePath
+        ) -WindowStyle Hidden -RedirectStandardOutput $importOutputPath -RedirectStandardError $importErrorPath -PassThru
+        Write-Host "Certificate import worker launched (pid=$($importProcess.Id))"
+        $importDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        while (-not $importProcess.HasExited -and [DateTime]::UtcNow -lt $importDeadline) {
+            Start-Sleep -Milliseconds 250
+            $importProcess.Refresh()
+        }
+        if (-not $importProcess.HasExited) {
+            Write-Host "Certificate import worker exceeded deadline; requesting asynchronous termination (pid=$($importProcess.Id))"
+            Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID', $importProcess.Id, '/T', '/F') -WindowStyle Hidden | Out-Null
+            throw "Timed out after ${TimeoutSeconds}s importing the ephemeral V4 Authenticode test certificate"
+        }
+        Write-Host "Certificate import worker exited (pid=$($importProcess.Id), exit=$($importProcess.ExitCode))"
+        if ($importProcess.ExitCode -ne 0) {
+            $importOutput = if (Test-Path -LiteralPath $importOutputPath) {
+                ([IO.File]::ReadAllText($importOutputPath)).Trim()
+            } else {
+                ''
+            }
+            $importError = if (Test-Path -LiteralPath $importErrorPath) {
+                ([IO.File]::ReadAllText($importErrorPath)).Trim()
+            } else {
+                'certutil produced no diagnostics'
+            }
+            throw "certutil failed to import the ephemeral V4 Authenticode test certificate: $importOutput $importError"
+        }
         Write-Host "Certificate import completed"
     } finally {
         Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
@@ -125,7 +156,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     }
     throw
 } finally {
-    foreach ($temporaryPath in @($workerPath, $resultPath, $errorPath)) {
+    foreach ($temporaryPath in @($workerPath, $resultPath, $errorPath, $importOutputPath, $importErrorPath)) {
         if (-not [string]::IsNullOrWhiteSpace($temporaryPath)) {
             Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
         }
