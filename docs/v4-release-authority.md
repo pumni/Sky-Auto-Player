@@ -64,18 +64,26 @@ signature file. It emits the official Tauri static JSON shape:
 ```
 
 `cargo xtask release-authority validate --channel stable|beta` validates the
-same bounded contract. Stable and beta are separate destination paths:
-`channels/stable/latest.json` and `channels/beta/latest.json`. The validator
-rejects v3 URLs, non-HTTPS URLs, other owners/repos, query or fragment state,
-SemVer build metadata, malformed dates, extra platforms, and non-canonical
-artifact names.
+same bounded contract. Stable accepts only final SemVer releases; beta is
+explicitly a prerelease channel. Stable and beta are separate destination
+paths: `channels/stable/latest.json` and `channels/beta/latest.json`. The
+validator rejects v3 URLs, non-HTTPS URLs, other owners/repos, query or
+fragment state, SemVer build metadata, malformed dates, extra platforms, and
+non-canonical artifact names.
 
-Metadata promotion is a separate operation after the immutable release has
-been published and the exact published assets have passed qualification. The
-promotion action copies only the validated generated file into the selected
-channel path; it never creates placeholder production metadata and never
-rebuilds or replaces a published binary. Stable promotion cannot write the
-beta path, and beta promotion cannot write the stable path.
+The packaged qualification path emits a bounded
+`tauri-nsis-qualified-release` evidence object containing the canonical
+version/name/size pair and SHA-256 digests for both the installer and `.sig`.
+`qualified=true` is not accepted by itself: the promotion gate rejects missing
+or extra fields, malformed evidence, digest mismatches, and same-name assets
+with different bytes. Metadata promotion is a separate operation after the
+immutable release has been published and the exact published assets have
+passed qualification. It compares GitHub's asset digest when present, or
+downloads and hashes the exact canonical asset when the API omits a digest.
+The promotion action copies only the validated generated file into the
+selected channel path; it never creates placeholder production metadata and
+never rebuilds or replaces a published binary. Stable promotion cannot write
+the beta path, and beta promotion cannot write the stable path.
 
 The repository-owned acceptance check
 `scripts/ci_v4_release_authority_acceptance.ps1` is read-only. It verifies
@@ -85,12 +93,15 @@ public repository. It does not create, upload, publish, edit, or delete any
 release.
 
 `scripts/promote_v4_metadata.ps1` is the separate promotion gate. It requires
-explicit qualification evidence, runs the Rust metadata validator, reads the
-dedicated repository's published release and exact `.sig` asset, and compares
-both against the candidate metadata before atomically copying it into the
-selected channel path in an authority checkout. It never creates or edits a
-GitHub release; committing the resulting channel file is a separate reviewed
-authority-repository change.
+the bounded evidence emitted by the packaged qualification path, runs the Rust
+metadata validator, reads the dedicated repository's published release and
+exact installer/`.sig` pair, and compares names, sizes, and SHA-256 digests
+against the qualified bytes before atomically copying metadata into the
+selected channel path in an authority checkout. Its `-SelfTest` regression
+path proves arbitrary `qualified=true` evidence and same-name/different-bytes
+assets are rejected. It never creates or edits a GitHub release; committing
+the resulting channel file is a separate reviewed authority-repository
+change.
 
 The v4 Tauri public trust key is intentionally not committed by WO-04. WO-05
 owns the independent updater trust root and its operational secrets. The

@@ -149,8 +149,12 @@ V4 uses static Tauri updater metadata rather than runtime scanning/sorting of Gi
 and beta, when enabled, have separate metadata authorities/endpoints. The Rust update service selects
 from an allow-listed, compiled channel configuration; the frontend cannot supply an endpoint.
 WO-04 validates that metadata points only to already-published, qualified assets in the dedicated
-authority and promotes stable/beta files as separate post-qualification actions. The authority may
-remain empty until the first qualified promotion, so a missing production metadata file fails closed.
+authority and promotes stable/beta files as separate post-qualification actions. Qualification
+evidence binds the exact canonical installer and updater signature bytes by SHA-256; promotion
+compares those digests with the published assets and fails closed on missing or mismatched evidence.
+Stable metadata accepts only final SemVer releases while beta metadata is explicitly prerelease-only.
+The authority may remain empty until the first qualified promotion, so a missing production metadata
+file fails closed.
 
 A dedicated dynamic update service is a non-goal for v4.0. It can be introduced later if the product
 needs staged rollout, cohorts, mandatory minimum versions, or server-driven release policy.

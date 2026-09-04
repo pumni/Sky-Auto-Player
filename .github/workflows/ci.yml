@@ -200,6 +200,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: pwsh scripts/ci_v4_release_authority_acceptance.ps1
 
+      - name: Promotion digest regression self-test
+        run: pwsh scripts/promote_v4_metadata.ps1 -SelfTest
+
       - name: Report CI timing
         if: always()
         run: |
@@ -784,6 +787,33 @@ jobs:
             if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
           }
 
+      - name: Emit exact Tauri qualification evidence
+        run: |
+          $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
+          foreach ($field in @("installer_sha256", "updater_signature_sha256", "installer", "updater_signature", "version")) {
+            if ([string]::IsNullOrWhiteSpace([string]$summary.$field)) {
+              throw "Tauri artifact summary is missing qualification field: $field"
+            }
+          }
+          $evidence = [ordered]@{
+            schema_version = 1
+            evidence_type = "tauri-nsis-qualified-release"
+            qualified = $true
+            qualification = "install-launch-uninstall"
+            product_name = $summary.product_name
+            identifier = $summary.identifier
+            version = $summary.version
+            target = $summary.target
+            install_mode = $summary.install_mode
+            installer = $summary.installer
+            updater_signature = $summary.updater_signature
+            installer_size = $summary.installer_size
+            signature_size = $summary.signature_size
+            installer_sha256 = $summary.installer_sha256
+            updater_signature_sha256 = $summary.updater_signature_sha256
+          }
+          $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
+
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -791,6 +821,7 @@ jobs:
           path: |
             rust/target/dist/bundle/nsis
             rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
+            rust/target/dist/V4_QUALIFICATION_EVIDENCE.json
           if-no-files-found: error
           retention-days: 14
 

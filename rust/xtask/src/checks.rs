@@ -319,6 +319,22 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         }
     }
 
+    let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");
+    let bundle = fs::read_to_string(&bundle_path)?;
+    for marker in [
+        "schema_version: 2",
+        "evidence_type: \"tauri-nsis-artifact\"",
+        "installer_sha256",
+        "updater_signature_sha256",
+    ] {
+        if !bundle.contains(marker) {
+            return Err(format!(
+                "Tauri artifact evidence is missing its exact-byte marker: {marker}"
+            )
+            .into());
+        }
+    }
+
     let acceptance_path = root.join("scripts/ci_v4_release_authority_acceptance.ps1");
     let acceptance = fs::read_to_string(&acceptance_path)?;
     for marker in [
@@ -358,6 +374,12 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "release-authority validate --channel $Channel",
         "releases/tags/v$version",
         "published_at",
+        "installer_sha256",
+        "updater_signature_sha256",
+        "Get-PublishedAssetSha256",
+        "Assert-PublishedAsset",
+        "Invoke-PromotionSelfTest",
+        "same-name/different-bytes",
         "Copy-Item -LiteralPath $Metadata",
         "never publishes or mutates a GitHub release",
     ] {
@@ -388,6 +410,9 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "release_authority:",
         "name: V4 release authority acceptance",
         "scripts/ci_v4_release_authority_acceptance.ps1",
+        "scripts/promote_v4_metadata.ps1 -SelfTest",
+        "Emit exact Tauri qualification evidence",
+        "V4_QUALIFICATION_EVIDENCE.json",
         "RELEASE_AUTHORITY_RESULT",
         "needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]",
     ] {

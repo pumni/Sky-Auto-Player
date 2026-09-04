@@ -1,4 +1,4 @@
-use crate::{Result, repo, version};
+use crate::{Result, manifest, repo, version};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
@@ -14,6 +14,7 @@ const WINDOWS_ARCH: &str = "x64";
 #[derive(Debug, Serialize)]
 struct ArtifactSummary {
     schema_version: u32,
+    evidence_type: &'static str,
     product_name: &'static str,
     identifier: &'static str,
     version: String,
@@ -23,6 +24,8 @@ struct ArtifactSummary {
     updater_signature: String,
     installer_size: u64,
     signature_size: u64,
+    installer_sha256: String,
+    updater_signature_sha256: String,
 }
 
 fn object<'a>(value: &'a Value, key: &str) -> Result<&'a serde_json::Map<String, Value>> {
@@ -208,7 +211,8 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
     }
 
     Ok(ArtifactSummary {
-        schema_version: 1,
+        schema_version: 2,
+        evidence_type: "tauri-nsis-artifact",
         product_name: PRODUCT_NAME,
         identifier: V4_IDENTIFIER,
         version: project_version.to_owned(),
@@ -222,6 +226,8 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
             .into_owned(),
         installer_size: installer.metadata()?.len(),
         signature_size: signature.metadata()?.len(),
+        installer_sha256: manifest::sha256(installer)?,
+        updater_signature_sha256: manifest::sha256(&signature)?,
     })
 }
 

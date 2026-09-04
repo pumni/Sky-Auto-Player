@@ -137,7 +137,7 @@ fn build_metadata(
     Ok(metadata)
 }
 
-fn validate_metadata(metadata: &TauriMetadata, _channel: Channel) -> Result<()> {
+fn validate_metadata(metadata: &TauriMetadata, channel: Channel) -> Result<()> {
     let parsed_version = version::parse(&metadata.version)?;
     if parsed_version.major != 4 {
         return Err(format!(
@@ -145,6 +145,23 @@ fn validate_metadata(metadata: &TauriMetadata, _channel: Channel) -> Result<()> 
             metadata.version
         )
         .into());
+    }
+    match channel {
+        Channel::Stable if !parsed_version.pre.is_empty() => {
+            return Err(format!(
+                "stable metadata must not contain a prerelease version: {}",
+                metadata.version
+            )
+            .into());
+        }
+        Channel::Beta if parsed_version.pre.is_empty() => {
+            return Err(format!(
+                "beta metadata must contain a prerelease version: {}",
+                metadata.version
+            )
+            .into());
+        }
+        _ => {}
     }
     if metadata.notes.chars().count() > MAX_NOTES_CHARS || metadata.notes.contains('\0') {
         return Err("updater notes are empty-safe but must be bounded and NUL-free".into());
@@ -375,5 +392,23 @@ mod tests {
             .unwrap()
             .signature = "signature-path.sig".into();
         assert!(validate_metadata(&bad_signature, Channel::Stable).is_err());
+    }
+
+    #[test]
+    fn channel_policy_keeps_stable_and_beta_candidates_isolated() {
+        let stable_url = canonical_asset_url("4.0.0");
+        assert!(validate_metadata(&metadata("4.0.0", &stable_url), Channel::Stable).is_ok());
+        for prerelease in ["4.0.0-beta.1", "4.0.0-rc.1"] {
+            let url = canonical_asset_url(prerelease);
+            assert!(
+                validate_metadata(&metadata(prerelease, &url), Channel::Stable).is_err(),
+                "stable accepted {prerelease}"
+            );
+            assert!(
+                validate_metadata(&metadata(prerelease, &url), Channel::Beta).is_ok(),
+                "beta rejected {prerelease}"
+            );
+        }
+        assert!(validate_metadata(&metadata("4.0.0", &stable_url), Channel::Beta).is_err());
     }
 }

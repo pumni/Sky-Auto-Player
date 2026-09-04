@@ -73,9 +73,13 @@ rust/target/dist/bundle/nsis/
 ```
 
 The verifier records the exact installer and signature filenames, version,
-identifier, target, install mode, and byte sizes in
-`TAURI_ARTIFACT_SUMMARY.json`. It rejects MSI, portable/updater ZIP, missing
-signatures, empty signatures, unexpected files, and version-naming drift.
+identifier, target, install mode, byte sizes, and SHA-256 digests in
+`TAURI_ARTIFACT_SUMMARY.json`. After the install/launch/uninstall smoke, the
+packaged qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with a
+bounded evidence schema. Promotion requires that evidence and compares its
+installer/.sig digests to the exact published GitHub asset bytes. It rejects
+MSI, portable/updater ZIP, missing signatures, empty signatures, unexpected
+files, and version-naming drift.
 
 That command is the canonical package build: it uses the normal production
 feature set and the generated test key/example endpoint only to exercise
