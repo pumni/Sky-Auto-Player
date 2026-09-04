@@ -44,6 +44,8 @@ not open every architecture page by default.
   integrity/provenance, rollback, and release contract.
 - [v4-tauri-packaging.md](v4-tauri-packaging.md) — v4 local Tauri NSIS/updater artifact qualification
   and current-user packaging contract.
+- [v4-release-authority.md](v4-release-authority.md) — v4 immutable release namespace, static
+  metadata, channel isolation, and read-only acceptance contract.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 - [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — historical evidence for
   the completed product/runtime Python retirement; not a tooling instruction.

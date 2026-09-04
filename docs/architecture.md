@@ -64,7 +64,8 @@ admitted successful publication.
 The Rust `UpdateService` owns stable/beta authority selection, bounded update
 state/progress, playback admission, and the Tauri updater lifecycle. React
 never receives endpoint, key, artifact, or downgrade policy data. Production
-authority is fail-closed until WO-04 configures it; the signed packaged
+authority is fixed to the dedicated v4 stable/beta metadata paths; missing
+metadata or the not-yet-configured WO-05 trust root fails closed. The signed packaged
 previous-v4 to candidate-v4 fixture is test-only. The retained
 `sky_updater` boundary continues to own the legacy line's transaction and
 recovery behavior.

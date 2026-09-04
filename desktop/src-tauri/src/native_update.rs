@@ -3,7 +3,9 @@
 //! React receives only the bounded DTOs below. Endpoint selection, updater
 //! configuration, signature verification, artifact handling, and install
 //! execution stay in this module and in the official Tauri updater plugin.
-//! The production authority is intentionally absent until WO-04 supplies it.
+//! The production authority is a fixed Rust-owned v4 metadata authority. The
+//! updater trust key remains external to this work order and is intentionally
+//! not committed here; a missing key makes the official updater fail closed.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, UpdateInstallLease};
 use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
@@ -21,6 +23,9 @@ use url::Url;
 
 const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const V4_RELEASE_AUTHORITY_REPOSITORY: &str = "pumni/Sky-Auto-Player-Releases";
+const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json";
+const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json";
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativeUpdateCandidate {
@@ -375,19 +380,28 @@ impl<R: Runtime> UpdateService<R> {
 }
 
 fn authority_endpoint(channel: UpdateChannel) -> Result<Url, String> {
-    #[cfg(feature = "tauri-update-fixture")]
-    {
-        let endpoint = match channel {
+    let endpoint = if cfg!(feature = "tauri-update-fixture") {
+        match channel {
             UpdateChannel::Stable => "http://127.0.0.1:17845/stable",
             UpdateChannel::Beta => "http://127.0.0.1:17845/beta",
+        }
+    } else {
+        let endpoint = match channel {
+            UpdateChannel::Stable => V4_STABLE_METADATA_ENDPOINT,
+            UpdateChannel::Beta => V4_BETA_METADATA_ENDPOINT,
         };
-        Url::parse(endpoint).map_err(|error| format!("fixture authority URL invalid: {error}"))
-    }
-    #[cfg(not(feature = "tauri-update-fixture"))]
-    {
-        let _ = channel;
-        Err("update_authority_not_configured: production authority is reserved for WO-04".into())
-    }
+        if !endpoint.contains(V4_RELEASE_AUTHORITY_REPOSITORY) {
+            return Err("v4 authority URL is outside the dedicated release repository".into());
+        }
+        endpoint
+    };
+    Url::parse(endpoint).map_err(|error| {
+        if cfg!(feature = "tauri-update-fixture") {
+            format!("fixture authority URL invalid: {error}")
+        } else {
+            format!("v4 authority URL invalid: {error}")
+        }
+    })
 }
 
 fn candidate_from_update(update: &Update, channel: UpdateChannel) -> NativeUpdateCandidate {
@@ -490,7 +504,10 @@ fn opaque_id() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     #[cfg(not(feature = "tauri-update-fixture"))]
-    use super::authority_endpoint;
+    use super::{
+        V4_BETA_METADATA_ENDPOINT, V4_RELEASE_AUTHORITY_REPOSITORY, V4_STABLE_METADATA_ENDPOINT,
+        authority_endpoint,
+    };
     use super::{bounded, update_activity_error};
     use crate::app_state::ActivityReservationError;
     #[cfg(not(feature = "tauri-update-fixture"))]
@@ -498,13 +515,18 @@ mod tests {
 
     #[cfg(not(feature = "tauri-update-fixture"))]
     #[test]
-    fn production_authority_is_fail_closed_until_wo04() {
-        let error = authority_endpoint(UpdateChannel::Stable)
-            .expect_err("production authority must not be invented before WO-04");
-        assert_eq!(
-            error,
-            "update_authority_not_configured: production authority is reserved for WO-04"
-        );
+    fn production_authority_is_fixed_and_channel_isolated() {
+        let stable = authority_endpoint(UpdateChannel::Stable).unwrap();
+        let beta = authority_endpoint(UpdateChannel::Beta).unwrap();
+        assert_eq!(stable.as_str(), V4_STABLE_METADATA_ENDPOINT);
+        assert_eq!(beta.as_str(), V4_BETA_METADATA_ENDPOINT);
+        assert_ne!(stable, beta);
+        for endpoint in [stable, beta] {
+            assert_eq!(endpoint.scheme(), "https");
+            assert_eq!(endpoint.host_str(), Some("raw.githubusercontent.com"));
+            assert!(endpoint.path().contains(V4_RELEASE_AUTHORITY_REPOSITORY));
+            assert!(!endpoint.path().contains("Sky-Auto-Player/releases"));
+        }
     }
 
     #[test]

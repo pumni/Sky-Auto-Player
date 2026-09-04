@@ -172,6 +172,44 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  release_authority:
+    name: V4 release authority acceptance
+    needs: changes
+    if: needs.changes.outputs.static_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Start CI timing
+        run: echo "SKY_CI_JOB_STARTED_RELEASE_AUTHORITY=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Read-only v3 namespace and dedicated v4 authority acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pwsh scripts/ci_v4_release_authority_acceptance.ps1
+
+      - name: Report CI timing
+        if: always()
+        run: |
+          start_time="${SKY_CI_JOB_STARTED_RELEASE_AUTHORITY:-}"
+          if [ -n "$start_time" ]; then
+            elapsed=$(( $(date +%s) - start_time ))
+            {
+              echo "## CI job timing"
+              echo "- Job: \`release-authority\`"
+              echo "- Elapsed seconds: \`$elapsed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   supply_chain:
     name: Supply-chain and advisory security
     needs: changes
@@ -764,7 +802,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, supply_chain, validate, updater_e2e, packaged]
+    needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -782,6 +820,7 @@ jobs:
           CODE_REQUIRED: ${{ needs.changes.outputs.code_required }}
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           STATIC_RESULT: ${{ needs.static.result }}
+          RELEASE_AUTHORITY_RESULT: ${{ needs.release_authority.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           UPDATER_E2E_RESULT: ${{ needs.updater_e2e.result }}
@@ -791,9 +830,11 @@ jobs:
           [[ "$CHANGES_RESULT" == "success" ]]
           if [[ "$STATIC_REQUIRED" == "true" ]]; then
             [[ "$STATIC_RESULT" == "success" ]]
+            [[ "$RELEASE_AUTHORITY_RESULT" == "success" ]]
             [[ "$SUPPLY_CHAIN_RESULT" == "success" ]]
           else
             [[ "$STATIC_RESULT" == "skipped" ]]
+            [[ "$RELEASE_AUTHORITY_RESULT" == "skipped" ]]
             [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
           fi
           if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi

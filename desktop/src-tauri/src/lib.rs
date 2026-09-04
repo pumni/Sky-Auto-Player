@@ -424,7 +424,7 @@ pub fn selftest_packaged_shell() -> i32 {
                 let _update_check: commands::UpdateCheckDto = serde_json::from_value(value)
                     .map_err(|error| format!("update.check response: {error}"))?;
             }
-            Err(error) if error.starts_with("update_authority_not_configured") => {}
+            Err(error) if error.starts_with("update_service_unavailable") => {}
             Err(error) => return Err(format!("unexpected update.check failure: {error}")),
         }
         let _diagnostics: commands::DiagnosticsEnabledDto =

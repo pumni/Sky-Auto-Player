@@ -6,11 +6,13 @@ tracks the native desktop Cargo version and is independent of the Rust
 playback dispatcher.
 
 V4 uses the Tauri NSIS package and the Rust-owned `UpdateService` described in
-`v4-tauri-packaging.md`. V4 does not use this document's GitHub Releases,
-portable artifact, or `sky_updater` transaction path; its production update
-authority is fail-closed until WO-04 configures it.
+`v4-tauri-packaging.md`. V4 does not use this document's legacy GitHub
+Releases, portable artifact, or `sky_updater` transaction path. Its fixed
+stable/beta metadata authority and deterministic promotion contract are in
+`v4-release-authority.md`; metadata remains unavailable until a qualified
+promotion, and the independent updater trust key remains a WO-05 concern.
 
-## 1. Distribution
+## 1. V3 maintenance distribution (legacy)
 
 Sky Auto Player has one canonical portable release package:
 
@@ -66,7 +68,7 @@ qualification pass. Assets are not replaced and the tag is not moved between
 draft creation and publication; a failed qualification requires a new version
 or RC instead.
 
-## 2. Runtime ownership
+## 2. V3 runtime ownership (legacy)
 
 The Native Desktop Runtime owns update checking, stable/beta selection,
 update-notice state, and the fixed manual fallback URL. It does not download,
@@ -140,7 +142,7 @@ directory; a valid active update makes startup exit cleanly with the bounded
 output `Sky Auto Player is currently updating to vX (Phase). The updater window
 will restart the app automatically.`
 
-## 3. Release selection and network
+## 3. V3 release selection and network (legacy)
 
 The desktop GUI is the canonical user-facing selector. Stable excludes prereleases;
 beta may include them. The checker uses:
@@ -165,6 +167,25 @@ The native updater uses HTTPS only and checks redirects against:
 `release-assets.githubusercontent.com`. Userinfo, HTTP URLs, arbitrary API
 bases, arbitrary mirrors, shell downloads, and TLS-verification bypasses are
 rejected. Release metadata never supplies the manual browser destination.
+
+### V4 authority boundary
+
+V4 never queries either v3 endpoint above. The Rust `UpdateService` selects
+exactly one of these fixed Tauri static metadata endpoints from the persisted
+channel setting:
+
+```text
+stable: https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json
+beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
+```
+
+The metadata contains only the canonical Windows NSIS asset from the dedicated
+`pumni/Sky-Auto-Player-Releases` authority and the exact contents of its
+`.exe.sig` sidecar. Stable and beta metadata have separate paths and are never
+interchanged. Endpoint URLs, keys, artifact paths, and downgrade policy do
+not cross the Rust/React boundary. See `v4-release-authority.md` for the
+generator, validator, post-qualification promotion, and read-only namespace
+acceptance.
 
 ## 4. Archive and manifest safety
 

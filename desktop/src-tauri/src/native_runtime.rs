@@ -1754,8 +1754,7 @@ impl NativeDesktopRuntime {
         self.update_service
             .as_ref()
             .ok_or_else(|| {
-                "update_authority_not_configured: production authority is reserved for WO-04"
-                    .to_string()
+                "update_service_unavailable: Rust-owned UpdateService is not configured".to_string()
             })?
             .check(&mut settings, |event| self.publish(event))
     }
@@ -1768,8 +1767,7 @@ impl NativeDesktopRuntime {
         self.update_service
             .as_ref()
             .ok_or_else(|| {
-                "update_authority_not_configured: production authority is reserved for WO-04"
-                    .to_string()
+                "update_service_unavailable: Rust-owned UpdateService is not configured".to_string()
             })?
             .install(&settings, &target_version, |event| self.publish(event))
     }

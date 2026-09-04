@@ -9,6 +9,7 @@ const V4_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
+const WINDOWS_ARCH: &str = "x64";
 
 #[derive(Debug, Serialize)]
 struct ArtifactSummary {
@@ -99,7 +100,7 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         })
     {
         return Err(
-            "WO-01 must not commit v4 updater endpoints or trust keys before the release authority exists".into(),
+            "checked-in Tauri updater endpoints and trust keys are forbidden: endpoints are Rust-owned and the v4 trust root belongs to WO-05".into(),
         );
     }
     Ok(())
@@ -198,10 +199,10 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
         return Err("Tauri updater signature is empty".into());
     }
     let installer_name = installer.file_name().unwrap().to_string_lossy();
-    let expected_prefix = format!("{PRODUCT_NAME}_{project_version}_");
-    if !installer_name.starts_with(&expected_prefix) {
+    let expected_name = format!("{PRODUCT_NAME}_{project_version}_{WINDOWS_ARCH}-setup.exe");
+    if installer_name != expected_name {
         return Err(format!(
-            "Tauri installer name does not match canonical product/version {expected_prefix}: {installer_name}"
+            "Tauri installer name does not match canonical product/version {expected_name}: {installer_name}"
         )
         .into());
     }
@@ -288,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn config_contract_rejects_v4_updater_authority_before_wo03() {
+    fn config_contract_rejects_unowned_v4_updater_configuration() {
         let mut config = valid_config();
         config["plugins"] = json!({"updater": {"endpoints": ["https://example.invalid"]}});
         assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
