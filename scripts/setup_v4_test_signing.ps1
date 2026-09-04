@@ -60,7 +60,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     [IO.File]::WriteAllText($workerPath, $worker, [Text.UTF8Encoding]::new($false))
     $process = Start-Process -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', $workerPath, '-OutputPath', $resultPath, '-CertificateSubject', $subject
+        '-File', $workerPath, '-OutputPath', $resultPath, '-CertificateSubject', ('"{0}"' -f $subject)
     ) -WindowStyle Hidden -RedirectStandardError $errorPath -PassThru
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
