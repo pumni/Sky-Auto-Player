@@ -68,7 +68,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
         $process.Refresh()
     }
     if (-not $process.HasExited) {
-        & taskkill.exe /PID $process.Id /T /F | Out-Null
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw "Timed out after ${TimeoutSeconds}s creating the ephemeral V4 Authenticode test certificate"
     }
     $process.WaitForExit(1000) | Out-Null
