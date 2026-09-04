@@ -710,6 +710,14 @@ jobs:
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
           }
 
+      - name: Run Authenticode tamper regression
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          pwsh scripts/test_v4_authenticode_integrity.ps1 `
+            -Source rust/target/dist/sky_desktop_shell.exe
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
+
       - name: Verify Tauri Authenticode signature
         env:
           RUSTUP_TOOLCHAIN: 1.98.0

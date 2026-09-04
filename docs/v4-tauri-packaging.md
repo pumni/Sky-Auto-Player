@@ -104,15 +104,23 @@ rust/target/dist/bundle/nsis/
 ```
 
 The Authenticode verifier requires an embedded signer certificate whose exact
-thumbprint matches the test PFX identity in test mode. It proves the file
-signature and digest independently of public CA trust. Windows may report the
-self-signed test certificate as `NotTrusted` or `UnknownError`; only those two
-statuses are accepted in test mode, and only with the explicit
-`test-self-signed-untrusted-chain` evidence marker. Production verification
-requires `Valid` plus the separately approved
+thumbprint matches the test PFX identity in test mode. It independently
+decodes the embedded PKCS#7 `SignedCms`, verifies the CMS signature, extracts
+the signed `SpcIndirectDataContent` digest, and recomputes the PE
+Authenticode image hash while excluding only the documented checksum,
+certificate-directory, and certificate-table fields. This proves file
+signature/integrity independently of public CA trust. Windows may report the
+self-signed test certificate as `NotTrusted` or `UnknownError`; those platform
+diagnostics are recorded in `status`/`platform_status`, but never serve as
+integrity proof; `integrity_status` is the independent cryptographic result. A
+test result is accepted only when the independent cryptographic verifier passes;
+unsupported or invalid statuses remain rejected. Production verification requires `Valid`
+plus the separately approved
 `SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT`; it never accepts an arbitrary
-trusted signer or the test exception. It records signer status and SHA-256 for
-every project-owned PE in the installed tree (the generated NSIS
+trusted signer or the test exception. A package-step tamper regression signs a
+disposable PE with the same PFX, verifies the clean bytes, mutates a hashed
+section byte, and requires verification to fail. It records signer status and
+SHA-256 for every project-owned PE in the installed tree (the generated NSIS
 `uninstall.exe` is checked for presence but is not a project-owned binary);
 the bundle verifier separately binds the final installer evidence to the exact
 NSIS candidate. The SPDX generator

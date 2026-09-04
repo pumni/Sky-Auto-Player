@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "v4_authenticode_crypto.ps1")
 if ($Artifact.Count -eq 0) { throw "At least one Authenticode artifact is required" }
 $mode = $Mode.ToLowerInvariant()
 $expectedThumbprint = if ($mode -eq "test") {
@@ -91,28 +92,56 @@ $records = foreach ($file in $files) {
     if ($seen.ContainsKey($file.Name)) { throw "Duplicate Authenticode evidence filename: $($file.Name)" }
     $seen[$file.Name] = $true
     $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-    $status = [string]$signature.Status
+    $platformStatus = [string]$signature.Status
     if ($null -eq $signature.SignerCertificate) {
-        throw "Authenticode signature has no embedded signer certificate for $($file.Name): $status"
+        throw "Authenticode signature has no embedded signer certificate for $($file.Name): $platformStatus"
     }
     $signerThumbprint = ([string]$signature.SignerCertificate.Thumbprint).Trim().ToUpperInvariant()
     if ($signerThumbprint -ne $expectedThumbprint) {
         throw "Authenticode signer thumbprint mismatch for $($file.Name): expected $expectedThumbprint, got $signerThumbprint"
     }
+    $rejectedStatuses = @(
+        "NotSigned",
+        "HashMismatch",
+        "Incompatible",
+        "NotSupported",
+        "PublisherMismatch",
+        "Error"
+    )
+    if ($rejectedStatuses -contains $platformStatus) {
+        throw "Unsupported or invalid Authenticode status for $($file.Name): $platformStatus"
+    }
+    $statusType = $signature.Status.GetType()
+    if ($statusType.IsEnum -and [Enum]::GetNames($statusType) -notcontains $platformStatus) {
+        throw "Unknown Authenticode status for $($file.Name): $platformStatus"
+    }
+    if ($mode -eq "production" -and $platformStatus -ne "Valid") {
+        throw "Production Authenticode verification requires Windows status Valid for $($file.Name): $platformStatus"
+    }
+    # The platform status is recorded, but it is not the test-mode integrity
+    # decision. In particular, UnknownError is never accepted as proof. The
+    # independent SignedCms/SPC PE-digest proof below is the only reason a
+    # non-Valid test status can continue.
+    $integrity = Get-AuthenticodeIntegrityProof -Path $file.FullName -ExpectedThumbprint $expectedThumbprint
+    if ($integrity.SignerThumbprint -ne $expectedThumbprint) {
+        throw "Independent Authenticode signer identity mismatch for $($file.Name)"
+    }
     $trustException = $null
-    $verification = "signature-valid"
-    if ($status -ne "Valid") {
-        if ($mode -ne "test" -or $status -notin @("NotTrusted", "UnknownError")) {
-            throw "Authenticode signature status is not accepted for $($file.Name): $status"
-        }
-        $trustException = "test-self-signed-untrusted-chain"
-        $verification = "signature-valid-untrusted-chain"
+    $verification = [string]$integrity.Verification
+    if ($mode -eq "test" -and $platformStatus -ne "Valid") {
+        $trustException = "test-platform-status-not-used-for-integrity"
     }
     [ordered]@{
         name = $file.Name
-        status = $status
+        status = $platformStatus
+        platform_status = $platformStatus
         verification = $verification
         trust_exception = $trustException
+        integrity_verifier = [string]$integrity.IntegrityVerifier
+        integrity_status = [string]$integrity.IntegrityStatus
+        signed_digest_algorithm = [string]$integrity.DigestAlgorithm
+        signed_digest = [string]$integrity.SignedDigest
+        computed_digest = [string]$integrity.ComputedDigest
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         signer_thumbprint = $signerThumbprint
         signer_subject = [string]$signature.SignerCertificate.Subject
@@ -125,9 +154,9 @@ $payload = [ordered]@{
     mode = $mode
     expected_signer_thumbprint = $expectedThumbprint
     verification_policy = if ($mode -eq "test") {
-        "embedded-signature-exact-test-identity-with-narrow-untrusted-chain-allowlist"
+        "exact-signer-independent-authenticode-integrity-with-platform-trust-diagnostic"
     } else {
-        "windows-valid-signature-exact-approved-production-identity"
+        "windows-valid-platform-and-exact-approved-signer-independent-authenticode-integrity"
     }
     files = @($records)
 }

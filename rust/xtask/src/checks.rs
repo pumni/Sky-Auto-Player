@@ -490,6 +490,8 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "bun run tauri signer generate",
         "TAURI_SIGNING_PRIVATE_KEY",
         "bun run tauri build --ci --config",
+        "- name: Run Authenticode tamper regression",
+        "scripts/test_v4_authenticode_integrity.ps1",
         "- name: Verify Tauri Authenticode signature",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
@@ -646,16 +648,32 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
         "expected_signer_thumbprint",
         "Resolve-TestPfxPath",
-        "if ($status -ne \"Valid\")",
-        "NotTrusted",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodeIntegrityProof",
+        "platform_status",
         "UnknownError",
-        "test-self-signed-untrusted-chain",
-        "signature-valid-untrusted-chain",
         "signer thumbprint mismatch",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
                 "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let crypto = fs::read_to_string(root.join("scripts/v4_authenticode_crypto.ps1"))?;
+    for marker in [
+        "Get-AuthenticodePeLayout",
+        "Get-AuthenticodeImageDigest",
+        "Get-AuthenticodeSpcDigest",
+        "SignedCms",
+        "CheckSignature($true)",
+        "signature-valid-independent-cryptographic-integrity",
+        "signedcms-spc-indirect-data-authenticode-hash",
+    ] {
+        if !crypto.contains(marker) {
+            return Err(format!(
+                "v4 independent Authenticode verifier is missing its required marker: {marker}"
             )
             .into());
         }
@@ -727,6 +745,23 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         if !signer.contains(marker) {
             return Err(format!(
                 "v4 Authenticode signer is missing its required PFX marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
+    for marker in [
+        "v4_authenticode_crypto.ps1",
+        "sign_v4_authenticode.ps1",
+        "Get-AuthenticodeSignature",
+        "clean signed PE PASS",
+        "Tampered signed PE unexpectedly passed independent Authenticode verification",
+        "Get-AuthenticodePeLayout",
+        "WriteAllBytes",
+    ] {
+        if !tamper.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode tamper regression is missing its required marker: {marker}"
             )
             .into());
         }
@@ -2478,6 +2513,8 @@ read_only=true
         # Tauri updater signer generation failed with exit code
       - run: bun run tauri build --ci --config test.json
         # Tauri build failed with exit code
+      - name: Run Authenticode tamper regression
+        run: pwsh scripts/test_v4_authenticode_integrity.ps1
       - name: Verify Tauri Authenticode signature
         run: pwsh scripts/verify_v4_authenticode.ps1
         # Authenticode verification failed with exit code

@@ -325,8 +325,16 @@ fn expected_authenticode_signer_thumbprint(mode: &str) -> Result<String> {
     Ok(thumbprint)
 }
 
-fn is_test_untrusted_chain_status(status: &str) -> bool {
-    matches!(status, "NotTrusted" | "UnknownError")
+fn is_rejected_authenticode_status(status: &str) -> bool {
+    matches!(
+        status,
+        "NotSigned"
+            | "HashMismatch"
+            | "Incompatible"
+            | "NotSupported"
+            | "PublisherMismatch"
+            | "Error"
+    )
 }
 
 fn validate_authenticode_evidence_value(
@@ -368,21 +376,51 @@ fn validate_authenticode_evidence_value(
         .get("status")
         .and_then(Value::as_str)
         .ok_or("canonical installer Authenticode status is missing")?;
+    if status.is_empty() {
+        return Err("canonical installer Authenticode status is empty".into());
+    }
+    let platform_status = file
+        .get("platform_status")
+        .and_then(Value::as_str)
+        .ok_or("canonical installer platform Authenticode status is missing")?;
+    if status != platform_status {
+        return Err(
+            "canonical installer Authenticode status disagrees with platform status".into(),
+        );
+    }
     let verification = file
         .get("verification")
         .and_then(Value::as_str)
         .ok_or("canonical installer Authenticode verification result is missing")?;
+    if verification != "signature-valid-independent-cryptographic-integrity"
+        || file.get("integrity_verifier").and_then(Value::as_str)
+            != Some("signedcms-spc-indirect-data-authenticode-hash")
+        || file.get("integrity_status").and_then(Value::as_str) != Some("Valid")
+        || file
+            .get("signed_digest")
+            .and_then(Value::as_str)
+            .zip(file.get("computed_digest").and_then(Value::as_str))
+            .map(|(signed, computed)| signed.eq_ignore_ascii_case(computed))
+            != Some(true)
+    {
+        return Err(
+            "canonical installer Authenticode cryptographic integrity proof is invalid".into(),
+        );
+    }
     let trust_exception = file.get("trust_exception");
-    match status {
+    if is_rejected_authenticode_status(platform_status) {
+        return Err(format!(
+            "canonical installer platform Authenticode status is not accepted: {platform_status}"
+        )
+        .into());
+    }
+    match platform_status {
         "Valid"
-            if verification == "signature-valid"
+            if verification == "signature-valid-independent-cryptographic-integrity"
                 && trust_exception.map(Value::is_null).unwrap_or(true) => {}
-        status
-            if mode == "test"
-                && is_test_untrusted_chain_status(status)
-                && verification == "signature-valid-untrusted-chain"
-                && trust_exception.and_then(Value::as_str)
-                    == Some("test-self-signed-untrusted-chain") => {}
+        _ if mode == "test"
+            && trust_exception.and_then(Value::as_str)
+                == Some("test-platform-status-not-used-for-integrity") => {}
         _ => {
             return Err(format!(
                 "canonical installer Authenticode status is not accepted: {status}"
@@ -543,8 +581,13 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
-                    "verification": "signature-valid",
+                    "platform_status": "Valid",
+                    "verification": "signature-valid-independent-cryptographic-integrity",
                     "trust_exception": null,
+                    "integrity_verifier": "signedcms-spc-indirect-data-authenticode-hash",
+                    "integrity_status": "Valid",
+                    "signed_digest": "A".repeat(64),
+                    "computed_digest": "a".repeat(64),
                     "signer_thumbprint": "A".repeat(40),
                     "sha256": summary.installer_sha256.clone(),
                 }]
@@ -562,9 +605,14 @@ mod tests {
             "expected_signer_thumbprint": "A".repeat(40),
             "files": [{
                 "name": summary.installer.clone(),
-                "status": "UnknownError",
-                "verification": "signature-valid-untrusted-chain",
-                "trust_exception": "test-self-signed-untrusted-chain",
+                "status": "NotTrusted",
+                "platform_status": "NotTrusted",
+                "verification": "signature-valid-independent-cryptographic-integrity",
+                "trust_exception": "test-platform-status-not-used-for-integrity",
+                "integrity_verifier": "signedcms-spc-indirect-data-authenticode-hash",
+                "integrity_status": "Valid",
+                "signed_digest": "A".repeat(64),
+                "computed_digest": "a".repeat(64),
                 "signer_thumbprint": "A".repeat(40),
                 "sha256": summary.installer_sha256.clone(),
             }]
@@ -595,6 +643,7 @@ mod tests {
 
         let mut unsupported_status = untrusted_payload.clone();
         unsupported_status["files"][0]["status"] = json!("NotSigned");
+        unsupported_status["files"][0]["platform_status"] = json!("NotSigned");
         assert!(
             validate_authenticode_evidence_value(
                 &unsupported_status,
@@ -614,8 +663,13 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
-                    "verification": "signature-valid",
+                    "platform_status": "Valid",
+                    "verification": "signature-valid-independent-cryptographic-integrity",
                     "trust_exception": null,
+                    "integrity_verifier": "signedcms-spc-indirect-data-authenticode-hash",
+                    "integrity_status": "Valid",
+                    "signed_digest": "A".repeat(64),
+                    "computed_digest": "a".repeat(64),
                     "signer_thumbprint": "B".repeat(40),
                     "sha256": summary.installer_sha256.clone(),
                 }]
@@ -638,8 +692,13 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
-                    "verification": "signature-valid",
+                    "platform_status": "Valid",
+                    "verification": "signature-valid-independent-cryptographic-integrity",
                     "trust_exception": null,
+                    "integrity_verifier": "signedcms-spc-indirect-data-authenticode-hash",
+                    "integrity_status": "Valid",
+                    "signed_digest": "A".repeat(64),
+                    "computed_digest": "a".repeat(64),
                     "signer_thumbprint": "A".repeat(40),
                     "sha256": "0".repeat(64),
                 }]
