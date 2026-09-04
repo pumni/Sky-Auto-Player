@@ -490,6 +490,9 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "bun run tauri signer generate",
         "TAURI_SIGNING_PRIVATE_KEY",
         "bun run tauri build --ci --config",
+        "name: Resolve GitHub CLI for artifact attestation verification",
+        "Get-Command gh.exe -CommandType Application",
+        "SKY_GH_PATH=$ghPath",
         "- name: Run Authenticode tamper regression",
         "scripts/test_v4_authenticode_integrity.ps1",
         "- name: Verify Tauri Authenticode signature",
@@ -506,6 +509,15 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "Installer attestation verification failed with exit code",
         "Updater signature attestation verification failed with exit code",
         "SBOM attestation verification failed with exit code",
+        "GH_TOKEN: ${{ github.token }}",
+        "attestation verify --help",
+        "--source-digest $env:GITHUB_SHA",
+        "--signer-workflow $signerWorkflow",
+        "& $env:SKY_GH_PATH attestation verify",
+        "--predicate-type https://spdx.dev/Document/v2.3",
+        "GitHub CLI absolute path is unavailable for attestation verification",
+        "GH_TOKEN is unavailable for attestation verification",
+        "Installed GitHub CLI lacks the required exact-source attestation options",
         "current-user install, launch, and uninstall",
         "sky_desktop_shell.exe",
         "uninstall.exe",
@@ -519,6 +531,52 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    let attestation_start = packaged
+        .find("      - name: Verify exact GitHub artifact attestations\n")
+        .ok_or("canonical v4 packaged CI is missing the attestation verification step")?;
+    let attestation_end = packaged[attestation_start..]
+        .find("\n      - name: Upload exact Tauri NSIS release candidate\n")
+        .map(|offset| attestation_start + offset)
+        .ok_or("canonical v4 packaged CI attestation step has no bounded end")?;
+    let attestation = &packaged[attestation_start..attestation_end];
+    if attestation
+        .matches("--source-digest $env:GITHUB_SHA")
+        .count()
+        != 3
+        || attestation
+            .matches("--signer-workflow $signerWorkflow")
+            .count()
+            != 3
+        || attestation.matches("-R $env:GITHUB_REPOSITORY").count() != 3
+        || attestation
+            .lines()
+            .any(|line| line.trim_start().starts_with("gh attestation verify"))
+    {
+        return Err(
+            "canonical v4 packaged CI attestation verification must use absolute gh, exact source digest, signer workflow, and repository binding for all three checks".into(),
+        );
+    }
+    let gh_resolution_position = packaged
+        .find("      - name: Resolve GitHub CLI for artifact attestation verification\n")
+        .ok_or("canonical v4 packaged CI is missing the GitHub CLI resolution step")?;
+    let restricted_path_position = packaged
+        .find("      - name: Construct Python-unavailable canonical environment\n")
+        .ok_or("canonical v4 packaged CI is missing the restricted environment step")?;
+    if gh_resolution_position >= restricted_path_position {
+        return Err(
+            "canonical v4 packaged CI must resolve the absolute GitHub CLI path before restricted PATH construction".into(),
+        );
+    }
+    let restricted_path_end = packaged[restricted_path_position..]
+        .find("\n      - name: Build and sign canonical Tauri NSIS artifact\n")
+        .map(|offset| restricted_path_position + offset)
+        .ok_or("canonical v4 packaged CI restricted environment step has no bounded end")?;
+    let restricted_environment = &packaged[restricted_path_position..restricted_path_end];
+    if restricted_environment.contains("gh.exe") || restricted_environment.contains("GitHub CLI") {
+        return Err(
+            "canonical v4 packaged CI must not add the GitHub CLI directory to the restricted build PATH".into(),
+        );
     }
 
     let validate_start = normalized
@@ -2521,6 +2579,10 @@ read_only=true
     name: Packaged v4 Tauri NSIS qualification
     needs: [changes, static, release_authority, supply_chain, validate]
     steps:
+      - name: Resolve GitHub CLI for artifact attestation verification
+        run: Get-Command gh.exe -CommandType Application; SKY_GH_PATH=$ghPath
+      - name: Construct Python-unavailable canonical environment
+        run: restricted PATH
       - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
       - run: bun run build
@@ -2551,7 +2613,19 @@ read_only=true
         # Installer attestation verification failed with exit code
         # Updater signature attestation verification failed with exit code
         # SBOM attestation verification failed with exit code
-      - uses: actions/upload-artifact@v7
+      - name: Verify exact GitHub artifact attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $attestationHelp = (& $env:SKY_GH_PATH attestation verify --help 2>&1 | Out-String)
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          & $env:SKY_GH_PATH attestation verify $signature -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          # GitHub CLI absolute path is unavailable for attestation verification
+          # GH_TOKEN is unavailable for attestation verification
+          # Installed GitHub CLI lacks the required exact-source attestation options
+      - name: Upload exact Tauri NSIS release candidate
+        uses: actions/upload-artifact@v7
         path: rust/target/dist/bundle/nsis
   status:
     needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]

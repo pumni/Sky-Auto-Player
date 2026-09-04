@@ -630,6 +630,15 @@ jobs:
       - name: Fail fast on packaged build dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
 
+      - name: Resolve GitHub CLI for artifact attestation verification
+        run: |
+          $ghCommand = Get-Command gh.exe -CommandType Application -ErrorAction Stop
+          $ghPath = [IO.Path]::GetFullPath($ghCommand.Source)
+          if (-not (Test-Path -LiteralPath $ghPath -PathType Leaf)) {
+            throw "GitHub CLI executable is not a regular file: $ghPath"
+          }
+          "SKY_GH_PATH=$ghPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
       - name: Install pinned desktop dependencies
         working-directory: desktop
         run: bun install --frozen-lockfile
@@ -857,14 +866,29 @@ jobs:
 
       - name: Verify exact GitHub artifact attestations
         if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:SKY_GH_PATH) -or
+              -not (Test-Path -LiteralPath $env:SKY_GH_PATH -PathType Leaf)) {
+            throw "GitHub CLI absolute path is unavailable for attestation verification"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "GH_TOKEN is unavailable for attestation verification"
+          }
+          $attestationHelp = (& $env:SKY_GH_PATH attestation verify --help 2>&1 | Out-String)
+          if ($attestationHelp -notmatch '--source-digest' -or
+              $attestationHelp -notmatch '--signer-workflow') {
+            throw "Installed GitHub CLI lacks the required exact-source attestation options"
+          }
           $installer = Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name
           $signature = "$installer.sig"
-          gh attestation verify $installer -R $env:GITHUB_REPOSITORY
+          $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/ci.yml"
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "Installer attestation verification failed with exit code $LASTEXITCODE" }
-          gh attestation verify $signature -R $env:GITHUB_REPOSITORY
+          & $env:SKY_GH_PATH attestation verify $signature -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "Updater signature attestation verification failed with exit code $LASTEXITCODE" }
-          gh attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "SBOM attestation verification failed with exit code $LASTEXITCODE" }
 
       - name: Upload exact Tauri NSIS release candidate
