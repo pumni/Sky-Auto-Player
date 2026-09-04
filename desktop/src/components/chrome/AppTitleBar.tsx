@@ -19,7 +19,6 @@ interface AppTitleBarProps {
 }
 
 export function AppTitleBar({
-  bootstrap,
   useStore,
   settingsTriggerRef,
   windowControls,
