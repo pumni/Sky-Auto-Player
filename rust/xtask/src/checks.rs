@@ -434,6 +434,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
 
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
+    let package_needs = "needs: [changes, static, release_authority, supply_chain, validate]";
     let fixture_start = normalized
         .find("  updater_e2e:\n")
         .ok_or("CI workflow is missing the isolated updater fixture job")?;
@@ -442,6 +443,13 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         .map(|offset| fixture_start + offset)
         .ok_or("CI workflow updater fixture job must precede the canonical packaged job")?;
     let fixture = &normalized[fixture_start..fixture_end];
+    let required_needs_line = format!("    {package_needs}");
+    if !fixture.lines().any(|line| line == required_needs_line) {
+        return Err(format!(
+            "updater fixture job must declare the required dependency topology: {package_needs}"
+        )
+        .into());
+    }
     for marker in [
         "name: Packaged v4 updater fixture qualification",
         "CARGO_TARGET_DIR",
@@ -467,6 +475,12 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         .map(|offset| start + offset)
         .ok_or("CI workflow packaged job is missing the status boundary")?;
     let packaged = &normalized[start..end];
+    if !packaged.lines().any(|line| line == required_needs_line) {
+        return Err(format!(
+            "packaged job must declare the required dependency topology: {package_needs}"
+        )
+        .into());
+    }
 
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
@@ -476,10 +490,24 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "bun run tauri signer generate",
         "TAURI_SIGNING_PRIVATE_KEY",
         "bun run tauri build --ci --config",
-        "cargo xtask verify-tauri-bundle",
+        "- name: Verify Tauri Authenticode signature",
+        "- name: Generate Tauri SPDX SBOM",
+        "- name: Verify Tauri SPDX SBOM",
+        "- name: Verify exact Tauri NSIS bundle",
+        "Authenticode verification failed with exit code",
+        "SBOM generation failed with exit code",
+        "SBOM verification failed with exit code",
+        "Tauri bundle verification failed with exit code",
+        "Installed Authenticode verification failed with exit code",
+        "Tauri updater signer generation failed with exit code",
+        "Tauri build failed with exit code",
+        "Installer attestation verification failed with exit code",
+        "Updater signature attestation verification failed with exit code",
+        "SBOM attestation verification failed with exit code",
         "current-user install, launch, and uninstall",
         "sky_desktop_shell.exe",
         "uninstall.exe",
+        "scripts/cleanup_v4_test_signing.ps1",
         "rust/target/dist/bundle/nsis",
         "actions/upload-artifact@",
     ] {
@@ -489,6 +517,17 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+
+    let validate_start = normalized
+        .find("  validate:\n")
+        .ok_or("CI workflow is missing the validate job")?;
+    let validate_end = normalized[validate_start..]
+        .find("\n  updater_e2e:\n")
+        .map(|offset| validate_start + offset)
+        .ok_or("CI workflow validate job must precede the updater fixture job")?;
+    if normalized[validate_start..validate_end].contains("certutil.exe") {
+        return Err("ordinary Windows validation must not require certutil.exe".into());
     }
 
     for forbidden in [
@@ -578,6 +617,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     for marker in [
         "scripts/setup_v4_test_signing.ps1",
         "scripts/verify_v4_authenticode.ps1",
+        "scripts/cleanup_v4_test_signing.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
         "scripts/ci_require_windows_tools.ps1",
@@ -596,6 +636,46 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     if ci.matches("cargo install cargo-vet").count() != 1 {
         return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
+    }
+
+    let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "expected_signer_thumbprint",
+        "Status -ne \"Valid\"",
+        "signer thumbprint mismatch",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let setup = fs::read_to_string(root.join("scripts/setup_v4_test_signing.ps1"))?;
+    for marker in [
+        "foreach ($store in @('Root', 'TrustedPublisher'))",
+        "CurrentUser/${store}",
+    ] {
+        if !setup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test trust setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_test_signing.ps1"))?;
+    for marker in [
+        "@('My', 'TrustedPublisher', 'Root')",
+        "CurrentUser/${store}",
+    ] {
+        if !cleanup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test cleanup is missing its required marker: {marker}"
+            )
+            .into());
+        }
     }
 
     let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
@@ -2318,8 +2398,13 @@ read_only=true
     #[test]
     fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
         let source = r#"
+  validate:
+    name: Windows compatibility and unit tests
+    steps:
+      - run: cargo xtask check rust
   updater_e2e:
     name: Packaged v4 updater fixture qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     env:
       RUNNER_TEMP: runner-temp
       CARGO_TARGET_DIR: runner-temp
@@ -2329,18 +2414,38 @@ read_only=true
       - run: pwsh scripts/ci_tauri_update_e2e.ps1 -BundleDir runner-temp
   packaged:
     name: Packaged v4 Tauri NSIS qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     steps:
       - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run tauri signer generate
         env: { TAURI_SIGNING_PRIVATE_KEY: test }
+        # Tauri updater signer generation failed with exit code
       - run: bun run tauri build --ci --config test.json
-      - run: cargo xtask verify-tauri-bundle
-       - name: Qualify current-user install, launch, and uninstall
-         run: check sky_desktop_shell.exe uninstall.exe
-       - uses: actions/upload-artifact@v7
-         path: rust/target/dist/bundle/nsis
+        # Tauri build failed with exit code
+      - name: Verify Tauri Authenticode signature
+        run: pwsh scripts/verify_v4_authenticode.ps1
+        # Authenticode verification failed with exit code
+        # Installed Authenticode verification failed with exit code
+      - name: Generate Tauri SPDX SBOM
+        run: cargo xtask sbom generate
+        # SBOM generation failed with exit code
+      - name: Verify Tauri SPDX SBOM
+        run: cargo xtask sbom verify
+        # SBOM verification failed with exit code
+      - name: Verify exact Tauri NSIS bundle
+        run: cargo xtask verify-tauri-bundle
+        # Tauri bundle verification failed with exit code
+      - name: Qualify current-user install, launch, and uninstall
+        run: check sky_desktop_shell.exe uninstall.exe
+      - name: Clean up ephemeral Authenticode test certificate
+        run: pwsh scripts/cleanup_v4_test_signing.ps1
+        # Installer attestation verification failed with exit code
+        # Updater signature attestation verification failed with exit code
+        # SBOM attestation verification failed with exit code
+      - uses: actions/upload-artifact@v7
+        path: rust/target/dist/bundle/nsis
   status:
     needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]
     env: { UPDATER_E2E_RESULT: success }
@@ -2348,6 +2453,11 @@ read_only=true
         assert!(packaged_ci_contract_source(source).is_ok());
         let crlf_source = source.replace('\n', "\r\n");
         assert!(packaged_ci_contract_source(&crlf_source).is_ok());
+        let unblocked_package_jobs = source.replace(
+            "needs: [changes, static, release_authority, supply_chain, validate]",
+            "needs: changes",
+        );
+        assert!(packaged_ci_contract_source(&unblocked_package_jobs).is_err());
         for forbidden in [
             "tauri-update-fixture",
             "dangerousInsecureTransportProtocol",
@@ -2374,8 +2484,13 @@ read_only=true
     #[test]
     fn packaged_ci_contract_requires_the_isolated_fixture_job() {
         let source = r#"
+  validate:
+    name: Windows compatibility and unit tests
+    steps:
+      - run: cargo xtask check rust
   packaged:
     name: Packaged v4 Tauri NSIS qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     steps:
       - run: bun install --frozen-lockfile
       - run: bun run build

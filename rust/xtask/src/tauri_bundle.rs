@@ -297,17 +297,57 @@ pub fn verify(
 
 fn validate_authenticode_evidence(path: &Path, summary: &ArtifactSummary) -> Result<()> {
     let payload: Value = serde_json::from_slice(&fs::read(path)?)?;
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or("Authenticode evidence mode is missing")?;
+    let expected_thumbprint = expected_authenticode_signer_thumbprint(mode)?;
+    validate_authenticode_evidence_value(&payload, summary, mode, &expected_thumbprint)
+}
+
+fn expected_authenticode_signer_thumbprint(mode: &str) -> Result<String> {
+    let variable = match mode {
+        "test" => "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+        "production" => "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        _ => return Err("Authenticode evidence mode is invalid".into()),
+    };
+    let thumbprint = std::env::var(variable)
+        .map_err(|_| format!("Authenticode verification requires {variable}"))?
+        .trim()
+        .to_ascii_uppercase();
+    if thumbprint.len() != 40
+        || !thumbprint
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(format!("{variable} must be a 40-character SHA-1 thumbprint").into());
+    }
+    Ok(thumbprint)
+}
+
+fn validate_authenticode_evidence_value(
+    payload: &Value,
+    summary: &ArtifactSummary,
+    mode: &str,
+    expected_thumbprint: &str,
+) -> Result<()> {
     if payload.get("schema_version").and_then(Value::as_u64) != Some(1)
         || payload.get("evidence_type").and_then(Value::as_str) != Some("authenticode-verification")
     {
         return Err("Authenticode evidence schema is invalid".into());
     }
-    let mode = payload
-        .get("mode")
-        .and_then(Value::as_str)
-        .ok_or("Authenticode evidence mode is missing")?;
     if !matches!(mode, "test" | "production") {
         return Err("Authenticode evidence mode is invalid".into());
+    }
+    if payload
+        .get("expected_signer_thumbprint")
+        .and_then(Value::as_str)
+        .map(|value| value.eq_ignore_ascii_case(expected_thumbprint))
+        != Some(true)
+    {
+        return Err(
+            "Authenticode evidence approved signer identity is missing or mismatched".into(),
+        );
     }
     let files = payload
         .get("files")
@@ -322,6 +362,16 @@ fn validate_authenticode_evidence(path: &Path, summary: &ArtifactSummary) -> Res
     }
     if file.get("status").and_then(Value::as_str) != Some("Valid") {
         return Err("canonical installer Authenticode signature is not valid".into());
+    }
+    if file
+        .get("signer_thumbprint")
+        .and_then(Value::as_str)
+        .map(|value| value.eq_ignore_ascii_case(expected_thumbprint))
+        != Some(true)
+    {
+        return Err(
+            "canonical installer Authenticode signer identity is missing or mismatched".into(),
+        );
     }
     if file
         .get("sha256")
@@ -442,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticode_evidence_binds_valid_installer_bytes() {
+    fn authenticode_evidence_binds_approved_signer_and_installer_bytes() {
         let root = std::env::temp_dir().join(format!(
             "sky-xtask-tauri-authenticode-{}-{:?}",
             std::process::id(),
@@ -462,32 +512,63 @@ mod tests {
                 "schema_version": 1,
                 "evidence_type": "authenticode-verification",
                 "mode": "test",
+                "expected_signer_thumbprint": "A".repeat(40),
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
+                    "signer_thumbprint": "A".repeat(40),
                     "sha256": summary.installer_sha256.clone(),
                 }]
             }))
             .unwrap(),
         )
         .unwrap();
-        validate_authenticode_evidence(&evidence_path, &summary).unwrap();
+        let payload: Value = serde_json::from_slice(&fs::read(&evidence_path).unwrap()).unwrap();
+        validate_authenticode_evidence_value(&payload, &summary, "test", &"A".repeat(40)).unwrap();
         fs::write(
             &evidence_path,
             serde_json::to_vec(&json!({
                 "schema_version": 1,
                 "evidence_type": "authenticode-verification",
                 "mode": "test",
+                "expected_signer_thumbprint": "A".repeat(40),
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
+                    "signer_thumbprint": "B".repeat(40),
+                    "sha256": summary.installer_sha256.clone(),
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let payload: Value = serde_json::from_slice(&fs::read(&evidence_path).unwrap()).unwrap();
+        assert!(
+            validate_authenticode_evidence_value(&payload, &summary, "test", &"A".repeat(40))
+                .is_err()
+        );
+        fs::write(
+            &evidence_path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "evidence_type": "authenticode-verification",
+                "mode": "test",
+                "expected_signer_thumbprint": "A".repeat(40),
+                "files": [{
+                    "name": summary.installer.clone(),
+                    "status": "Valid",
+                    "signer_thumbprint": "A".repeat(40),
                     "sha256": "0".repeat(64),
                 }]
             }))
             .unwrap(),
         )
         .unwrap();
-        assert!(validate_authenticode_evidence(&evidence_path, &summary).is_err());
+        let payload: Value = serde_json::from_slice(&fs::read(&evidence_path).unwrap()).unwrap();
+        assert!(
+            validate_authenticode_evidence_value(&payload, &summary, "test", &"A".repeat(40))
+                .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

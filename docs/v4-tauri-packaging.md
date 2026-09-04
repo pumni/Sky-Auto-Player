@@ -8,7 +8,8 @@ Production metadata may be absent until a qualified promotion. The independent
 Tauri updater trust root is committed as public material in the Tauri config
 and Rust updater boundary; missing or invalid trust material fails closed.
 Authenticode provider credentials remain an external Track B release input
-and are never committed.
+and are never committed; Track B must also provide the approved signer
+thumbprint used by production verification.
 
 ## Canonical package contract
 
@@ -87,6 +88,7 @@ pwsh scripts/verify_v4_authenticode.ps1 `
   -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
 cargo xtask sbom generate --artifact-dir rust/target/dist/bundle/nsis --output rust/target/dist/SBOM.spdx.json
 cargo xtask sbom verify --artifact-dir rust/target/dist/bundle/nsis --sbom rust/target/dist/SBOM.spdx.json
+pwsh scripts/cleanup_v4_test_signing.ps1
 ```
 
 The expected bundle directory contains exactly:
@@ -97,7 +99,11 @@ rust/target/dist/bundle/nsis/
   Sky Auto Player_<version>_<arch>-setup.exe.sig
 ```
 
-The Authenticode verifier records signer status and SHA-256 for every
+The Authenticode verifier requires a genuinely `Valid` Windows Authenticode
+result and the exact signer thumbprint from `SKY_AUTHENTICODE_TEST_THUMBPRINT`
+in test mode. Production verification requires the separately approved
+`SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT`; it never accepts an arbitrary
+trusted signer. It records signer status and SHA-256 for every
 project-owned PE in the installed tree (the generated NSIS `uninstall.exe` is
 checked for presence but is not a project-owned binary); the bundle verifier
 separately binds the final installer evidence to the exact NSIS candidate. The SPDX generator
@@ -115,7 +121,10 @@ signatures, empty signatures, unexpected files, and version-naming drift.
 That command is the canonical package build: it uses the normal production
 feature set and the generated test updater key/example endpoint only to
 exercise updater artifact signing. The Authenticode certificate is an
-ephemeral test fixture. It does not enable the updater fixture or insecure
+ephemeral test fixture, trusted only in the runner's `CurrentUser\Root` and
+`CurrentUser\TrustedPublisher` stores for this qualification. The CI always
+removes it from `My`, `Root`, and `TrustedPublisher` after signing and
+installed-PE verification. It does not enable the updater fixture or insecure
 transport. The separate `updater_e2e` CI job builds both previous-v4 and
 candidate-v4 into a `RUNNER_TEMP` `CARGO_TARGET_DIR` with
 `tauri-update-fixture`; its loopback endpoint and insecure transport setting

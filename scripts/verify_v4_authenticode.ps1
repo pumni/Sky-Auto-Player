@@ -11,6 +11,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($Artifact.Count -eq 0) { throw "At least one Authenticode artifact is required" }
+$mode = $Mode.ToLowerInvariant()
+$expectedThumbprint = if ($mode -eq "test") {
+    [string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT
+} else {
+    [string]$env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT
+}
+$expectedThumbprint = $expectedThumbprint.Trim()
+if ($expectedThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
+    $identityVariable = if ($mode -eq "test") {
+        "SKY_AUTHENTICODE_TEST_THUMBPRINT"
+    } else {
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT"
+    }
+    throw "V4 Authenticode verification requires the exact approved signer thumbprint in $identityVariable"
+}
+$expectedThumbprint = $expectedThumbprint.ToUpperInvariant()
 
 $files = foreach ($path in $Artifact) {
     $resolved = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path
@@ -30,11 +46,15 @@ $records = foreach ($file in $files) {
     if ([string]$signature.Status -ne "Valid" -or $null -eq $signature.SignerCertificate) {
         throw "Authenticode signature is not valid for $($file.Name): $($signature.Status)"
     }
+    $signerThumbprint = ([string]$signature.SignerCertificate.Thumbprint).Trim().ToUpperInvariant()
+    if ($signerThumbprint -ne $expectedThumbprint) {
+        throw "Authenticode signer thumbprint mismatch for $($file.Name): expected $expectedThumbprint, got $signerThumbprint"
+    }
     [ordered]@{
         name = $file.Name
         status = [string]$signature.Status
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        signer_thumbprint = ([string]$signature.SignerCertificate.Thumbprint).ToUpperInvariant()
+        signer_thumbprint = $signerThumbprint
         signer_subject = [string]$signature.SignerCertificate.Subject
     }
 }
@@ -42,7 +62,8 @@ $records = foreach ($file in $files) {
 $payload = [ordered]@{
     schema_version = 1
     evidence_type = "authenticode-verification"
-    mode = $Mode.ToLowerInvariant()
+    mode = $mode
+    expected_signer_thumbprint = $expectedThumbprint
     files = @($records)
 }
 

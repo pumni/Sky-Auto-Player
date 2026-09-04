@@ -384,7 +384,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Fail fast on Windows validation dependencies
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,certutil.exe
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
 
       - name: Install Chromium for desktop browser smoke
         if: needs.changes.outputs.browser_required == 'true'
@@ -459,7 +459,7 @@ jobs:
 
   updater_e2e:
     name: Packaged v4 updater fixture qualification
-    needs: changes
+    needs: [changes, static, release_authority, supply_chain, validate]
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
@@ -549,6 +549,10 @@ jobs:
           # Its generated configs alone enable dangerousInsecureTransportProtocol on loopback.
           pwsh scripts/ci_tauri_update_e2e.ps1 -BundleDir $fixtureBundle
 
+      - name: Clean up ephemeral Authenticode test certificate
+        if: always()
+        run: pwsh scripts/cleanup_v4_test_signing.ps1
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats
@@ -559,7 +563,7 @@ jobs:
 
   packaged:
     name: Packaged v4 Tauri NSIS qualification
-    needs: changes
+    needs: [changes, static, release_authority, supply_chain, validate]
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
@@ -676,6 +680,7 @@ jobs:
             Push-Location desktop
             try {
               bun run tauri signer generate --ci --password "" --force -w $keyPath
+              if ($LASTEXITCODE -ne 0) { throw "Tauri updater signer generation failed with exit code $LASTEXITCODE" }
               $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
               $testPublicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
               [ordered]@{
@@ -689,6 +694,7 @@ jobs:
               $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
               $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
               bun run tauri build --ci --config $configPath -- --profile dist
+              if ($LASTEXITCODE -ne 0) { throw "Tauri build failed with exit code $LASTEXITCODE" }
             } finally {
               Pop-Location
             }
@@ -704,7 +710,7 @@ jobs:
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
           }
 
-      - name: Verify exact Tauri NSIS bundle
+      - name: Verify Tauri Authenticode signature
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
@@ -712,17 +718,36 @@ jobs:
             -Mode test `
             -Artifact (Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name) `
             -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
+
+      - name: Generate Tauri SPDX SBOM
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
           cargo xtask sbom generate `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
             --output rust/target/dist/SBOM.spdx.json
+          if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
+
+      - name: Verify Tauri SPDX SBOM
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
           cargo xtask sbom verify `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
             --sbom rust/target/dist/SBOM.spdx.json
+          if ($LASTEXITCODE -ne 0) { throw "SBOM verification failed with exit code $LASTEXITCODE" }
+
+      - name: Verify exact Tauri NSIS bundle
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
           cargo xtask verify-tauri-bundle `
             --bundle-dir $env:SKY_TAURI_BUNDLE `
             --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json `
             --authenticode-evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json `
             --sbom rust/target/dist/SBOM.spdx.json
+          if ($LASTEXITCODE -ne 0) { throw "Tauri bundle verification failed with exit code $LASTEXITCODE" }
 
       - name: Report exact Tauri NSIS artifact identity
         run: |
@@ -757,6 +782,7 @@ jobs:
               -Mode test `
               -Artifact $installedPe.FullName `
               -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
+            if ($LASTEXITCODE -ne 0) { throw "Installed Authenticode verification failed with exit code $LASTEXITCODE" }
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
             Start-Sleep -Seconds 5
             if ($appProcess.HasExited) { throw "Packaged Tauri application exited during launch smoke (exit $($appProcess.ExitCode))" }
@@ -802,6 +828,10 @@ jobs:
           }
           $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
 
+      - name: Clean up ephemeral Authenticode test certificate
+        if: always()
+        run: pwsh scripts/cleanup_v4_test_signing.ps1
+
       - name: Attest exact Tauri NSIS artifact set
         if: github.event_name != 'pull_request'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -823,8 +853,11 @@ jobs:
           $installer = Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name
           $signature = "$installer.sig"
           gh attestation verify $installer -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Installer attestation verification failed with exit code $LASTEXITCODE" }
           gh attestation verify $signature -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Updater signature attestation verification failed with exit code $LASTEXITCODE" }
           gh attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3
+          if ($LASTEXITCODE -ne 0) { throw "SBOM attestation verification failed with exit code $LASTEXITCODE" }
 
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

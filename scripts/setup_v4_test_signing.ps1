@@ -110,36 +110,39 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     try {
         Write-Host "Exporting certificate"
         Export-Certificate -Cert $certificate -FilePath $certificatePath -Type CERT | Out-Null
-        Write-Host "Importing certificate into CurrentUser/TrustedPublisher via certutil"
-        $importProcess = Start-Process -FilePath 'certutil.exe' -ArgumentList @(
-            '-f', '-user', '-addstore', 'TrustedPublisher', $certificatePath
-        ) -WindowStyle Hidden -RedirectStandardOutput $importOutputPath -RedirectStandardError $importErrorPath -PassThru
-        Write-Host "Certificate import worker launched (pid=$($importProcess.Id))"
-        $importDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-        while (-not $importProcess.HasExited -and [DateTime]::UtcNow -lt $importDeadline) {
-            Start-Sleep -Milliseconds 250
-            $importProcess.Refresh()
-        }
-        if (-not $importProcess.HasExited) {
-            Write-Host "Certificate import worker exceeded deadline; requesting asynchronous termination (pid=$($importProcess.Id))"
-            Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID', $importProcess.Id, '/T', '/F') -WindowStyle Hidden | Out-Null
-            throw "Timed out after ${TimeoutSeconds}s importing the ephemeral V4 Authenticode test certificate"
-        }
-        Write-Host "Certificate import worker exited (pid=$($importProcess.Id), exit=$($importProcess.ExitCode))"
-        if ($importProcess.ExitCode -ne 0) {
-            $importOutput = if (Test-Path -LiteralPath $importOutputPath) {
-                ([IO.File]::ReadAllText($importOutputPath)).Trim()
-            } else {
-                ''
+        foreach ($store in @('Root', 'TrustedPublisher')) {
+            Remove-Item -LiteralPath $importOutputPath, $importErrorPath -Force -ErrorAction SilentlyContinue
+            Write-Host "Importing certificate into CurrentUser/${store} via certutil"
+            $importProcess = Start-Process -FilePath 'certutil.exe' -ArgumentList @(
+                '-f', '-user', '-addstore', $store, $certificatePath
+            ) -WindowStyle Hidden -RedirectStandardOutput $importOutputPath -RedirectStandardError $importErrorPath -PassThru
+            Write-Host "Certificate import worker launched (store=${store}, pid=$($importProcess.Id))"
+            $importDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            while (-not $importProcess.HasExited -and [DateTime]::UtcNow -lt $importDeadline) {
+                Start-Sleep -Milliseconds 250
+                $importProcess.Refresh()
             }
-            $importError = if (Test-Path -LiteralPath $importErrorPath) {
-                ([IO.File]::ReadAllText($importErrorPath)).Trim()
-            } else {
-                'certutil produced no diagnostics'
+            if (-not $importProcess.HasExited) {
+                Write-Host "Certificate import worker exceeded deadline; requesting asynchronous termination (store=${store}, pid=$($importProcess.Id))"
+                Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID', $importProcess.Id, '/T', '/F') -WindowStyle Hidden | Out-Null
+                throw "Timed out after ${TimeoutSeconds}s importing the ephemeral V4 Authenticode test certificate into ${store}"
             }
-            throw "certutil failed to import the ephemeral V4 Authenticode test certificate: $importOutput $importError"
+            Write-Host "Certificate import worker exited (store=${store}, pid=$($importProcess.Id), exit=$($importProcess.ExitCode))"
+            if ($importProcess.ExitCode -ne 0) {
+                $importOutput = if (Test-Path -LiteralPath $importOutputPath) {
+                    ([IO.File]::ReadAllText($importOutputPath)).Trim()
+                } else {
+                    ''
+                }
+                $importError = if (Test-Path -LiteralPath $importErrorPath) {
+                    ([IO.File]::ReadAllText($importErrorPath)).Trim()
+                } else {
+                    'certutil produced no diagnostics'
+                }
+                throw "certutil failed to import the ephemeral V4 Authenticode test certificate into ${store}: $importOutput $importError"
+            }
         }
-        Write-Host "Certificate publisher trust import completed"
+        Write-Host "Certificate root and publisher trust imports completed"
     } finally {
         Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
     }
@@ -153,6 +156,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
         Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath "Cert:\CurrentUser\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
     }
     throw
 } finally {
