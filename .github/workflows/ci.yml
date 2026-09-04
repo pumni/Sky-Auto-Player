@@ -180,6 +180,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Start CI timing
         run: echo "SKY_CI_JOB_STARTED_RELEASE_AUTHORITY=$(date +%s)" >> "$GITHUB_ENV"
