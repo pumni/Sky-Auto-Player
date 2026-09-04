@@ -58,19 +58,25 @@ if ($null -eq $certificate -or [string]::IsNullOrWhiteSpace($certificate.Thumbpr
 Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding ASCII
 '@
     [IO.File]::WriteAllText($workerPath, $worker, [Text.UTF8Encoding]::new($false))
+    Write-Host "Certificate worker script written"
+    Write-Host "Launching certificate worker"
     $process = Start-Process -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', $workerPath, '-OutputPath', $resultPath, '-CertificateSubject', ('"{0}"' -f $subject)
     ) -WindowStyle Hidden -RedirectStandardError $errorPath -PassThru
+    Write-Host "Certificate worker launched (pid=$($process.Id))"
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 250
         $process.Refresh()
     }
     if (-not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Write-Host "Certificate worker exceeded deadline; requesting asynchronous termination (pid=$($process.Id))"
+        Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID', $process.Id, '/T', '/F') -WindowStyle Hidden | Out-Null
+        Write-Host "Certificate worker termination requested"
         throw "Timed out after ${TimeoutSeconds}s creating the ephemeral V4 Authenticode test certificate"
     }
+    Write-Host "Certificate worker exited (pid=$($process.Id), exit=$($process.ExitCode))"
     $process.WaitForExit(1000) | Out-Null
     if ($process.ExitCode -ne 0) {
         $workerError = if (Test-Path -LiteralPath $errorPath) {
