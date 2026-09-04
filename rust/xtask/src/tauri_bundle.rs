@@ -1,4 +1,4 @@
-use crate::{Result, manifest, repo, version};
+use crate::{Result, manifest, repo, sbom, version};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
@@ -10,6 +10,9 @@ const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
 const WINDOWS_ARCH: &str = "x64";
+// Public Tauri updater trust material. The matching private key is generated
+// and stored outside the repository by the release operator.
+pub const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK";
 
 #[derive(Debug, Serialize)]
 struct ArtifactSummary {
@@ -86,6 +89,19 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .get("windows")
         .and_then(Value::as_object)
         .ok_or("Tauri bundle.windows must be configured")?;
+    let sign_command = windows
+        .get("signCommand")
+        .and_then(Value::as_str)
+        .ok_or("Tauri bundle.windows.signCommand must be configured")?;
+    if !sign_command.starts_with("pwsh ")
+        || !sign_command.contains("sign_v4_authenticode.ps1")
+        || !sign_command.contains("%1")
+        || sign_command.contains(['&', '|', ';', '`'])
+    {
+        return Err(
+            "Tauri Windows signing must use the fail-closed v4 Authenticode provider seam".into(),
+        );
+    }
     let nsis = windows
         .get("nsis")
         .and_then(Value::as_object)
@@ -94,19 +110,43 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         return Err("Tauri NSIS installMode must be currentUser".into());
     }
 
-    if let Some(updater) = config
+    let updater = config
         .get("plugins")
         .and_then(Value::as_object)
         .and_then(|plugins| plugins.get("updater"))
-        && updater.as_object().is_some_and(|updater| {
-            updater.contains_key("endpoints") || updater.contains_key("pubkey")
-        })
-    {
+        .and_then(Value::as_object)
+        .ok_or("Tauri updater configuration must contain the v4 public trust root")?;
+    let public_key = updater
+        .get("pubkey")
+        .and_then(Value::as_str)
+        .ok_or("Tauri updater v4 public key is missing")?;
+    if public_key != V4_TAURI_UPDATER_PUBLIC_KEY || !valid_public_key(public_key) {
         return Err(
-            "checked-in Tauri updater endpoints and trust keys are forbidden: endpoints are Rust-owned and the v4 trust root belongs to WO-05".into(),
+            "Tauri updater public key is missing, malformed, or is not the independent v4 root"
+                .into(),
         );
     }
+    if updater.contains_key("endpoints") {
+        return Err("Tauri updater endpoints are Rust-owned and must not be checked in".into());
+    }
+    if updater
+        .get("dangerousInsecureTransportProtocol")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err("production Tauri updater transport must remain HTTPS-only".into());
+    }
     Ok(())
+}
+
+fn valid_public_key(value: &str) -> bool {
+    value.len() <= 4096
+        && !value.is_empty()
+        && !value.contains("release-2026")
+        && !value.contains("PRIVATE KEY")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
 }
 
 pub fn validate_config(root: &Path) -> Result<()> {
@@ -231,16 +271,66 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
     })
 }
 
-pub fn verify(root: &Path, bundle_dir: &Path, summary_path: Option<&Path>) -> Result<()> {
+pub fn verify(
+    root: &Path,
+    bundle_dir: &Path,
+    summary_path: Option<&Path>,
+    authenticode_evidence_path: Option<&Path>,
+    sbom_path: Option<&Path>,
+) -> Result<()> {
     validate_config(root)?;
     let project_version = repo::project_version(root)?;
     let summary = artifact_summary(bundle_dir, &project_version)?;
+    let authenticode_evidence_path = authenticode_evidence_path
+        .ok_or("canonical Tauri qualification requires Authenticode evidence")?;
+    validate_authenticode_evidence(authenticode_evidence_path, &summary)?;
+    let sbom_path = sbom_path.ok_or("canonical Tauri qualification requires an SPDX SBOM")?;
+    sbom::verify(root, bundle_dir, sbom_path)?;
     let payload = serde_json::to_vec_pretty(&json!(summary))?;
     if let Some(path) = summary_path {
         fs::write(path, &payload)?;
         println!("[xtask] Tauri artifact summary: {}", path.display());
     }
     println!("{}", String::from_utf8(payload)?);
+    Ok(())
+}
+
+fn validate_authenticode_evidence(path: &Path, summary: &ArtifactSummary) -> Result<()> {
+    let payload: Value = serde_json::from_slice(&fs::read(path)?)?;
+    if payload.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || payload.get("evidence_type").and_then(Value::as_str) != Some("authenticode-verification")
+    {
+        return Err("Authenticode evidence schema is invalid".into());
+    }
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or("Authenticode evidence mode is missing")?;
+    if !matches!(mode, "test" | "production") {
+        return Err("Authenticode evidence mode is invalid".into());
+    }
+    let files = payload
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or("Authenticode evidence files are missing")?;
+    if files.len() != 1 {
+        return Err("canonical Tauri bundle evidence must cover exactly one installer".into());
+    }
+    let file = &files[0];
+    if file.get("name").and_then(Value::as_str) != Some(summary.installer.as_str()) {
+        return Err("Authenticode evidence does not cover the canonical installer".into());
+    }
+    if file.get("status").and_then(Value::as_str) != Some("Valid") {
+        return Err("canonical installer Authenticode signature is not valid".into());
+    }
+    if file
+        .get("sha256")
+        .and_then(Value::as_str)
+        .map(|value| value.eq_ignore_ascii_case(&summary.installer_sha256))
+        != Some(true)
+    {
+        return Err("Authenticode evidence installer digest does not match the candidate".into());
+    }
     Ok(())
 }
 
@@ -257,8 +347,12 @@ mod tests {
                 "active": true,
                 "targets": [NSIS_TARGET],
                 "createUpdaterArtifacts": true,
-                "windows": {"nsis": {"installMode": CURRENT_USER_INSTALL_MODE}}
-            }
+                "windows": {
+                    "signCommand": "pwsh -File ../scripts/sign_v4_authenticode.ps1 %1",
+                    "nsis": {"installMode": CURRENT_USER_INSTALL_MODE}
+                }
+            },
+            "plugins": {"updater": {"pubkey": V4_TAURI_UPDATER_PUBLIC_KEY}}
         })
     }
 
@@ -302,6 +396,17 @@ mod tests {
     }
 
     #[test]
+    fn config_contract_rejects_the_legacy_update_root_and_signing_bypass() {
+        let mut config = valid_config();
+        config["plugins"]["updater"]["pubkey"] = json!("release-2026");
+        assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
+
+        let mut config = valid_config();
+        config["bundle"]["windows"]["signCommand"] = json!("true %1");
+        assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
+    }
+
+    #[test]
     fn artifact_verifier_requires_setup_executable_and_signature_pair() {
         let root =
             std::env::temp_dir().join(format!("sky-xtask-tauri-bundle-{}", std::process::id()));
@@ -333,6 +438,56 @@ mod tests {
         )
         .unwrap();
         assert!(artifact_summary(&root, "4.0.0-alpha.1").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn authenticode_evidence_binds_valid_installer_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-tauri-authenticode-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let installer = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe");
+        let signature = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe.sig");
+        fs::write(&installer, b"installer").unwrap();
+        fs::write(&signature, b"test-signature\n").unwrap();
+        let summary = artifact_summary(&root, "4.0.0-alpha.1").unwrap();
+        let evidence_path = root.join("authenticode.json");
+        fs::write(
+            &evidence_path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "evidence_type": "authenticode-verification",
+                "mode": "test",
+                "files": [{
+                    "name": summary.installer.clone(),
+                    "status": "Valid",
+                    "sha256": summary.installer_sha256.clone(),
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        validate_authenticode_evidence(&evidence_path, &summary).unwrap();
+        fs::write(
+            &evidence_path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "evidence_type": "authenticode-verification",
+                "mode": "test",
+                "files": [{
+                    "name": summary.installer.clone(),
+                    "status": "Valid",
+                    "sha256": "0".repeat(64),
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(validate_authenticode_evidence(&evidence_path, &summary).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

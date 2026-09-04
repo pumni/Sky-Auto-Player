@@ -263,6 +263,9 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json",
         "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json",
         "endpoints(vec![endpoint])",
+        "V4_TAURI_UPDATER_PUBLIC_KEY",
+        "V4_TAURI_UPDATER_PUBLIC_KEYS",
+        ".pubkey(public_key)",
         "production_authority_is_fixed_and_channel_isolated",
     ] {
         if !native.contains(marker) {
@@ -276,6 +279,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "api.github.com/repos/pumni/Sky-Auto-Player/releases",
         "update_authority_not_configured",
         "std::env::var(\"",
+        "release-2026",
     ] {
         if native.contains(forbidden) {
             return Err(format!(
@@ -526,6 +530,105 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     packaged_ci_contract_source(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
+    Ok(())
+}
+
+fn v4_trust_material_contract(root: &Path) -> Result<()> {
+    let config_path = root.join("desktop/src-tauri/tauri.conf.json");
+    let config = fs::read_to_string(&config_path)?;
+    for marker in ["sign_v4_authenticode.ps1", "plugins", "updater", "pubkey"] {
+        if !config.contains(marker) {
+            return Err(
+                format!("v4 Tauri trust config is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if config.contains("release-2026") || config.contains("PRIVATE KEY") {
+        return Err("v4 Tauri config contains legacy or private key material".into());
+    }
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?;
+    for marker in [
+        "scripts/setup_v4_test_signing.ps1",
+        "scripts/verify_v4_authenticode.ps1",
+        "scripts/test_v4_updater_key_rotation.ps1",
+        "cargo xtask sbom generate",
+        "cargo xtask sbom verify",
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+        "Verify exact GitHub artifact attestations",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+
+    let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+    let rsa_private_begin = ["BEGIN", "RSA", "PRIVATE", "KEY"].join(" ");
+    let ec_private_begin = ["BEGIN", "EC", "PRIVATE", "KEY"].join(" ");
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.path().components().any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules" | "dist")
+                )
+            })
+        })
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [".key", ".pem", ".pfx", ".p12"]
+            .iter()
+            .any(|suffix| filename.ends_with(suffix))
+        {
+            return Err(format!(
+                "private signing material file is present in the repository tree: {}",
+                path.display()
+            )
+            .into());
+        }
+        let Ok(content) = String::from_utf8(fs::read(path)?) else {
+            continue;
+        };
+        for (line_number, line) in content.lines().enumerate() {
+            if line.contains(&private_begin)
+                || line.contains(&rsa_private_begin)
+                || line.contains(&ec_private_begin)
+            {
+                return Err(format!(
+                    "private key material marker found at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+            let secret_name = ["TAURI_SIGNING_PRIVATE", "_KEY"].concat();
+            if line.contains(&secret_name)
+                && ["Write-Host", "Write-Output", "echo", "Add-Content"]
+                    .iter()
+                    .any(|sink| line.contains(sink))
+            {
+                return Err(format!(
+                    "signing secret is sent to a logging/output sink at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+        }
+    }
+    println!("[xtask] v4 trust-material and secret-output guards: PASS");
     Ok(())
 }
 
@@ -1832,6 +1935,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            v4_trust_material_contract(&root)?;
             legacy_release_guard(&root)?;
             release_authority_contract(&root)?;
             packaged_ci_contract(&root)?;

@@ -4,8 +4,9 @@
 //! configuration, signature verification, artifact handling, and install
 //! execution stay in this module and in the official Tauri updater plugin.
 //! The production authority is a fixed Rust-owned v4 metadata authority. The
-//! updater trust key remains external to this work order and is intentionally
-//! not committed here; a missing key makes the official updater fail closed.
+//! updater trust root is independent from the v3 release authority and is
+//! compiled into this boundary; a missing or invalid root makes the official
+//! updater fail closed.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, UpdateInstallLease};
 use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
@@ -26,6 +27,10 @@ const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const V4_RELEASE_AUTHORITY_REPOSITORY: &str = "pumni/Sky-Auto-Player-Releases";
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json";
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json";
+#[cfg(not(feature = "tauri-update-fixture"))]
+const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK";
+#[cfg(not(feature = "tauri-update-fixture"))]
+const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativeUpdateCandidate {
@@ -317,9 +322,34 @@ impl<R: Runtime> UpdateService<R> {
 
     fn check_official(&self, channel: UpdateChannel) -> Result<Option<Update>, String> {
         let endpoint = authority_endpoint(channel)?;
-        let builder = self
-            .app
-            .updater_builder()
+        #[cfg(feature = "tauri-update-fixture")]
+        {
+            self.check_official_with_key(endpoint, None)
+        }
+        #[cfg(not(feature = "tauri-update-fixture"))]
+        {
+            let mut last_error = None;
+            for public_key in V4_TAURI_UPDATER_PUBLIC_KEYS {
+                match self.check_official_with_key(endpoint.clone(), Some(public_key)) {
+                    Ok(update) => return Ok(update),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            Err(last_error.unwrap_or_else(|| "update trust root is unavailable".into()))
+        }
+    }
+
+    fn check_official_with_key(
+        &self,
+        endpoint: Url,
+        public_key: Option<&str>,
+    ) -> Result<Option<Update>, String> {
+        let builder = self.app.updater_builder();
+        let builder = match public_key {
+            Some(public_key) => builder.pubkey(public_key),
+            None => builder,
+        };
+        let builder = builder
             .endpoints(vec![endpoint])
             .map_err(|error| format!("update authority rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
@@ -506,7 +536,7 @@ mod tests {
     #[cfg(not(feature = "tauri-update-fixture"))]
     use super::{
         V4_BETA_METADATA_ENDPOINT, V4_RELEASE_AUTHORITY_REPOSITORY, V4_STABLE_METADATA_ENDPOINT,
-        authority_endpoint,
+        V4_TAURI_UPDATER_PUBLIC_KEY, V4_TAURI_UPDATER_PUBLIC_KEYS, authority_endpoint,
     };
     use super::{bounded, update_activity_error};
     use crate::app_state::ActivityReservationError;
@@ -527,6 +557,20 @@ mod tests {
             assert!(endpoint.path().contains(V4_RELEASE_AUTHORITY_REPOSITORY));
             assert!(!endpoint.path().contains("Sky-Auto-Player/releases"));
         }
+    }
+
+    #[cfg(not(feature = "tauri-update-fixture"))]
+    #[test]
+    fn production_updater_trust_root_is_independent_and_bounded() {
+        assert_eq!(V4_TAURI_UPDATER_PUBLIC_KEYS, &[V4_TAURI_UPDATER_PUBLIC_KEY]);
+        assert!(!V4_TAURI_UPDATER_PUBLIC_KEY.is_empty());
+        assert!(V4_TAURI_UPDATER_PUBLIC_KEY.len() <= 4096);
+        assert!(!V4_TAURI_UPDATER_PUBLIC_KEY.contains("PRIVATE KEY"));
+        assert!(
+            V4_TAURI_UPDATER_PUBLIC_KEY
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        );
     }
 
     #[test]

@@ -10,7 +10,9 @@ V4 uses the Tauri NSIS package and the Rust-owned `UpdateService` described in
 Releases, portable artifact, or `sky_updater` transaction path. Its fixed
 stable/beta metadata authority and deterministic promotion contract are in
 `v4-release-authority.md`; metadata remains unavailable until a qualified
-promotion, and the independent updater trust key remains a WO-05 concern.
+promotion. V4 uses an independent public updater trust root; its private
+signing key and Authenticode provider credentials remain outside the repository
+and are fail-closed release inputs.
 
 ## 1. V3 maintenance distribution (legacy)
 

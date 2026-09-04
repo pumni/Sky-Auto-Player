@@ -548,6 +548,12 @@ jobs:
         working-directory: desktop
         run: bun run build
 
+      - name: Prepare ephemeral Authenticode test certificate
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV
+
+      - name: Exercise non-production updater key rotation fixture
+        run: pwsh scripts/test_v4_updater_key_rotation.ps1
+
       - name: Configure isolated updater fixture target
         run: |
           $fixtureTarget = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-updater-fixture-target"
@@ -611,6 +617,11 @@ jobs:
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -673,6 +684,9 @@ jobs:
       - name: Build pinned desktop frontend
         working-directory: desktop
         run: bun run build
+
+      - name: Prepare ephemeral Authenticode test certificate
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV
 
       - name: Construct Python-unavailable canonical environment
         run: |
@@ -744,9 +758,21 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
+          pwsh scripts/verify_v4_authenticode.ps1 `
+            -Mode test `
+            -Artifact (Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name) `
+            -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+          cargo xtask sbom generate `
+            --artifact-dir $env:SKY_TAURI_BUNDLE `
+            --output rust/target/dist/SBOM.spdx.json
+          cargo xtask sbom verify `
+            --artifact-dir $env:SKY_TAURI_BUNDLE `
+            --sbom rust/target/dist/SBOM.spdx.json
           cargo xtask verify-tauri-bundle `
             --bundle-dir $env:SKY_TAURI_BUNDLE `
-            --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
+            --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json `
+            --authenticode-evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json `
+            --sbom rust/target/dist/SBOM.spdx.json
 
       - name: Report exact Tauri NSIS artifact identity
         run: |
@@ -774,6 +800,13 @@ jobs:
           try {
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
+            $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
+              Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
+            if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }
+            pwsh scripts/verify_v4_authenticode.ps1 `
+              -Mode test `
+              -Artifact $installedPe.FullName `
+              -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
             Start-Sleep -Seconds 5
             if ($appProcess.HasExited) { throw "Packaged Tauri application exited during launch smoke (exit $($appProcess.ExitCode))" }
@@ -811,8 +844,37 @@ jobs:
             signature_size = $summary.signature_size
             installer_sha256 = $summary.installer_sha256
             updater_signature_sha256 = $summary.updater_signature_sha256
+            authenticode_mode = "test"
+            authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
+            authenticode_evidence_sha256 = (Get-FileHash -LiteralPath rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json -Algorithm SHA256).Hash.ToLowerInvariant()
+            sbom = "SBOM.spdx.json"
+            sbom_sha256 = (Get-FileHash -LiteralPath rust/target/dist/SBOM.spdx.json -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
+
+      - name: Attest exact Tauri NSIS artifact set
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.exe
+            ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.sig
+
+      - name: Attest exact Tauri SPDX SBOM
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.exe
+          sbom-path: ${{ github.workspace }}/rust/target/dist/SBOM.spdx.json
+
+      - name: Verify exact GitHub artifact attestations
+        if: github.event_name != 'pull_request'
+        run: |
+          $installer = Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name
+          $signature = "$installer.sig"
+          gh attestation verify $installer -R $env:GITHUB_REPOSITORY
+          gh attestation verify $signature -R $env:GITHUB_REPOSITORY
+          gh attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3
 
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -822,6 +884,9 @@ jobs:
             rust/target/dist/bundle/nsis
             rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
             rust/target/dist/V4_QUALIFICATION_EVIDENCE.json
+            rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+            rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
+            rust/target/dist/SBOM.spdx.json
           if-no-files-found: error
           retention-days: 14
 
