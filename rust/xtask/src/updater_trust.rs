@@ -229,6 +229,35 @@ pub fn verify_local_private_key(
     result
 }
 
+/// Verify a Tauri updater signature against an installer file using the canonical v4 public root.
+pub fn verify_updater_signature(installer_path: &Path, signature_path: &Path) -> Result<()> {
+    if !installer_path.is_file() {
+        return Err(format!(
+            "installer file does not exist: {}",
+            installer_path.display()
+        )
+        .into());
+    }
+    if !signature_path.is_file() {
+        return Err(format!(
+            "updater signature file does not exist: {}",
+            signature_path.display()
+        )
+        .into());
+    }
+    let installer_bytes = fs::read(installer_path)?;
+    if installer_bytes.is_empty() {
+        return Err("installer file is empty".into());
+    }
+    let signature = decode_signature(signature_path)?;
+    let public_key = decode_public_key(crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY)?;
+    public_key
+        .verify(&installer_bytes, &signature, false)
+        .map_err(|_| "updater signature does not match the canonical production v4 public root")?;
+    println!("[xtask] V4 Updater Signature Verification: PASS (Key ID: F6355260A0C663D5)");
+    Ok(())
+}
+
 pub fn extract_key_id_from_public_key(value: &str) -> Result<String> {
     let decoded = STANDARD.decode(value)?;
     let text = String::from_utf8(decoded)?;
@@ -433,6 +462,29 @@ mod tests {
         let empty_key = root.join("empty.key");
         fs::write(&empty_key, "").unwrap();
         assert!(verify_local_private_key(&crate::repo::root(), &empty_key, None).is_err());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_updater_signature_rejects_missing_or_corrupt_files() {
+        let root = fixture_root();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let dummy_exe = root.join("dummy.exe");
+        let dummy_sig = root.join("dummy.exe.sig");
+        assert!(verify_updater_signature(&dummy_exe, &dummy_sig).is_err());
+
+        fs::write(&dummy_exe, b"MZ dummy executable content").unwrap();
+        assert!(verify_updater_signature(&dummy_exe, &dummy_sig).is_err());
+
+        fs::write(
+            &dummy_sig,
+            "untrusted comment: signature\ninvalid signature data",
+        )
+        .unwrap();
+        assert!(verify_updater_signature(&dummy_exe, &dummy_sig).is_err());
 
         let _ = fs::remove_dir_all(root);
     }

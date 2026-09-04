@@ -83,9 +83,10 @@ cargo xtask verify-tauri-bundle `
 The build config invokes `scripts/sign_v4_authenticode.ps1`; it signs only in
 test mode with the ephemeral certificate. In production mode it fails closed
 until an approved Authenticode provider is configured. See
-`v4-authenticode-provider-seam.md` for the formalized provider seam specification
-and `v4-updater-key-custody.md` for the private key custody and rotation runbook.
-To create the evidence used above, run:
+`v4-authenticode-provider-seam.md` for the formalized provider seam specification,
+`v4-updater-key-custody.md` for the private key custody and rotation runbook, and
+`v4-release-execution-topology.md` for the single-candidate release orchestrator
+and runner execution topology. To create the evidence used above, run:
 
 ```powershell
 pwsh scripts/verify_v4_authenticode.ps1 `

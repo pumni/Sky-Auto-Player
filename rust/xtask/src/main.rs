@@ -307,6 +307,32 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        "updater-trust" if args.get(1).map(String::as_str) == Some("verify-signature") => {
+            let mut installer = None;
+            let mut signature = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--installer" => {
+                        installer = Some(required_value(&args, &mut i, "--installer")?)
+                    }
+                    "--signature" => {
+                        signature = Some(required_value(&args, &mut i, "--signature")?)
+                    }
+                    option => {
+                        return Err(format!(
+                            "unknown updater-trust verify-signature option: {option}"
+                        )
+                        .into());
+                    }
+                }
+                i += 1;
+            }
+            let installer = installer.ok_or("verify-signature requires --installer <path>")?;
+            let signature = signature.ok_or("verify-signature requires --signature <path>")?;
+            updater_trust::verify_updater_signature(Path::new(&installer), Path::new(&signature))?;
+            Ok(())
+        }
         "updater-trust" if args.get(1).map(String::as_str) == Some("rotation-self-test") => {
             let mut old_public = None;
             let mut new_public = None;

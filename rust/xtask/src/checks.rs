@@ -498,6 +498,9 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "- name: Run V4 production signing contract test",
         "scripts/test_v4_production_signing_contract.ps1",
         "V4 production signing contract test failed with exit code",
+        "- name: Run V4 production release orchestrator contract test",
+        "scripts/test_v4_production_orchestrator.ps1",
+        "V4 production release orchestrator contract test failed with exit code",
         "- name: Verify Tauri Authenticode signature",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
@@ -868,6 +871,63 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             "v4 updater key verification script must delegate to updater-trust verify-private-key"
                 .into(),
         );
+    }
+    let orchestrator =
+        fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
+    for marker in [
+        "ExpectedSourceSha",
+        "Version",
+        "Channel",
+        "UpdaterPrivateKeyPath",
+        "ApprovedSignerThumbprint",
+        "updater-trust verify-private-key",
+        "updater-trust verify-signature",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
+        "sign_v4_authenticode.ps1",
+        "verify_v4_authenticode.ps1",
+    ] {
+        if !orchestrator.contains(marker) {
+            return Err(format!(
+                "v4 production release orchestrator is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let orchestrator_test =
+        fs::read_to_string(root.join("scripts/test_v4_production_orchestrator.ps1"))?;
+    for marker in [
+        "[PASS] All V4 production orchestrator contract tests passed",
+        "Parameter validation fails closed on missing parameters",
+        "Source SHA mismatch fails closed before packaging",
+        "Channel policy validation fails closed on invalid SemVer / channel",
+        "Mutually exclusive provider configuration fails closed",
+        "Wrong updater private key fails pre-flight verification before packaging",
+        "Secret values are not emitted by expected error paths",
+        "Updater signature verification rejects corrupted signature",
+        "Tampered candidate binary is detected",
+        "Production verification rejects CI test certificate",
+    ] {
+        if !orchestrator_test.contains(marker) {
+            return Err(format!(
+                "v4 production orchestrator test is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let topology_doc = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;
+    for marker in [
+        "Build Once, Qualify Exact Bytes",
+        "Runner Trust Boundaries and Key Custody",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
+    ] {
+        if !topology_doc.contains(marker) {
+            return Err(format!(
+                "v4 release execution topology documentation is missing required marker: {marker}"
+            )
+            .into());
+        }
     }
 
     let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
@@ -2625,6 +2685,9 @@ read_only=true
       - name: Run V4 production signing contract test
         run: pwsh scripts/test_v4_production_signing_contract.ps1
         # V4 production signing contract test failed with exit code
+      - name: Run V4 production release orchestrator contract test
+        run: pwsh scripts/test_v4_production_orchestrator.ps1
+        # V4 production release orchestrator contract test failed with exit code
       - name: Verify Tauri Authenticode signature
         run: pwsh scripts/verify_v4_authenticode.ps1
         # Authenticode verification failed with exit code
