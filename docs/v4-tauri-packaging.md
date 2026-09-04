@@ -2,9 +2,11 @@
 
 V4 uses the Tauri Windows bundler as its canonical package producer. The
 foundation enables the NSIS package and updater artifact generation. The
-Rust-owned `UpdateService` now drives the official Tauri updater, but
-production authority remains intentionally fail-closed until WO-04 supplies
-the endpoint and trust key.
+Rust-owned `UpdateService` now drives the official Tauri updater through the
+dedicated v4 release authority described in `v4-release-authority.md`.
+Production metadata may be absent until a qualified promotion, and the
+independent updater trust key remains a WO-05 responsibility; either case
+fails closed.
 
 ## Canonical package contract
 
@@ -24,8 +26,8 @@ It is not a v4 packaging entry point.
 
 The Tauri config intentionally omits its optional `version` field so Cargo
 remains the single v4 version source. `cargo xtask check static` rejects
-version/config drift and accidental updater authority in the production Tauri
-configuration. Test authority is compiled only by the explicit
+version/config drift and accidental frontend-visible updater authority in the
+production Tauri configuration. Test authority is compiled only by the explicit
 `tauri-update-fixture` feature and exists for packaged qualification.
 
 ## Local Windows package qualification
@@ -71,9 +73,13 @@ rust/target/dist/bundle/nsis/
 ```
 
 The verifier records the exact installer and signature filenames, version,
-identifier, target, install mode, and byte sizes in
-`TAURI_ARTIFACT_SUMMARY.json`. It rejects MSI, portable/updater ZIP, missing
-signatures, empty signatures, unexpected files, and version-naming drift.
+identifier, target, install mode, byte sizes, and SHA-256 digests in
+`TAURI_ARTIFACT_SUMMARY.json`. After the install/launch/uninstall smoke, the
+packaged qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with a
+bounded evidence schema. Promotion requires that evidence and compares its
+installer/.sig digests to the exact published GitHub asset bytes. It rejects
+MSI, portable/updater ZIP, missing signatures, empty signatures, unexpected
+files, and version-naming drift.
 
 That command is the canonical package build: it uses the normal production
 feature set and the generated test key/example endpoint only to exercise
@@ -99,5 +105,6 @@ resource-close phases.
 The local NSIS installer and updater signature require Windows packaging tools
 and a test signing key. Fresh current-user install, launch, GUI smoke, and
 uninstall remain Windows-manual acceptance evidence; the packaged update
-qualification is the deterministic WO-03 acceptance path. WO-04 still owns
-production release/channel authority.
+qualification is the deterministic previous-v4 -> candidate-v4 acceptance
+path. The production release/channel authority is now configured by WO-04;
+trust-key operations remain with WO-05.

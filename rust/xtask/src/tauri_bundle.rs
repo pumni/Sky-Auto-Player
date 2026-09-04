@@ -1,4 +1,4 @@
-use crate::{Result, repo, version};
+use crate::{Result, manifest, repo, version};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
@@ -9,10 +9,12 @@ const V4_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
+const WINDOWS_ARCH: &str = "x64";
 
 #[derive(Debug, Serialize)]
 struct ArtifactSummary {
     schema_version: u32,
+    evidence_type: &'static str,
     product_name: &'static str,
     identifier: &'static str,
     version: String,
@@ -22,6 +24,8 @@ struct ArtifactSummary {
     updater_signature: String,
     installer_size: u64,
     signature_size: u64,
+    installer_sha256: String,
+    updater_signature_sha256: String,
 }
 
 fn object<'a>(value: &'a Value, key: &str) -> Result<&'a serde_json::Map<String, Value>> {
@@ -99,7 +103,7 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         })
     {
         return Err(
-            "WO-01 must not commit v4 updater endpoints or trust keys before the release authority exists".into(),
+            "checked-in Tauri updater endpoints and trust keys are forbidden: endpoints are Rust-owned and the v4 trust root belongs to WO-05".into(),
         );
     }
     Ok(())
@@ -198,16 +202,17 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
         return Err("Tauri updater signature is empty".into());
     }
     let installer_name = installer.file_name().unwrap().to_string_lossy();
-    let expected_prefix = format!("{PRODUCT_NAME}_{project_version}_");
-    if !installer_name.starts_with(&expected_prefix) {
+    let expected_name = format!("{PRODUCT_NAME}_{project_version}_{WINDOWS_ARCH}-setup.exe");
+    if installer_name != expected_name {
         return Err(format!(
-            "Tauri installer name does not match canonical product/version {expected_prefix}: {installer_name}"
+            "Tauri installer name does not match canonical product/version {expected_name}: {installer_name}"
         )
         .into());
     }
 
     Ok(ArtifactSummary {
-        schema_version: 1,
+        schema_version: 2,
+        evidence_type: "tauri-nsis-artifact",
         product_name: PRODUCT_NAME,
         identifier: V4_IDENTIFIER,
         version: project_version.to_owned(),
@@ -221,6 +226,8 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
             .into_owned(),
         installer_size: installer.metadata()?.len(),
         signature_size: signature.metadata()?.len(),
+        installer_sha256: manifest::sha256(installer)?,
+        updater_signature_sha256: manifest::sha256(&signature)?,
     })
 }
 
@@ -288,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn config_contract_rejects_v4_updater_authority_before_wo03() {
+    fn config_contract_rejects_unowned_v4_updater_configuration() {
         let mut config = valid_config();
         config["plugins"] = json!({"updater": {"endpoints": ["https://example.invalid"]}});
         assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());

@@ -17,7 +17,8 @@ packaged-assets = [
     "tauri/compression",
 ]
 # Local, signed updater fixture used only by the packaged previous-v4 to
-# candidate-v4 qualification. WO-04 supplies the production authority.
+# candidate-v4 qualification. WO-04 owns the production metadata authority;
+# WO-05 owns the production updater trust root.
 tauri-update-fixture = []
 tauri-test = ["tauri/test", "sky_player/test-support"]
 

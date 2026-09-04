@@ -7,6 +7,7 @@ mod classifier;
 mod dist;
 mod manifest;
 mod process;
+mod release_authority;
 mod repo;
 mod supply_chain;
 mod tauri_bundle;
@@ -19,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> [--summary <path>]\n  cargo xtask verify-dist --release-dir <dir>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> [--summary <path>]\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -221,6 +222,116 @@ fn main() -> Result<()> {
                 summary.as_deref().map(Path::new),
             )
         }
+        "release-authority" => match args.get(1).map(String::as_str) {
+            Some("generate") => {
+                let mut channel = None;
+                let mut version = None;
+                let mut notes_file = None;
+                let mut pub_date = None;
+                let mut platform = None;
+                let mut asset_url = None;
+                let mut signature_file = None;
+                let mut output = None;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--channel" => channel = Some(required_value(&args, &mut i, "--channel")?),
+                        "--version" => version = Some(required_value(&args, &mut i, "--version")?),
+                        "--notes-file" => {
+                            notes_file = Some(required_value(&args, &mut i, "--notes-file")?)
+                        }
+                        "--pub-date" => {
+                            pub_date = Some(required_value(&args, &mut i, "--pub-date")?)
+                        }
+                        "--platform" => {
+                            platform = Some(required_value(&args, &mut i, "--platform")?)
+                        }
+                        "--asset-url" => {
+                            asset_url = Some(required_value(&args, &mut i, "--asset-url")?)
+                        }
+                        "--signature-file" => {
+                            signature_file =
+                                Some(required_value(&args, &mut i, "--signature-file")?)
+                        }
+                        "--output" => output = Some(required_value(&args, &mut i, "--output")?),
+                        option => {
+                            return Err(format!(
+                                "unknown release-authority generate option: {option}"
+                            )
+                            .into());
+                        }
+                    }
+                    i += 1;
+                }
+                release_authority::generate(release_authority::GenerateInput {
+                    channel: release_authority::Channel::parse(
+                        channel
+                            .as_deref()
+                            .ok_or("release-authority generate requires --channel <stable|beta>")?,
+                    )?,
+                    version: version
+                        .as_deref()
+                        .ok_or("release-authority generate requires --version <semver>")?,
+                    notes_path: Path::new(
+                        notes_file
+                            .as_deref()
+                            .ok_or("release-authority generate requires --notes-file <path>")?,
+                    ),
+                    pub_date: pub_date
+                        .as_deref()
+                        .ok_or("release-authority generate requires --pub-date <rfc3339>")?,
+                    platform: platform
+                        .as_deref()
+                        .ok_or("release-authority generate requires --platform windows-x86_64")?,
+                    asset_url: asset_url
+                        .as_deref()
+                        .ok_or("release-authority generate requires --asset-url <url>")?,
+                    signature_path: Path::new(
+                        signature_file
+                            .as_deref()
+                            .ok_or("release-authority generate requires --signature-file <path>")?,
+                    ),
+                    output: Path::new(
+                        output
+                            .as_deref()
+                            .ok_or("release-authority generate requires --output <path>")?,
+                    ),
+                })
+            }
+            Some("validate") => {
+                let mut channel = None;
+                let mut metadata = None;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--channel" => channel = Some(required_value(&args, &mut i, "--channel")?),
+                        "--metadata" => {
+                            metadata = Some(required_value(&args, &mut i, "--metadata")?)
+                        }
+                        option => {
+                            return Err(format!(
+                                "unknown release-authority validate option: {option}"
+                            )
+                            .into());
+                        }
+                    }
+                    i += 1;
+                }
+                release_authority::validate(
+                    release_authority::Channel::parse(
+                        channel
+                            .as_deref()
+                            .ok_or("release-authority validate requires --channel <stable|beta>")?,
+                    )?,
+                    Path::new(
+                        metadata
+                            .as_deref()
+                            .ok_or("release-authority validate requires --metadata <path>")?,
+                    ),
+                )
+            }
+            _ => Err("release-authority requires generate or validate".into()),
+        },
         _ => {
             eprintln!("{}", usage());
             Err(format!("unknown command: {}", args[0]).into())

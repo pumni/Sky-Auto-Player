@@ -41,11 +41,16 @@ The preferred topology is:
 
 - source repository: `pumni/Sky-Auto-Player`;
 - v3 legacy releases: existing releases in the source repository;
-- v4 binary release authority: a dedicated repository or equivalent immutable release namespace;
+- v4 binary release authority: `pumni/Sky-Auto-Player-Releases`, a dedicated immutable release namespace;
 - v4 updater metadata: static Tauri updater metadata owned by the v4 release authority.
 
-The exact v4 release-authority repository name is an operational decision and is not hard-coded into
-runtime code until that repository exists and is reviewed.
+The authority repository exists and is reviewed by WO-04. Runtime code hard-codes only the two
+allow-listed metadata paths below; it does not expose them to React or accept endpoint overrides:
+
+```text
+https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json
+https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
+```
 
 ### 3. The canonical v4 Windows distribution is NSIS, per-user, and signed
 
@@ -143,6 +148,13 @@ mechanism without relying on a one-off emergency bridge release.
 V4 uses static Tauri updater metadata rather than runtime scanning/sorting of GitHub Releases. Stable
 and beta, when enabled, have separate metadata authorities/endpoints. The Rust update service selects
 from an allow-listed, compiled channel configuration; the frontend cannot supply an endpoint.
+WO-04 validates that metadata points only to already-published, qualified assets in the dedicated
+authority and promotes stable/beta files as separate post-qualification actions. Qualification
+evidence binds the exact canonical installer and updater signature bytes by SHA-256; promotion
+compares those digests with the published assets and fails closed on missing or mismatched evidence.
+Stable metadata accepts only final SemVer releases while beta metadata is explicitly prerelease-only.
+The authority may remain empty until the first qualified promotion, so a missing production metadata
+file fails closed.
 
 A dedicated dynamic update service is a non-goal for v4.0. It can be introduced later if the product
 needs staged rollout, cohorts, mandatory minimum versions, or server-driven release policy.

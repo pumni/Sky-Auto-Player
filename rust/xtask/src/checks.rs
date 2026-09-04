@@ -232,8 +232,8 @@ fn legacy_release_guard_source(source: &str) -> Result<()> {
         "$tag = $env:GITHUB_REF_NAME",
         r#"$tag -match '^v(?<major>\d+)\.'"#,
         "$major -ge 4",
-        "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete",
-        "WO-04/WO-07",
+        "v4 publication is prohibited in the legacy v3 release workflow; use the dedicated v4 release authority",
+        "dedicated v4 release authority",
     ] {
         if !source.contains(marker) {
             return Err(format!(
@@ -250,6 +250,179 @@ fn legacy_release_guard(root: &Path) -> Result<()> {
     legacy_release_guard_source(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     println!("[xtask] legacy v3 release workflow v4 guard: PASS");
+    Ok(())
+}
+
+fn release_authority_contract(root: &Path) -> Result<()> {
+    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    let native = fs::read_to_string(&native_path)?;
+    for marker in [
+        "V4_RELEASE_AUTHORITY_REPOSITORY",
+        "V4_STABLE_METADATA_ENDPOINT",
+        "V4_BETA_METADATA_ENDPOINT",
+        "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json",
+        "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json",
+        "endpoints(vec![endpoint])",
+        "production_authority_is_fixed_and_channel_isolated",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "Rust updater authority is missing the fixed v4 contract marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "api.github.com/repos/pumni/Sky-Auto-Player/releases",
+        "update_authority_not_configured",
+        "std::env::var(\"",
+    ] {
+        if native.contains(forbidden) {
+            return Err(format!(
+                "Rust v4 updater authority contains a forbidden fallback/injection marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let generator_path = root.join("rust/xtask/src/release_authority.rs");
+    let generator = fs::read_to_string(&generator_path)?;
+    for marker in [
+        "AUTHORITY_REPOSITORY: &str = \"pumni/Sky-Auto-Player-Releases\"",
+        "STABLE_METADATA_PATH: &str = \"channels/stable/latest.json\"",
+        "BETA_METADATA_PATH: &str = \"channels/beta/latest.json\"",
+        "WINDOWS_PLATFORM: &str = \"windows-x86_64\"",
+        "canonical_installer_name",
+        "canonical_asset_url",
+        "valid_utc_timestamp",
+        "valid_signature",
+        "version::parse",
+        "parsed_version.major != 4",
+    ] {
+        if !generator.contains(marker) {
+            return Err(format!(
+                "v4 metadata generator is missing its deterministic validation marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "pumni/Sky-Auto-Player/releases",
+        "example.invalid",
+        "dangerousInsecureTransportProtocol",
+    ] {
+        if generator.contains(forbidden) {
+            return Err(format!(
+                "v4 metadata generator contains a forbidden authority marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");
+    let bundle = fs::read_to_string(&bundle_path)?;
+    for marker in [
+        "schema_version: 2",
+        "evidence_type: \"tauri-nsis-artifact\"",
+        "installer_sha256",
+        "updater_signature_sha256",
+    ] {
+        if !bundle.contains(marker) {
+            return Err(format!(
+                "Tauri artifact evidence is missing its exact-byte marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let acceptance_path = root.join("scripts/ci_v4_release_authority_acceptance.ps1");
+    let acceptance = fs::read_to_string(&acceptance_path)?;
+    for marker in [
+        "This is deliberately read-only",
+        "$sourceRepository = \"pumni/Sky-Auto-Player\"",
+        "$authorityRepository = \"pumni/Sky-Auto-Player-Releases\"",
+        "releases/latest",
+        "read_only=true",
+    ] {
+        if !acceptance.contains(marker) {
+            return Err(format!(
+                "v4 release authority acceptance is missing its read-only marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "gh release create",
+        "gh release upload",
+        "gh release delete",
+        "softprops/action-gh-release",
+    ] {
+        if acceptance.contains(forbidden) {
+            return Err(format!(
+                "read-only v4 authority acceptance contains a release mutation: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let promotion_path = root.join("scripts/promote_v4_metadata.ps1");
+    let promotion = fs::read_to_string(&promotion_path)?;
+    for marker in [
+        "[ValidateSet(\"stable\", \"beta\")]",
+        "$authorityRepository = \"pumni/Sky-Auto-Player-Releases\"",
+        "$QualificationEvidence",
+        "release-authority validate --channel $Channel",
+        "releases/tags/v$version",
+        "published_at",
+        "installer_sha256",
+        "updater_signature_sha256",
+        "Get-PublishedAssetSha256",
+        "Assert-PublishedAsset",
+        "Invoke-PromotionSelfTest",
+        "same-name/different-bytes",
+        "Copy-Item -LiteralPath $Metadata",
+        "never publishes or mutates a GitHub release",
+    ] {
+        if !promotion.contains(marker) {
+            return Err(format!(
+                "v4 metadata promotion is missing its post-publication marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "gh release create",
+        "gh release upload",
+        "softprops/action-gh-release",
+        "pumni/Sky-Auto-Player/releases",
+    ] {
+        if promotion.contains(forbidden) {
+            return Err(format!(
+                "v4 metadata promotion contains a forbidden release mutation/fallback: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?;
+    for marker in [
+        "release_authority:",
+        "name: V4 release authority acceptance",
+        "scripts/ci_v4_release_authority_acceptance.ps1",
+        "scripts/promote_v4_metadata.ps1 -SelfTest",
+        "Emit exact Tauri qualification evidence",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "RELEASE_AUTHORITY_RESULT",
+        "needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]",
+    ] {
+        if !ci.contains(marker) {
+            return Err(
+                format!("CI is missing the v4 release authority gate marker: {marker}").into(),
+            );
+        }
+    }
+    println!("[xtask] v4 release authority contract: PASS");
     Ok(())
 }
 
@@ -335,7 +508,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     }
 
     for marker in [
-        "needs: [changes, static, supply_chain, validate, updater_e2e, packaged]",
+        "needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]",
         "UPDATER_E2E_RESULT",
     ] {
         if !normalized.contains(marker) {
@@ -1660,6 +1833,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
             legacy_release_guard(&root)?;
+            release_authority_contract(&root)?;
             packaged_ci_contract(&root)?;
             retirement(&root)?;
         }
@@ -1889,7 +2063,7 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     }
 
     #[test]
-    fn legacy_release_guard_requires_the_v4_fail_closed_contract() {
+    fn legacy_release_guard_requires_the_permanent_v4_namespace_guard() {
         let source = r#"
       - name: Block v4+ tags from legacy v3 release workflow
         run: |
@@ -1897,15 +2071,48 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
           if ($tag -match '^v(?<major>\d+)\.') {
             $major = [int64]$Matches.major
             if ($major -ge 4) {
-              throw "v4 publication is disabled in the legacy v3 release workflow until the dedicated release authority work order is complete: $tag"
+              throw "v4 publication is prohibited in the legacy v3 release workflow; use the dedicated v4 release authority: $tag"
             }
           }
-      # WO-04/WO-07
 "#;
         assert!(legacy_release_guard_source(source).is_ok());
         assert!(
             legacy_release_guard_source(&source.replace("$major -ge 4", "$major -gt 4")).is_err()
         );
+    }
+
+    #[test]
+    fn release_authority_contract_requires_rust_owned_channels_and_read_only_acceptance() {
+        let native = r#"
+const V4_RELEASE_AUTHORITY_REPOSITORY: &str = "pumni/Sky-Auto-Player-Releases";
+const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json";
+const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json";
+endpoints(vec![endpoint])
+fn production_authority_is_fixed_and_channel_isolated() {}
+"#;
+        for marker in [
+            "V4_RELEASE_AUTHORITY_REPOSITORY",
+            "V4_STABLE_METADATA_ENDPOINT",
+            "V4_BETA_METADATA_ENDPOINT",
+            "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json",
+            "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json",
+            "endpoints(vec![endpoint])",
+            "production_authority_is_fixed_and_channel_isolated",
+        ] {
+            assert!(native.contains(marker), "{marker}");
+        }
+        assert!(!native.contains("api.github.com/repos/pumni/Sky-Auto-Player/releases"));
+
+        let acceptance = r#"
+# This is deliberately read-only.
+$sourceRepository = "pumni/Sky-Auto-Player"
+$authorityRepository = "pumni/Sky-Auto-Player-Releases"
+releases/latest
+read_only=true
+"#;
+        assert!(acceptance.contains("This is deliberately read-only"));
+        assert!(acceptance.contains("releases/latest"));
+        assert!(!acceptance.contains("gh release create"));
     }
 
     #[test]
@@ -1935,7 +2142,7 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
        - uses: actions/upload-artifact@v7
          path: rust/target/dist/bundle/nsis
   status:
-    needs: [changes, static, supply_chain, validate, updater_e2e, packaged]
+    needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]
     env: { UPDATER_E2E_RESULT: success }
         "#;
         assert!(packaged_ci_contract_source(source).is_ok());
