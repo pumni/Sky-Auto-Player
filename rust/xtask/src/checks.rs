@@ -495,6 +495,9 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "SKY_GH_PATH=$ghPath",
         "- name: Run Authenticode tamper regression",
         "scripts/test_v4_authenticode_integrity.ps1",
+        "- name: Run V4 production signing contract test",
+        "scripts/test_v4_production_signing_contract.ps1",
+        "V4 production signing contract test failed with exit code",
         "- name: Verify Tauri Authenticode signature",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
@@ -2619,6 +2622,9 @@ read_only=true
         # Tauri build failed with exit code
       - name: Run Authenticode tamper regression
         run: pwsh scripts/test_v4_authenticode_integrity.ps1
+      - name: Run V4 production signing contract test
+        run: pwsh scripts/test_v4_production_signing_contract.ps1
+        # V4 production signing contract test failed with exit code
       - name: Verify Tauri Authenticode signature
         run: pwsh scripts/verify_v4_authenticode.ps1
         # Authenticode verification failed with exit code

@@ -727,6 +727,13 @@ jobs:
             -Source rust/target/dist/sky_desktop_shell.exe
           if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
 
+      - name: Run V4 production signing contract test
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_signing_contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw "V4 production signing contract test failed with exit code $LASTEXITCODE" }
+
       - name: Verify Tauri Authenticode signature
         env:
           RUSTUP_TOOLCHAIN: 1.98.0

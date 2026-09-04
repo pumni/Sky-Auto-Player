@@ -38,8 +38,13 @@ if ($mode -eq "production") {
 
     $providerCommand = [string]$env:SKY_AUTHENTICODE_PROVIDER_COMMAND
     $providerScript = [string]$env:SKY_AUTHENTICODE_PROVIDER_SCRIPT
-    if ([string]::IsNullOrWhiteSpace($providerCommand) -and [string]::IsNullOrWhiteSpace($providerScript)) {
-        throw "V4 Authenticode signing is fail-closed: provider '$provider' requires SKY_AUTHENTICODE_PROVIDER_COMMAND or SKY_AUTHENTICODE_PROVIDER_SCRIPT"
+    $hasCommand = -not [string]::IsNullOrWhiteSpace($providerCommand)
+    $hasScript = -not [string]::IsNullOrWhiteSpace($providerScript)
+    if (-not $hasCommand -and -not $hasScript) {
+        throw "V4 Authenticode signing is fail-closed: provider '$provider' requires exactly one of SKY_AUTHENTICODE_PROVIDER_SCRIPT or SKY_AUTHENTICODE_PROVIDER_COMMAND"
+    }
+    if ($hasCommand -and $hasScript) {
+        throw "V4 Authenticode signing is fail-closed: mutually exclusive configuration (both SKY_AUTHENTICODE_PROVIDER_SCRIPT and SKY_AUTHENTICODE_PROVIDER_COMMAND are set; specify exactly one)"
     }
 
     Write-Host "V4 Authenticode production signer invoked: provider=$provider, approved_thumbprint=$approvedThumbprint, target=$Path"

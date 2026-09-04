@@ -62,10 +62,14 @@ When `SKY_AUTHENTICODE_MODE=production`, the release runner must supply:
    - Identifies the provider mechanism for auditing and telemetry.
    - Examples: `azure-trusted-signing`, `signtool-hsm`, `custom-script`.
 
-3. **Signing Invocation** (Exactly one required):
-   - **`SKY_AUTHENTICODE_PROVIDER_SCRIPT`**: Full path to a PowerShell script accepting `-Path <file>`.
+3. **Signing Invocation** (Exactly one required, mutually exclusive):
+   - **`SKY_AUTHENTICODE_PROVIDER_SCRIPT`** (Preferred): Full path to a structured PowerShell script
+     accepting `-Path <file>`. Structured scripts are preferred over string commands to ensure clean
+     argument passing and error propagation.
    - **`SKY_AUTHENTICODE_PROVIDER_COMMAND`**: Command line template where `%1` or `$Path` is replaced
      by the target file path.
+   - **Mutual Exclusivity**: If both `SKY_AUTHENTICODE_PROVIDER_SCRIPT` and `SKY_AUTHENTICODE_PROVIDER_COMMAND`
+     are set (or if neither is set), signing fails closed immediately.
 
 ### Provider Execution and Post-Signing Verification
 

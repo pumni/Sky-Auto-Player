@@ -147,6 +147,56 @@ try {
         throw "FAILED: Production verification accepted test thumbprint"
     }
     Write-Host "Contract Test 4: PASS"
+
+    # Contract Test 5: Production signing rejects mutually exclusive provider script and command
+    Write-Host "Contract Test 5: Mutually exclusive provider script and command fails closed..."
+    $env:SKY_AUTHENTICODE_MODE = "production"
+    $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = "1234567890ABCDEF1234567890ABCDEF12345678"
+    $env:SKY_AUTHENTICODE_PROVIDER = "custom"
+    $env:SKY_AUTHENTICODE_PROVIDER_COMMAND = "echo %1"
+    $dummyScript = Join-Path $fixtureRoot "dummy_provider.ps1"
+    Set-Content -LiteralPath $dummyScript -Value 'param([string]$Path) exit 0'
+    $env:SKY_AUTHENTICODE_PROVIDER_SCRIPT = $dummyScript
+
+    # Ensure no test credentials exist in env
+    $env:SKY_AUTHENTICODE_TEST_PFX_PATH = ""
+    $env:SKY_AUTHENTICODE_TEST_PFX_PASSWORD = ""
+    $env:SKY_AUTHENTICODE_TEST_THUMBPRINT = ""
+
+    $rejectedMutualExclusive = $false
+    try {
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+            -Path $targetExe 2>$null
+        if ($LASTEXITCODE -ne 0) { $rejectedMutualExclusive = $true }
+    } catch {
+        $rejectedMutualExclusive = $true
+    }
+    if (-not $rejectedMutualExclusive) {
+        throw "FAILED: Production signing accepted mutually exclusive SCRIPT and COMMAND"
+    }
+    Write-Host "Contract Test 5: PASS"
+
+    # Contract Test 6: Production signing executes structured provider script and enforces exit code
+    Write-Host "Contract Test 6: Structured provider script failure propagation..."
+    $env:SKY_AUTHENTICODE_PROVIDER_COMMAND = ""
+    $failingScript = Join-Path $fixtureRoot "failing_provider.ps1"
+    Set-Content -LiteralPath $failingScript -Value 'param([string]$Path) exit 42'
+    $env:SKY_AUTHENTICODE_PROVIDER_SCRIPT = $failingScript
+
+    $rejectedFailedProvider = $false
+    try {
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+            -Path $targetExe 2>$null
+        if ($LASTEXITCODE -ne 0) { $rejectedFailedProvider = $true }
+    } catch {
+        $rejectedFailedProvider = $true
+    }
+    if (-not $rejectedFailedProvider) {
+        throw "FAILED: Production signing did not fail closed when provider script failed"
+    }
+    Write-Host "Contract Test 6: PASS"
 } finally {
     # Clean up test certificate
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
