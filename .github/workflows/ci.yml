@@ -372,35 +372,6 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name != 'pull_request' }}
 
-      - name: Restore pinned cargo-vet tool
-        id: cargo-vet-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
-
-      - name: Install and verify pinned cargo-vet
-        env:
-          CARGO_VET_VERSION: 0.10.2
-        run: |
-          $toolRoot = Join-Path $env:RUNNER_TEMP "cargo-vet"
-          $binary = Join-Path $toolRoot "bin\cargo-vet.exe"
-          if (-not (Test-Path $binary)) {
-            cargo install cargo-vet --version $env:CARGO_VET_VERSION --locked --root $toolRoot
-          }
-          $version = (& $binary --version).Trim()
-          if ($version -ne "cargo-vet $env:CARGO_VET_VERSION") {
-            throw "Expected cargo-vet $env:CARGO_VET_VERSION, got: $version"
-          }
-          (Split-Path -Parent $binary) | Add-Content $env:GITHUB_PATH -Encoding UTF8
-
-      - name: Save pinned cargo-vet tool
-        if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.98
-
       - name: Repository verification — Rust
         if: needs.changes.outputs.package_required != 'true'
         env:
@@ -412,6 +383,9 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Fail fast on Windows validation dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
+
       - name: Install Chromium for desktop browser smoke
         if: needs.changes.outputs.browser_required == 'true'
         working-directory: desktop
@@ -420,7 +394,7 @@ jobs:
       - name: Construct Python-unavailable validation environment
         if: needs.changes.outputs.package_required == 'true'
         run: |
-          $required = @("cargo", "cargo-vet", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
+          $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
           $toolDirectories = foreach ($name in $required) {
             $command = Get-Command $name -ErrorAction SilentlyContinue
             if ($command) { Split-Path -Parent $command.Source }
@@ -540,6 +514,9 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Fail fast on updater fixture dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
+
       - name: Install pinned desktop dependencies
         working-directory: desktop
         run: bun install --frozen-lockfile
@@ -548,8 +525,8 @@ jobs:
         working-directory: desktop
         run: bun run build
 
-      - name: Prepare ephemeral Authenticode test certificate
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 120
 
       - name: Exercise non-production updater key rotation fixture
         run: pwsh scripts/test_v4_updater_key_rotation.ps1
@@ -645,6 +622,9 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Fail fast on packaged build dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
+
       - name: Install pinned desktop dependencies
         working-directory: desktop
         run: bun install --frozen-lockfile
@@ -653,8 +633,8 @@ jobs:
         working-directory: desktop
         run: bun run build
 
-      - name: Prepare ephemeral Authenticode test certificate
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 120
 
       - name: Construct Python-unavailable canonical environment
         run: |

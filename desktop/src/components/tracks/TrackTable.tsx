@@ -17,6 +17,9 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
   const pendingKeyboardIndex = useRef<number | null>(null);
+  // TanStack Virtual exposes a mutable controller by design; React Compiler
+  // must not memoize this third-party hook's return value.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: resultTotal,
     getScrollElement: () => parentRef.current,

@@ -580,6 +580,8 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "scripts/verify_v4_authenticode.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
+        "scripts/ci_require_windows_tools.ps1",
+        "TimeoutSeconds 120",
         "SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS",
         "Packaged Tauri updater rotation",
         "cargo xtask sbom generate",
@@ -591,6 +593,9 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         if !ci.contains(marker) {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
         }
+    }
+    if ci.matches("cargo install cargo-vet").count() != 1 {
+        return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
     }
 
     let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
