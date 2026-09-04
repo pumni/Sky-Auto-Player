@@ -102,7 +102,10 @@ project-owned PE in the installed tree (the generated NSIS `uninstall.exe` is
 checked for presence but is not a project-owned binary); the bundle verifier
 separately binds the final installer evidence to the exact NSIS candidate. The SPDX generator
 records SHA-256 for the exact two-file NSIS artifact set and binds it to the
-current commit. After the install/launch/uninstall smoke, the packaged
+current commit. The SBOM covers the reachable Rust production graph from
+`rust/Cargo.lock` and the frontend production graph from `desktop/bun.lock`,
+and binds both lockfile hashes to the same artifact set. After the
+install/launch/uninstall smoke, the packaged
 qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with artifact,
 Authenticode evidence, SBOM, and digest references. Promotion requires
 production Authenticode mode and compares installer/.sig digests to the exact
@@ -128,8 +131,11 @@ key material in the source tree.
 
 `scripts/test_v4_updater_key_rotation.ps1` generates two disposable Tauri
 signer pairs outside the repository and exercises the Rust rotation policy.
-The bridge release trusts old and new public roots; the cutover release trusts
-only the new root. The production list is kept in
+The packaged CI fixture additionally builds an actual bridge client with
+`[old,new]` and a cutover client with `[new]`. Runtime fallback happens at
+Tauri `Update::download()` for each trust context, so a bridge can apply a
+candidate signed only by the new root; after cutover, an old-root-only
+candidate is rejected. The production list is kept in
 `desktop/src-tauri/src/native_update.rs`; add the next public root there for a
 bridge, publish the bridge, then remove the old root after the cutover release.
 The private halves are never read into repository files or logs.
@@ -149,9 +155,10 @@ place.
 The isolated CI updater qualification runs
 `scripts/ci_tauri_update_e2e.ps1`. It serves the signed candidate from a
 loopback fixture, installs the previous v4 package, and verifies the official
-Tauri updater reaches the candidate version after restart. The same evidence
-records the ordered native quiesce, key-release, state-persistence, and
-resource-close phases.
+Tauri updater reaches the candidate version after restart. It also verifies
+the bridge `[old,new]` to cutover `[new]` trust transition against real
+packaged clients. The same evidence records the ordered native quiesce,
+key-release, state-persistence, and resource-close phases.
 
 ## Acceptance boundary
 
@@ -159,6 +166,8 @@ The local NSIS installer and updater signature require Windows packaging tools
 and a test signing key. Fresh current-user install, launch, GUI smoke, and
 uninstall remain Windows-manual acceptance evidence; the packaged update
 qualification is the deterministic previous-v4 -> candidate-v4 acceptance
-path. The production release/channel authority is configured by WO-04. The v4
-updater public trust root and rotation policy are implemented here; an approved
-Authenticode provider and release credentials remain Track B work.
+path. A full non-PR run must be dispatched from the branch so provenance and
+SPDX attestations are generated and verified before acceptance. The production
+release/channel authority is configured by WO-04. The v4 updater public trust
+root and rotation policy are implemented here; an approved Authenticode
+provider and release credentials remain Track B work.

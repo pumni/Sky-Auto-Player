@@ -1,7 +1,8 @@
 use crate::{Result, manifest, repo};
+use semver::{Version, VersionReq};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -23,13 +24,52 @@ struct LockedPackage {
     source: Option<String>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct FrontendPackage {
+    key: String,
+    name: String,
+    version: String,
+    integrity: String,
+    dependencies: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct FrontendGraph {
+    packages: Vec<FrontendPackage>,
+    root_packages: Vec<String>,
+    edges: Vec<(String, String)>,
+}
+
+impl FrontendGraph {
+    fn package_index(&self, key: &str) -> Result<usize> {
+        self.packages
+            .iter()
+            .position(|package| package.key == key)
+            .ok_or_else(|| format!("frontend package is missing from its graph: {key}").into())
+    }
+}
+
+fn frontend_package_id(index: usize) -> String {
+    format!("SPDXRef-Package-Npm-{}", index + 1)
+}
+
+fn npm_purl(package: &FrontendPackage) -> String {
+    format!(
+        "pkg:npm/{}@{}",
+        package.name.replace('@', "%40").replace('/', "%2F"),
+        package.version
+    )
+}
+
 pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
     let artifacts = collect_artifacts(artifact_dir)?;
     let artifact_set = artifact_set_sha256(&artifacts);
     let head = repo::git_head(root, false)?;
     let version = repo::project_version(root)?;
-    let lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
+    let cargo_lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
+    let bun_lockfile_sha256 = manifest::sha256(&root.join("desktop/bun.lock"))?;
     let locked_packages = locked_packages(root)?;
+    let frontend = frontend_graph(root)?;
     let files = artifacts
         .iter()
         .enumerate()
@@ -87,6 +127,40 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
             "relatedSpdxElement": package_id,
         }));
     }
+    for (index, package) in frontend.packages.iter().enumerate() {
+        let package_id = frontend_package_id(index);
+        packages.push(json!({
+            "SPDXID": package_id,
+            "name": package.name,
+            "versionInfo": package.version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+            "externalRefs": [{
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": npm_purl(package),
+            }],
+            "comment": format!("bun-lock-key:{}; integrity:{}", package.key, package.integrity),
+        }));
+    }
+    for package_key in &frontend.root_packages {
+        let package_id = frontend_package_id(frontend.package_index(package_key)?);
+        package_relationships.push(json!({
+            "spdxElementId": "SPDXRef-Package-SkyAutoPlayer",
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": package_id,
+        }));
+    }
+    for (from, to) in &frontend.edges {
+        package_relationships.push(json!({
+            "spdxElementId": frontend_package_id(frontend.package_index(from)?),
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": frontend_package_id(frontend.package_index(to)?),
+        }));
+    }
     let mut relationships = file_relationships;
     relationships.extend(package_relationships);
     let document = json!({
@@ -95,7 +169,7 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": format!("Sky Auto Player v{} canonical Windows candidate", version),
         "documentNamespace": format!(
-            "https://github.com/pumni/Sky-Auto-Player/sbom/{head}/{artifact_set}/{lockfile_sha256}"
+            "https://github.com/pumni/Sky-Auto-Player/sbom/{head}/{artifact_set}/{cargo_lockfile_sha256}/{bun_lockfile_sha256}"
         ),
         "creationInfo": {
             "created": repo::commit_time_utc(root)?,
@@ -106,8 +180,8 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
         "files": files,
         "relationships": relationships,
         "comment": format!(
-            "{}{}; git-head:{}; lockfile-sha256:{}; candidate-artifact-directory:canonical-tauri-nsis",
-            ARTIFACT_SET_MARKER, artifact_set, head, lockfile_sha256
+            "{}{}; git-head:{}; cargo-lockfile-sha256:{}; bun-lockfile-sha256:{}; candidate-artifact-directory:canonical-tauri-nsis",
+            ARTIFACT_SET_MARKER, artifact_set, head, cargo_lockfile_sha256, bun_lockfile_sha256
         ),
     });
     let mut bytes = serde_json::to_vec_pretty(&document)?;
@@ -123,8 +197,10 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
 
 pub fn verify(root: &Path, artifact_dir: &Path, sbom_path: &Path) -> Result<()> {
     let artifacts = collect_artifacts(artifact_dir)?;
+    let locked_packages = locked_packages(root)?;
+    let frontend = frontend_graph(root)?;
     let payload: Value = serde_json::from_slice(&fs::read(sbom_path)?)?;
-    validate_document(root, &artifacts, &payload)?;
+    validate_document(root, &artifacts, &locked_packages, &frontend, &payload)?;
     println!(
         "[xtask] verified SPDX SBOM against {} exact artifact(s): {}",
         artifacts.len(),
@@ -185,7 +261,13 @@ fn artifact_set_sha256(artifacts: &[Artifact]) -> String {
     repo::hex_digest(digest.finalize())
 }
 
-fn validate_document(root: &Path, artifacts: &[Artifact], payload: &Value) -> Result<()> {
+fn validate_document(
+    root: &Path,
+    artifacts: &[Artifact],
+    locked_packages: &[LockedPackage],
+    frontend: &FrontendGraph,
+    payload: &Value,
+) -> Result<()> {
     if payload.get("spdxVersion").and_then(Value::as_str) != Some(SPDX_VERSION) {
         return Err("SBOM must be SPDX-2.3 JSON".into());
     }
@@ -205,9 +287,13 @@ fn validate_document(root: &Path, artifacts: &[Artifact], payload: &Value) -> Re
         return Err("SBOM artifact-set SHA-256 does not match the candidate".into());
     }
     let head = repo::git_head(root, false)?;
-    let lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
-    if !comment.contains(&format!("lockfile-sha256:{lockfile_sha256}")) {
+    let cargo_lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
+    let bun_lockfile_sha256 = manifest::sha256(&root.join("desktop/bun.lock"))?;
+    if !comment.contains(&format!("cargo-lockfile-sha256:{cargo_lockfile_sha256}")) {
         return Err("SBOM is not bound to the current Cargo.lock".into());
+    }
+    if !comment.contains(&format!("bun-lockfile-sha256:{bun_lockfile_sha256}")) {
+        return Err("SBOM is not bound to the current desktop/bun.lock".into());
     }
     let namespace = payload
         .get("documentNamespace")
@@ -215,7 +301,8 @@ fn validate_document(root: &Path, artifacts: &[Artifact], payload: &Value) -> Re
         .ok_or("SBOM documentNamespace is missing")?;
     if !namespace.contains(&head)
         || !namespace.contains(&expected_set)
-        || !namespace.contains(&lockfile_sha256)
+        || !namespace.contains(&cargo_lockfile_sha256)
+        || !namespace.contains(&bun_lockfile_sha256)
     {
         return Err("SBOM namespace is not bound to this source and artifact set".into());
     }
@@ -223,14 +310,13 @@ fn validate_document(root: &Path, artifacts: &[Artifact], payload: &Value) -> Re
         .get("packages")
         .and_then(Value::as_array)
         .ok_or("SBOM packages must be an array")?;
-    let locked = locked_packages(root)?;
-    if packages.len() != locked.len() + 1 {
-        return Err("SBOM package set does not match Cargo.lock".into());
+    if packages.len() != locked_packages.len() + frontend.packages.len() + 1 {
+        return Err("SBOM package set does not match the dependency lockfiles".into());
     }
     if packages[0].get("SPDXID").and_then(Value::as_str) != Some("SPDXRef-Package-SkyAutoPlayer") {
         return Err("SBOM product package is missing".into());
     }
-    for (index, expected) in locked.iter().enumerate() {
+    for (index, expected) in locked_packages.iter().enumerate() {
         let package = &packages[index + 1];
         if package.get("SPDXID").and_then(Value::as_str)
             != Some(format!("SPDXRef-Package-Cargo-{}", index + 1).as_str())
@@ -243,6 +329,40 @@ fn validate_document(root: &Path, artifacts: &[Artifact], payload: &Value) -> Re
             )
             .into());
         }
+    }
+    let frontend_offset = locked_packages.len() + 1;
+    for (index, expected) in frontend.packages.iter().enumerate() {
+        let package = &packages[frontend_offset + index];
+        if package.get("SPDXID").and_then(Value::as_str)
+            != Some(frontend_package_id(index).as_str())
+            || package.get("name").and_then(Value::as_str) != Some(expected.name.as_str())
+            || package.get("versionInfo").and_then(Value::as_str) != Some(expected.version.as_str())
+            || package
+                .get("externalRefs")
+                .and_then(Value::as_array)
+                .and_then(|refs| refs.first())
+                .and_then(|reference| reference.get("referenceLocator"))
+                .and_then(Value::as_str)
+                != Some(npm_purl(expected).as_str())
+            || package
+                .get("comment")
+                .and_then(Value::as_str)
+                .map(|comment| {
+                    comment.contains(&format!("bun-lock-key:{}", expected.key))
+                        && comment.contains(&format!("integrity:{}", expected.integrity))
+                })
+                != Some(true)
+        {
+            return Err(format!(
+                "SBOM frontend package mismatch: {} {}",
+                expected.name, expected.version
+            )
+            .into());
+        }
+    }
+    let expected_relationships = expected_relationships(artifacts, locked_packages, frontend)?;
+    if payload.get("relationships") != Some(&Value::Array(expected_relationships)) {
+        return Err("SBOM dependency/artifact relationships do not match the candidate".into());
     }
     let files = payload
         .get("files")
@@ -330,6 +450,288 @@ fn locked_packages(root: &Path) -> Result<Vec<LockedPackage>> {
         .collect()
 }
 
+fn frontend_graph(root: &Path) -> Result<FrontendGraph> {
+    let source = fs::read_to_string(root.join("desktop/bun.lock"))?;
+    let payload: Value = serde_json::from_str(&strip_trailing_commas(&source)?)?;
+    if payload.get("lockfileVersion").and_then(Value::as_u64) != Some(2) {
+        return Err("desktop/bun.lock must use Bun lockfile version 2".into());
+    }
+    let package_values = payload
+        .get("packages")
+        .and_then(Value::as_object)
+        .ok_or("desktop/bun.lock package map is missing")?;
+    let mut packages = BTreeMap::new();
+    for (key, value) in package_values {
+        let tuple = value
+            .as_array()
+            .ok_or_else(|| format!("Bun lock package entry is not an array: {key}"))?;
+        let descriptor = tuple
+            .first()
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("Bun lock package descriptor is missing: {key}"))?;
+        let (name, version) = split_package_descriptor(descriptor)?;
+        let metadata = tuple
+            .get(2)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("Bun lock package metadata is missing: {key}"))?;
+        let integrity = tuple
+            .get(3)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("Bun lock package integrity is missing: {key}"))?;
+        if integrity.is_empty() || integrity.len() > 4096 {
+            return Err(format!("Bun lock package integrity is invalid: {key}").into());
+        }
+        packages.insert(
+            key.clone(),
+            FrontendPackage {
+                key: key.clone(),
+                name,
+                version,
+                integrity: integrity.to_owned(),
+                dependencies: dependency_map(metadata)?,
+            },
+        );
+    }
+
+    let workspace = payload
+        .get("workspaces")
+        .and_then(Value::as_object)
+        .and_then(|workspaces| workspaces.get(""))
+        .and_then(Value::as_object)
+        .ok_or("desktop/bun.lock root workspace is missing")?;
+    let root_dependencies = workspace
+        .get("dependencies")
+        .and_then(Value::as_object)
+        .ok_or("desktop/bun.lock production dependencies are missing")?;
+    let mut root_packages = Vec::new();
+    for (name, requirement) in root_dependencies {
+        let requirement = requirement
+            .as_str()
+            .ok_or_else(|| format!("Bun root dependency requirement is invalid: {name}"))?;
+        let key = resolve_frontend_package(&packages, "", name, requirement)?;
+        root_packages.push(key);
+    }
+    root_packages.sort();
+
+    let mut selected = BTreeSet::new();
+    let mut edges = BTreeSet::new();
+    let mut pending = root_packages.clone();
+    while let Some(key) = pending.pop() {
+        if !selected.insert(key.clone()) {
+            continue;
+        }
+        let package = packages
+            .get(&key)
+            .ok_or_else(|| format!("Bun lock selected package is missing: {key}"))?;
+        for (name, requirement) in &package.dependencies {
+            let dependency = resolve_frontend_package(&packages, &key, name, requirement)?;
+            edges.insert((key.clone(), dependency.clone()));
+            if !selected.contains(&dependency) {
+                pending.push(dependency);
+            }
+        }
+    }
+    let graph_packages = selected
+        .into_iter()
+        .map(|key| {
+            packages
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| format!("Bun lock selected package is missing: {key}"))
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    Ok(FrontendGraph {
+        packages: graph_packages,
+        root_packages,
+        edges: edges.into_iter().collect(),
+    })
+}
+
+fn dependency_map(metadata: &serde_json::Map<String, Value>) -> Result<BTreeMap<String, String>> {
+    let mut dependencies = BTreeMap::new();
+    let optional_peers = metadata
+        .get("optionalPeers")
+        .and_then(Value::as_array)
+        .map(|peers| {
+            peers
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    for field in ["dependencies", "optionalDependencies", "peerDependencies"] {
+        let Some(entries) = metadata.get(field) else {
+            continue;
+        };
+        let entries = entries
+            .as_object()
+            .ok_or_else(|| format!("Bun lock {field} must be an object"))?;
+        for (name, requirement) in entries {
+            if field == "peerDependencies" && optional_peers.contains(name.as_str()) {
+                continue;
+            }
+            let requirement = requirement
+                .as_str()
+                .ok_or_else(|| format!("Bun lock dependency requirement is invalid: {name}"))?;
+            dependencies.insert(name.clone(), requirement.to_owned());
+        }
+    }
+    Ok(dependencies)
+}
+
+fn split_package_descriptor(descriptor: &str) -> Result<(String, String)> {
+    let separator = descriptor
+        .rfind('@')
+        .ok_or_else(|| format!("Bun lock package descriptor has no version: {descriptor}"))?;
+    let name = &descriptor[..separator];
+    let version = &descriptor[separator + 1..];
+    if name.is_empty() || version.is_empty() {
+        return Err(format!("Bun lock package descriptor is malformed: {descriptor}").into());
+    }
+    Ok((name.to_owned(), version.to_owned()))
+}
+
+fn resolve_frontend_package(
+    packages: &BTreeMap<String, FrontendPackage>,
+    parent_key: &str,
+    name: &str,
+    requirement: &str,
+) -> Result<String> {
+    let preferred = if parent_key.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent_key}/{name}")
+    };
+    if let Some(package) = packages.get(&preferred)
+        && package.name == name
+        && frontend_version_matches(&package.version, requirement)
+    {
+        return Ok(preferred);
+    }
+    let candidates = packages
+        .iter()
+        .filter(|(_, package)| {
+            package.name == name && frontend_version_matches(&package.version, requirement)
+        })
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [candidate] => Ok(candidate.clone()),
+        [] => Err(format!(
+            "Bun lock dependency cannot be resolved: {name} {requirement} from {parent_key}"
+        )
+        .into()),
+        _ => Err(format!(
+            "Bun lock dependency resolution is ambiguous: {name} {requirement} from {parent_key}"
+        )
+        .into()),
+    }
+}
+
+fn frontend_version_matches(version: &str, requirement: &str) -> bool {
+    let Ok(version) = Version::parse(version) else {
+        return false;
+    };
+    requirement.split("||").any(|alternative| {
+        if VersionReq::parse(alternative.trim())
+            .map(|requirement| requirement.matches(&version))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        let normalized = alternative
+            .split_whitespace()
+            .map(|token| token.split_once('-').map_or(token, |(prefix, _)| prefix))
+            .collect::<Vec<_>>()
+            .join(" ");
+        VersionReq::parse(&normalized)
+            .map(|requirement| requirement.matches(&version))
+            .unwrap_or(false)
+    })
+}
+
+fn strip_trailing_commas(source: &str) -> Result<String> {
+    let bytes = source.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            output.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            output.push(byte);
+            index += 1;
+            continue;
+        }
+        if byte == b',' {
+            let mut next = index + 1;
+            while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                next += 1;
+            }
+            if matches!(bytes.get(next), Some(b'}' | b']')) {
+                index += 1;
+                continue;
+            }
+        }
+        output.push(byte);
+        index += 1;
+    }
+    String::from_utf8(output).map_err(Into::into)
+}
+
+fn expected_relationships(
+    artifacts: &[Artifact],
+    locked_packages: &[LockedPackage],
+    frontend: &FrontendGraph,
+) -> Result<Vec<Value>> {
+    let mut relationships = artifacts
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            json!({
+                "spdxElementId": "SPDXRef-Package-SkyAutoPlayer",
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": format!("SPDXRef-Artifact-{}", index + 1),
+            })
+        })
+        .collect::<Vec<_>>();
+    relationships.extend(locked_packages.iter().enumerate().map(|(index, _)| {
+        json!({
+            "spdxElementId": "SPDXRef-Package-SkyAutoPlayer",
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": format!("SPDXRef-Package-Cargo-{}", index + 1),
+        })
+    }));
+    for package_key in &frontend.root_packages {
+        relationships.push(json!({
+            "spdxElementId": "SPDXRef-Package-SkyAutoPlayer",
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": frontend_package_id(frontend.package_index(package_key)?),
+        }));
+    }
+    for (from, to) in &frontend.edges {
+        relationships.push(json!({
+            "spdxElementId": frontend_package_id(frontend.package_index(from)?),
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": frontend_package_id(frontend.package_index(to)?),
+        }));
+    }
+    Ok(relationships)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +765,24 @@ mod tests {
         assert!(is_sha256(&"a".repeat(64)));
         assert!(!is_sha256(&"g".repeat(64)));
         assert!(!is_sha256(&"a".repeat(63)));
+    }
+
+    #[test]
+    fn frontend_graph_covers_production_workspace_dependencies() {
+        let graph = frontend_graph(&crate::repo::root()).unwrap();
+        assert!(
+            graph
+                .root_packages
+                .iter()
+                .any(|key| graph.packages.iter().any(|package| package.key == *key))
+        );
+        assert!(graph.packages.iter().any(|package| package.name == "react"));
+        assert!(
+            graph
+                .packages
+                .iter()
+                .any(|package| package.name == "@tauri-apps/api")
+        );
+        assert!(!graph.edges.is_empty());
     }
 }

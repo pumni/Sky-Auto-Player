@@ -1,4 +1,6 @@
 use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use minisign_verify::PublicKey;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -547,14 +549,42 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         return Err("v4 Tauri config contains legacy or private key material".into());
     }
 
+    let config_json: Value = serde_json::from_str(&config)?;
+    let config_key = config_json
+        .get("plugins")
+        .and_then(Value::as_object)
+        .and_then(|plugins| plugins.get("updater"))
+        .and_then(Value::as_object)
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(Value::as_str)
+        .ok_or("v4 Tauri config public trust root is not a string")?;
+    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    let native = fs::read_to_string(&native_path)?;
+    let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
+    if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || native_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || !native.contains(
+            "const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];",
+        )
+    {
+        return Err("v4 production updater public-root copies do not match byte-for-byte".into());
+    }
+    let decoded = STANDARD.decode(config_key)?;
+    let decoded = String::from_utf8(decoded)?;
+    PublicKey::decode(&decoded)?;
+
     let ci_path = root.join(".github/workflows/ci.yml");
     let ci = fs::read_to_string(&ci_path)?;
     for marker in [
         "scripts/setup_v4_test_signing.ps1",
         "scripts/verify_v4_authenticode.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS",
+        "Packaged Tauri updater rotation",
         "cargo xtask sbom generate",
         "cargo xtask sbom verify",
+        "workflow_dispatch:",
         "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
         "Verify exact GitHub artifact attestations",
     ] {
@@ -598,7 +628,15 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             )
             .into());
         }
-        let Ok(content) = String::from_utf8(fs::read(path)?) else {
+        let bytes = fs::read(path)?;
+        if is_tauri_minisign_private_key(&bytes) {
+            return Err(format!(
+                "Tauri/minisign private key material found at {}",
+                path.display()
+            )
+            .into());
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
         for (line_number, line) in content.lines().enumerate() {
@@ -630,6 +668,59 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     println!("[xtask] v4 trust-material and secret-output guards: PASS");
     Ok(())
+}
+
+fn extract_rust_string_constant(source: &str, name: &str) -> Result<String> {
+    let marker = format!("const {name}: &str = \"");
+    let values = source
+        .lines()
+        .filter_map(|line| {
+            let start = line.find(&marker)? + marker.len();
+            let value = line.get(start..)?.split_once('"')?.0;
+            Some(value.to_owned())
+        })
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Ok(value.clone()),
+        _ => Err(format!("Rust source must contain exactly one {name} string constant").into()),
+    }
+}
+
+fn is_tauri_minisign_private_key(bytes: &[u8]) -> bool {
+    let mut candidate = bytes.to_vec();
+    for _ in 0..3 {
+        if is_minisign_secret_text(&candidate) {
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(&candidate) else {
+            return false;
+        };
+        let Ok(decoded) = STANDARD.decode(text.trim()) else {
+            return false;
+        };
+        candidate = decoded;
+    }
+    false
+}
+
+fn is_minisign_secret_text(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.len() != 2 {
+        return false;
+    }
+    let comment = lines[0].to_ascii_lowercase();
+    if !comment.starts_with("untrusted comment:")
+        || (!comment.contains("secret key") && !comment.contains("private key"))
+    {
+        return false;
+    }
+    STANDARD
+        .decode(lines[1])
+        .map(|payload| (64..=1024).contains(&payload.len()))
+        .unwrap_or(false)
 }
 
 fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
@@ -2342,6 +2433,35 @@ read_only=true
                 .iter()
                 .any(|finding| finding.rule == "forbidden-dll-load")
         );
+    }
+
+    #[test]
+    fn trust_guard_rejects_renamed_and_encoded_minisign_secret_keys() {
+        let secret_payload = STANDARD.encode([0_u8; 158]);
+        let secret_text =
+            format!("untrusted comment: minisign encrypted secret key\n{secret_payload}");
+        assert!(is_tauri_minisign_private_key(secret_text.as_bytes()));
+        assert!(is_tauri_minisign_private_key(
+            STANDARD.encode(&secret_text).as_bytes()
+        ));
+
+        let public_text = format!(
+            "untrusted comment: minisign public key: fixture\n{}",
+            STANDARD.encode([0_u8; 32])
+        );
+        assert!(!is_tauri_minisign_private_key(
+            STANDARD.encode(public_text).as_bytes()
+        ));
+
+        let fixture = std::env::temp_dir().join(format!(
+            "sky-xtask-renamed-secret-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::write(&fixture, STANDARD.encode(secret_text)).unwrap();
+        let renamed_fixture = fs::read(&fixture).unwrap();
+        assert!(is_tauri_minisign_private_key(&renamed_fixture));
+        fs::remove_file(fixture).unwrap();
     }
 
     #[test]

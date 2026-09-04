@@ -109,3 +109,9 @@ release-authority metadata contract. Its operational private key remains
 outside the repository, and Authenticode provider credentials are a separate
 Track B release input. The legacy `sky_updater` crate remains present for the
 v3 maintenance line.
+
+Updater rotation is qualified with real packaged clients: the bridge trusts
+`[old,new]` and verifies candidate bytes during `Update::download()`, while the
+cutover client trusts `[new]` and rejects an old-root-only candidate. A full
+non-PR workflow dispatch is required for provenance and SPDX attestation
+evidence.

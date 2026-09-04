@@ -560,48 +560,16 @@ jobs:
           New-Item -ItemType Directory -Path $fixtureTarget -Force | Out-Null
           "CARGO_TARGET_DIR=$fixtureTarget" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
-      - name: Build throwaway signed fixture and qualify previous-v4 to candidate-v4 update
+      - name: Build throwaway signed fixture and qualify packaged Tauri updater rotation
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-fixture.key"
-          $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-fixture-updater.json"
           $fixtureTarget = $env:CARGO_TARGET_DIR
           $fixtureBundle = Join-Path $fixtureTarget "dist/bundle/nsis"
-          try {
-            Push-Location desktop
-            try {
-              bun run tauri signer generate --ci --password "" --force -w $keyPath
-              $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
-              $testPublicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
-              [ordered]@{
-                plugins = [ordered]@{
-                  updater = [ordered]@{
-                    pubkey = $testPublicKey
-                    dangerousInsecureTransportProtocol = $true
-                    endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
-                  }
-                }
-              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
-              $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
-              $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
-              bun run tauri build --ci --config $configPath -- --profile dist --features tauri-update-fixture
-            } finally {
-              Pop-Location
-            }
-            $previousInstallers = @(Get-ChildItem -LiteralPath $fixtureBundle -Filter '*-setup.exe' -File)
-            if ($previousInstallers.Count -ne 1) {
-              throw "Expected exactly one throwaway previous-v4 installer, found $($previousInstallers.Count)"
-            }
-            pwsh scripts/ci_tauri_update_e2e.ps1 `
-              -PreviousInstaller $previousInstallers[0].FullName `
-              -UpdaterConfigPath $configPath `
-              -BundleDir $fixtureBundle
-          } finally {
-            Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
-            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-          }
+          # Packaged Tauri updater rotation: ci_tauri_update_e2e.ps1 sets SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS
+          # separately for the bridge [old,new] and cutover [new] tauri-update-fixture builds.
+          # Its generated configs alone enable dangerousInsecureTransportProtocol on loopback.
+          pwsh scripts/ci_tauri_update_e2e.ps1 -BundleDir $fixtureBundle
 
       - name: Show sccache stats
         if: always()

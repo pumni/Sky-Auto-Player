@@ -26,6 +26,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_DIRTY_WORKTREE");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_SOURCE_FINGERPRINT");
+    println!("cargo:rerun-if-env-changed=SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS");
     let head = std::env::var("GITHUB_SHA")
         .ok()
         .or_else(|| std::env::var("SKY_NATIVE_BUILD_COMMIT").ok())
@@ -45,6 +46,24 @@ fn main() {
     println!("cargo:rustc-env=SKY_NATIVE_DIRTY_WORKTREE={dirty}");
     println!("cargo:rustc-env=SKY_NATIVE_SOURCE_FINGERPRINT={source_fingerprint}");
     println!("cargo:rustc-env=SKY_RUSTC_VERSION={rustc_version}");
+    if std::env::var_os("CARGO_FEATURE_TAURI_UPDATE_FIXTURE").is_some()
+        && let Ok(keys) = std::env::var("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS")
+    {
+        let roots = keys.split('|').collect::<Vec<_>>();
+        if roots.is_empty()
+            || roots.len() > 4
+            || roots.iter().any(|root| {
+                root.is_empty()
+                    || root.len() > 4096
+                    || !root.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+                    })
+            })
+        {
+            panic!("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS is malformed or unbounded");
+        }
+        println!("cargo:rustc-env=SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS={keys}");
+    }
     if std::env::var_os("CARGO_FEATURE_TAURI_TEST").is_some() {
         // The MockRuntime-only binding/test validation does not run the
         // frontend. Override only that rustc invocation's generated context

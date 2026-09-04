@@ -14,6 +14,12 @@ promotion. V4 uses an independent public updater trust root; its private
 signing key and Authenticode provider credentials remain outside the repository
 and are fail-closed release inputs.
 
+For v4 rotation, the bridge client carries `[old,new]` and tries artifact
+verification during the Tauri download step; the cutover client carries
+`[new]` and rejects artifacts signed only by the old root. Check-time manifest
+discovery is not treated as package verification. Non-PR qualification also
+requires provenance and SPDX attestations to be generated and verified.
+
 ## 1. V3 maintenance distribution (legacy)
 
 Sky Auto Player has one canonical portable release package:
