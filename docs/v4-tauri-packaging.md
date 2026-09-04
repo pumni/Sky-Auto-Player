@@ -52,8 +52,12 @@ $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 $env:SKY_AUTHENTICODE_MODE = "test"
 $testSigningEnv = Join-Path $env:TEMP "sky-v4-test-signing.env"
+$env:GITHUB_ENV = $testSigningEnv
 pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $testSigningEnv
-$env:SKY_AUTHENTICODE_TEST_THUMBPRINT = ((Get-Content $testSigningEnv | Where-Object { $_ -like "SKY_AUTHENTICODE_TEST_THUMBPRINT=*" }) -split "=", 2)[1]
+Get-Content $testSigningEnv | ForEach-Object {
+  $name, $value = $_ -split "=", 2
+  Set-Item -Path "Env:$name" -Value $value
+}
 $testConfigPath = Join-Path $env:TEMP "sky-auto-player-v4-test-updater.json"
 $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
 @{
@@ -99,14 +103,19 @@ rust/target/dist/bundle/nsis/
   Sky Auto Player_<version>_<arch>-setup.exe.sig
 ```
 
-The Authenticode verifier requires a genuinely `Valid` Windows Authenticode
-result and the exact signer thumbprint from `SKY_AUTHENTICODE_TEST_THUMBPRINT`
-in test mode. Production verification requires the separately approved
+The Authenticode verifier requires an embedded signer certificate whose exact
+thumbprint matches the test PFX identity in test mode. It proves the file
+signature and digest independently of public CA trust. Windows may report the
+self-signed test certificate as `NotTrusted` or `UnknownError`; only those two
+statuses are accepted in test mode, and only with the explicit
+`test-self-signed-untrusted-chain` evidence marker. Production verification
+requires `Valid` plus the separately approved
 `SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT`; it never accepts an arbitrary
-trusted signer. It records signer status and SHA-256 for every
-project-owned PE in the installed tree (the generated NSIS `uninstall.exe` is
-checked for presence but is not a project-owned binary); the bundle verifier
-separately binds the final installer evidence to the exact NSIS candidate. The SPDX generator
+trusted signer or the test exception. It records signer status and SHA-256 for
+every project-owned PE in the installed tree (the generated NSIS
+`uninstall.exe` is checked for presence but is not a project-owned binary);
+the bundle verifier separately binds the final installer evidence to the exact
+NSIS candidate. The SPDX generator
 records SHA-256 for the exact two-file NSIS artifact set and binds it to the
 current commit. The SBOM covers the reachable Rust production graph from
 `rust/Cargo.lock` and the frontend production graph from `desktop/bun.lock`,
@@ -121,11 +130,12 @@ signatures, empty signatures, unexpected files, and version-naming drift.
 That command is the canonical package build: it uses the normal production
 feature set and the generated test updater key/example endpoint only to
 exercise updater artifact signing. The Authenticode certificate is an
-ephemeral test fixture, trusted only in the runner's `CurrentUser\Root` and
-`CurrentUser\TrustedPublisher` stores for this qualification. The CI always
-removes it from `My`, `Root`, and `TrustedPublisher` after signing and
-installed-PE verification. It does not enable the updater fixture or insecure
-transport. The separate `updater_e2e` CI job builds both previous-v4 and
+ephemeral test fixture. The setup step creates its private key and certificate
+in a password-protected PFX under `RUNNER_TEMP`; it never imports the
+certificate into a Windows trust store. The CI always deletes the PFX and its
+password environment variable after signing and installed-PE verification.
+It does not enable the updater fixture or insecure transport. The separate
+`updater_e2e` CI job builds both previous-v4 and
 candidate-v4 into a `RUNNER_TEMP` `CARGO_TARGET_DIR` with
 `tauri-update-fixture`; its loopback endpoint and insecure transport setting
 never enter the canonical bundle or upload path.

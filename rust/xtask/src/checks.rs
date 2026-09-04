@@ -641,9 +641,16 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
     for marker in [
         "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
         "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
         "expected_signer_thumbprint",
-        "Status -ne \"Valid\"",
+        "Resolve-TestPfxPath",
+        "if ($status -ne \"Valid\")",
+        "NotTrusted",
+        "UnknownError",
+        "test-self-signed-untrusted-chain",
+        "signature-valid-untrusted-chain",
         "signer thumbprint mismatch",
     ] {
         if !verifier.contains(marker) {
@@ -655,24 +662,71 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     let setup = fs::read_to_string(root.join("scripts/setup_v4_test_signing.ps1"))?;
     for marker in [
-        "foreach ($store in @('Root', 'TrustedPublisher'))",
-        "CurrentUser/${store}",
+        "CertificateRequest",
+        "X509ContentType]::Pfx",
+        "EphemeralKeySet",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "RUNNER_TEMP",
     ] {
         if !setup.contains(marker) {
             return Err(format!(
-                "v4 Authenticode test trust setup is missing its required marker: {marker}"
+                "v4 Authenticode test PFX setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "New-SelfSignedCertificate",
+        "certutil.exe",
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if setup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup must not depend on certificate stores: {forbidden}"
             )
             .into());
         }
     }
     let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_test_signing.ps1"))?;
     for marker in [
-        "@('My', 'TrustedPublisher', 'Root')",
-        "CurrentUser/${store}",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "RUNNER_TEMP",
+        "sky-v4-test-signing-[0-9a-fA-F]{32}\\.pfx",
+        "Clear-TestSigningEnvironment",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
     ] {
         if !cleanup.contains(marker) {
             return Err(format!(
-                "v4 Authenticode test cleanup is missing its required marker: {marker}"
+                "v4 Authenticode test PFX cleanup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if cleanup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let signer = fs::read_to_string(root.join("scripts/sign_v4_authenticode.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "/f $pfxPath",
+        "/p $pfxPassword",
+        "EphemeralKeySet",
+    ] {
+        if !signer.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode signer is missing its required PFX marker: {marker}"
             )
             .into());
         }

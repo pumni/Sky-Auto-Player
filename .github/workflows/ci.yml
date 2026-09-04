@@ -515,7 +515,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Fail fast on updater fixture dependencies
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,certutil.exe,signtool.exe
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
 
       - name: Install pinned desktop dependencies
         working-directory: desktop
@@ -628,7 +628,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Fail fast on packaged build dependencies
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,certutil.exe,signtool.exe
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
 
       - name: Install pinned desktop dependencies
         working-directory: desktop

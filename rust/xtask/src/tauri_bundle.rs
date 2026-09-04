@@ -325,6 +325,10 @@ fn expected_authenticode_signer_thumbprint(mode: &str) -> Result<String> {
     Ok(thumbprint)
 }
 
+fn is_test_untrusted_chain_status(status: &str) -> bool {
+    matches!(status, "NotTrusted" | "UnknownError")
+}
+
 fn validate_authenticode_evidence_value(
     payload: &Value,
     summary: &ArtifactSummary,
@@ -360,8 +364,31 @@ fn validate_authenticode_evidence_value(
     if file.get("name").and_then(Value::as_str) != Some(summary.installer.as_str()) {
         return Err("Authenticode evidence does not cover the canonical installer".into());
     }
-    if file.get("status").and_then(Value::as_str) != Some("Valid") {
-        return Err("canonical installer Authenticode signature is not valid".into());
+    let status = file
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or("canonical installer Authenticode status is missing")?;
+    let verification = file
+        .get("verification")
+        .and_then(Value::as_str)
+        .ok_or("canonical installer Authenticode verification result is missing")?;
+    let trust_exception = file.get("trust_exception");
+    match status {
+        "Valid"
+            if verification == "signature-valid"
+                && trust_exception.map(Value::is_null).unwrap_or(true) => {}
+        status
+            if mode == "test"
+                && is_test_untrusted_chain_status(status)
+                && verification == "signature-valid-untrusted-chain"
+                && trust_exception.and_then(Value::as_str)
+                    == Some("test-self-signed-untrusted-chain") => {}
+        _ => {
+            return Err(format!(
+                "canonical installer Authenticode status is not accepted: {status}"
+            )
+            .into());
+        }
     }
     if file
         .get("signer_thumbprint")
@@ -516,6 +543,8 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
+                    "verification": "signature-valid",
+                    "trust_exception": null,
                     "signer_thumbprint": "A".repeat(40),
                     "sha256": summary.installer_sha256.clone(),
                 }]
@@ -525,6 +554,56 @@ mod tests {
         .unwrap();
         let payload: Value = serde_json::from_slice(&fs::read(&evidence_path).unwrap()).unwrap();
         validate_authenticode_evidence_value(&payload, &summary, "test", &"A".repeat(40)).unwrap();
+
+        let untrusted_payload = json!({
+            "schema_version": 1,
+            "evidence_type": "authenticode-verification",
+            "mode": "test",
+            "expected_signer_thumbprint": "A".repeat(40),
+            "files": [{
+                "name": summary.installer.clone(),
+                "status": "UnknownError",
+                "verification": "signature-valid-untrusted-chain",
+                "trust_exception": "test-self-signed-untrusted-chain",
+                "signer_thumbprint": "A".repeat(40),
+                "sha256": summary.installer_sha256.clone(),
+            }]
+        });
+        validate_authenticode_evidence_value(&untrusted_payload, &summary, "test", &"A".repeat(40))
+            .unwrap();
+        assert!(
+            validate_authenticode_evidence_value(
+                &untrusted_payload,
+                &summary,
+                "production",
+                &"A".repeat(40),
+            )
+            .is_err()
+        );
+
+        let mut untrusted_without_exception = untrusted_payload.clone();
+        untrusted_without_exception["files"][0]["trust_exception"] = Value::Null;
+        assert!(
+            validate_authenticode_evidence_value(
+                &untrusted_without_exception,
+                &summary,
+                "test",
+                &"A".repeat(40),
+            )
+            .is_err()
+        );
+
+        let mut unsupported_status = untrusted_payload.clone();
+        unsupported_status["files"][0]["status"] = json!("NotSigned");
+        assert!(
+            validate_authenticode_evidence_value(
+                &unsupported_status,
+                &summary,
+                "test",
+                &"A".repeat(40),
+            )
+            .is_err()
+        );
         fs::write(
             &evidence_path,
             serde_json::to_vec(&json!({
@@ -535,6 +614,8 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
+                    "verification": "signature-valid",
+                    "trust_exception": null,
                     "signer_thumbprint": "B".repeat(40),
                     "sha256": summary.installer_sha256.clone(),
                 }]
@@ -557,6 +638,8 @@ mod tests {
                 "files": [{
                     "name": summary.installer.clone(),
                     "status": "Valid",
+                    "verification": "signature-valid",
+                    "trust_exception": null,
                     "signer_thumbprint": "A".repeat(40),
                     "sha256": "0".repeat(64),
                 }]
