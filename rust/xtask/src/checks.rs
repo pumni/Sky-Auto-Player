@@ -705,7 +705,8 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
     if mask_position >= password_environment_position {
         return Err(
-            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV".into(),
+            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV"
+                .into(),
         );
     }
     for forbidden in [
