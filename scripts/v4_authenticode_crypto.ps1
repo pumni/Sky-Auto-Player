@@ -69,8 +69,10 @@ function Get-AuthenticodePeLayout {
     }
     $checksumOffset = $optionalHeaderOffset + 64
     $certificateDirectoryOffset = $dataDirectoryOffset + (8 * 4)
+    $sizeOfHeaders = [long](Read-UInt32LittleEndian $Bytes ($optionalHeaderOffset + 60))
     if ($checksumOffset + 4 -gt $optionalHeaderEnd -or
-        $certificateDirectoryOffset + 8 -gt $optionalHeaderEnd) {
+        $certificateDirectoryOffset + 8 -gt $optionalHeaderEnd -or
+        $sizeOfHeaders -le 0 -or $sizeOfHeaders -gt $Bytes.Length) {
         throw 'PE image optional-header fields are truncated'
     }
 
@@ -85,6 +87,9 @@ function Get-AuthenticodePeLayout {
     $sectionHeaderSize = 40
     if ($sectionTableOffset + ($numberOfSections * $sectionHeaderSize) -gt $Bytes.Length) {
         throw 'PE image section table is truncated'
+    }
+    if ($sizeOfHeaders -lt $sectionTableOffset + ($numberOfSections * $sectionHeaderSize)) {
+        throw 'PE image SizeOfHeaders does not cover the complete section table'
     }
     $sections = foreach ($index in 0..($numberOfSections - 1)) {
         $sectionOffset = $sectionTableOffset + ($index * $sectionHeaderSize)
@@ -110,7 +115,7 @@ function Get-AuthenticodePeLayout {
         CertificateDirectoryOffset = [long]$certificateDirectoryOffset
         CertificateTableOffset = $certificateTableOffset
         CertificateTableSize = $certificateTableSize
-        FirstSectionOffset = [long](($sections | Measure-Object -Property PointerToRawData -Minimum).Minimum)
+        SizeOfHeaders = $sizeOfHeaders
         Sections = @($sections)
     }
 }
@@ -153,9 +158,22 @@ function Get-AuthenticodeImageDigest {
     )
     $hasher = [System.Security.Cryptography.IncrementalHash]::CreateHash($HashAlgorithm)
     try {
-        Add-AuthenticodeHashRange $hasher $Bytes 0 $Layout.FirstSectionOffset $exclusions
-        foreach ($section in ($Layout.Sections | Sort-Object VirtualAddress, PointerToRawData)) {
+        Add-AuthenticodeHashRange $hasher $Bytes 0 $Layout.SizeOfHeaders $exclusions
+        $sumOfBytesHashed = [long]$Layout.SizeOfHeaders
+        foreach ($section in ($Layout.Sections | Sort-Object PointerToRawData, VirtualAddress)) {
             Add-AuthenticodeHashRange $hasher $Bytes $section.PointerToRawData ($section.PointerToRawData + $section.SizeOfRawData) $exclusions
+            $sumOfBytesHashed += $section.SizeOfRawData
+        }
+        $extraDataEnd = [long]$Bytes.Length - $Layout.CertificateTableSize
+        if ($extraDataEnd -lt $sumOfBytesHashed) {
+            throw 'PE image certificate table overlaps the Authenticode hashed image'
+        }
+        if ($extraDataEnd -gt $sumOfBytesHashed) {
+            Add-AuthenticodeHashRange $hasher $Bytes $sumOfBytesHashed $extraDataEnd $exclusions
+        }
+        $paddingLength = (8 - ($Bytes.Length % 8)) % 8
+        if ($paddingLength -gt 0) {
+            $Hasher.AppendData([byte[]]::new($paddingLength))
         }
         return $hasher.GetHashAndReset()
     } finally {
