@@ -4,8 +4,9 @@
 //! configuration, signature verification, artifact handling, and install
 //! execution stay in this module and in the official Tauri updater plugin.
 //! The production authority is a fixed Rust-owned v4 metadata authority. The
-//! updater trust key remains external to this work order and is intentionally
-//! not committed here; a missing key makes the official updater fail closed.
+//! updater trust root is independent from the v3 release authority and is
+//! compiled into this boundary; a missing or invalid root makes the official
+//! updater fail closed.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, UpdateInstallLease};
 use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
@@ -26,6 +27,13 @@ const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const V4_RELEASE_AUTHORITY_REPOSITORY: &str = "pumni/Sky-Auto-Player-Releases";
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json";
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json";
+#[cfg(not(feature = "tauri-update-fixture"))]
+const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK";
+#[cfg(not(feature = "tauri-update-fixture"))]
+const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];
+#[cfg(feature = "tauri-update-fixture")]
+const FIXTURE_TAURI_UPDATER_PUBLIC_KEYS: Option<&str> =
+    option_env!("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS");
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativeUpdateCandidate {
@@ -37,7 +45,7 @@ pub(crate) struct NativeUpdateCandidate {
 
 struct NativeUpdateState {
     candidate: Option<NativeUpdateCandidate>,
-    update: Option<Update>,
+    updates: Vec<Update>,
     operation_id: Option<String>,
     state: UpdateState,
 }
@@ -46,7 +54,7 @@ impl Default for NativeUpdateState {
     fn default() -> Self {
         Self {
             candidate: None,
-            update: None,
+            updates: Vec::new(),
             operation_id: None,
             state: UpdateState::Idle,
         }
@@ -98,11 +106,16 @@ impl<R: Runtime> UpdateService<R> {
         let timestamp = unix_timestamp();
 
         match result {
-            Ok(Some(update)) if settings.snapshot().update.skip_version != update.version => {
+            Ok(updates)
+                if updates.first().is_some_and(|update| {
+                    settings.snapshot().update.skip_version != update.version
+                }) =>
+            {
                 settings
                     .record_update_success(timestamp)
                     .map_err(|error| format!("update timestamp persistence failed: {error}"))?;
-                let candidate = candidate_from_update(&update, channel);
+                let candidate =
+                    candidate_from_update(updates.first().expect("update exists"), channel);
                 let dto = UpdateCheckDto {
                     state: UpdateState::Available,
                     current_version: current_version.clone(),
@@ -118,7 +131,7 @@ impl<R: Runtime> UpdateService<R> {
                         .lock()
                         .map_err(|_| "native update state lock poisoned".to_string())?;
                     state.candidate = Some(candidate.clone());
-                    state.update = Some(update);
+                    state.updates = updates;
                     state.operation_id = None;
                     state.state = UpdateState::Available;
                 }
@@ -177,7 +190,7 @@ impl<R: Runtime> UpdateService<R> {
         requested_target: &str,
         publish: impl Fn(UiEvent) -> Result<(), String>,
     ) -> Result<UpdateHandoffDto, String> {
-        let (candidate, update) = {
+        let (candidate, updates) = {
             let state = self
                 .state
                 .lock()
@@ -186,11 +199,11 @@ impl<R: Runtime> UpdateService<R> {
                 .candidate
                 .clone()
                 .ok_or_else(|| "update_unavailable: check for an update first".to_string())?;
-            let update = state
-                .update
-                .clone()
-                .ok_or_else(|| "update_unavailable: update metadata is unavailable".to_string())?;
-            (candidate, update)
+            let updates = state.updates.clone();
+            if updates.is_empty() {
+                return Err("update_unavailable: update metadata is unavailable".into());
+            }
+            (candidate, updates)
         };
         if candidate.version != requested_target
             || settings.update.skip_version == candidate.version
@@ -215,29 +228,34 @@ impl<R: Runtime> UpdateService<R> {
             "Downloading update",
         )?;
 
-        let download = tauri::async_runtime::block_on(update.download(
-            {
-                let publish = &publish;
-                let candidate = candidate.clone();
-                let operation_id = operation_id.clone();
-                move |completed, total| {
-                    let total = total.filter(|value| *value <= MAX_ARTIFACT_BYTES);
-                    let completed = (completed as u64).min(MAX_ARTIFACT_BYTES);
-                    let _ = publish_progress(
-                        publish,
-                        UpdateState::Downloading,
-                        &candidate,
-                        &operation_id,
-                        completed,
-                        total,
-                        "Downloading update",
-                    );
-                }
-            },
-            || {},
-        ));
-        let bytes = match download {
-            Ok(bytes) if (bytes.len() as u64) <= MAX_ARTIFACT_BYTES => bytes,
+        let candidate_for_download = candidate.clone();
+        let operation_for_download = operation_id.clone();
+        let download = first_verified_download(updates, |update| {
+            tauri::async_runtime::block_on(update.download(
+                {
+                    let publish = &publish;
+                    let candidate = candidate_for_download.clone();
+                    let operation_id = operation_for_download.clone();
+                    move |completed, total| {
+                        let total = total.filter(|value| *value <= MAX_ARTIFACT_BYTES);
+                        let completed = (completed as u64).min(MAX_ARTIFACT_BYTES);
+                        let _ = publish_progress(
+                            publish,
+                            UpdateState::Downloading,
+                            &candidate,
+                            &operation_id,
+                            completed,
+                            total,
+                            "Downloading update",
+                        );
+                    }
+                },
+                || {},
+            ))
+            .map_err(|error| error.to_string())
+        });
+        let (update, bytes) = match download {
+            Ok((update, bytes)) if (bytes.len() as u64) <= MAX_ARTIFACT_BYTES => (update, bytes),
             Ok(_) => {
                 return self.install_error(
                     &candidate,
@@ -315,11 +333,37 @@ impl<R: Runtime> UpdateService<R> {
         Ok(dto)
     }
 
-    fn check_official(&self, channel: UpdateChannel) -> Result<Option<Update>, String> {
+    fn check_official(&self, channel: UpdateChannel) -> Result<Vec<Update>, String> {
         let endpoint = authority_endpoint(channel)?;
-        let builder = self
-            .app
-            .updater_builder()
+        let mut updates = Vec::new();
+        let mut last_error = None;
+        for public_key in updater_public_keys() {
+            match self.check_official_with_key(endpoint.clone(), public_key) {
+                Ok(Some(update)) => updates.push(update),
+                Ok(None) => {}
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if !updates.is_empty() {
+            Ok(updates)
+        } else if let Some(error) = last_error {
+            Err(error)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn check_official_with_key(
+        &self,
+        endpoint: Url,
+        public_key: Option<&str>,
+    ) -> Result<Option<Update>, String> {
+        let builder = self.app.updater_builder();
+        let builder = match public_key {
+            Some(public_key) => builder.pubkey(public_key),
+            None => builder,
+        };
+        let builder = builder
             .endpoints(vec![endpoint])
             .map_err(|error| format!("update authority rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
@@ -377,6 +421,40 @@ impl<R: Runtime> UpdateService<R> {
             app.cleanup_before_exit();
         }
     }
+}
+
+fn updater_public_keys() -> Vec<Option<&'static str>> {
+    #[cfg(feature = "tauri-update-fixture")]
+    {
+        FIXTURE_TAURI_UPDATER_PUBLIC_KEYS
+            .map(|keys| keys.split('|').map(Some).collect())
+            .unwrap_or_else(|| vec![None])
+    }
+    #[cfg(not(feature = "tauri-update-fixture"))]
+    {
+        V4_TAURI_UPDATER_PUBLIC_KEYS
+            .iter()
+            .copied()
+            .map(Some)
+            .collect()
+    }
+}
+
+/// Try each `Update`'s own Tauri verification context until the downloaded
+/// bytes verify. This is the runtime rotation mechanism: a bridge client can
+/// carry old and new roots, while a cutover client carries only the new root.
+fn first_verified_download<T>(
+    updates: Vec<T>,
+    mut download: impl FnMut(&T) -> Result<Vec<u8>, String>,
+) -> Result<(T, Vec<u8>), String> {
+    let mut last_error = None;
+    for update in updates {
+        match download(&update) {
+            Ok(bytes) => return Ok((update, bytes)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "update trust roots are unavailable".into()))
 }
 
 fn authority_endpoint(channel: UpdateChannel) -> Result<Url, String> {
@@ -506,9 +584,9 @@ mod tests {
     #[cfg(not(feature = "tauri-update-fixture"))]
     use super::{
         V4_BETA_METADATA_ENDPOINT, V4_RELEASE_AUTHORITY_REPOSITORY, V4_STABLE_METADATA_ENDPOINT,
-        authority_endpoint,
+        V4_TAURI_UPDATER_PUBLIC_KEY, V4_TAURI_UPDATER_PUBLIC_KEYS, authority_endpoint,
     };
-    use super::{bounded, update_activity_error};
+    use super::{bounded, first_verified_download, update_activity_error};
     use crate::app_state::ActivityReservationError;
     #[cfg(not(feature = "tauri-update-fixture"))]
     use crate::ui_events::UpdateChannel;
@@ -529,6 +607,20 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "tauri-update-fixture"))]
+    #[test]
+    fn production_updater_trust_root_is_independent_and_bounded() {
+        assert_eq!(V4_TAURI_UPDATER_PUBLIC_KEYS, &[V4_TAURI_UPDATER_PUBLIC_KEY]);
+        assert!(!V4_TAURI_UPDATER_PUBLIC_KEY.is_empty());
+        assert!(V4_TAURI_UPDATER_PUBLIC_KEY.len() <= 4096);
+        assert!(!V4_TAURI_UPDATER_PUBLIC_KEY.contains("PRIVATE KEY"));
+        assert!(
+            V4_TAURI_UPDATER_PUBLIC_KEY
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        );
+    }
+
     #[test]
     fn production_error_is_bounded_and_does_not_name_a_release_namespace() {
         let message = bounded("x".repeat(8_000));
@@ -546,5 +638,30 @@ mod tests {
             message,
             "playback_active: update installation cannot run during physical playback"
         );
+    }
+
+    #[test]
+    fn runtime_rotation_download_falls_through_to_the_root_that_verifies_bytes() {
+        let mut attempts = Vec::new();
+        let (selected, bytes) = first_verified_download(vec!["old-root", "new-root"], |root| {
+            attempts.push(*root);
+            if *root == "old-root" {
+                Err("signature mismatch".into())
+            } else {
+                Ok(b"new-root-signed-update".to_vec())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, ["old-root", "new-root"]);
+        assert_eq!(selected, "new-root");
+        assert_eq!(bytes, b"new-root-signed-update");
+    }
+
+    #[test]
+    fn runtime_rotation_download_fails_closed_when_no_root_verifies_bytes() {
+        let result = first_verified_download(vec!["old-root", "new-root"], |_| {
+            Err::<Vec<u8>, _>("signature mismatch".into())
+        });
+        assert_eq!(result.unwrap_err(), "signature mismatch");
     }
 }

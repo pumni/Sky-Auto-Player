@@ -18,12 +18,7 @@ interface AppTitleBarProps {
   windowControls?: WindowControls;
 }
 
-export function AppTitleBar({
-  bootstrap,
-  useStore,
-  settingsTriggerRef,
-  windowControls,
-}: AppTitleBarProps) {
+export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: AppTitleBarProps) {
   const controls = useMemo(() => windowControls ?? createWindowControls(), [windowControls]);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
   const setSettingsOpen = useStore((store: DesktopStore) => store.setSettingsOpen);

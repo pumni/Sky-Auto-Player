@@ -10,8 +10,10 @@ name = "xtask"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "=0.22.1"
 ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
 ico = "0.5"
+minisign-verify = "=0.2.5"
 roxmltree = "0.20.0"
 semver = "=1.0.28"
 serde = { version = "1", features = ["derive"] }

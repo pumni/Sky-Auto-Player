@@ -1,6 +1,8 @@
 use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
 use crate::native_update::UpdateService;
+#[cfg(any(test, feature = "tauri-test"))]
 use sky_native_adapters::AppPaths;
+#[cfg(any(test, feature = "tauri-test"))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};

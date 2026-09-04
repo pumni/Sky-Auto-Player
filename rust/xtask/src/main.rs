@@ -9,9 +9,11 @@ mod manifest;
 mod process;
 mod release_authority;
 mod repo;
+mod sbom;
 mod supply_chain;
 mod tauri_bundle;
 mod update_trust;
+mod updater_trust;
 mod version;
 
 use std::env;
@@ -20,7 +22,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> [--summary <path>]\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust rotation-self-test --old-public <path> --new-public <path> --old-signature <path> --new-signature <path> --payload <path>\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -199,6 +201,8 @@ fn main() -> Result<()> {
         "verify-tauri-bundle" => {
             let mut bundle_dir = None;
             let mut summary = None;
+            let mut authenticode_evidence = None;
+            let mut sbom_path = None;
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -206,6 +210,11 @@ fn main() -> Result<()> {
                         bundle_dir = Some(required_value(&args, &mut i, "--bundle-dir")?)
                     }
                     "--summary" => summary = Some(required_value(&args, &mut i, "--summary")?),
+                    "--authenticode-evidence" => {
+                        authenticode_evidence =
+                            Some(required_value(&args, &mut i, "--authenticode-evidence")?)
+                    }
+                    "--sbom" => sbom_path = Some(required_value(&args, &mut i, "--sbom")?),
                     option => {
                         return Err(format!("unknown verify-tauri-bundle option: {option}").into());
                     }
@@ -220,6 +229,82 @@ fn main() -> Result<()> {
                         .as_str(),
                 ),
                 summary.as_deref().map(Path::new),
+                authenticode_evidence.as_deref().map(Path::new),
+                sbom_path.as_deref().map(Path::new),
+            )
+        }
+        "sbom" => {
+            let operation = args.get(1).map(String::as_str);
+            let mut artifact_dir = None;
+            let mut output = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--artifact-dir" => {
+                        artifact_dir = Some(required_value(&args, &mut i, "--artifact-dir")?)
+                    }
+                    "--output" | "--sbom" => {
+                        output = Some(required_value(&args, &mut i, "--output/--sbom")?)
+                    }
+                    option => return Err(format!("unknown sbom option: {option}").into()),
+                }
+                i += 1;
+            }
+            let artifact_dir = Path::new(
+                artifact_dir
+                    .ok_or("sbom requires --artifact-dir <dir>")?
+                    .as_str(),
+            )
+            .to_owned();
+            let output =
+                Path::new(&output.ok_or("sbom requires --output <path> or --sbom <path>")?)
+                    .to_owned();
+            match operation {
+                Some("generate") => sbom::generate(&repo::root(), &artifact_dir, &output),
+                Some("verify") => sbom::verify(&repo::root(), &artifact_dir, &output),
+                _ => Err("sbom requires generate or verify".into()),
+            }
+        }
+        "updater-trust" if args.get(1).map(String::as_str) == Some("rotation-self-test") => {
+            let mut old_public = None;
+            let mut new_public = None;
+            let mut old_signature = None;
+            let mut new_signature = None;
+            let mut payload = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--old-public" => {
+                        old_public = Some(required_value(&args, &mut i, "--old-public")?)
+                    }
+                    "--new-public" => {
+                        new_public = Some(required_value(&args, &mut i, "--new-public")?)
+                    }
+                    "--old-signature" => {
+                        old_signature = Some(required_value(&args, &mut i, "--old-signature")?)
+                    }
+                    "--new-signature" => {
+                        new_signature = Some(required_value(&args, &mut i, "--new-signature")?)
+                    }
+                    "--payload" => payload = Some(required_value(&args, &mut i, "--payload")?),
+                    option => return Err(format!("unknown updater-trust option: {option}").into()),
+                }
+                i += 1;
+            }
+            let old_public = old_public.ok_or("rotation-self-test requires --old-public <path>")?;
+            let new_public = new_public.ok_or("rotation-self-test requires --new-public <path>")?;
+            let old_signature =
+                old_signature.ok_or("rotation-self-test requires --old-signature <path>")?;
+            let new_signature =
+                new_signature.ok_or("rotation-self-test requires --new-signature <path>")?;
+            let payload = payload.ok_or("rotation-self-test requires --payload <path>")?;
+            updater_trust::rotation_self_test(Path::new(&old_public), Path::new(&new_public))?;
+            updater_trust::verify_rotation_signatures(
+                Path::new(&old_public),
+                Path::new(&new_public),
+                Path::new(&old_signature),
+                Path::new(&new_signature),
+                Path::new(&payload),
             )
         }
         "release-authority" => match args.get(1).map(String::as_str) {

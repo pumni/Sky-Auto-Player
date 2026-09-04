@@ -1,7 +1,7 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { CheckCircle2, LoaderCircle, XCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import type { DesktopStoreHook } from '../../state/store';
 
 interface CalibrationDialogProps {
   useStore: DesktopStoreHook;

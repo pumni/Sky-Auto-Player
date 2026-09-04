@@ -73,10 +73,11 @@ non-canonical artifact names.
 
 The packaged qualification path emits a bounded
 `tauri-nsis-qualified-release` evidence object containing the canonical
-version/name/size pair and SHA-256 digests for both the installer and `.sig`.
+version/name/size pair and SHA-256 digests for both the installer and `.sig`,
+plus production Authenticode evidence and SPDX SBOM references/digests.
 `qualified=true` is not accepted by itself: the promotion gate rejects missing
-or extra fields, malformed evidence, digest mismatches, and same-name assets
-with different bytes. Metadata promotion is a separate operation after the
+or extra fields, test-mode Authenticode evidence, malformed evidence, digest
+mismatches, and same-name assets with different bytes. Metadata promotion is a separate operation after the
 immutable release has been published and the exact published assets have
 passed qualification. It compares GitHub's asset digest when present, or
 downloads and hashes the exact canonical asset when the API omits a digest.
@@ -103,6 +104,14 @@ assets are rejected. It never creates or edits a GitHub release; committing
 the resulting channel file is a separate reviewed authority-repository
 change.
 
-The v4 Tauri public trust key is intentionally not committed by WO-04. WO-05
-owns the independent updater trust root and its operational secrets. The
-legacy `sky_updater` crate remains present for the v3 maintenance line.
+The v4 Tauri updater public trust root is committed independently of this
+release-authority metadata contract. Its operational private key remains
+outside the repository, and Authenticode provider credentials are a separate
+Track B release input. The legacy `sky_updater` crate remains present for the
+v3 maintenance line.
+
+Updater rotation is qualified with real packaged clients: the bridge trusts
+`[old,new]` and verifies candidate bytes during `Update::download()`, while the
+cutover client trusts `[new]` and rejects an old-root-only candidate. A full
+non-PR workflow dispatch is required for provenance and SPDX attestation
+evidence.

@@ -3,7 +3,6 @@ import type {
   Bootstrap,
   CalibrationFinished,
   CalibrationModeId,
-  CalibrationProgress,
   CalibrationStart,
   DesktopBridge,
   DiagnosticsSnapshot,

@@ -1,4 +1,6 @@
 use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use minisign_verify::PublicKey;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -263,6 +265,9 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json",
         "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json",
         "endpoints(vec![endpoint])",
+        "V4_TAURI_UPDATER_PUBLIC_KEY",
+        "V4_TAURI_UPDATER_PUBLIC_KEYS",
+        ".pubkey(public_key)",
         "production_authority_is_fixed_and_channel_isolated",
     ] {
         if !native.contains(marker) {
@@ -276,6 +281,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "api.github.com/repos/pumni/Sky-Auto-Player/releases",
         "update_authority_not_configured",
         "std::env::var(\"",
+        "release-2026",
     ] {
         if native.contains(forbidden) {
             return Err(format!(
@@ -428,6 +434,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
 
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
+    let package_needs = "needs: [changes, static, release_authority, supply_chain, validate]";
     let fixture_start = normalized
         .find("  updater_e2e:\n")
         .ok_or("CI workflow is missing the isolated updater fixture job")?;
@@ -436,6 +443,13 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         .map(|offset| fixture_start + offset)
         .ok_or("CI workflow updater fixture job must precede the canonical packaged job")?;
     let fixture = &normalized[fixture_start..fixture_end];
+    let required_needs_line = format!("    {package_needs}");
+    if !fixture.lines().any(|line| line == required_needs_line) {
+        return Err(format!(
+            "updater fixture job must declare the required dependency topology: {package_needs}"
+        )
+        .into());
+    }
     for marker in [
         "name: Packaged v4 updater fixture qualification",
         "CARGO_TARGET_DIR",
@@ -461,6 +475,12 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         .map(|offset| start + offset)
         .ok_or("CI workflow packaged job is missing the status boundary")?;
     let packaged = &normalized[start..end];
+    if !packaged.lines().any(|line| line == required_needs_line) {
+        return Err(format!(
+            "packaged job must declare the required dependency topology: {package_needs}"
+        )
+        .into());
+    }
 
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
@@ -470,10 +490,38 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "bun run tauri signer generate",
         "TAURI_SIGNING_PRIVATE_KEY",
         "bun run tauri build --ci --config",
-        "cargo xtask verify-tauri-bundle",
+        "name: Resolve GitHub CLI for artifact attestation verification",
+        "Get-Command gh.exe -CommandType Application",
+        "SKY_GH_PATH=$ghPath",
+        "- name: Run Authenticode tamper regression",
+        "scripts/test_v4_authenticode_integrity.ps1",
+        "- name: Verify Tauri Authenticode signature",
+        "- name: Generate Tauri SPDX SBOM",
+        "- name: Verify Tauri SPDX SBOM",
+        "- name: Verify exact Tauri NSIS bundle",
+        "Authenticode verification failed with exit code",
+        "SBOM generation failed with exit code",
+        "SBOM verification failed with exit code",
+        "Tauri bundle verification failed with exit code",
+        "Installed Authenticode verification failed with exit code",
+        "Tauri updater signer generation failed with exit code",
+        "Tauri build failed with exit code",
+        "Installer attestation verification failed with exit code",
+        "Updater signature attestation verification failed with exit code",
+        "SBOM attestation verification failed with exit code",
+        "GH_TOKEN: ${{ github.token }}",
+        "attestation verify --help",
+        "--source-digest $env:GITHUB_SHA",
+        "--signer-workflow $signerWorkflow",
+        "& $env:SKY_GH_PATH attestation verify",
+        "--predicate-type https://spdx.dev/Document/v2.3",
+        "GitHub CLI absolute path is unavailable for attestation verification",
+        "GH_TOKEN is unavailable for attestation verification",
+        "Installed GitHub CLI lacks the required exact-source attestation options",
         "current-user install, launch, and uninstall",
         "sky_desktop_shell.exe",
         "uninstall.exe",
+        "scripts/cleanup_v4_test_signing.ps1",
         "rust/target/dist/bundle/nsis",
         "actions/upload-artifact@",
     ] {
@@ -483,6 +531,63 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    let attestation_start = packaged
+        .find("      - name: Verify exact GitHub artifact attestations\n")
+        .ok_or("canonical v4 packaged CI is missing the attestation verification step")?;
+    let attestation_end = packaged[attestation_start..]
+        .find("\n      - name: Upload exact Tauri NSIS release candidate\n")
+        .map(|offset| attestation_start + offset)
+        .ok_or("canonical v4 packaged CI attestation step has no bounded end")?;
+    let attestation = &packaged[attestation_start..attestation_end];
+    if attestation
+        .matches("--source-digest $env:GITHUB_SHA")
+        .count()
+        != 3
+        || attestation
+            .matches("--signer-workflow $signerWorkflow")
+            .count()
+            != 3
+        || attestation.matches("-R $env:GITHUB_REPOSITORY").count() != 3
+        || attestation
+            .lines()
+            .any(|line| line.trim_start().starts_with("gh attestation verify"))
+    {
+        return Err(
+            "canonical v4 packaged CI attestation verification must use absolute gh, exact source digest, signer workflow, and repository binding for all three checks".into(),
+        );
+    }
+    let gh_resolution_position = packaged
+        .find("      - name: Resolve GitHub CLI for artifact attestation verification\n")
+        .ok_or("canonical v4 packaged CI is missing the GitHub CLI resolution step")?;
+    let restricted_path_position = packaged
+        .find("      - name: Construct Python-unavailable canonical environment\n")
+        .ok_or("canonical v4 packaged CI is missing the restricted environment step")?;
+    if gh_resolution_position >= restricted_path_position {
+        return Err(
+            "canonical v4 packaged CI must resolve the absolute GitHub CLI path before restricted PATH construction".into(),
+        );
+    }
+    let restricted_path_end = packaged[restricted_path_position..]
+        .find("\n      - name: Build and sign canonical Tauri NSIS artifact\n")
+        .map(|offset| restricted_path_position + offset)
+        .ok_or("canonical v4 packaged CI restricted environment step has no bounded end")?;
+    let restricted_environment = &packaged[restricted_path_position..restricted_path_end];
+    if restricted_environment.contains("gh.exe") || restricted_environment.contains("GitHub CLI") {
+        return Err(
+            "canonical v4 packaged CI must not add the GitHub CLI directory to the restricted build PATH".into(),
+        );
+    }
+
+    let validate_start = normalized
+        .find("  validate:\n")
+        .ok_or("CI workflow is missing the validate job")?;
+    let validate_end = normalized[validate_start..]
+        .find("\n  updater_e2e:\n")
+        .map(|offset| validate_start + offset)
+        .ok_or("CI workflow validate job must precede the updater fixture job")?;
+    if normalized[validate_start..validate_end].contains("certutil.exe") {
+        return Err("ordinary Windows validation must not require certutil.exe".into());
     }
 
     for forbidden in [
@@ -527,6 +632,343 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
         .map_err(|error| format!("{}: {error}", path.display()))?;
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
     Ok(())
+}
+
+fn v4_trust_material_contract(root: &Path) -> Result<()> {
+    let config_path = root.join("desktop/src-tauri/tauri.conf.json");
+    let config = fs::read_to_string(&config_path)?;
+    for marker in ["sign_v4_authenticode.ps1", "plugins", "updater", "pubkey"] {
+        if !config.contains(marker) {
+            return Err(
+                format!("v4 Tauri trust config is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if config.contains("release-2026") || config.contains("PRIVATE KEY") {
+        return Err("v4 Tauri config contains legacy or private key material".into());
+    }
+
+    let config_json: Value = serde_json::from_str(&config)?;
+    let config_key = config_json
+        .get("plugins")
+        .and_then(Value::as_object)
+        .and_then(|plugins| plugins.get("updater"))
+        .and_then(Value::as_object)
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(Value::as_str)
+        .ok_or("v4 Tauri config public trust root is not a string")?;
+    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    let native = fs::read_to_string(&native_path)?;
+    let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
+    if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || native_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || !native.contains(
+            "const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];",
+        )
+    {
+        return Err("v4 production updater public-root copies do not match byte-for-byte".into());
+    }
+    let decoded = STANDARD.decode(config_key)?;
+    let decoded = String::from_utf8(decoded)?;
+    PublicKey::decode(&decoded)?;
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?;
+    for marker in [
+        "scripts/setup_v4_test_signing.ps1",
+        "scripts/verify_v4_authenticode.ps1",
+        "scripts/cleanup_v4_test_signing.ps1",
+        "scripts/test_v4_updater_key_rotation.ps1",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "scripts/ci_require_windows_tools.ps1",
+        "TimeoutSeconds 30",
+        "SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS",
+        "Packaged Tauri updater rotation",
+        "cargo xtask sbom generate",
+        "cargo xtask sbom verify",
+        "workflow_dispatch:",
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+        "Verify exact GitHub artifact attestations",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+    if ci.matches("cargo install cargo-vet").count() != 1 {
+        return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
+    }
+
+    let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "expected_signer_thumbprint",
+        "Resolve-TestPfxPath",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodeIntegrityProof",
+        "platform_status",
+        "UnknownError",
+        "signer thumbprint mismatch",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let crypto = fs::read_to_string(root.join("scripts/v4_authenticode_crypto.ps1"))?;
+    for marker in [
+        "Get-AuthenticodePeLayout",
+        "Get-AuthenticodeImageDigest",
+        "Get-AuthenticodeSpcDigest",
+        "SizeOfHeaders",
+        "sumOfBytesHashed",
+        "Sort-Object PointerToRawData",
+        "SignedCms",
+        "CheckSignature($true)",
+        "signature-valid-independent-cryptographic-integrity",
+        "signedcms-spc-indirect-data-authenticode-hash",
+    ] {
+        if !crypto.contains(marker) {
+            return Err(format!(
+                "v4 independent Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let setup = fs::read_to_string(root.join("scripts/setup_v4_test_signing.ps1"))?;
+    for marker in [
+        "CertificateRequest",
+        "X509ContentType]::Pfx",
+        "EphemeralKeySet",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "::add-mask::",
+        "RUNNER_TEMP",
+    ] {
+        if !setup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let mask_position = setup
+        .find("::add-mask::")
+        .ok_or("v4 Authenticode test PFX setup must mask the generated password")?;
+    let password_environment_position = setup
+        .find("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+        .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
+    if mask_position >= password_environment_position {
+        return Err(
+            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV"
+                .into(),
+        );
+    }
+    for forbidden in [
+        "New-SelfSignedCertificate",
+        "certutil.exe",
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if setup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_test_signing.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "RUNNER_TEMP",
+        "sky-v4-test-signing-[0-9a-fA-F]{32}\\.pfx",
+        "Clear-TestSigningEnvironment",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+    ] {
+        if !cleanup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if cleanup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let signer = fs::read_to_string(root.join("scripts/sign_v4_authenticode.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "/f $pfxPath",
+        "/p $pfxPassword",
+        "EphemeralKeySet",
+    ] {
+        if !signer.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode signer is missing its required PFX marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
+    for marker in [
+        "v4_authenticode_crypto.ps1",
+        "sign_v4_authenticode.ps1",
+        "Get-AuthenticodeSignature",
+        "clean signed PE PASS",
+        "Tampered signed PE unexpectedly passed independent Authenticode verification",
+        "Get-AuthenticodePeLayout",
+        "WriteAllBytes",
+    ] {
+        if !tamper.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode tamper regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+    let rsa_private_begin = ["BEGIN", "RSA", "PRIVATE", "KEY"].join(" ");
+    let ec_private_begin = ["BEGIN", "EC", "PRIVATE", "KEY"].join(" ");
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.path().components().any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules" | "dist")
+                )
+            })
+        })
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [".key", ".pem", ".pfx", ".p12"]
+            .iter()
+            .any(|suffix| filename.ends_with(suffix))
+        {
+            return Err(format!(
+                "private signing material file is present in the repository tree: {}",
+                path.display()
+            )
+            .into());
+        }
+        let bytes = fs::read(path)?;
+        if is_tauri_minisign_private_key(&bytes) {
+            return Err(format!(
+                "Tauri/minisign private key material found at {}",
+                path.display()
+            )
+            .into());
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for (line_number, line) in content.lines().enumerate() {
+            if line.contains(&private_begin)
+                || line.contains(&rsa_private_begin)
+                || line.contains(&ec_private_begin)
+            {
+                return Err(format!(
+                    "private key material marker found at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+            let secret_name = ["TAURI_SIGNING_PRIVATE", "_KEY"].concat();
+            if line.contains(&secret_name)
+                && ["Write-Host", "Write-Output", "echo", "Add-Content"]
+                    .iter()
+                    .any(|sink| line.contains(sink))
+            {
+                return Err(format!(
+                    "signing secret is sent to a logging/output sink at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+        }
+    }
+    println!("[xtask] v4 trust-material and secret-output guards: PASS");
+    Ok(())
+}
+
+fn extract_rust_string_constant(source: &str, name: &str) -> Result<String> {
+    let marker = format!("const {name}: &str = \"");
+    let values = source
+        .lines()
+        .filter_map(|line| {
+            let start = line.find(&marker)? + marker.len();
+            let value = line.get(start..)?.split_once('"')?.0;
+            Some(value.to_owned())
+        })
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Ok(value.clone()),
+        _ => Err(format!("Rust source must contain exactly one {name} string constant").into()),
+    }
+}
+
+fn is_tauri_minisign_private_key(bytes: &[u8]) -> bool {
+    let mut candidate = bytes.to_vec();
+    for _ in 0..3 {
+        if is_minisign_secret_text(&candidate) {
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(&candidate) else {
+            return false;
+        };
+        let Ok(decoded) = STANDARD.decode(text.trim()) else {
+            return false;
+        };
+        candidate = decoded;
+    }
+    false
+}
+
+fn is_minisign_secret_text(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.len() != 2 {
+        return false;
+    }
+    let comment = lines[0].to_ascii_lowercase();
+    if !comment.starts_with("untrusted comment:")
+        || (!comment.contains("secret key") && !comment.contains("private key"))
+    {
+        return false;
+    }
+    STANDARD
+        .decode(lines[1])
+        .map(|payload| (64..=1024).contains(&payload.len()))
+        .unwrap_or(false)
 }
 
 fn active_files(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
@@ -1832,6 +2274,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            v4_trust_material_contract(&root)?;
             legacy_release_guard(&root)?;
             release_authority_contract(&root)?;
             packaged_ci_contract(&root)?;
@@ -2118,8 +2561,13 @@ read_only=true
     #[test]
     fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
         let source = r#"
+  validate:
+    name: Windows compatibility and unit tests
+    steps:
+      - run: cargo xtask check rust
   updater_e2e:
     name: Packaged v4 updater fixture qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     env:
       RUNNER_TEMP: runner-temp
       CARGO_TARGET_DIR: runner-temp
@@ -2129,18 +2577,56 @@ read_only=true
       - run: pwsh scripts/ci_tauri_update_e2e.ps1 -BundleDir runner-temp
   packaged:
     name: Packaged v4 Tauri NSIS qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     steps:
+      - name: Resolve GitHub CLI for artifact attestation verification
+        run: Get-Command gh.exe -CommandType Application; SKY_GH_PATH=$ghPath
+      - name: Construct Python-unavailable canonical environment
+        run: restricted PATH
       - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run tauri signer generate
         env: { TAURI_SIGNING_PRIVATE_KEY: test }
+        # Tauri updater signer generation failed with exit code
       - run: bun run tauri build --ci --config test.json
-      - run: cargo xtask verify-tauri-bundle
-       - name: Qualify current-user install, launch, and uninstall
-         run: check sky_desktop_shell.exe uninstall.exe
-       - uses: actions/upload-artifact@v7
-         path: rust/target/dist/bundle/nsis
+        # Tauri build failed with exit code
+      - name: Run Authenticode tamper regression
+        run: pwsh scripts/test_v4_authenticode_integrity.ps1
+      - name: Verify Tauri Authenticode signature
+        run: pwsh scripts/verify_v4_authenticode.ps1
+        # Authenticode verification failed with exit code
+        # Installed Authenticode verification failed with exit code
+      - name: Generate Tauri SPDX SBOM
+        run: cargo xtask sbom generate
+        # SBOM generation failed with exit code
+      - name: Verify Tauri SPDX SBOM
+        run: cargo xtask sbom verify
+        # SBOM verification failed with exit code
+      - name: Verify exact Tauri NSIS bundle
+        run: cargo xtask verify-tauri-bundle
+        # Tauri bundle verification failed with exit code
+      - name: Qualify current-user install, launch, and uninstall
+        run: check sky_desktop_shell.exe uninstall.exe
+      - name: Clean up ephemeral Authenticode test certificate
+        run: pwsh scripts/cleanup_v4_test_signing.ps1
+        # Installer attestation verification failed with exit code
+        # Updater signature attestation verification failed with exit code
+        # SBOM attestation verification failed with exit code
+      - name: Verify exact GitHub artifact attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $attestationHelp = (& $env:SKY_GH_PATH attestation verify --help 2>&1 | Out-String)
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          & $env:SKY_GH_PATH attestation verify $signature -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          # GitHub CLI absolute path is unavailable for attestation verification
+          # GH_TOKEN is unavailable for attestation verification
+          # Installed GitHub CLI lacks the required exact-source attestation options
+      - name: Upload exact Tauri NSIS release candidate
+        uses: actions/upload-artifact@v7
+        path: rust/target/dist/bundle/nsis
   status:
     needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]
     env: { UPDATER_E2E_RESULT: success }
@@ -2148,6 +2634,11 @@ read_only=true
         assert!(packaged_ci_contract_source(source).is_ok());
         let crlf_source = source.replace('\n', "\r\n");
         assert!(packaged_ci_contract_source(&crlf_source).is_ok());
+        let unblocked_package_jobs = source.replace(
+            "needs: [changes, static, release_authority, supply_chain, validate]",
+            "needs: changes",
+        );
+        assert!(packaged_ci_contract_source(&unblocked_package_jobs).is_err());
         for forbidden in [
             "tauri-update-fixture",
             "dangerousInsecureTransportProtocol",
@@ -2174,8 +2665,13 @@ read_only=true
     #[test]
     fn packaged_ci_contract_requires_the_isolated_fixture_job() {
         let source = r#"
+  validate:
+    name: Windows compatibility and unit tests
+    steps:
+      - run: cargo xtask check rust
   packaged:
     name: Packaged v4 Tauri NSIS qualification
+    needs: [changes, static, release_authority, supply_chain, validate]
     steps:
       - run: bun install --frozen-lockfile
       - run: bun run build
@@ -2238,6 +2734,35 @@ read_only=true
                 .iter()
                 .any(|finding| finding.rule == "forbidden-dll-load")
         );
+    }
+
+    #[test]
+    fn trust_guard_rejects_renamed_and_encoded_minisign_secret_keys() {
+        let secret_payload = STANDARD.encode([0_u8; 158]);
+        let secret_text =
+            format!("untrusted comment: minisign encrypted secret key\n{secret_payload}");
+        assert!(is_tauri_minisign_private_key(secret_text.as_bytes()));
+        assert!(is_tauri_minisign_private_key(
+            STANDARD.encode(&secret_text).as_bytes()
+        ));
+
+        let public_text = format!(
+            "untrusted comment: minisign public key: fixture\n{}",
+            STANDARD.encode([0_u8; 32])
+        );
+        assert!(!is_tauri_minisign_private_key(
+            STANDARD.encode(public_text).as_bytes()
+        ));
+
+        let fixture = std::env::temp_dir().join(format!(
+            "sky-xtask-renamed-secret-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::write(&fixture, STANDARD.encode(secret_text)).unwrap();
+        let renamed_fixture = fs::read(&fixture).unwrap();
+        assert!(is_tauri_minisign_private_key(&renamed_fixture));
+        fs::remove_file(fixture).unwrap();
     }
 
     #[test]

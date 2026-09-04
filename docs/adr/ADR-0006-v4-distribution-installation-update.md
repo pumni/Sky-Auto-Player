@@ -139,9 +139,13 @@ Windows code signing and updater signing are separate requirements:
 
 V4 does not reuse the v3 `release-2026` custom manifest signing key or its signature envelope.
 
-Before v4 GA, the project must document updater-key backup, loss, compromise, and rotation procedures.
-The signing design should support overlapping trusted updater keys or an equivalent reviewed rotation
-mechanism without relying on a one-off emergency bridge release.
+The v4 public root and reviewed overlap/cutover fixture are implemented in
+`v4-tauri-packaging.md`. Before v4 GA, the release operator must keep the
+matching private key in an offline encrypted vault with a separately controlled
+backup. Loss requires a new root and version; compromise requires removing the
+old root through the reviewed bridge/cutover sequence and publishing a new
+version. No private key is recoverable from the repository, CI artifacts, or
+logs.
 
 ### 9. Static updater metadata is the initial channel mechanism
 

@@ -79,7 +79,8 @@ function Assert-QualificationEvidence(
         "schema_version", "evidence_type", "qualified", "qualification",
         "product_name", "identifier", "version", "target", "install_mode",
         "installer", "updater_signature", "installer_size", "signature_size",
-        "installer_sha256", "updater_signature_sha256"
+        "installer_sha256", "updater_signature_sha256", "authenticode_mode",
+        "authenticode_evidence", "authenticode_evidence_sha256", "sbom", "sbom_sha256"
     )
     $actual = @($Evidence.PSObject.Properties.Name)
     $unknown = @($actual | Where-Object { $_ -notin $required })
@@ -98,6 +99,9 @@ function Assert-QualificationEvidence(
     if ((Get-RequiredEvidenceString $Evidence "evidence_type") -ne $evidenceType -or
         (Get-RequiredEvidenceString $Evidence "qualification") -ne "install-launch-uninstall") {
         throw "Qualification evidence type is not the canonical Tauri qualification path"
+    }
+    if ((Get-RequiredEvidenceString $Evidence "authenticode_mode") -ne "production") {
+        throw "Qualification evidence is not production Authenticode evidence"
     }
     $qualified = $Evidence.PSObject.Properties["qualified"]
     if ($qualified.Value -isnot [bool] -or -not $qualified.Value) {
@@ -121,6 +125,10 @@ function Assert-QualificationEvidence(
         SignatureSize = Get-RequiredEvidenceSize $Evidence "signature_size"
         InstallerSha256 = Get-RequiredEvidenceSha256 $Evidence "installer_sha256"
         SignatureSha256 = Get-RequiredEvidenceSha256 $Evidence "updater_signature_sha256"
+        AuthenticodeEvidence = Get-RequiredEvidenceString $Evidence "authenticode_evidence"
+        AuthenticodeEvidenceSha256 = Get-RequiredEvidenceSha256 $Evidence "authenticode_evidence_sha256"
+        Sbom = Get-RequiredEvidenceString $Evidence "sbom"
+        SbomSha256 = Get-RequiredEvidenceSha256 $Evidence "sbom_sha256"
     }
 }
 
@@ -200,6 +208,11 @@ function Invoke-PromotionSelfTest {
         signature_size = [int64]10
         installer_sha256 = "a" * 64
         updater_signature_sha256 = "a" * 64
+        authenticode_mode = "production"
+        authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
+        authenticode_evidence_sha256 = "a" * 64
+        sbom = "SBOM.spdx.json"
+        sbom_sha256 = "a" * 64
     }
     $digests = Assert-QualificationEvidence $evidence $version $installer $signature
     $differentBytes = [pscustomobject]@{
