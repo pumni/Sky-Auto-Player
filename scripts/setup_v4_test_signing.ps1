@@ -110,9 +110,9 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     try {
         Write-Host "Exporting certificate"
         Export-Certificate -Cert $certificate -FilePath $certificatePath -Type CERT | Out-Null
-        Write-Host "Importing certificate into CurrentUser/Root via certutil"
+        Write-Host "Importing certificate into CurrentUser/TrustedPublisher via certutil"
         $importProcess = Start-Process -FilePath 'certutil.exe' -ArgumentList @(
-            '-f', '-user', '-addstore', 'Root', $certificatePath
+            '-f', '-user', '-addstore', 'TrustedPublisher', $certificatePath
         ) -WindowStyle Hidden -RedirectStandardOutput $importOutputPath -RedirectStandardError $importErrorPath -PassThru
         Write-Host "Certificate import worker launched (pid=$($importProcess.Id))"
         $importDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -139,7 +139,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
             }
             throw "certutil failed to import the ephemeral V4 Authenticode test certificate: $importOutput $importError"
         }
-        Write-Host "Certificate import completed"
+        Write-Host "Certificate publisher trust import completed"
     } finally {
         Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
     }
@@ -152,7 +152,7 @@ Set-Content -LiteralPath $OutputPath -Value $certificate.Thumbprint -Encoding AS
     Write-CertificateSetupEvidence 'FAIL' $_.Exception.Message
     if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
         Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "Cert:\CurrentUser\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
     }
     throw
 } finally {
