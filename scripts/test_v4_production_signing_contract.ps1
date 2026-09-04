@@ -24,6 +24,28 @@ if ($null -eq $sourcePe) {
     $sourcePe = Get-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\notepad.exe')
 }
 
+# Save outer environment variables to restore in finally block
+$savedEnv = @{
+    'SKY_AUTHENTICODE_MODE' = $env:SKY_AUTHENTICODE_MODE
+    'SKY_AUTHENTICODE_TEST_PFX_PATH' = $env:SKY_AUTHENTICODE_TEST_PFX_PATH
+    'SKY_AUTHENTICODE_TEST_PFX_PASSWORD' = $env:SKY_AUTHENTICODE_TEST_PFX_PASSWORD
+    'SKY_AUTHENTICODE_TEST_THUMBPRINT' = $env:SKY_AUTHENTICODE_TEST_THUMBPRINT
+    'SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT' = $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT
+    'SKY_AUTHENTICODE_PROVIDER' = $env:SKY_AUTHENTICODE_PROVIDER
+    'SKY_AUTHENTICODE_PROVIDER_SCRIPT' = $env:SKY_AUTHENTICODE_PROVIDER_SCRIPT
+    'SKY_AUTHENTICODE_PROVIDER_COMMAND' = $env:SKY_AUTHENTICODE_PROVIDER_COMMAND
+}
+
+function Restore-SavedEnvironment {
+    foreach ($entry in $savedEnv.GetEnumerator()) {
+        if ($null -ne $entry.Value) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        } else {
+            [Environment]::SetEnvironmentVariable($entry.Key, $null, "Process")
+        }
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     Copy-Item -LiteralPath $sourcePe.FullName -Destination $targetExe -Force
@@ -41,20 +63,46 @@ try {
         & $signToolCandidate remove /s $targetExe 2>$null | Out-Null
     }
 
+    # Clear all outer Authenticode environment variables so Test 1 runs in truly unconfigured production mode
+    foreach ($varName in @(
+        'SKY_AUTHENTICODE_MODE',
+        'SKY_AUTHENTICODE_TEST_PFX_PATH',
+        'SKY_AUTHENTICODE_TEST_PFX_PASSWORD',
+        'SKY_AUTHENTICODE_TEST_THUMBPRINT',
+        'SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT',
+        'SKY_AUTHENTICODE_PROVIDER',
+        'SKY_AUTHENTICODE_PROVIDER_SCRIPT',
+        'SKY_AUTHENTICODE_PROVIDER_COMMAND'
+    )) {
+        [Environment]::SetEnvironmentVariable($varName, $null, "Process")
+    }
+
     # Contract Test 1: Unconfigured production mode fails closed
     Write-Host "Contract Test 1: Unconfigured production mode fails closed..."
-    $failedClosed = $false
-    try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
-            -Path $targetExe
-        if ($LASTEXITCODE -ne 0) { $failedClosed = $true }
-    } catch {
-        $failedClosed = $true
+
+    # 1a. Completely unconfigured (default mode = production, no thumbprint)
+    $output1a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+        -Path $targetExe 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        throw "FAILED: sign_v4_authenticode succeeded when completely unconfigured"
     }
-    if (-not $failedClosed) {
-        throw "FAILED: sign_v4_authenticode did not fail closed when production provider is unconfigured"
+    if ($output1a -notmatch "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT") {
+        throw "FAILED: sign_v4_authenticode did not fail closed on missing approved thumbprint"
     }
+
+    # 1b. Approved thumbprint provided, but provider is unconfigured (asserts missing-provider branch specifically)
+    $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
+    $output1b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+        -Path $targetExe 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        throw "FAILED: sign_v4_authenticode succeeded when provider is unconfigured"
+    }
+    if ($output1b -notmatch "no approved production provider is configured") {
+        throw "FAILED: sign_v4_authenticode did not fail closed specifically on missing provider"
+    }
+    $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = ""
     Write-Host "Contract Test 1: PASS"
 
     # Set up ephemeral CI test certificate
@@ -80,17 +128,14 @@ try {
     $env:SKY_AUTHENTICODE_PROVIDER = "custom"
     $env:SKY_AUTHENTICODE_PROVIDER_COMMAND = "echo signing %1"
 
-    $rejectedCredentials = $false
-    try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
-            -Path $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedCredentials = $true }
-    } catch {
-        $rejectedCredentials = $true
-    }
-    if (-not $rejectedCredentials) {
+    $output2 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+        -Path $targetExe 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
         throw "FAILED: Production signing accepted ephemeral CI test credentials"
+    }
+    if ($output2 -notmatch "ephemeral CI test credentials cannot satisfy production mode") {
+        throw "FAILED: Production signing did not fail closed specifically on test credentials"
     }
     Write-Host "Contract Test 2: PASS"
 
@@ -204,6 +249,7 @@ try {
     if (Test-Path -LiteralPath $fixtureRoot) {
         Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+    Restore-SavedEnvironment
 }
 
 Write-Host "[PASS] V4 Authenticode contract tests: CI test certificate cannot satisfy production mode"

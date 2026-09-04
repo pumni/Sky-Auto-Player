@@ -69,24 +69,30 @@ nonce and verifies the resulting signature against the compiled public root, wit
 printing private key material or passphrases to stdout, stderr, or log files.
 
 To prevent password exposure in shell history (such as `PSReadLine` history files) or process listings,
-the tool avoids command-line password flags. Passwords should be entered interactively via masked
-input or supplied via an in-memory environment variable:
+the verification tools avoid command-line password flags.
 
-### Running verification via xtask
+### Interactive Operator Verification (Recommended)
+
+For interactive operator use, run the PowerShell verifier. It performs a non-echoing, masked
+interactive prompt via `Read-Host -AsSecureString` to prevent passphrase exposure in terminal
+logs or history files:
 
 ```powershell
-# Interactively prompts for passphrase if the key is encrypted:
-cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.key"
-
-# Or with an in-memory environment variable name:
-cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.key" --password-env MY_KEY_PASS
+# Prompts securely for passphrase if the private key is encrypted:
+pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key"
 ```
 
-### Running verification via script
+### Non-Interactive / Automation Verification via xtask
+
+`cargo xtask updater-trust verify-private-key` is designed for automated, non-interactive environments
+and does not read from stdin. Passphrases must be supplied via an in-memory environment variable:
 
 ```powershell
-# Interactive prompt:
-pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key"
+# Reads from custom environment variable name:
+cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.key" --password-env MY_KEY_PASS
+
+# Or reads from standard TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.key"
 ```
 
 Expected output:
