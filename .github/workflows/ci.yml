@@ -389,7 +389,14 @@ jobs:
       - name: Install Chromium for desktop browser smoke
         if: needs.changes.outputs.browser_required == 'true'
         working-directory: desktop
-        run: bunx playwright install chromium
+        run: |
+          bun install --frozen-lockfile
+          $expected = (Get-Content package.json -Raw | ConvertFrom-Json).devDependencies.playwright
+          $actual = (& bun node_modules/playwright/cli.js --version).Trim() -replace '^Version\s+', ''
+          if ($actual -ne $expected) {
+            throw "Playwright CLI mismatch: package.json=$expected, local CLI=$actual"
+          }
+          bun node_modules/playwright/cli.js install chromium
 
       - name: Construct Python-unavailable validation environment
         if: needs.changes.outputs.package_required == 'true'
