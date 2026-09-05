@@ -685,6 +685,7 @@ jobs:
         run: |
           $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test.key"
           $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test-updater.json"
+          $preBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
           try {
             Push-Location desktop
             try {
@@ -716,7 +717,19 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+            $postPackagingDirty = @(& git status --porcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($postPackagingDirty.Count -gt 0) {
+              $postBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
+              Write-Host "Pre-build Cargo.toml SHA256:  $preBuildCargoHash"
+              Write-Host "Post-build Cargo.toml SHA256: $postBuildCargoHash"
+              Write-Host "=== git status --porcelain ==="
+              & git status --porcelain
+              Write-Host "=== git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml ==="
+              & git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml
+              Write-Host "=== git diff --check -- desktop/src-tauri/Cargo.toml ==="
+              & git diff --check -- desktop/src-tauri/Cargo.toml
+              throw "Packaged build left working tree dirty: $($postPackagingDirty -join ', ')"
+            }
           }
 
       - name: Run Authenticode tamper regression
@@ -734,13 +747,25 @@ jobs:
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_signing_contract.ps1
           if ($LASTEXITCODE -ne 0) { throw "V4 production signing contract test failed with exit code $LASTEXITCODE" }
 
+      - name: Run V4 production release orchestrator contract test
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_orchestrator.ps1
+          if ($LASTEXITCODE -ne 0) { throw "V4 production release orchestrator contract test failed with exit code $LASTEXITCODE" }
+
       - name: Verify Tauri Authenticode signature
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
+          $installers = @(Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Tauri NSIS installer before Authenticode verification; found $($installers.Count)"
+          }
+          $installer = $installers[0].FullName
           pwsh scripts/verify_v4_authenticode.ps1 `
             -Mode test `
-            -Artifact (Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name) `
+            -Artifact $installer `
             -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
 

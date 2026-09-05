@@ -50,15 +50,16 @@ not open every architecture page by default.
   loss, compromise, rotation, and recovery runbook.
 - [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md) — v4 production Authenticode
   provider seam specification and contract.
+- [v4-release-execution-topology.md](v4-release-execution-topology.md) — v4 production release
+  execution topology, candidate lifecycle, and provenance boundary.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler/toolchain policy.
 - [wave5-legacy-python-retirement.md](wave5-legacy-python-retirement.md) — historical evidence for
   the completed product/runtime Python retirement; not a tooling instruction.
 - [wave6-rust-xtask-release-ci.md](wave6-rust-xtask-release-ci.md) — Rust xtask commands and the
   Rust/Bun canonical check/release boundary and zero-Python guard.
 
-Build and release implementation details live in `rust/xtask/`, `desktop/`, `.github/workflows/`,
-and their direct tests. `cargo xtask dist` is the canonical release assembler and does not build a
-Python product or extension. Historical release scripts are not canonical.
+Build and release details live in `rust/xtask/`, `desktop/`, `.github/workflows/`, and direct
+tests. `cargo xtask dist` is the canonical assembler and does not build a Python product.
 
 ## Development and verification
 
@@ -79,10 +80,9 @@ when a task touches those boundaries.
 - `docs/releases/` contains release-specific acceptance/history, not startup context.
 - `docs/perf-baselines/` contains named performance evidence. A baseline is evidence for the
   environment and revision it records, not a universal instruction.
-- Completed plans, migration playbooks, superseded audits, and implementation briefs
-  live in Git history. Use `git log` or `git show` only when historical rationale is needed.
+- Completed plans, superseded audits, and historical briefs live in Git history (`git log`).
 
 ## Documentation maintenance
 
-Keep active docs about the current system. Convert durable decisions into ADRs or current architecture
+Keep active docs about the current system. Convert durable decisions into ADRs or current
 contracts; retire completed plans to Git history. Keep this router concise.
