@@ -11,7 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "=0.22.1"
-ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
 ico = "0.5"
 minisign-verify = "=0.2.5"
 roxmltree = "0.20.0"
@@ -23,4 +22,3 @@ sky_ci_classifier = { path = "../tools/sky_ci_classifier" }
 toml = "0.9.12"
 url = "2.5.8"
 walkdir = "2.5"
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }

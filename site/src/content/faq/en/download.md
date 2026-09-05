@@ -6,4 +6,4 @@ category: 'General'
 question: 'Where can I download Sky Auto Player?'
 ---
 
-Download the latest packaged ZIP from the [Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest).
+Download the canonical Tauri NSIS installer from the [dedicated v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).

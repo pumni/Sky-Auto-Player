@@ -7,7 +7,7 @@ description: >-
   Sky Auto Player supports JSON, .skysheet, and JSON-compatible TXT files exported from
   the Sky Music editor. Learn what each format contains and how to add songs correctly.
 summary: >-
-  Sky Auto Player reads JSON, .skysheet, and JSON-compatible TXT files from the songs/ folder.
+  Sky Auto Player reads JSON, .skysheet, and JSON-compatible TXT files imported through the Library.
   All three formats originate from the Sky Music editor and share the same underlying data structure.
 category: getting-started
 order: 2
@@ -42,19 +42,10 @@ Three file formats are accepted:
 All three share the same underlying data structure — the extension determines how the file
 is detected; the parser reads the JSON content regardless.
 
-## Where to put song files
+## Import song files
 
-Place sheet files in the `songs/` folder located next to `Sky-Auto-Player.exe`:
-
-```
-Sky-Auto-Player/
-├── Sky-Auto-Player.exe
-├── config.json
-└── songs/
-    ├── my-song.json
-    ├── another-song.skysheet
-    └── third-song.txt
-```
+Use the desktop Library to import sheet files. Application data is kept in the user app-data
+boundary rather than beside the installed executable.
 
 After adding files, press **Reload songs** in the desktop Library without restarting the
 application.
@@ -64,7 +55,7 @@ application.
 1. Open [Sky Music Nightly](https://specy.github.io/skyMusic/).
 2. Find or create a song arrangement.
 3. Use the editor's **Export** function to save as JSON or `.skysheet`.
-4. Drop the exported file into your `songs/` folder.
+4. Import the exported file through the desktop Library.
 
 ## Common issues
 

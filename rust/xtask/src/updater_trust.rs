@@ -73,31 +73,20 @@ pub fn inventory_public_trust_roots(root: &Path) -> Result<UpdaterTrustInventory
     }
     verified_locations.push("rust/xtask/src/tauri_bundle.rs".to_string());
 
-    // 4. Verify isolation of legacy v3 update trust root
+    // 4. Verify that the retired v3 custom-manifest trust root is not part of
+    // the current v4 workspace.
     let cargo_toml_path = root.join("rust/Cargo.toml");
     let cargo_toml: toml::Value = toml::from_str(&fs::read_to_string(&cargo_toml_path)?)?;
-    let legacy_v3_root_isolated = if let Some(workspace) =
-        cargo_toml.get("workspace").and_then(toml::Value::as_table)
-        && let Some(metadata) = workspace.get("metadata").and_then(toml::Value::as_table)
-        && let Some(update_signing) = metadata
-            .get("sky-update-signing")
-            .and_then(toml::Value::as_table)
-        && let Some(key_id) = update_signing.get("key-id").and_then(toml::Value::as_str)
-    {
-        if key_id != "release-2026" {
-            return Err("legacy update root key-id in rust/Cargo.toml is not release-2026".into());
-        }
-        if config_key.contains("release-2026")
-            || native_key.contains("release-2026")
-            || bundle_key.contains("release-2026")
-            || config_content.contains("release-2026")
-        {
-            return Err("v4 code contains legacy v3 release-2026 reference".into());
-        }
-        true
-    } else {
-        false
-    };
+    let has_legacy_v3_root = cargo_toml
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|workspace| workspace.get("metadata"))
+        .and_then(toml::Value::as_table)
+        .is_some_and(|metadata| metadata.contains_key("sky-update-signing"));
+    if has_legacy_v3_root {
+        return Err("retired v3 update trust metadata remains in rust/Cargo.toml".into());
+    }
+    let legacy_v3_root_isolated = true;
 
     Ok(UpdaterTrustInventory {
         canonical_key_id: key_id,
@@ -119,7 +108,7 @@ pub fn print_inventory(root: &Path) -> Result<()> {
     for location in &inventory.verified_locations {
         println!("    - {location}");
     }
-    println!("  Legacy v3 Root: isolated to rust/Cargo.toml (release-2026) and rejected by v4");
+    println!("  Legacy v3 Root: absent from the current v4 workspace");
     println!("  Unique Production v4 Root: verified exactly 1 public trust root");
     Ok(())
 }

@@ -2,6 +2,10 @@
 
 Date: 2026-09-03
 
+Status: Phase 7 is complete on the WO-06 source-hardening branch. The current
+v4 workspace and release path use Tauri NSIS and the official Tauri updater;
+the retired custom updater is not a v4 dependency or release authority.
+
 Related ADR: `docs/adr/ADR-0006-v4-distribution-installation-update.md`
 
 ## Goal
@@ -115,7 +119,8 @@ Changes:
 - Add the required Tauri updater/process dependencies without wiring production UI yet.
 - Add a package inspection test that records the exact generated installer/updater artifacts.
 
-Must not do yet:
+Historical sequencing constraints before WO-06 (now superseded for current
+v4 source):
 
 - remove `sky_updater`;
 - remove v3 release tooling;
@@ -222,9 +227,10 @@ Required qualification matrix:
 - update-channel isolation;
 - immutable release/asset identity check.
 
-## Phase 7 — Retire v3 updater ownership from v4
+## Phase 7 — Retire v3 updater ownership from v4 (WO-06)
 
-Remove from the production v4 dependency graph after replacement qualification:
+The following v3 surfaces are removed from the current v4 dependency and
+release graph:
 
 - `sky_updater` runtime dependency;
 - `Sky-Auto-Player-Updater.exe` packaging;
@@ -236,6 +242,10 @@ Remove from the production v4 dependency graph after replacement qualification:
 - v3 preserve-list assumptions from v4 packaging.
 
 Historical v3 tags/releases/docs remain intact. Removal must not rewrite historical evidence.
+
+The historical implementation remains available through Git history and the
+`v3-maintenance` line; it is not built, packaged, or qualified by current v4
+checks.
 
 Exit criteria:
 
@@ -261,7 +271,7 @@ Do not use v3 PEP 440 spellings such as `4.0.0rc1` or `.devN` in the v4 release 
 
 These do not block v4.0 unless requirements change:
 
-- portable distribution;
+- a secondary portable distribution;
 - MSI distribution;
 - Microsoft Store packaging;
 - dynamic update backend;

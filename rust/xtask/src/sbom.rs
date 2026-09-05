@@ -1,4 +1,4 @@
-use crate::{Result, manifest, repo};
+use crate::{Result, hash, repo};
 use semver::{Version, VersionReq};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -66,8 +66,8 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
     let artifact_set = artifact_set_sha256(&artifacts);
     let head = repo::git_head(root, false)?;
     let version = repo::project_version(root)?;
-    let cargo_lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
-    let bun_lockfile_sha256 = manifest::sha256(&root.join("desktop/bun.lock"))?;
+    let cargo_lockfile_sha256 = hash::sha256(&root.join("rust/Cargo.lock"))?;
+    let bun_lockfile_sha256 = hash::sha256(&root.join("desktop/bun.lock"))?;
     let locked_packages = locked_packages(root)?;
     let frontend = frontend_graph(root)?;
     let files = artifacts
@@ -240,7 +240,7 @@ fn collect_artifacts(artifact_dir: &Path) -> Result<Vec<Artifact>> {
         artifacts.push(Artifact {
             name,
             size: fs::metadata(&path)?.len(),
-            sha256: manifest::sha256(&path)?,
+            sha256: hash::sha256(&path)?,
         });
     }
     artifacts.sort_by(|left, right| left.name.cmp(&right.name));
@@ -287,8 +287,8 @@ fn validate_document(
         return Err("SBOM artifact-set SHA-256 does not match the candidate".into());
     }
     let head = repo::git_head(root, false)?;
-    let cargo_lockfile_sha256 = manifest::sha256(&root.join("rust/Cargo.lock"))?;
-    let bun_lockfile_sha256 = manifest::sha256(&root.join("desktop/bun.lock"))?;
+    let cargo_lockfile_sha256 = hash::sha256(&root.join("rust/Cargo.lock"))?;
+    let bun_lockfile_sha256 = hash::sha256(&root.join("desktop/bun.lock"))?;
     if !comment.contains(&format!("cargo-lockfile-sha256:{cargo_lockfile_sha256}")) {
         return Err("SBOM is not bound to the current Cargo.lock".into());
     }

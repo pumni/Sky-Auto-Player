@@ -45,7 +45,7 @@ game, không kiểm tra file game, không sửa đổi game, không inject code,
 Quy trình sử dụng điển hình:
 
 1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, `.skysheet`, hoặc TXT tương thích JSON.
-2. Đặt file vào thư mục `songs/` cạnh `Sky-Auto-Player.exe`.
+2. Nhập file qua Library desktop.
 3. Khởi động Sky Auto Player, chọn bài, chuyển sang game và nhấn hotkey phát nhạc.
 
 Bản đóng gói `Sky-Auto-Player.exe` là giao diện Tauri desktop chính thức và duy nhất được hỗ trợ,

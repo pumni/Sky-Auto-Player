@@ -30,8 +30,8 @@ evidence:
     label: Lớp platform Windows — nơi duy nhất SendInput được phép tồn tại
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
   - category: distribution
-    label: Hợp đồng phân phối — portable unsigned/cập nhật thủ công
-    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
+    label: Hợp đồng phân phối — Tauri NSIS và updater chính thức
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md
 ---
 
 ## Ba mandate bảo mật
@@ -86,38 +86,16 @@ có thể kiểm tra code, build từ source, hoặc xác minh binary release kh
 
 ## Xác minh bản phát hành
 
-Mỗi bản phát hành tạo ra năm file:
-
-- `Sky-Auto-Player-v<phiên bản>.zip` — archive ứng dụng
-- `Sky-Auto-Player-v<phiên bản>.zip.sha256` — checksum SHA256
-- `MANIFEST.json` — manifest liệt kê checksum của mọi asset
-- `MANIFEST.json.sig` — chữ ký Ed25519 detached cho đúng byte của manifest
-- `PROVENANCE.json` — metadata provenance của build
-
-Xác minh archive trước khi giải nén:
-
-```powershell
-(Get-FileHash "Sky-Auto-Player-v<version>.zip" -Algorithm SHA256).Hash
-# So sánh với nội dung file .sha256
-```
+V4 phát hành installer Tauri NSIS canonical và sidecar `.exe.sig`. Installer được xác minh
+Authenticode; qualification ràng buộc đúng byte của installer và signature bằng SHA-256 cùng
+evidence SPDX SBOM và provenance.
 
 ## Ranh giới cập nhật công khai
 
-Binary Windows công khai vẫn intentionally unsigned cho Authenticode và gói phát hành có native
-updater. Updater chỉ chạy sau lựa chọn của người dùng, xác minh chữ ký Ed25519 detached trên đúng
-byte `MANIFEST.json` trước khi tin các hash trong đó, sau đó xác minh ZIP và SHA256 trước khi thay
-thế theo transaction; đường thủ công chỉ mở trang GitHub Releases chính thức.
-Authenticode là **N/A — intentionally unsigned**.
-
-Bằng chứng integrity/provenance của gói vẫn gồm:
-
-- ZIP canonical, `.zip.sha256`, `MANIFEST.json` và `MANIFEST.json.sig`
-- manifest băm đúng các byte unsigned được đóng gói
-- build provenance/attestation của GitHub
-
-Binary Rust `sky_updater` được đóng gói và chỉ được gọi từ thao tác update do người dùng chọn.
-Nó vẫn là security component fail-closed và được test riêng về HTTPS, archive, signed manifest và
-transaction; không có AuthentiCode requirement hay signature bypass.
+`UpdateService` Rust gọi official Tauri updater. Tauri xác minh `.exe.sig` trước khi chạy
+installer current-user. V4 không có custom updater executable đi kèm, updater ZIP portable,
+hay hợp đồng `MANIFEST.json.sig`; authority của v4 là repository release riêng, còn endpoint
+channel và downgrade policy không đi qua frontend.
 
 ## Thông báo Điều khoản Dịch vụ
 

@@ -16,7 +16,6 @@ sky_desktop_shell
         +--> sky_native_adapters   filesystem, Win32 and process adapters
         +--> sky_player            playback application/runtime service
         +--> Tauri updater plugin  signed update check/download/install
-        +--> sky_updater           retained legacy updater boundary
 ```
 
 `sky_app_core` remains inward and must not depend on Tauri, Win32, the desktop
@@ -36,9 +35,7 @@ The native runtime owns settings persistence, catalog indexing/search/detail,
 playback planning and control, diagnostics, update policy, calibration
 orchestration, event delivery, and shutdown. The calibration measurement
 remains process-isolated in `native_calibration.exe`. V4 update operations are
-owned by the Rust `UpdateService`, which invokes the official Tauri updater;
-`sky_updater` remains buildable for the legacy line until its retirement work
-order.
+owned by the Rust `UpdateService`, which invokes the official Tauri updater.
 
 ## Playback boundary
 
@@ -68,9 +65,9 @@ authority is fixed to the dedicated v4 stable/beta metadata paths; missing
 metadata or missing/invalid v4 updater trust material fails closed. Production
 Authenticode uses the governed `unsigned-zero-budget` policy; no provider
 credentials are required, and qualification rejects signed or unexpected PE state.
-The signed packaged previous-v4 to candidate-v4 fixture is test-only. The retained
-`sky_updater` boundary continues to own the legacy line's transaction and
-recovery behavior.
+The signed packaged previous-v4 to candidate-v4 fixture is test-only. The retired
+v3 transaction/recovery implementation is preserved in Git history and the
+`v3-maintenance` line; it is not part of the current workspace or product graph.
 
 ## Evidence and repository tooling
 

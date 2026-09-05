@@ -64,11 +64,11 @@ audit in its `static` group.
 The v4 release policy is `unsigned-zero-budget`: shipped project PE files and the canonical NSIS
 installer are intentionally unsigned for Authenticode. Windows may show Unknown Publisher or a
 SmartScreen warning; this is a publisher-identity/UX trade-off, not a bypass of update trust.
-Update metadata is authenticated separately: the official Tauri updater verifies the detached Ed25519 signature
-over the exact `MANIFEST.json` bytes, using its embedded trusted key set, before trusting manifest
-hashes. It must also preserve its HTTPS allow-list, exact SHA256/archive/manifest verification,
-transaction/rollback behavior, preserve-list, bounded provenance, and user-triggered execution
-model. The current normative contract is
+The Rust-owned `UpdateService` selects the fixed v4 authority and the official Tauri updater
+verifies the detached Ed25519 signature over the exact NSIS update artifact before installation.
+V4 has no bundled custom updater executable, portable ZIP updater contract, or `MANIFEST.json.sig`
+protocol. It must also preserve its HTTPS allow-list, exact artifact SHA-256, bounded provenance,
+and user-triggered execution model. The current normative contract is
 [`docs/distribution-and-update.md`](docs/distribution-and-update.md).
 
 Changes to updater trust, release provenance, allowed download origins, preserved user data, or

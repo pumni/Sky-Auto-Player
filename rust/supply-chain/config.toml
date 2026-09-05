@@ -936,10 +936,6 @@ criteria = "safe-to-deploy"
 version = "0.9.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.pep440_rs]]
-version = "0.7.3"
-criteria = "safe-to-deploy"
-
 [[exemptions.percent-encoding]]
 version = "2.3.2"
 criteria = "safe-to-deploy"

@@ -1,14 +1,23 @@
 use crate::Result;
 use std::ffi::OsStr;
+#[cfg(test)]
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
+#[cfg(test)]
+use std::process::Child;
+use std::process::{Command, Output, Stdio};
+#[cfg(test)]
 use std::sync::{Arc, Mutex, mpsc};
+#[cfg(test)]
 use std::thread::{self, JoinHandle};
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+#[cfg(test)]
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(test)]
 const READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub fn run(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Result<()> {
@@ -78,27 +87,6 @@ pub fn run_owned(
     Ok(())
 }
 
-pub fn run_owned_timeout(
-    program: &Path,
-    args: &[String],
-    cwd: &Path,
-    env: &[(String, String)],
-    timeout: Duration,
-) -> Result<()> {
-    let output = capture_owned_timeout(program.as_os_str(), args, cwd, env, timeout)?;
-    if !output.status.success() {
-        return Err(format!(
-            "{} failed with {}\nstdout: {}\nstderr: {}",
-            program.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    Ok(())
-}
-
 pub fn capture_owned(
     program: &OsStr,
     args: &[String],
@@ -120,12 +108,14 @@ pub fn capture_owned(
         .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()).into())
 }
 
+#[cfg(test)]
 struct BoundedReader {
     bytes: Arc<Mutex<Vec<u8>>>,
     finished: mpsc::Receiver<()>,
     handle: JoinHandle<()>,
 }
 
+#[cfg(test)]
 fn spawn_bounded_reader<R>(mut reader: R) -> BoundedReader
 where
     R: Read + Send + 'static,
@@ -157,6 +147,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn collect_bounded_reader(reader: BoundedReader, stream: &str) -> Result<Vec<u8>> {
     if reader.finished.recv_timeout(READER_DRAIN_TIMEOUT).is_err() {
         return Ok(reader
@@ -175,6 +166,7 @@ fn collect_bounded_reader(reader: BoundedReader, stream: &str) -> Result<Vec<u8>
         .map_err(|_| format!("{stream} reader lock poisoned").into())
 }
 
+#[cfg(test)]
 fn terminate_and_reap(child: &mut Child) -> Result<std::process::ExitStatus> {
     let _ = child.kill();
     child
@@ -182,6 +174,7 @@ fn terminate_and_reap(child: &mut Child) -> Result<std::process::ExitStatus> {
         .map_err(|error| format!("failed to reap timed-out child: {error}").into())
 }
 
+#[cfg(test)]
 pub fn capture_owned_timeout(
     program: &OsStr,
     args: &[String],

@@ -110,7 +110,12 @@ release-authority metadata contract. Its operational private key remains
 outside the repository. The project's production release policy does not
 require Authenticode provider credentials; an optional real-signer seam is
 separately governed and is not represented as current production evidence.
-The legacy `sky_updater` crate remains present for the v3 maintenance line.
+outside the repository. The project's production release policy is
+`unsigned-zero-budget`: no Authenticode provider credentials are required; an
+optional real-signer seam is separately governed and is not represented as
+current production evidence. The retired v3 updater is preserved by Git
+history and the `v3-maintenance` line, but is not part of the current v4
+workspace or product graph.
 
 Updater rotation is qualified with real packaged clients: the bridge trusts
 `[old,new]` and verifies candidate bytes during `Update::download()`, while the
