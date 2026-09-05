@@ -685,6 +685,7 @@ jobs:
         run: |
           $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test.key"
           $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test-updater.json"
+          $preBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
           try {
             Push-Location desktop
             try {
@@ -718,6 +719,15 @@ jobs:
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
             $postPackagingDirty = @(& git status --porcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             if ($postPackagingDirty.Count -gt 0) {
+              $postBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
+              Write-Host "Pre-build Cargo.toml SHA256:  $preBuildCargoHash"
+              Write-Host "Post-build Cargo.toml SHA256: $postBuildCargoHash"
+              Write-Host "=== git status --porcelain ==="
+              & git status --porcelain
+              Write-Host "=== git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml ==="
+              & git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml
+              Write-Host "=== git diff --check -- desktop/src-tauri/Cargo.toml ==="
+              & git diff --check -- desktop/src-tauri/Cargo.toml
               throw "Packaged build left working tree dirty: $($postPackagingDirty -join ', ')"
             }
           }

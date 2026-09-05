@@ -312,6 +312,9 @@ try {
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $resolvedKeyPath
         $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $passwordValue
 
+        $cargoManifestPath = Join-Path $repoRoot "desktop\src-tauri\Cargo.toml"
+        $preBuildCargoHash = (Get-FileHash -LiteralPath $cargoManifestPath -Algorithm SHA256).Hash
+
         Push-Location (Join-Path $repoRoot "desktop")
         try {
             & bun install --frozen-lockfile
@@ -333,6 +336,15 @@ try {
         }
         $postBuildDirtyEntries = @($postBuildPorcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         if ($postBuildDirtyEntries.Count -gt 0) {
+            $postBuildCargoHash = (Get-FileHash -LiteralPath $cargoManifestPath -Algorithm SHA256).Hash
+            Write-Host "Pre-build Cargo.toml SHA256:  $preBuildCargoHash"
+            Write-Host "Post-build Cargo.toml SHA256: $postBuildCargoHash"
+            Write-Host "=== git status --porcelain ==="
+            & git status --porcelain
+            Write-Host "=== git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml ==="
+            & git diff --no-ext-diff -- $cargoManifestPath
+            Write-Host "=== git diff --check -- desktop/src-tauri/Cargo.toml ==="
+            & git diff --check -- $cargoManifestPath
             throw "Working tree became dirty during production build; candidate was not produced from an intact commit $expectedSha. Dirty entries:`n$($postBuildDirtyEntries -join "`n")"
         }
     } else {
