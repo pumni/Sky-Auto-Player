@@ -546,6 +546,43 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
             .into());
         }
     }
+    let test_signing_setup_marker =
+        "      - name: Prepare bounded ephemeral Authenticode test certificate\n";
+    let tamper_regression_marker = "      - name: Run Authenticode tamper regression\n";
+    let test_signing_setup_position = packaged
+        .find(test_signing_setup_marker)
+        .ok_or("canonical v4 packaged CI is missing the isolated test-signing setup step")?;
+    let tamper_regression_position = packaged
+        .find(tamper_regression_marker)
+        .ok_or("canonical v4 packaged CI is missing the Authenticode tamper regression step")?;
+    if test_signing_setup_position >= tamper_regression_position {
+        return Err(
+            "canonical v4 packaged CI must prepare test signing credentials in a prior step".into(),
+        );
+    }
+    let test_signing_setup = &packaged[test_signing_setup_position..tamper_regression_position];
+    for marker in [
+        "timeout-minutes: 2",
+        "pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30",
+    ] {
+        if !test_signing_setup.contains(marker) {
+            return Err(format!(
+                "canonical v4 packaged CI test-signing setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let tamper_regression_end = packaged[tamper_regression_position..]
+        .find("\n      - name: Run V4 production signing contract test\n")
+        .map(|offset| tamper_regression_position + offset)
+        .ok_or("canonical v4 packaged CI tamper regression step has no bounded end")?;
+    let tamper_regression = &packaged[tamper_regression_position..tamper_regression_end];
+    if tamper_regression.contains("setup_v4_test_signing.ps1") {
+        return Err(
+            "canonical v4 packaged CI must not configure test signing in the tamper regression step"
+                .into(),
+        );
+    }
     let attestation_start = packaged
         .find("      - name: Verify exact GitHub artifact attestations\n")
         .ok_or("canonical v4 packaged CI is missing the attestation verification step")?;
@@ -2739,8 +2776,12 @@ read_only=true
         # Tauri updater signer generation failed with exit code
       - run: bun run tauri build --ci --config test.json
         # Tauri build failed with exit code
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        timeout-minutes: 2
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
       - name: Run Authenticode tamper regression
         run: pwsh scripts/test_v4_authenticode_integrity.ps1
+        # CI self-signed credentials remain test-only; canonical package evidence is unsigned.
       - name: Run V4 production signing contract test
         run: pwsh scripts/test_v4_production_signing_contract.ps1
         # V4 production signing contract test failed with exit code

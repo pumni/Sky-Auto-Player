@@ -736,12 +736,15 @@ jobs:
             }
           }
 
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        timeout-minutes: 2
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
+
       - name: Run Authenticode tamper regression
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
           # CI self-signed credentials remain test-only; canonical package evidence is unsigned.
-          pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
           pwsh scripts/test_v4_authenticode_integrity.ps1 `
             -Source rust/target/dist/sky_desktop_shell.exe
           if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
