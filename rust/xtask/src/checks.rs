@@ -918,6 +918,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Wrong updater private key fails pre-flight verification before packaging",
         "Secret values are not emitted by expected error paths",
         "Inherited signing key environment fails closed",
+        "Stale candidate artifacts and evidence are purged before packaging",
         "Updater signature verification rejects corrupted signature",
         "Tampered candidate binary is detected",
         "Production verification rejects CI test certificate",

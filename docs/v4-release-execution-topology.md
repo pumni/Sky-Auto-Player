@@ -319,7 +319,9 @@ Provides provenance and audit trails for release records:
    If Tauri build fails or the Authenticode seam fails to sign:
    - Any temporary signing environment overrides (`TAURI_SIGNING_PRIVATE_KEY*`, `SKY_AUTHENTICODE_*`)
      are removed and prior saved environment variables are restored in the `finally` block.
-   - Any partial files in the staging output directory are purged.
+   - Canonical candidate installer (`.exe`), updater signature (`.exe.sig`), and unpromoted
+     production qualification evidence files (`V4_QUALIFICATION_EVIDENCE.json`,
+     `V4_PRODUCTION_RELEASE_EVIDENCE.json`) are purged from the staging bundle and evidence directories.
    - No release evidence is emitted.
    - Note: The orchestrator guarantees process environment variable cleanup and ensures secrets are
      never printed to stdout, stderr, or logs. It does not claim runtime memory zeroization of managed
