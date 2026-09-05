@@ -30,8 +30,8 @@ evidence:
     label: Windows platform layer — only place SendInput lives
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_dispatch_win32/src/
   - category: distribution
-    label: Distribution contract — unsigned portable native updates
-    url: https://github.com/pumni/Sky-Auto-Player/tree/main/rust/crates/sky_updater
+    label: Distribution contract — Tauri NSIS and official updater
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md
 ---
 
 ## Three security mandates
@@ -87,39 +87,17 @@ the source.
 
 ## Release verification
 
-Every release produces five files:
-
-- `Sky-Auto-Player-v<version>.zip` — the application archive
-- `Sky-Auto-Player-v<version>.zip.sha256` — the SHA256 checksum
-- `MANIFEST.json` — a manifest listing all asset checksums
-- `MANIFEST.json.sig` — a detached Ed25519 signature for the exact manifest bytes
-- `PROVENANCE.json` — build provenance metadata
-
-Verify the archive before extracting:
-
-```powershell
-(Get-FileHash "Sky-Auto-Player-v<version>.zip" -Algorithm SHA256).Hash
-# Compare with the content of the .sha256 file
-```
+V4 releases contain the canonical Tauri NSIS setup executable and its `.exe.sig` sidecar.
+The installer is Authenticode-qualified, and qualification binds the exact installer and
+signature bytes by SHA-256 alongside SPDX SBOM and provenance evidence.
 
 ## Public update boundary
 
-Public Windows binaries remain intentionally unsigned for Authenticode and the package includes
-the native updater. The user-triggered updater verifies the detached Ed25519 signature over the
-exact `MANIFEST.json` bytes before trusting its hashes, then verifies the exact release ZIP and
-SHA256 before transactional replacement; the manual fallback opens only the official GitHub
-Releases page.
-Authenticode is **N/A — intentionally unsigned**.
-
-The public integrity/provenance evidence remains:
-
-- canonical ZIP, `.zip.sha256`, `MANIFEST.json`, and `MANIFEST.json.sig`
-- exact unsigned bytes hashed by the manifest
-- GitHub build provenance/attestation
-
-The Rust `sky_updater` binary is shipped and reachable only from the user-triggered update
-action. It remains separately tested and fail-closed on HTTPS, archive, signed manifest, and
-transaction integrity; it has no Authenticode requirement or signature bypass.
+The Rust-owned `UpdateService` invokes the official Tauri updater. Tauri verifies the exact
+`.exe.sig` before running the current-user NSIS installer. V4 has no bundled custom updater
+executable, portable ZIP updater, or `MANIFEST.json.sig` contract. The public update authority
+is the dedicated v4 release repository; channel endpoints and downgrade policy remain outside
+the frontend.
 
 ## Terms of Service notice
 

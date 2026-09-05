@@ -58,8 +58,7 @@ machinery improves outcomes.
 - `rust/crates/sky_player/` — playback application and realtime runtime.
 - `rust/crates/sky_dispatch_core/` — platform-independent dispatch logic.
 - `rust/crates/sky_dispatch_win32/` — Windows `SendInput` and native dispatch boundary.
-- `rust/crates/sky_updater/` — update transaction and recovery boundary.
-- `rust/xtask/` — canonical repository, build, and release verification tooling.
+- `rust/xtask/` — canonical repository, artifact qualification, and release verification tooling.
 - `tests/` — direct regression/golden/Windows behavior evidence.
 - `scripts/` — narrow host/evidence scripts only where Rust is not a better fit.
 - `site/` — marketing/GitHub Pages surface.

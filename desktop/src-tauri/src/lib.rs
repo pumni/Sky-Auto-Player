@@ -6,7 +6,6 @@ mod ipc_contract;
 mod lifecycle;
 mod native_runtime;
 mod native_update;
-mod startup_guard;
 mod ui_events;
 #[cfg(windows)]
 mod windows_caption;
@@ -121,23 +120,6 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
     }
     if gui_smoke {
         record_gui_smoke_phase("command_ownership.check.pass");
-        record_gui_smoke_phase("startup_update_guard.check.enter");
-    }
-    if let Err(error) = startup_guard::check_startup_update_guard() {
-        if gui_smoke {
-            record_gui_smoke_phase("startup_update_guard.check.failed");
-        }
-        eprintln!("Sky Auto Player startup refused: {error}");
-        if gui_smoke {
-            // The packaging smoke is a process-level gate. A startup guard
-            // rejection must be observable as a failing child, rather than
-            // looking like a clean return before Tauri's event loop starts.
-            std::process::exit(2);
-        }
-        return;
-    }
-    if gui_smoke {
-        record_gui_smoke_phase("startup_update_guard.check.pass");
     }
     let app_state = if gui_smoke || update_smoke {
         app_state::AppState::with_test_seams(TestSeams::SafePackage)
@@ -347,16 +329,12 @@ fn update_smoke_marker(flag: &str) -> Option<PathBuf> {
     None
 }
 
-/// Validate the release native desktop composition without constructing a WebView.
+/// Validate the packaged native desktop composition without constructing a WebView.
 ///
-/// This hidden, packaging-only entrypoint is used by the exact portable
-/// artifact gate. It uses the same native composition root as the production
-/// shell and exercises safe, non-physical command seams before shutdown.
+/// This hidden, packaging-only entrypoint uses the same native composition
+/// root as the production shell and exercises safe, non-physical command
+/// seams before shutdown.
 pub fn selftest_packaged_shell() -> i32 {
-    if let Err(error) = startup_guard::check_startup_update_guard() {
-        eprintln!("packaged shell selftest startup guard failed: {error}");
-        return 2;
-    }
     let paths = match sky_native_adapters::AppPaths::resolve() {
         Ok(paths) => paths,
         Err(error) => {

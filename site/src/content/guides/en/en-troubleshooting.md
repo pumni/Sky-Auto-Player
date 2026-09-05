@@ -100,25 +100,22 @@ in use inside Sky.
 
 ## Windows SmartScreen warning on launch
 
-**Cause**: Sky Auto Player is not code-signed. Windows SmartScreen shows this warning for
-any unsigned executable downloaded from the internet.
+**Cause**: The installer or an installed binary did not pass the expected Authenticode identity
+or was not downloaded from the canonical v4 authority.
 
-**Fix**: Click **More info → Run anyway**. To verify the binary is authentic, check the
-SHA256 checksum of the downloaded ZIP against the `.sha256` file published on the
-[releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest).
+**Fix**: Do not bypass the warning. Delete the download and obtain the installer and `.exe.sig`
+sidecar again from the [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
 
 ## Updating manually
 
-**Cause**: Public Windows releases use an unsigned portable model. The bundled updater must be
-launched by the user and the installation folder must be writable; there is no system installer.
+**Cause**: The official Tauri updater could not stage or execute the current-user installer.
 
 **Fix**:
 
 1. Retry **Update and Restart** from the in-app update notice.
-2. If staging fails, open the [official releases page](https://github.com/pumni/Sky-Auto-Player/releases).
-3. Download the canonical ZIP, `.zip.sha256`, and `MANIFEST.json`.
-4. Verify the ZIP SHA256 when desired, extract into a new folder, and copy your
-   `config.json`, `.env`, `songs/`, and `logs/` folders.
+2. If it still fails, uninstall only after preserving app data, then download the current
+   canonical NSIS installer from the [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+3. Do not use a v3 ZIP, `MANIFEST.json`, or standalone updater executable for v4.
 
 ## The HUD shows high timing jitter
 

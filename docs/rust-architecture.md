@@ -10,7 +10,7 @@ sky_desktop_shell
        +--> sky_app_core
        +--> sky_native_adapters
        +--> sky_player
-       +--> sky_updater
+       +--> official Tauri updater via `UpdateService`
 
 sky_player -> sky_dispatch_core + sky_dispatch_win32
 ```
@@ -27,11 +27,11 @@ QPC-based timing, target/focus gates, telemetry publication, and cleanup.
 `sky_dispatch_core` owns pure schedule/action policy; `sky_dispatch_win32`
 owns the Windows wait, focus, priority, and `SendInput` boundaries.
 
-The desktop shell owns Tauri command decoding and delivery DTO translation.
+The desktop shell owns Tauri command decoding, delivery DTO translation, and
+the Rust-owned `UpdateService` policy boundary for the official Tauri updater.
 It does not contain song scheduling, risk analysis, persisted-settings
-migration, or realtime dispatch algorithms. `sky_updater` owns network,
-manifest, transaction, rollback, and recovery implementation at its existing
-security boundary. Calibration measurement is a separate native process.
+migration, or realtime dispatch algorithms. Calibration measurement is a
+separate native process.
 
 ## Hot-path constraints
 

@@ -6,7 +6,6 @@ category: 'General'
 question: 'Does Sky Auto Player need admin rights?'
 ---
 
-The portable app does not require an installer or administrator access for normal use. To remove
-it, close the app and delete its folder after preserving any songs or configuration you want to
-keep. Updates use the bundled user-triggered native updater and require a user-writable folder;
-the official GitHub Releases page remains the manual fallback.
+The canonical v4 app uses a current-user Tauri NSIS installer and does not require administrator
+access for normal use. Uninstall it through Windows **Installed apps**. Updates use the official
+Tauri updater through the Rust-owned `UpdateService`.
