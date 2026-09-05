@@ -758,9 +758,14 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
+          $installers = @(Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Tauri NSIS installer before Authenticode verification; found $($installers.Count)"
+          }
+          $installer = $installers[0].FullName
           pwsh scripts/verify_v4_authenticode.ps1 `
             -Mode test `
-            -Artifact (Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name) `
+            -Artifact $installer `
             -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
 

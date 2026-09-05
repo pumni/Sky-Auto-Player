@@ -59,6 +59,40 @@ try {
 
     . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 
+    # Canonical production bundle snapshot to guarantee contract test isolation
+    $canonicalBundle = Join-Path $repoRoot "rust\target\dist\bundle\nsis"
+    function Get-CanonicalBundleSnapshot {
+        if (-not (Test-Path -LiteralPath $canonicalBundle -PathType Container)) {
+            return @{}
+        }
+        $snapshot = @{}
+        Get-ChildItem -LiteralPath $canonicalBundle -File | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            $snapshot[$_.Name] = @{
+                Size = $_.Length
+                Hash = $hash
+            }
+        }
+        return $snapshot
+    }
+    $initialBundleSnapshot = Get-CanonicalBundleSnapshot
+
+    function New-TestOutputDirectories {
+        param([string]$Name)
+
+        $root = Join-Path $fixtureRoot $Name
+        $bundle = Join-Path $root "bundle"
+        $evidence = Join-Path $root "evidence"
+
+        New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+        New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+
+        return @{
+            BundleDir = $bundle
+            EvidenceDir = $evidence
+        }
+    }
+
     # Generate throwaway Minisign key outside repo
     $throwawayKeyPath = Join-Path $fixtureRoot "throwaway.key"
     Push-Location (Join-Path $repoRoot "desktop")
@@ -111,6 +145,7 @@ try {
             throw "Failed to create dirty worktree fixture in README.md"
         }
 
+        $dirs3 = New-TestOutputDirectories "test-03-dirty-worktree"
         $out3 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
             -ExpectedSourceSha $currentSha `
@@ -119,7 +154,9 @@ try {
             -UpdaterPrivateKeyPath $throwawayKeyPath `
             -AuthenticodeProvider "custom" `
             -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
-            -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+            -AuthenticodeProviderScript $dummyProviderScript `
+            -BundleDir $dirs3.BundleDir `
+            -EvidenceDir $dirs3.EvidenceDir 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator succeeded on dirty worktree" }
         if ($out3 -notmatch "Working tree is dirty; production release requires a clean working tree") {
             throw "FAILED: Did not fail closed with clean worktree error on dirty tree"
@@ -187,6 +224,7 @@ try {
 
     # Test 6: Wrong updater private key fails pre-flight verification before packaging
     Write-Host "Test 6: Wrong updater private key fails pre-flight verification before packaging..."
+    $dirs6 = New-TestOutputDirectories "test-06-wrong-updater-key"
     $out6 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
@@ -195,7 +233,9 @@ try {
         -UpdaterPrivateKeyPath $throwawayKeyPath `
         -AuthenticodeProvider "custom" `
         -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
-        -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+        -AuthenticodeProviderScript $dummyProviderScript `
+        -BundleDir $dirs6.BundleDir `
+        -EvidenceDir $dirs6.EvidenceDir 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator accepted mismatched updater key" }
     if ($out6 -notmatch "Pre-packaging updater key verification failed") {
         throw "FAILED: Did not fail closed on updater key pre-flight check. Actual output:`n$out6"
@@ -206,6 +246,7 @@ try {
     Write-Host "Test 7: Secret values are not emitted by expected error paths..."
     $secretPassword = "SECRET_SUPER_TEST_PASS_987654321"
     $env:MY_TEST_KEY_PASSWORD = $secretPassword
+    $dirs7 = New-TestOutputDirectories "test-07-secret-leak"
     $out7 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
@@ -215,7 +256,9 @@ try {
         -UpdaterPasswordEnv "MY_TEST_KEY_PASSWORD" `
         -AuthenticodeProvider "custom" `
         -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
-        -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+        -AuthenticodeProviderScript $dummyProviderScript `
+        -BundleDir $dirs7.BundleDir `
+        -EvidenceDir $dirs7.EvidenceDir 2>&1 | Out-String
     Remove-Item Env:MY_TEST_KEY_PASSWORD -ErrorAction SilentlyContinue
     if ($out7.Contains($secretPassword)) {
         throw "FAILED: Secret password was leaked to output/error stream!"
@@ -227,6 +270,7 @@ try {
     $secretRawKey = "untrusted comment: secret raw private key content`nSECRET_RAW_KEY_MATERIAL_12345"
     $env:TAURI_SIGNING_PRIVATE_KEY = $secretRawKey
     try {
+        $dirs8a = New-TestOutputDirectories "test-08a-inherited-key"
         $out8a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
             -ExpectedSourceSha $currentSha `
@@ -235,7 +279,9 @@ try {
             -UpdaterPrivateKeyPath $throwawayKeyPath `
             -AuthenticodeProvider "custom" `
             -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
-            -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+            -AuthenticodeProviderScript $dummyProviderScript `
+            -BundleDir $dirs8a.BundleDir `
+            -EvidenceDir $dirs8a.EvidenceDir 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator accepted inherited TAURI_SIGNING_PRIVATE_KEY" }
         if ($out8a -notmatch "Pre-existing TAURI_SIGNING_PRIVATE_KEY detected") {
             throw "FAILED: Did not reject inherited TAURI_SIGNING_PRIVATE_KEY. Actual output:`n$out8a"
@@ -249,6 +295,7 @@ try {
 
     $env:TAURI_SIGNING_PRIVATE_KEY_PATH = "C:\fake\secret\path.key"
     try {
+        $dirs8b = New-TestOutputDirectories "test-08b-inherited-key-path"
         $out8b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
             -ExpectedSourceSha $currentSha `
@@ -257,7 +304,9 @@ try {
             -UpdaterPrivateKeyPath $throwawayKeyPath `
             -AuthenticodeProvider "custom" `
             -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
-            -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+            -AuthenticodeProviderScript $dummyProviderScript `
+            -BundleDir $dirs8b.BundleDir `
+            -EvidenceDir $dirs8b.EvidenceDir 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator accepted inherited TAURI_SIGNING_PRIVATE_KEY_PATH" }
         if ($out8b -notmatch "Pre-existing TAURI_SIGNING_PRIVATE_KEY_PATH detected") {
             throw "FAILED: Did not reject inherited TAURI_SIGNING_PRIVATE_KEY_PATH. Actual output:`n$out8b"
@@ -397,6 +446,7 @@ try {
 
     # Test 13: Unbound prebuilt candidate without internal fixture mode fails closed
     Write-Host "Test 13: Unbound prebuilt candidate without internal fixture mode fails closed..."
+    $dirs13a = New-TestOutputDirectories "test-13a-unbound-candidate"
     $out13a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
@@ -406,12 +456,15 @@ try {
         -AuthenticodeProvider "custom" `
         -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
         -AuthenticodeProviderScript $dummyProviderScript `
+        -BundleDir $dirs13a.BundleDir `
+        -EvidenceDir $dirs13a.EvidenceDir `
         -InternalFixtureCandidatePath $unmutatedPe 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted InternalFixtureCandidatePath without -InternalTestFixture" }
     if ($out13a -notmatch "InternalFixtureCandidatePath is only permitted when -InternalTestFixture is specified") {
         throw "FAILED: Did not fail closed on unbound fixture candidate path"
     }
 
+    $dirs13b = New-TestOutputDirectories "test-13b-unbound-skip-smoke"
     $out13b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
@@ -421,6 +474,8 @@ try {
         -AuthenticodeProvider "custom" `
         -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
         -AuthenticodeProviderScript $dummyProviderScript `
+        -BundleDir $dirs13b.BundleDir `
+        -EvidenceDir $dirs13b.EvidenceDir `
         -InternalSkipSmoke 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted InternalSkipSmoke without -InternalTestFixture" }
     if ($out13b -notmatch "InternalSkipSmoke is only permitted when -InternalTestFixture is specified") {
@@ -559,7 +614,27 @@ try {
     if ($out16c -notmatch "Qualification evidence type is not the canonical Tauri qualification path") {
         throw "FAILED: Did not reject qualification=skipped-smoke"
     }
-    Write-Host "Test 16: PASS"
+    # Regression assertion: Running orchestrator contract suite must not create, delete, or modify production release outputs
+    $finalBundleSnapshot = Get-CanonicalBundleSnapshot
+    if ($initialBundleSnapshot.Count -ne $finalBundleSnapshot.Count) {
+        throw "FAILED ISOLATION CONTRACT: Canonical production bundle file count changed! Initial: $($initialBundleSnapshot.Count), Final: $($finalBundleSnapshot.Count)"
+    }
+    foreach ($key in $initialBundleSnapshot.Keys) {
+        if (-not $finalBundleSnapshot.ContainsKey($key)) {
+            throw "FAILED ISOLATION CONTRACT: File '$key' was deleted from canonical production bundle by orchestrator contract tests!"
+        }
+        $init = $initialBundleSnapshot[$key]
+        $fin = $finalBundleSnapshot[$key]
+        if ($init.Hash -ne $fin.Hash -or $init.Size -ne $fin.Size) {
+            throw "FAILED ISOLATION CONTRACT: File '$key' in canonical production bundle was mutated by orchestrator contract tests! Initial Hash=$($init.Hash), Final Hash=$($fin.Hash)"
+        }
+    }
+    foreach ($key in $finalBundleSnapshot.Keys) {
+        if (-not $initialBundleSnapshot.ContainsKey($key)) {
+            throw "FAILED ISOLATION CONTRACT: File '$key' was unexpectedly created in canonical production bundle by orchestrator contract tests!"
+        }
+    }
+    Write-Host "Canonical production bundle isolation: PASS"
 
 } finally {
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
