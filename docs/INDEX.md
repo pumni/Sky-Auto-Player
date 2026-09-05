@@ -34,8 +34,8 @@ sources.
 - [library-v1-contract.md](library-v1-contract.md) — native manifest, collection, and local import
   contract for the stacked Library V1 work.
 
-For implementation work, read relevant source and direct tests alongside the matching document. Do
-not open every architecture page by default.
+Read relevant source and direct tests alongside the matching document; do not open every page by
+default.
 
 ## Security, distribution, and toolchain
 
@@ -58,9 +58,8 @@ not open every architecture page by default.
 - [wave6-rust-xtask-release-ci.md](wave6-rust-xtask-release-ci.md) — Rust xtask commands and the
   Rust/Bun canonical check/release boundary and zero-Python guard.
 
-Build and release details live in `rust/xtask/`, `desktop/`, `.github/workflows/`, and direct
-tests. Tauri NSIS is the canonical v4 package producer; `cargo xtask` verifies and qualifies
-the resulting artifacts and does not assemble a portable v4 ZIP.
+Build/release details live in `rust/xtask/`, `desktop/`, workflows, and direct tests. Tauri NSIS is
+the canonical v4 producer; `cargo xtask` verifies its artifacts and does not assemble a portable ZIP.
 
 ## Development and verification
 
