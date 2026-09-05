@@ -10,9 +10,12 @@ V4 uses the Tauri NSIS package and the Rust-owned `UpdateService` described in
 Releases, portable artifact, or `sky_updater` transaction path. Its fixed
 stable/beta metadata authority and deterministic promotion contract are in
 `v4-release-authority.md`; metadata remains unavailable until a qualified
-promotion. V4 uses an independent public updater trust root; its private
-signing key and Authenticode provider credentials remain outside the repository
-and are fail-closed release inputs.
+promotion. V4 uses an independent public updater trust root and the explicitly
+governed `unsigned-zero-budget` Authenticode policy. The updater private key
+remains outside the repository/workspace, encrypted at rest, with an independent
+readable encrypted backup. No production certificate, provider, or thumbprint is
+required. Windows may show Unknown Publisher or a SmartScreen warning; this is a
+publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic trust.
 
 For v4 rotation, the bridge client carries `[old,new]` and tries artifact
 verification during the Tauri download step; the cutover client carries

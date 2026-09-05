@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("test", "production")]
+    [ValidateSet("test", "production", "unsigned-zero-budget")]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -13,21 +13,24 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "v4_authenticode_crypto.ps1")
 if ($Artifact.Count -eq 0) { throw "At least one Authenticode artifact is required" }
 $mode = $Mode.ToLowerInvariant()
-$expectedThumbprint = if ($mode -eq "test") {
-    [string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT
-} else {
-    [string]$env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT
-}
-$expectedThumbprint = $expectedThumbprint.Trim()
-if ($expectedThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
-    $identityVariable = if ($mode -eq "test") {
-        "SKY_AUTHENTICODE_TEST_THUMBPRINT"
+$expectedThumbprint = $null
+if ($mode -ne "unsigned-zero-budget") {
+    $expectedThumbprint = if ($mode -eq "test") {
+        [string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT
     } else {
-        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT"
+        [string]$env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT
     }
-    throw "V4 Authenticode verification requires the exact approved signer thumbprint in $identityVariable"
+    $expectedThumbprint = $expectedThumbprint.Trim()
+    if ($expectedThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
+        $identityVariable = if ($mode -eq "test") {
+            "SKY_AUTHENTICODE_TEST_THUMBPRINT"
+        } else {
+            "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT"
+        }
+        throw "V4 Authenticode verification requires the exact approved signer thumbprint in $identityVariable"
+    }
+    $expectedThumbprint = $expectedThumbprint.ToUpperInvariant()
 }
-$expectedThumbprint = $expectedThumbprint.ToUpperInvariant()
 if ($mode -eq "production") {
     $testThumbprint = ([string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT).Trim().ToUpperInvariant()
     if (-not [string]::IsNullOrWhiteSpace($testThumbprint) -and $expectedThumbprint -eq $testThumbprint) {
@@ -99,6 +102,32 @@ $records = foreach ($file in $files) {
     $seen[$file.Name] = $true
     $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
     $platformStatus = [string]$signature.Status
+
+    if ($mode -eq "unsigned-zero-budget") {
+        # The governed production state accepts exactly an unsigned PE. Any
+        # signature, including a self-signed CI certificate, is unexpected and
+        # fails closed. Only NotSigned is evidence of the required state.
+        if ($platformStatus -ne "NotSigned" -or $null -ne $signature.SignerCertificate) {
+            throw "unsigned-zero-budget Authenticode verification requires an unsigned target: $($file.Name) ($platformStatus)"
+        }
+        [ordered]@{
+            name = $file.Name
+            status = $platformStatus
+            platform_status = $platformStatus
+            verification = "authenticode-unsigned-zero-budget"
+            trust_exception = "unsigned-zero-budget-policy"
+            integrity_verifier = "not-applicable-unsigned-zero-budget"
+            integrity_status = "NotSigned"
+            signed_digest_algorithm = $null
+            signed_digest = $null
+            computed_digest = $null
+            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            signer_thumbprint = $null
+            signer_subject = $null
+        }
+        continue
+    }
+
     if ($null -eq $signature.SignerCertificate) {
         throw "Authenticode signature has no embedded signer certificate for $($file.Name): $platformStatus"
     }
@@ -162,7 +191,9 @@ $payload = [ordered]@{
     evidence_type = "authenticode-verification"
     mode = $mode
     expected_signer_thumbprint = $expectedThumbprint
-    verification_policy = if ($mode -eq "test") {
+    verification_policy = if ($mode -eq "unsigned-zero-budget") {
+        "unsigned-project-owned-pe-files-and-canonical-nsis"
+    } elseif ($mode -eq "test") {
         "exact-signer-independent-authenticode-integrity-with-platform-trust-diagnostic"
     } else {
         "windows-valid-platform-and-exact-approved-signer-independent-authenticode-integrity"

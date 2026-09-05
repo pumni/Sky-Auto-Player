@@ -30,6 +30,7 @@ $productIdentifier = "io.github.pumni.skyautoplayer"
 $installerNameSuffix = "_x64-setup.exe"
 $evidenceType = "tauri-nsis-qualified-release"
 $evidenceSchemaVersion = 1
+$productionAuthenticodeMode = "unsigned-zero-budget"
 
 function Get-GitHubJson([string]$Path) {
     $payload = & gh api $Path --header "Accept: application/vnd.github+json"
@@ -103,8 +104,8 @@ function Assert-QualificationEvidence(
         (Get-RequiredEvidenceString $Evidence "qualification") -ne "install-launch-uninstall") {
         throw "Qualification evidence type is not the canonical Tauri qualification path"
     }
-    if ((Get-RequiredEvidenceString $Evidence "authenticode_mode") -ne "production") {
-        throw "Qualification evidence is not production Authenticode evidence"
+    if ((Get-RequiredEvidenceString $Evidence "authenticode_mode") -ne $productionAuthenticodeMode) {
+        throw "Qualification evidence is not governed unsigned-zero-budget Authenticode evidence"
     }
     $qualified = $Evidence.PSObject.Properties["qualified"]
     if ($qualified.Value -isnot [bool] -or -not $qualified.Value) {
@@ -211,7 +212,7 @@ function Invoke-PromotionSelfTest {
         signature_size = [int64]10
         installer_sha256 = "a" * 64
         updater_signature_sha256 = "a" * 64
-        authenticode_mode = "production"
+        authenticode_mode = $productionAuthenticodeMode
         authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
         authenticode_evidence_sha256 = "a" * 64
         sbom = "SBOM.spdx.json"

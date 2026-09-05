@@ -585,7 +585,7 @@ try {
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $invalidFile 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted authenticode_mode=test" }
-    if ($out16a -notmatch "Qualification evidence is not production Authenticode evidence") {
+    if ($out16a -notmatch "Qualification evidence is not governed unsigned-zero-budget Authenticode evidence") {
         throw "FAILED: Did not reject authenticode_mode=test"
     }
 

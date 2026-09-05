@@ -52,7 +52,7 @@ https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/s
 https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
 ```
 
-### 3. The canonical v4 Windows distribution is NSIS, per-user, and signed
+### 3. The canonical v4 Windows distribution is NSIS, per-user, and updater-authenticated
 
 V4 uses the Tauri bundler with the Windows NSIS target. The default supported installation scope is
 current-user so normal installation and update do not require Administrator privileges and can live
@@ -131,11 +131,24 @@ A production `.env` file beside the executable is not part of the v4 user config
 
 ### 8. V4 has two independent signing boundaries
 
-Windows code signing and updater signing are separate requirements:
+Windows Authenticode and updater signing are separate boundaries:
 
-1. Project-owned Windows executables and the canonical installer are Authenticode signed so Windows
-   and users receive a stable publisher identity.
+1. Under the permanent project release policy `unsigned-zero-budget`, project-owned Windows
+   executables and the canonical installer are deliberately Authenticode-unsigned. Qualification
+   proves the expected `NotSigned` state and rejects test/self-signed or otherwise unexpected
+   signatures.
 2. Tauri updater artifacts use the Tauri updater signing mechanism and a new v4 update trust root.
+
+The zero-budget state is a publisher-identity and user-experience trade-off: Windows may show
+**Unknown Publisher** or a SmartScreen warning. It is not a bypass of updater cryptographic trust.
+The official Tauri updater still verifies its Ed25519/minisign `.sig` against the v4 public root;
+exact SHA-256 identity, SBOM, provenance attestations, and install/launch/uninstall qualification
+remain mandatory. The bounded `signCommand` invokes the verifier seam, whose zero-budget mode
+deliberately performs no signing and requires no production certificate, provider, or thumbprint.
+
+An optional real-signer branch may remain available for a separately approved future policy, but
+`production` Authenticode mode is not the project's current release policy and never blocks the
+current release path.
 
 V4 does not reuse the v3 `release-2026` custom manifest signing key or its signature envelope.
 
@@ -174,7 +187,7 @@ V4 `xtask` responsibilities should include, as appropriate:
 - repository and dependency-policy checks;
 - packaged application smoke tests;
 - installer/update artifact existence and structure checks;
-- Authenticode verification;
+- Authenticode state verification (`unsigned-zero-budget` in the current production policy);
 - updater signature/metadata validation;
 - fresh-install qualification;
 - previous-v4 -> candidate-v4 update qualification;
@@ -246,8 +259,9 @@ qualification must prove that the canonical v4 product no longer depends on them
 ## Consequences
 
 V4 gains a smaller product-owned update attack surface, standard Windows installation/uninstallation,
-a publisher identity, standard Tauri updater artifacts, clearer install/data ownership, and simpler
-runtime update code.
+standard Tauri updater artifacts, clearer install/data ownership, and simpler runtime update code.
+The project accepts the absence of an Authenticode publisher identity under the permanent
+`unsigned-zero-budget` policy, including possible Unknown Publisher/SmartScreen warnings.
 
 The project accepts a deliberate compatibility break with v3 and the operational requirement to keep
 v3 release discovery isolated from v4. It also accepts that recovery from a bad v4 release is normally
@@ -268,9 +282,10 @@ arbitrary previous installation at per-file granularity.
 
 ## Required implementation gates before `v4.0.0` GA
 
-- Authenticode signing is enabled and verified in release CI;
+- the governed `unsigned-zero-budget` Authenticode state is verified for every shipped project PE and
+  the final NSIS installer; test/self-signed evidence is rejected;
 - release SBOM and build provenance attestations are generated and verified;
-- exact draft artifacts complete fresh-install, update, uninstall/reinstall, SmartScreen/signature,
+- exact draft artifacts complete fresh-install, update, uninstall/reinstall, Authenticode-state,
   Defender, and packaged GUI qualification;
 - stable update metadata is promoted only to the qualified immutable release;
 - v3 and v4 release namespaces are demonstrably isolated;
