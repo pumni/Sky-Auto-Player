@@ -302,8 +302,9 @@ fn main() -> Result<()> {
                 Path::new(&key_file),
                 password.as_deref(),
             )?;
+            let key_id = updater_trust::canonical_key_id()?;
             println!(
-                "[xtask] Local updater private key matches canonical production v4 root (Key ID: F6355260A0C663D5)"
+                "[xtask] Local updater private key matches canonical production v4 root (Key ID: {key_id})"
             );
             Ok(())
         }
