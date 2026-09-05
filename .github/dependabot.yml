@@ -14,7 +14,6 @@ updates:
           - crossbeam-queue
           - parking_lot
           - proptest
-          - pep440_rs
         update-types:
           - patch
           - minor

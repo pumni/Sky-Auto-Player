@@ -22,7 +22,7 @@ export const homeEn: HomeContent = {
       "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — scheduled from the sheet's timing model and dispatched through Windows SendInput.",
     primaryCta: 'Download for Windows',
     secondaryCta: 'See how it works',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
+    metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'TAURI NSIS', 'CURRENT USER'],
     riskNote: 'Automated playback may conflict with Sky’s Terms of Service.',
     riskNoteLink: 'Use responsibly and at your own risk.',
     affiliationDisclaimer:
@@ -90,12 +90,12 @@ export const homeEn: HomeContent = {
       {
         title: 'Download',
         description:
-          'Get the latest ZIP from GitHub Releases and extract it to a folder you control. No system installer or administrator access is required.',
+          'Get the canonical Tauri NSIS installer from the dedicated v4 release authority and install it for the current user.',
       },
       {
         title: 'Add a sheet',
         description:
-          'Export a JSON, .skysheet or compatible TXT sheet from the Sky Music editor and place it in the songs folder.',
+          'Export a JSON, .skysheet or compatible TXT sheet from the Sky Music editor and import it through the desktop Library.',
       },
       {
         title: 'Play',

@@ -98,25 +98,21 @@ dùng trong Sky.
 
 ## Cảnh báo Windows SmartScreen khi khởi động
 
-**Nguyên nhân**: Sky Auto Player chưa được ký mã. SmartScreen hiển thị cảnh báo này
-cho bất kỳ tệp unsigned nào tải từ internet.
+**Nguyên nhân**: Installer hoặc binary không đạt identity Authenticode mong đợi, hoặc không
+được tải từ release authority v4 canonical.
 
-**Sửa**: Nhấn **Thêm thông tin → Vẫn chạy**. Để xác minh binary hợp lệ, kiểm tra
-checksum SHA256 của ZIP tải về so với file `.sha256` được công bố trên
-[trang releases](https://github.com/pumni/Sky-Auto-Player/releases/latest).
+**Sửa**: Không bỏ qua cảnh báo. Xóa file và tải lại installer cùng sidecar `.exe.sig` từ
+[release authority v4](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
 
 ## Cập nhật thủ công
 
-**Nguyên nhân**: Release Windows công khai dùng mô hình portable unsigned. Native updater chỉ
-được chạy sau lựa chọn của người dùng và thư mục cài đặt phải có quyền ghi; không có system installer.
+**Nguyên nhân**: Official Tauri updater không thể stage hoặc chạy installer current-user.
 
 **Sửa**:
 
 1. Thử lại **Update and Restart** từ thông báo cập nhật trong app.
-2. Nếu staging thất bại, mở [trang releases chính thức](https://github.com/pumni/Sky-Auto-Player/releases).
-3. Tải ZIP canonical, `.zip.sha256` và `MANIFEST.json`.
-4. Khi cần, xác minh SHA256 của ZIP, giải nén vào thư mục mới rồi chép các thư mục
-   các tệp `config.json`, `.env` và thư mục `songs/`, `logs/` của bạn.
+2. Nếu vẫn thất bại, tải installer NSIS canonical từ [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+3. Không dùng ZIP v3, `MANIFEST.json` hoặc updater executable độc lập cho v4.
 
 ## HUD hiển thị jitter timing cao
 

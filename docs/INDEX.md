@@ -59,7 +59,8 @@ not open every architecture page by default.
   Rust/Bun canonical check/release boundary and zero-Python guard.
 
 Build and release details live in `rust/xtask/`, `desktop/`, `.github/workflows/`, and direct
-tests. `cargo xtask dist` is the canonical assembler and does not build a Python product.
+tests. Tauri NSIS is the canonical v4 package producer; `cargo xtask` verifies and qualifies
+the resulting artifacts and does not assemble a portable v4 ZIP.
 
 ## Development and verification
 

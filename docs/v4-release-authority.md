@@ -107,8 +107,9 @@ change.
 The v4 Tauri updater public trust root is committed independently of this
 release-authority metadata contract. Its operational private key remains
 outside the repository, and Authenticode provider credentials are a separate
-Track B release input. The legacy `sky_updater` crate remains present for the
-v3 maintenance line.
+Track B release input. The retired v3 updater is preserved by Git history and
+the `v3-maintenance` line, but is not part of the current v4 workspace or
+product graph.
 
 Updater rotation is qualified with real packaged clients: the bridge trusts
 `[old,new]` and verifies candidate bytes during `Update::download()`, while the

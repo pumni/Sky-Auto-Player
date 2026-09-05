@@ -22,7 +22,7 @@ export const homeVi: HomeContent = {
       'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — lên lịch theo mô hình timing của sheet và bù độ trễ phía gửi, chứ không chỉ gửi phím tuần tự.',
     primaryCta: 'Tải xuống cho Windows',
     secondaryCta: 'Xem cách hoạt động',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'PORTABLE', 'KHÔNG CẦN CÀI ĐẶT'],
+    metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'TAURI NSIS', 'CURRENT USER'],
     riskNote: 'Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
     riskNoteLink: 'Hãy dùng có trách nhiệm và tự chịu rủi ro.',
     affiliationDisclaimer:
@@ -87,12 +87,12 @@ export const homeVi: HomeContent = {
       {
         title: 'Tải xuống',
         description:
-          'Tải file ZIP mới nhất từ GitHub Releases và giải nén vào thư mục bạn chọn. Không cần trình cài đặt hệ thống hoặc quyền quản trị.',
+          'Tải installer Tauri NSIS canonical từ v4 release authority và cài đặt cho current user.',
       },
       {
         title: 'Thêm sheet nhạc',
         description:
-          'Xuất sheet dạng JSON, .skysheet hoặc TXT tương thích từ Sky Music editor rồi đặt vào thư mục songs.',
+          'Xuất sheet dạng JSON, .skysheet hoặc TXT tương thích từ Sky Music editor rồi nhập qua Library desktop.',
       },
       {
         title: 'Phát nhạc',

@@ -61,12 +61,10 @@ audit in its `static` group.
 
 ## Update and release integrity
 
-The public binaries are intentionally unsigned for Authenticode and remain portable. Update
-metadata is authenticated separately: the native updater verifies the detached Ed25519 signature
-over the exact `MANIFEST.json` bytes, using its embedded trusted key set, before trusting manifest
-hashes. It must also preserve its HTTPS allow-list, exact SHA256/archive/manifest verification,
-transaction/rollback behavior, preserve-list, bounded provenance, and user-triggered execution
-model. The current normative contract is
+V4 distribution uses an Authenticode-qualified Tauri NSIS installer and the official Tauri updater.
+The Rust-owned `UpdateService` selects the fixed v4 authority and the Tauri updater verifies the
+exact installer signature before installation. V4 has no bundled custom updater executable,
+portable ZIP updater contract, or `MANIFEST.json.sig` protocol. The current normative contract is
 [`docs/distribution-and-update.md`](docs/distribution-and-update.md).
 
 Changes to updater trust, release provenance, allowed download origins, preserved user data, or

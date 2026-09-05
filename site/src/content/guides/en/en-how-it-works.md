@@ -45,7 +45,7 @@ read game memory, inspect game files, modify the game, inject code, or attach a 
 The intended workflow is:
 
 1. Export a sheet from the [Sky Music editor](https://specy.github.io/skyMusic/) as JSON, `.skysheet`, or JSON-compatible TXT.
-2. Drop the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
+2. Import the file through the desktop Library.
 3. Launch Sky Auto Player, select the song, switch to the game, and press your play hotkey.
 
 The packaged `Sky-Auto-Player.exe` is the canonical and only supported Tauri desktop GUI. It

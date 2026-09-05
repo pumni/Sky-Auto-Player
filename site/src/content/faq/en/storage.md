@@ -6,6 +6,6 @@ category: 'General'
 question: "Where are Sky Auto Player\u2019s logs and config stored?"
 ---
 
-`config.json` and `songs/` live alongside `Sky-Auto-Player.exe`. The native updater writes its
-durable result under `%LOCALAPPDATA%\Sky-Auto-Player\update-state\last-result.json` and keeps
-temporary run data under `%LOCALAPPDATA%\Sky-Auto-Player\update-runs\`.
+Application settings, logs, cache, and calibration state live under the app-data boundary in
+`%LOCALAPPDATA%\Sky-Auto-Player\`. They are separate from the current-user NSIS installation
+root and are not managed as portable updater files.
