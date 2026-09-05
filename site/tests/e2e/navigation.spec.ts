@@ -101,7 +101,7 @@ test.describe('navigation and route contracts', () => {
     await expect(page.locator('.nav-download')).toBeVisible();
     await expect(page.locator('.nav-download')).toHaveAttribute(
       'href',
-      'https://github.com/pumni/Sky-Auto-Player/releases/latest',
+      'https://github.com/pumni/Sky-Auto-Player-Releases/releases/latest',
     );
   });
 });
