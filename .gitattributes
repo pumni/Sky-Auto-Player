@@ -2,3 +2,5 @@
 * text=auto
 rust/supply-chain/*.toml text eol=lf
 rust/supply-chain/*.lock text eol=lf
+**/Cargo.toml text eol=lf
+Cargo.toml text eol=lf
