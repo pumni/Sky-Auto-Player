@@ -297,10 +297,24 @@ try {
         -EvidenceDir $staleEvidenceDir 2>&1 | Out-String
 
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator unexpectedly succeeded with wrong updater key" }
-    if ($out9 -notmatch "Pre-packaging updater key verification failed") {
-        throw "FAILED: Did not fail at pre-packaging updater key check as expected. Actual output:`n$out9"
+
+    $purgeMarker = "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS"
+    $keyFailMarker = "Pre-packaging updater key verification failed"
+
+    if (-not $out9.Contains($purgeMarker)) {
+        throw "FAILED: Pre-packaging purge marker not found in output. Actual output:`n$out9"
+    }
+    if (-not $out9.Contains($keyFailMarker)) {
+        throw "FAILED: Pre-packaging updater key verification failure marker not found. Actual output:`n$out9"
     }
 
+    $purgeIndex = $out9.IndexOf($purgeMarker)
+    $keyFailIndex = $out9.IndexOf($keyFailMarker)
+    if ($purgeIndex -ge $keyFailIndex) {
+        throw "FAILED: Stale-output purge did not execute strictly BEFORE pre-packaging updater key verification! Purge index=$purgeIndex, KeyFail index=$keyFailIndex"
+    }
+
+    # Defense-in-depth: Assert that post-run, all 4 stale files remain absent
     if (Test-Path -LiteralPath $staleInstaller) { throw "FAILED: Stale installer was not purged before packaging!" }
     if (Test-Path -LiteralPath $staleSig) { throw "FAILED: Stale signature was not purged before packaging!" }
     if (Test-Path -LiteralPath $staleQualEvidence) { throw "FAILED: Stale qualification evidence was not purged before packaging!" }

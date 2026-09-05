@@ -886,6 +886,8 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "V4_PRODUCTION_RELEASE_EVIDENCE.json",
         "sign_v4_authenticode.ps1",
         "verify_v4_authenticode.ps1",
+        "Invoke-PrePackagingStaleOutputPurge",
+        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
     ] {
         if !orchestrator.contains(marker) {
             return Err(format!(
@@ -919,6 +921,8 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Secret values are not emitted by expected error paths",
         "Inherited signing key environment fails closed",
         "Stale candidate artifacts and evidence are purged before packaging",
+        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
+        "Stale-output purge did not execute strictly BEFORE pre-packaging updater key verification",
         "Updater signature verification rejects corrupted signature",
         "Tampered candidate binary is detected",
         "Production verification rejects CI test certificate",

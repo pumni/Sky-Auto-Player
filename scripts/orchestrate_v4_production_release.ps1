@@ -90,6 +90,37 @@ function Get-CanonicalUpdaterKeyId {
     throw "Failed to extract Key ID from canonical public key in tauri.conf.json"
 }
 
+function Invoke-PrePackagingStaleOutputPurge {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$EvidenceDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$InstallerName,
+        [Parameter(Mandatory = $true)]
+        [string]$SignatureName
+    )
+
+    $staleTargets = @(
+        (Join-Path $BundleDirectory $InstallerName),
+        (Join-Path $BundleDirectory $SignatureName),
+        (Join-Path $EvidenceDirectory "V4_QUALIFICATION_EVIDENCE.json"),
+        (Join-Path $EvidenceDirectory "V4_PRODUCTION_RELEASE_EVIDENCE.json")
+    )
+
+    foreach ($target in $staleTargets) {
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $target) {
+                throw "Hygiene failure: Failed to purge stale output file before packaging: $target"
+            }
+        }
+    }
+
+    Write-Host "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS"
+}
+
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 
 $expectedInstallerName = "Sky Auto Player_${Version}_x64-setup.exe"
@@ -211,11 +242,11 @@ try {
     # Workspace hygiene: purge stale candidate binaries and evidence from previous runs
     # A stale ignored candidate or evidence must never be accepted as the output of this run
     if (-not $InternalTestFixture) {
-        $staleInstaller = Join-Path $resolvedBundleDir $expectedInstallerName
-        $staleSig = Join-Path $resolvedBundleDir $expectedSignatureName
-        $staleQualEvidence = Join-Path $resolvedEvidenceDir "V4_QUALIFICATION_EVIDENCE.json"
-        $staleProdEvidence = Join-Path $resolvedEvidenceDir "V4_PRODUCTION_RELEASE_EVIDENCE.json"
-        Remove-Item -LiteralPath $staleInstaller, $staleSig, $staleQualEvidence, $staleProdEvidence -Force -ErrorAction SilentlyContinue
+        Invoke-PrePackagingStaleOutputPurge `
+            -BundleDirectory $resolvedBundleDir `
+            -EvidenceDirectory $resolvedEvidenceDir `
+            -InstallerName $expectedInstallerName `
+            -SignatureName $expectedSignatureName
     }
 
     $canonicalKeyId = Get-CanonicalUpdaterKeyId
