@@ -894,6 +894,19 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
+    let evidence_builder = fs::read_to_string(root.join("scripts/v4_qualification_evidence.ps1"))?;
+    for marker in [
+        "New-V4CanonicalQualificationEvidence",
+        "tauri-nsis-qualified-release",
+        "install-launch-uninstall",
+    ] {
+        if !evidence_builder.contains(marker) {
+            return Err(format!(
+                "v4 qualification evidence builder is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
     let orchestrator_test =
         fs::read_to_string(root.join("scripts/test_v4_production_orchestrator.ps1"))?;
     for marker in [

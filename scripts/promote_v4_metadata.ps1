@@ -15,6 +15,9 @@ param(
     [Parameter(ParameterSetName = "Promotion")]
     [string]$SourceCheckout = (Split-Path -Parent $PSScriptRoot),
 
+    [Parameter(Mandatory = $true, ParameterSetName = "ValidateEvidence")]
+    [string]$ValidateEvidence,
+
     [Parameter(Mandatory = $true, ParameterSetName = "SelfTest")]
     [switch]$SelfTest
 )
@@ -242,6 +245,19 @@ function Invoke-PromotionSelfTest {
 
 if ($SelfTest) {
     Invoke-PromotionSelfTest
+    exit 0
+}
+
+if ($ValidateEvidence) {
+    if (-not (Test-Path -LiteralPath $ValidateEvidence -PathType Leaf)) {
+        throw "Qualification evidence file does not exist: $ValidateEvidence"
+    }
+    $evidenceObj = Get-Content -LiteralPath $ValidateEvidence -Raw | ConvertFrom-Json
+    $versionVal = Get-RequiredEvidenceString $evidenceObj "version"
+    $expectedInst = "$productName`_$versionVal$installerNameSuffix"
+    $expectedSig = "$expectedInst.sig"
+    $null = Assert-QualificationEvidence $evidenceObj $versionVal $expectedInst $expectedSig
+    Write-Host "V4 qualification evidence validation: PASS ($versionVal)"
     exit 0
 }
 

@@ -716,7 +716,10 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+            $postPackagingDirty = @(& git status --porcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($postPackagingDirty.Count -gt 0) {
+              throw "Packaged build left working tree dirty: $($postPackagingDirty -join ', ')"
+            }
           }
 
       - name: Run Authenticode tamper regression
