@@ -2751,9 +2751,10 @@ read_only=true
         run: pwsh scripts/test_v4_updater_private_key.ps1
         # V4 updater private-key verifier regression failed with exit code
       - name: Verify Tauri Authenticode signature
-        run: pwsh scripts/verify_v4_authenticode.ps1
+        run: pwsh scripts/verify_v4_authenticode.ps1 -Mode unsigned-zero-budget
         # Authenticode verification failed with exit code
         # Installed Authenticode verification failed with exit code
+        # CI self-signed credentials remain test-only
       - name: Generate Tauri SPDX SBOM
         run: cargo xtask sbom generate
         # SBOM generation failed with exit code
