@@ -654,10 +654,6 @@ jobs:
         working-directory: desktop
         run: bun run build
 
-      - name: Prepare bounded ephemeral Authenticode test certificate
-        timeout-minutes: 2
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
-
       - name: Construct Python-unavailable canonical environment
         run: |
           $required = @("cargo", "rustc", "rustup", "git", "bun", "bunx", "link", "rc", "sccache")
@@ -710,6 +706,7 @@ jobs:
               } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
               $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
               $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+              $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
               bun run tauri build --ci --config $configPath -- --profile dist
               if ($LASTEXITCODE -ne 0) { throw "Tauri build failed with exit code $LASTEXITCODE" }
             } finally {
@@ -739,10 +736,15 @@ jobs:
             }
           }
 
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        timeout-minutes: 2
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
+
       - name: Run Authenticode tamper regression
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
+          # CI self-signed credentials remain test-only; canonical package evidence is unsigned.
           pwsh scripts/test_v4_authenticode_integrity.ps1 `
             -Source rust/target/dist/sky_desktop_shell.exe
           if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
@@ -778,7 +780,7 @@ jobs:
           }
           $installer = $installers[0].FullName
           pwsh scripts/verify_v4_authenticode.ps1 `
-            -Mode test `
+            -Mode unsigned-zero-budget `
             -Artifact $installer `
             -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
@@ -842,7 +844,7 @@ jobs:
               Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
             if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }
             pwsh scripts/verify_v4_authenticode.ps1 `
-              -Mode test `
+              -Mode unsigned-zero-budget `
               -Artifact $installedPe.FullName `
               -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
             if ($LASTEXITCODE -ne 0) { throw "Installed Authenticode verification failed with exit code $LASTEXITCODE" }
@@ -883,7 +885,7 @@ jobs:
             signature_size = $summary.signature_size
             installer_sha256 = $summary.installer_sha256
             updater_signature_sha256 = $summary.updater_signature_sha256
-            authenticode_mode = "test"
+            authenticode_mode = "unsigned-zero-budget"
             authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
             authenticode_evidence_sha256 = (Get-FileHash -LiteralPath rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json -Algorithm SHA256).Hash.ToLowerInvariant()
             sbom = "SBOM.spdx.json"

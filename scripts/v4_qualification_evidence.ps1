@@ -41,7 +41,9 @@ function New-V4CanonicalQualificationEvidence {
         signature_size = $SignatureSize
         installer_sha256 = $InstallerSha256.ToLowerInvariant()
         updater_signature_sha256 = $SignatureSha256.ToLowerInvariant()
-        authenticode_mode = "production"
+        # The project production policy is intentionally Authenticode-unsigned.
+        # The linked Authenticode evidence proves this exact state.
+        authenticode_mode = "unsigned-zero-budget"
         authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
         authenticode_evidence_sha256 = $AuthenticodeEvidenceSha256.ToLowerInvariant()
         sbom = "SBOM.spdx.json"

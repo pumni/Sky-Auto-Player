@@ -11,9 +11,17 @@ if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
 Write-Host "V4 Authenticode signer invoked: target=$Path"
 
 $mode = if ([string]::IsNullOrWhiteSpace($env:SKY_AUTHENTICODE_MODE)) {
-    "production"
+    "unsigned-zero-budget"
 } else {
     $env:SKY_AUTHENTICODE_MODE.Trim().ToLowerInvariant()
+}
+
+if ($mode -eq "unsigned-zero-budget") {
+    # This is the permanent project release policy. The Tauri signCommand seam
+    # remains configured so the bundler has a deterministic, auditable hook,
+    # but the hook deliberately performs no Authenticode signing.
+    Write-Host "V4 Authenticode policy: unsigned-zero-budget; no signing performed: target=$Path"
+    exit 0
 }
 
 if ($mode -eq "production") {
@@ -91,7 +99,7 @@ if ($mode -eq "production") {
 }
 
 if ($mode -ne "test") {
-    throw "V4 Authenticode signing is fail-closed: unrecognized mode '$mode' (must be 'test' or 'production')"
+    throw "V4 Authenticode signing is fail-closed: unrecognized mode '$mode' (must be 'test', 'production', or 'unsigned-zero-budget')"
 }
 
 $thumbprint = [string]$env:SKY_AUTHENTICODE_TEST_THUMBPRINT

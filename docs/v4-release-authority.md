@@ -74,9 +74,10 @@ non-canonical artifact names.
 The packaged qualification path emits a bounded
 `tauri-nsis-qualified-release` evidence object containing the canonical
 version/name/size pair and SHA-256 digests for both the installer and `.sig`,
-plus production Authenticode evidence and SPDX SBOM references/digests.
+  plus `unsigned-zero-budget` Authenticode-state evidence and SPDX SBOM references/digests.
+  The installer is truthfully recorded as Authenticode-unsigned.
 `qualified=true` is not accepted by itself: the promotion gate rejects missing
-or extra fields, test-mode Authenticode evidence, malformed evidence, digest
+  or extra fields, `test` or other non-governed Authenticode modes, malformed evidence, digest
 mismatches, and same-name assets with different bytes. Metadata promotion is a separate operation after the
 immutable release has been published and the exact published assets have
 passed qualification. It compares GitHub's asset digest when present, or
@@ -106,9 +107,10 @@ change.
 
 The v4 Tauri updater public trust root is committed independently of this
 release-authority metadata contract. Its operational private key remains
-outside the repository, and Authenticode provider credentials are a separate
-Track B release input. The legacy `sky_updater` crate remains present for the
-v3 maintenance line.
+outside the repository. The project's production release policy does not
+require Authenticode provider credentials; an optional real-signer seam is
+separately governed and is not represented as current production evidence.
+The legacy `sky_updater` crate remains present for the v3 maintenance line.
 
 Updater rotation is qualified with real packaged clients: the bridge trusts
 `[old,new]` and verifies candidate bytes during `Update::download()`, while the
