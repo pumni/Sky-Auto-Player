@@ -254,9 +254,14 @@ pub fn verify_updater_signature(installer_path: &Path, signature_path: &Path) ->
     public_key
         .verify(&installer_bytes, &signature, false)
         .map_err(|_| "updater signature does not match the canonical production v4 public root")?;
-    let key_id = extract_key_id_from_public_key(crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY)?;
+    let key_id = canonical_key_id()?;
     println!("[xtask] V4 Updater Signature Verification: PASS (Key ID: {key_id})");
     Ok(())
+}
+
+/// Return the identity parsed from the canonical compiled public root.
+pub fn canonical_key_id() -> Result<String> {
+    extract_key_id_from_public_key(crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY)
 }
 
 pub fn extract_key_id_from_public_key(value: &str) -> Result<String> {

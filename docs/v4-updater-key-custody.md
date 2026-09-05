@@ -58,8 +58,11 @@ cargo xtask updater-trust inventory
 4. **In-Memory & Ephemeral Signing Rules**:
    - When signing candidate update artifacts for release qualification, the key file or
      passphrase must only be loaded into ephemeral process memory.
-   - When automated workflows handle the passphrase, `::add-mask::<passphrase>` must be
-     emitted before any other output to prevent log leakage.
+   - Release and verifier processes never print secret values to stdout, stderr, or log files.
+     External automation is responsible for its own secret-management and log-masking controls;
+     the child release or verifier process does not need to emit the secret or a masking command.
+   - This is an output-secrecy guarantee only. PowerShell/.NET managed strings are not claimed
+     to be cryptographically zeroized by this runbook.
 
 ## 3. Local Private Key Verification
 
@@ -73,7 +76,7 @@ the verification tools avoid command-line password flags.
 
 ### Interactive Operator Verification (Recommended)
 
-For interactive operator use, run the PowerShell verifier. It performs a non-echoing, masked
+For interactive operator use, run the PowerShell verifier. It performs a non-echoing secure
 interactive prompt via `Read-Host -AsSecureString` to prevent passphrase exposure in terminal
 logs or history files:
 
@@ -97,7 +100,8 @@ cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.ke
 
 Expected output:
 ```text
-[PASS] Local updater private key matches canonical production v4 root (Key ID: F6355260A0C663D5)
+[xtask] Local updater private key matches canonical production v4 root (Key ID: <canonical public-root identity>)
+[PASS] Local updater private key matches canonical production v4 root
 ```
 
 If the key does not match or the password is wrong, the tool exits with code 1 and emits a

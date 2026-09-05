@@ -501,6 +501,9 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "- name: Run V4 production release orchestrator contract test",
         "scripts/test_v4_production_orchestrator.ps1",
         "V4 production release orchestrator contract test failed with exit code",
+        "- name: Run V4 updater private-key verifier secret-output regression",
+        "scripts/test_v4_updater_private_key.ps1",
+        "V4 updater private-key verifier regression failed with exit code",
         "- name: Verify Tauri Authenticode signature",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
@@ -871,6 +874,30 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             "v4 updater key verification script must delegate to updater-trust verify-private-key"
                 .into(),
         );
+    }
+    for forbidden in ["::add-mask::", "F6355260A0C663D5"] {
+        if key_verifier.contains(forbidden) {
+            return Err(format!(
+                "v4 updater key verification script must not emit or hard-code production secret/output data: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let key_verifier_test =
+        fs::read_to_string(root.join("scripts/test_v4_updater_private_key.ps1"))?;
+    for marker in [
+        "V4_TEST_ONLY_PASS_PHRASE_MARKER",
+        "verify_v4_updater_private_key.ps1",
+        "Verifier mismatch path",
+        "Verifier success path",
+        "throwaway.key",
+    ] {
+        if !key_verifier_test.contains(marker) {
+            return Err(format!(
+                "v4 updater key verifier regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
     }
     let orchestrator =
         fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
@@ -2707,6 +2734,9 @@ read_only=true
       - name: Run V4 production release orchestrator contract test
         run: pwsh scripts/test_v4_production_orchestrator.ps1
         # V4 production release orchestrator contract test failed with exit code
+      - name: Run V4 updater private-key verifier secret-output regression
+        run: pwsh scripts/test_v4_updater_private_key.ps1
+        # V4 updater private-key verifier regression failed with exit code
       - name: Verify Tauri Authenticode signature
         run: pwsh scripts/verify_v4_authenticode.ps1
         # Authenticode verification failed with exit code

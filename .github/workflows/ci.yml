@@ -761,6 +761,13 @@ jobs:
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_orchestrator.ps1
           if ($LASTEXITCODE -ne 0) { throw "V4 production release orchestrator contract test failed with exit code $LASTEXITCODE" }
 
+      - name: Run V4 updater private-key verifier secret-output regression
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1
+          if ($LASTEXITCODE -ne 0) { throw "V4 updater private-key verifier regression failed with exit code $LASTEXITCODE" }
+
       - name: Verify Tauri Authenticode signature
         env:
           RUSTUP_TOOLCHAIN: 1.98.0

@@ -45,23 +45,29 @@ $passwordValue = if (-not [string]::IsNullOrWhiteSpace($envVal)) {
     ""
 }
 
-# 3. Mask password if running in GitHub Actions to prevent log leakage
-if (-not [string]::IsNullOrWhiteSpace($passwordValue) -and $env:GITHUB_ACTIONS -eq "true") {
-    Write-Output "::add-mask::$passwordValue"
-}
-
 $prevPwd = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $passwordValue
 try {
-    & cargo xtask updater-trust verify-private-key --key-file $keyFile
+    # The child owns verification and emits only sanitized status. Keep a final
+    # redaction guard around the boundary so this process never forwards a
+    # password if a dependency unexpectedly includes it in diagnostic output.
+    $verificationOutput = & cargo xtask updater-trust verify-private-key --key-file $keyFile 2>&1 | Out-String
+    if (-not [string]::IsNullOrEmpty($passwordValue)) {
+        $verificationOutput = $verificationOutput.Replace($passwordValue, "[REDACTED]")
+    }
+    Write-Output $verificationOutput.TrimEnd()
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] Local updater private key does not match canonical production v4 root"
         exit 1
     }
-    Write-Host "[PASS] Local updater private key matches canonical production v4 root (Key ID: F6355260A0C663D5)"
+    Write-Host "[PASS] Local updater private key matches canonical production v4 root"
     exit 0
 } catch {
-    Write-Host "[FAIL] Updater private key verification failed: $($_.Exception.Message)"
+    $errorMessage = $_.Exception.Message
+    if (-not [string]::IsNullOrEmpty($passwordValue)) {
+        $errorMessage = $errorMessage.Replace($passwordValue, "[REDACTED]")
+    }
+    Write-Host "[FAIL] Updater private key verification failed: $errorMessage"
     exit 1
 } finally {
     if ($null -ne $prevPwd) {
