@@ -23,6 +23,7 @@ $savedEnv = @{
     'SKY_AUTHENTICODE_PROVIDER' = $env:SKY_AUTHENTICODE_PROVIDER
     'SKY_AUTHENTICODE_PROVIDER_SCRIPT' = $env:SKY_AUTHENTICODE_PROVIDER_SCRIPT
     'SKY_AUTHENTICODE_PROVIDER_COMMAND' = $env:SKY_AUTHENTICODE_PROVIDER_COMMAND
+    'TAURI_SIGNING_PRIVATE_KEY' = $env:TAURI_SIGNING_PRIVATE_KEY
     'TAURI_SIGNING_PRIVATE_KEY_PATH' = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
     'TAURI_SIGNING_PRIVATE_KEY_PASSWORD' = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 }
@@ -38,6 +39,10 @@ function Restore-SavedEnvironment {
 }
 
 try {
+    # Ensure runner environment is clean of inherited signing keys before tests run
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 
     $currentSha = (& git rev-parse HEAD).Trim().ToLowerInvariant()
@@ -217,18 +222,63 @@ try {
     }
     Write-Host "Test 7: PASS"
 
-    # Test 8: Updater signature verification rejects corrupted signature
-    Write-Host "Test 8: Updater signature verification rejects corrupted signature..."
+    # Test 8: Inherited signing key environment fails closed without leaking secret
+    Write-Host "Test 8: Inherited signing key environment fails closed..."
+    $secretRawKey = "untrusted comment: secret raw private key content`nSECRET_RAW_KEY_MATERIAL_12345"
+    $env:TAURI_SIGNING_PRIVATE_KEY = $secretRawKey
+    try {
+        $out8a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
+            -ExpectedSourceSha $currentSha `
+            -Version $currentVersion `
+            -Channel "beta" `
+            -UpdaterPrivateKeyPath $throwawayKeyPath `
+            -AuthenticodeProvider "custom" `
+            -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
+            -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator accepted inherited TAURI_SIGNING_PRIVATE_KEY" }
+        if ($out8a -notmatch "Pre-existing TAURI_SIGNING_PRIVATE_KEY detected") {
+            throw "FAILED: Did not reject inherited TAURI_SIGNING_PRIVATE_KEY. Actual output:`n$out8a"
+        }
+        if ($out8a.Contains("SECRET_RAW_KEY_MATERIAL_12345")) {
+            throw "FAILED: Secret raw key material was echoed in error output!"
+        }
+    } finally {
+        Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+    }
+
+    $env:TAURI_SIGNING_PRIVATE_KEY_PATH = "C:\fake\secret\path.key"
+    try {
+        $out8b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
+            -ExpectedSourceSha $currentSha `
+            -Version $currentVersion `
+            -Channel "beta" `
+            -UpdaterPrivateKeyPath $throwawayKeyPath `
+            -AuthenticodeProvider "custom" `
+            -ApprovedSignerThumbprint "0123456789ABCDEF0123456789ABCDEF01234567" `
+            -AuthenticodeProviderScript $dummyProviderScript 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { throw "FAILED: Orchestrator accepted inherited TAURI_SIGNING_PRIVATE_KEY_PATH" }
+        if ($out8b -notmatch "Pre-existing TAURI_SIGNING_PRIVATE_KEY_PATH detected") {
+            throw "FAILED: Did not reject inherited TAURI_SIGNING_PRIVATE_KEY_PATH. Actual output:`n$out8b"
+        }
+    } finally {
+        Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+    }
+    Write-Host "Test 8: PASS"
+
+    # Test 9: Updater signature verification rejects corrupted signature
+    Write-Host "Test 9: Updater signature verification rejects corrupted signature..."
     $testExe = Join-Path $fixtureRoot "dummy.exe"
     $testSig = Join-Path $fixtureRoot "dummy.exe.sig"
     [IO.File]::WriteAllBytes($testExe, [Text.Encoding]::UTF8.GetBytes("MZ fake executable content"))
     [IO.File]::WriteAllText($testSig, "untrusted comment: minisign signature`ncorrupted signature data")
-    $out8 = & cargo xtask updater-trust verify-signature --installer $testExe --signature $testSig 2>&1 | Out-String
+    $out9 = & cargo xtask updater-trust verify-signature --installer $testExe --signature $testSig 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: verify-signature succeeded with corrupt signature" }
-    Write-Host "Test 8: PASS"
+    Write-Host "Test 9: PASS"
 
-    # Test 9: Tampered candidate binary is detected by Authenticode verifier
-    Write-Host "Test 9: Tampered candidate binary is detected..."
+    # Test 10: Tampered candidate binary is detected by Authenticode verifier
+    Write-Host "Test 10: Tampered candidate binary is detected..."
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "setup_v4_test_signing.ps1") `
         -EnvFile $envFile
@@ -263,15 +313,15 @@ try {
     [IO.File]::WriteAllBytes($peCopy, $bytes)
 
     # Verify tampering is detected
-    $out9 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out10 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
         -Mode test `
         -Artifact $peCopy 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Authenticode verification accepted tampered binary" }
-    Write-Host "Test 9: PASS"
+    Write-Host "Test 10: PASS"
 
-    # Test 10: Verification rejects test credentials in production mode
-    Write-Host "Test 10: Production verification rejects CI test certificate..."
+    # Test 11: Verification rejects test credentials in production mode
+    Write-Host "Test 11: Production verification rejects CI test certificate..."
     $unmutatedPe = Join-Path $fixtureRoot "unmutated_pe.exe"
     Copy-Item -LiteralPath $sourcePe.FullName -Destination $unmutatedPe -Force
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
@@ -280,20 +330,20 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to sign unmutated PE" }
 
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $testThumbprint
-    $out10 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out11 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
         -Mode production `
         -Artifact $unmutatedPe 2>&1 | Out-String
     Remove-Item Env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Production verification accepted test certificate!" }
-    if ($out10 -notmatch "rejects ephemeral CI test signer thumbprint" -and $out10 -notmatch "rejects CI test certificate") {
-        throw "FAILED: Did not reject test certificate in production mode. Actual output:`n$out10"
+    if ($out11 -notmatch "rejects ephemeral CI test signer thumbprint" -and $out11 -notmatch "rejects CI test certificate") {
+        throw "FAILED: Did not reject test certificate in production mode. Actual output:`n$out11"
     }
-    Write-Host "Test 10: PASS"
+    Write-Host "Test 11: PASS"
 
-    # Test 11: Unbound prebuilt candidate without internal fixture mode fails closed
-    Write-Host "Test 11: Unbound prebuilt candidate without internal fixture mode fails closed..."
-    $out11a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    # Test 12: Unbound prebuilt candidate without internal fixture mode fails closed
+    Write-Host "Test 12: Unbound prebuilt candidate without internal fixture mode fails closed..."
+    $out12a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
         -Version $currentVersion `
@@ -304,11 +354,11 @@ try {
         -AuthenticodeProviderScript $dummyProviderScript `
         -InternalFixtureCandidatePath $unmutatedPe 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted InternalFixtureCandidatePath without -InternalTestFixture" }
-    if ($out11a -notmatch "InternalFixtureCandidatePath is only permitted when -InternalTestFixture is specified") {
+    if ($out12a -notmatch "InternalFixtureCandidatePath is only permitted when -InternalTestFixture is specified") {
         throw "FAILED: Did not fail closed on unbound fixture candidate path"
     }
 
-    $out11b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out12b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
         -Version $currentVersion `
@@ -319,19 +369,19 @@ try {
         -AuthenticodeProviderScript $dummyProviderScript `
         -InternalSkipSmoke 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted InternalSkipSmoke without -InternalTestFixture" }
-    if ($out11b -notmatch "InternalSkipSmoke is only permitted when -InternalTestFixture is specified") {
+    if ($out12b -notmatch "InternalSkipSmoke is only permitted when -InternalTestFixture is specified") {
         throw "FAILED: Did not fail closed on unbound internal skip smoke"
     }
-    Write-Host "Test 11: PASS"
+    Write-Host "Test 12: PASS"
 
-    # Test 12: Internal test fixture with skipped smoke cannot emit promotable evidence
-    Write-Host "Test 12: Skipped smoke cannot create canonical production evidence..."
+    # Test 13: Internal test fixture with skipped smoke cannot emit promotable evidence
+    Write-Host "Test 13: Skipped smoke cannot create canonical production evidence..."
     $fixtureBundleDir = Join-Path $fixtureRoot "fixture_bundle"
     $fixtureEvidenceDir = Join-Path $fixtureRoot "fixture_evidence"
     New-Item -ItemType Directory -Path $fixtureBundleDir -Force | Out-Null
     New-Item -ItemType Directory -Path $fixtureEvidenceDir -Force | Out-Null
 
-    $out12 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out13 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
         -ExpectedSourceSha $currentSha `
         -Version $currentVersion `
@@ -345,7 +395,7 @@ try {
         -InternalTestFixture `
         -InternalFixtureCandidatePath $unmutatedPe `
         -InternalSkipSmoke 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "FAILED: Internal test fixture failed to run: $out12" }
+    if ($LASTEXITCODE -ne 0) { throw "FAILED: Internal test fixture failed to run: $out13" }
 
     # Verify that V4_QUALIFICATION_EVIDENCE.json was NOT emitted
     $prodEvidencePath = Join-Path $fixtureEvidenceDir "V4_QUALIFICATION_EVIDENCE.json"
@@ -369,19 +419,19 @@ try {
     }
 
     # Verify that promote_v4_metadata rejects this non-promotable fixture evidence
-    $out12Reject = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out13Reject = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $fixtureEvidencePath 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) {
         throw "FAILED: promote_v4_metadata unexpectedly accepted fixture evidence with skipped smoke!"
     }
-    if ($out12Reject -notmatch "Qualification evidence type is not the canonical Tauri qualification path") {
+    if ($out13Reject -notmatch "Qualification evidence type is not the canonical Tauri qualification path") {
         throw "FAILED: promote_v4_metadata did not reject fixture evidence with type mismatch"
     }
-    Write-Host "Test 12: PASS"
+    Write-Host "Test 13: PASS"
 
-    # Test 13: Emitted canonical qualification evidence is accepted by promote_v4_metadata
-    Write-Host "Test 13: Emitted canonical evidence is accepted by the same schema validation semantics used for promotion..."
+    # Test 14: Emitted canonical qualification evidence is accepted by promote_v4_metadata
+    Write-Host "Test 14: Emitted canonical evidence is accepted by the same schema validation semantics used for promotion..."
     $installerName = "Sky Auto Player_${currentVersion}_x64-setup.exe"
     $signatureName = "$installerName.sig"
     $canonicalEvidenceDir = Join-Path $fixtureRoot "canonical_evidence"
@@ -404,58 +454,58 @@ try {
     $validEvidence = New-ContractEvidence
     $validEvidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $canonicalEvidenceFile -Encoding utf8
 
-    $out13 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out14 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $canonicalEvidenceFile 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "FAILED: promote_v4_metadata rejected canonical qualification evidence: $out13"
+        throw "FAILED: promote_v4_metadata rejected canonical qualification evidence: $out14"
     }
-    if ($out13 -notmatch "V4 qualification evidence validation: PASS") {
+    if ($out14 -notmatch "V4 qualification evidence validation: PASS") {
         throw "FAILED: promote_v4_metadata did not report PASS on valid qualification evidence"
     }
-    Write-Host "Test 13: PASS"
+    Write-Host "Test 14: PASS"
 
-    # Test 14: Tampered/invalid qualification evidence fields are rejected by promote_v4_metadata
-    Write-Host "Test 14: Tampered qualification evidence fields are rejected by promotion validator..."
-    # 14a. Test mode instead of production
+    # Test 15: Tampered/invalid qualification evidence fields are rejected by promote_v4_metadata
+    Write-Host "Test 15: Tampered qualification evidence fields are rejected by promotion validator..."
+    # 15a. Test mode instead of production
     $invalidAuthMode = New-ContractEvidence
     $invalidAuthMode["authenticode_mode"] = "test"
     $invalidFile = Join-Path $canonicalEvidenceDir "invalid_auth_mode.json"
     $invalidAuthMode | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $invalidFile -Encoding utf8
-    $out14a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out15a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $invalidFile 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted authenticode_mode=test" }
-    if ($out14a -notmatch "Qualification evidence is not production Authenticode evidence") {
+    if ($out15a -notmatch "Qualification evidence is not production Authenticode evidence") {
         throw "FAILED: Did not reject authenticode_mode=test"
     }
 
-    # 14b. qualified = false
+    # 15b. qualified = false
     $invalidQualified = New-ContractEvidence
     $invalidQualified["qualified"] = $false
     $invalidFile2 = Join-Path $canonicalEvidenceDir "invalid_qualified.json"
     $invalidQualified | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $invalidFile2 -Encoding utf8
-    $out14b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out15b = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $invalidFile2 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted qualified=false" }
-    if ($out14b -notmatch "Qualification evidence is not an explicit successful result") {
+    if ($out15b -notmatch "Qualification evidence is not an explicit successful result") {
         throw "FAILED: Did not reject qualified=false"
     }
 
-    # 14c. qualification != install-launch-uninstall
+    # 15c. qualification != install-launch-uninstall
     $invalidQualification = New-ContractEvidence
     $invalidQualification["qualification"] = "skipped-smoke"
     $invalidFile3 = Join-Path $canonicalEvidenceDir "invalid_qualification.json"
     $invalidQualification | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $invalidFile3 -Encoding utf8
-    $out14c = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    $out15c = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") `
         -ValidateEvidence $invalidFile3 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { throw "FAILED: Accepted qualification=skipped-smoke" }
-    if ($out14c -notmatch "Qualification evidence type is not the canonical Tauri qualification path") {
+    if ($out15c -notmatch "Qualification evidence type is not the canonical Tauri qualification path") {
         throw "FAILED: Did not reject qualification=skipped-smoke"
     }
-    Write-Host "Test 14: PASS"
+    Write-Host "Test 15: PASS"
 
 } finally {
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `

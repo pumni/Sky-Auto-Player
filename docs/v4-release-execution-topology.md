@@ -128,6 +128,14 @@ Furthermore, `V4_PRODUCTION_RELEASE_EVIDENCE.json` is an unsigned local artifact
 Accepting Topology B in the future requires an explicit ADR amendment and a source-bound
 cryptographic provenance design.
 
+### 2.3 Self-Hosted Runner Hygiene Preconditions
+
+Dedicated self-hosted Windows runners executing production releases must satisfy strict hygiene preconditions:
+1. **Clean Workspace Checkout**: The runner workspace must be checked out cleanly to the exact target release commit SHA with no uncommitted modifications or untracked dirty files (`git status --porcelain` is empty).
+2. **Unpolluted Environment Overrides**: The runner environment must not inherit ambient signing environment variables (such as pre-set `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH`). The orchestrator checks this pre-flight and fails closed if pre-existing keys or paths are detected.
+3. **Stale Output Purge**: Target bundle and evidence directories are purged of previous candidate installers, signatures, and evidence prior to building. Stale outputs from aborted or previous runs can never be reused.
+4. **Isolated Key Storage**: Private updater keys and certificate stores must reside outside the repository tree, accessible only via restricted paths or secure hardware/cloud seams.
+
 ---
 
 ## 3. Orchestration Specification
@@ -153,37 +161,45 @@ The canonical release orchestrator is implemented in
 
 *Note: Canonical production releases always build from source and always execute the install/launch/uninstall smoke test. No prebuilt or smoke-skipping switches exist in the production transaction.*
 
-### 3.2 Security Pre-Checks (Fail-Closed)
+### 3.2 Security Pre-Checks and Runner Hygiene (Fail-Closed)
 
 Before initiating any build or invoking external tools, the orchestrator validates:
-1. **Commit Integrity**: Current Git HEAD matches `-ExpectedSourceSha` exactly.
-2. **Clean Worktree (Pre-Flight & Post-Build)**: Git working tree must be completely clean
+1. **Unpolluted Environment**: Fails closed immediately if `TAURI_SIGNING_PRIVATE_KEY` or
+   `TAURI_SIGNING_PRIVATE_KEY_PATH` are already present in the runner environment. Signing credentials
+   must never be ambiently inherited from previous runner jobs.
+2. **Commit Integrity**: Current Git HEAD matches `-ExpectedSourceSha` exactly.
+3. **Clean Worktree (Pre-Flight & Post-Build)**: Git working tree must be completely clean
    (`git status --porcelain`). Any uncommitted changes fail closed before any updater-key check,
    provider invocation, build, or signing. Furthermore, a second clean-worktree check runs
    immediately after the production build to ensure build tools did not mutate tracked source or
    manifest files.
-3. **Version Alignment**: `desktop/src-tauri/Cargo.toml` package version matches `-Version`.
-4. **Channel Policy**: Aligned with WO-04 release authority (`stable` requires non-prerelease SemVer;
+4. **Version Alignment**: `desktop/src-tauri/Cargo.toml` package version matches `-Version`.
+5. **Channel Policy**: Aligned with WO-04 release authority (`stable` requires non-prerelease SemVer;
    `beta` requires prerelease SemVer).
-5. **Key Path Isolation**: `-UpdaterPrivateKeyPath` is verified to reside outside the repository tree.
-6. **Key Validity Check**: Invokes `cargo xtask updater-trust verify-private-key` against the private key
+6. **Key Path Isolation**: `-UpdaterPrivateKeyPath` is verified to reside outside the repository tree.
+7. **Key Validity Check**: Invokes `cargo xtask updater-trust verify-private-key` against the private key
    *before* building. Key ID is dynamically derived from canonical public root.
-7. **Zero Secret Output**: The orchestrator never prints or leaks the updater key passphrase to
+8. **Zero Secret Output**: The orchestrator never prints or leaks the updater key passphrase or key material to
    stdout, stderr, or log streams under any execution or error path.
-8. **Provider Exclusivity**: Exactly one of `-AuthenticodeProviderScript` or `-AuthenticodeProviderCommand`.
-9. **Production Mode Enforcement**: Authenticode mode is locked to `production`. Test certificates
-   are rejected unconditionally.
+9. **Provider Exclusivity**: Exactly one of `-AuthenticodeProviderScript` or `-AuthenticodeProviderCommand`.
+10. **Production Mode Enforcement**: Authenticode mode is locked to `production`. Test certificates
+    are rejected unconditionally.
+11. **Stale Output Purge**: Automatically purges any pre-existing installer candidate, `.sig` file,
+    and qualification evidence from the resolved target bundle and evidence directories before packaging.
 
 ### 3.3 Execution Workflow
 
 ```text
 Step 1: Setup & Pre-Flight Checks
+  - Assert environment is unpolluted by pre-existing signing environment variables.
   - Validate parameters, commit SHA, clean worktree, version, channel rules.
+  - Purge stale candidate and evidence files from resolved output directories.
   - Verify updater private key matches canonical public root via `cargo xtask updater-trust verify-private-key`.
   - Configure production Authenticode environment variables for signCommand.
 
 Step 2: Build & Sign Candidate (Single Build)
   - Run `bun install --frozen-lockfile` and `bun run build` in desktop/.
+  - Set `TAURI_SIGNING_PRIVATE_KEY` to the validated private key file path (never raw key bytes).
   - Run `bun run tauri build --ci -- --profile dist`.
   - Tauri NSIS bundler invokes `scripts/sign_v4_authenticode.ps1` via signCommand seam.
   - Tauri bundler signs the installer with the private key, generating `.exe.sig`.
@@ -287,19 +303,30 @@ Provides provenance and audit trails for release records:
 
 ---
 
-## 5. Failure Recovery and Candidate Purge
+## 5. Failure Recovery, Stale Candidate Purge, and Environment Cleanup
 
 1. **Pre-Build Rejection**:
    If the Git SHA, clean worktree check, SemVer, or updater private key fails pre-flight
-   validation, no artifacts are generated. Exit code is non-zero. The working tree remains untouched.
+   validation, or if inherited signing variables (`TAURI_SIGNING_PRIVATE_KEY*`) are detected,
+   no artifacts are generated. Exit code is non-zero. The working tree remains untouched.
 
-2. **Build or Signing Failure**:
+2. **Stale Output Pre-Purge**:
+   Before packaging begins, existing candidate installers, signature files, and qualification
+   evidence in the resolved output directories are deterministically deleted. This guarantees
+   that a failed packaging run never leaves stale artifacts that could be erroneously reused.
+
+3. **Build or Signing Failure**:
    If Tauri build fails or the Authenticode seam fails to sign:
-   - In-memory keys and environment variables are wiped immediately in the `finally` block.
-   - Any partial files in the staging output directory are deleted.
+   - Any temporary signing environment overrides (`TAURI_SIGNING_PRIVATE_KEY*`, `SKY_AUTHENTICODE_*`)
+     are removed and prior saved environment variables are restored in the `finally` block.
+   - Any partial files in the staging output directory are purged.
    - No release evidence is emitted.
+   - Note: The orchestrator guarantees process environment variable cleanup and ensures secrets are
+     never printed to stdout, stderr, or logs. It does not claim runtime memory zeroization of managed
+     .NET strings, which is not guaranteed by the PowerShell/.NET CLR runtime. Key material remains
+     in isolated files outside the repository.
 
-3. **Qualification Failure & Candidate Purge**:
+4. **Qualification Failure & Candidate Purge**:
    If the candidate binary fails Authenticode thumbprint verification, Ed25519 Minisign
    signature verification, SBOM validation, or smoke installation:
    - The candidate binary and signature file are purged from the bundle directory.

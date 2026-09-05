@@ -63,6 +63,7 @@ $savedEnv = @{
     'SKY_AUTHENTICODE_TEST_PFX_PATH' = $env:SKY_AUTHENTICODE_TEST_PFX_PATH
     'SKY_AUTHENTICODE_TEST_PFX_PASSWORD' = $env:SKY_AUTHENTICODE_TEST_PFX_PASSWORD
     'SKY_AUTHENTICODE_TEST_THUMBPRINT' = $env:SKY_AUTHENTICODE_TEST_THUMBPRINT
+    'TAURI_SIGNING_PRIVATE_KEY' = $env:TAURI_SIGNING_PRIVATE_KEY
     'TAURI_SIGNING_PRIVATE_KEY_PATH' = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
     'TAURI_SIGNING_PRIVATE_KEY_PASSWORD' = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 }
@@ -102,6 +103,15 @@ try {
     Write-Host "================================================================="
 
     # 3. Validate input parameters (identities, clean worktree, references)
+    # Reject inherited non-empty TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH
+    # Release runner environment must not contain pre-set signing authorities
+    if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+        throw "Security violation: Pre-existing TAURI_SIGNING_PRIVATE_KEY detected in environment. Production release requires an unpolluted runner environment."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
+        throw "Security violation: Pre-existing TAURI_SIGNING_PRIVATE_KEY_PATH detected in environment. Production release requires an unpolluted runner environment."
+    }
+
     if ($ExpectedSourceSha -notmatch '^[0-9a-fA-F]{40}$') {
         throw "ExpectedSourceSha must be a 40-character hexadecimal git commit SHA"
     }
@@ -198,6 +208,16 @@ try {
     New-Item -ItemType Directory -Path $resolvedEvidenceDir -Force | Out-Null
     New-Item -ItemType Directory -Path $resolvedBundleDir -Force | Out-Null
 
+    # Workspace hygiene: purge stale candidate binaries and evidence from previous runs
+    # A stale ignored candidate or evidence must never be accepted as the output of this run
+    if (-not $InternalTestFixture) {
+        $staleInstaller = Join-Path $resolvedBundleDir $expectedInstallerName
+        $staleSig = Join-Path $resolvedBundleDir $expectedSignatureName
+        $staleQualEvidence = Join-Path $resolvedEvidenceDir "V4_QUALIFICATION_EVIDENCE.json"
+        $staleProdEvidence = Join-Path $resolvedEvidenceDir "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+        Remove-Item -LiteralPath $staleInstaller, $staleSig, $staleQualEvidence, $staleProdEvidence -Force -ErrorAction SilentlyContinue
+    }
+
     $canonicalKeyId = Get-CanonicalUpdaterKeyId
 
     # Fail closed on dirty worktree before any updater-key verification, provider invocation, build or signing
@@ -255,6 +275,9 @@ try {
             $env:SKY_AUTHENTICODE_PROVIDER_COMMAND = $AuthenticodeProviderCommand
             Remove-Item Env:SKY_AUTHENTICODE_PROVIDER_SCRIPT -ErrorAction SilentlyContinue
         }
+        # Tauri v2 bundler accepts a file path in TAURI_SIGNING_PRIVATE_KEY for signing.
+        # Never place raw private key contents into environment variables.
+        $env:TAURI_SIGNING_PRIVATE_KEY = $resolvedKeyPath
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $resolvedKeyPath
         $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $passwordValue
 
@@ -526,5 +549,8 @@ try {
     }
     throw $err
 } finally {
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
     Restore-SavedEnvironment
 }
