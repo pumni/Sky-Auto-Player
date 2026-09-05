@@ -77,10 +77,23 @@ try {
         [Environment]::SetEnvironmentVariable($varName, $null, "Process")
     }
 
-    # Contract Test 1: Unconfigured production mode fails closed
-    Write-Host "Contract Test 1: Unconfigured production mode fails closed..."
+    # Contract Test 1: The project production policy is an unconfigured no-op.
+    Write-Host "Contract Test 1: unsigned-zero-budget mode succeeds without a provider..."
+    $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
+    $output1 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
+        -Path $targetExe 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "FAILED: unsigned-zero-budget signing hook did not succeed without provider inputs: $output1"
+    }
+    $unsignedSignature = Get-AuthenticodeSignature -LiteralPath $targetExe
+    if ([string]$unsignedSignature.Status -ne "NotSigned" -or $null -ne $unsignedSignature.SignerCertificate) {
+        throw "FAILED: unsigned-zero-budget signing hook did not leave the throwaway target unsigned"
+    }
 
-    # 1a. Completely unconfigured (default mode = production, no thumbprint)
+    # 1a. The optional real-signer branch remains fail-closed when explicitly selected.
+    Write-Host "Contract Test 1a: Explicit future production mode fails closed when unconfigured..."
+    $env:SKY_AUTHENTICODE_MODE = "production"
     $output1a = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') `
         -Path $targetExe 2>&1 | Out-String
@@ -157,6 +170,23 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Test-mode verification failed on signed target"
     }
+
+    # Verify the project production policy rejects the signed test target.
+    Write-Host "Contract Test 3a: unsigned-zero-budget verification rejects signed binary..."
+    $rejectedInZeroBudget = $false
+    try {
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
+            -Mode unsigned-zero-budget `
+            -Artifact $targetExe 2>$null
+        if ($LASTEXITCODE -ne 0) { $rejectedInZeroBudget = $true }
+    } catch {
+        $rejectedInZeroBudget = $true
+    }
+    if (-not $rejectedInZeroBudget) {
+        throw "FAILED: unsigned-zero-budget verification accepted signed binary"
+    }
+    Write-Host "Contract Test 3a: PASS"
 
     # Verify production mode rejects test certificate
     $rejectedInProduction = $false
@@ -252,5 +282,5 @@ try {
     Restore-SavedEnvironment
 }
 
-Write-Host "[PASS] V4 Authenticode contract tests: CI test certificate cannot satisfy production mode"
+Write-Host "[PASS] V4 Authenticode contract tests: CI test certificate cannot satisfy production mode or zero-budget unsigned state"
 exit 0

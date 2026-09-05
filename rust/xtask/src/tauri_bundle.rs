@@ -10,6 +10,7 @@ const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
 const WINDOWS_ARCH: &str = "x64";
+const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated
 // and stored outside the repository by the release operator.
 pub const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK";
@@ -99,7 +100,7 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         || sign_command.contains(['&', '|', ';', '`'])
     {
         return Err(
-            "Tauri Windows signing must use the fail-closed v4 Authenticode provider seam".into(),
+            "Tauri Windows Authenticode must use the bounded v4 signCommand policy seam".into(),
         );
     }
     let nsis = windows
@@ -301,7 +302,11 @@ fn validate_authenticode_evidence(path: &Path, summary: &ArtifactSummary) -> Res
         .get("mode")
         .and_then(Value::as_str)
         .ok_or("Authenticode evidence mode is missing")?;
-    let expected_thumbprint = expected_authenticode_signer_thumbprint(mode)?;
+    let expected_thumbprint = if mode == UNSIGNED_ZERO_BUDGET_MODE {
+        String::new()
+    } else {
+        expected_authenticode_signer_thumbprint(mode)?
+    };
     validate_authenticode_evidence_value(&payload, summary, mode, &expected_thumbprint)
 }
 
@@ -348,17 +353,31 @@ fn validate_authenticode_evidence_value(
     {
         return Err("Authenticode evidence schema is invalid".into());
     }
-    if !matches!(mode, "test" | "production") {
+    if !matches!(mode, "test" | "production" | UNSIGNED_ZERO_BUDGET_MODE) {
         return Err("Authenticode evidence mode is invalid".into());
     }
-    if payload
-        .get("expected_signer_thumbprint")
-        .and_then(Value::as_str)
-        .map(|value| value.eq_ignore_ascii_case(expected_thumbprint))
-        != Some(true)
+    if payload.get("mode").and_then(Value::as_str) != Some(mode) {
+        return Err("Authenticode evidence mode disagrees with its validation policy".into());
+    }
+    if mode != UNSIGNED_ZERO_BUDGET_MODE
+        && payload
+            .get("expected_signer_thumbprint")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case(expected_thumbprint))
+            != Some(true)
     {
         return Err(
             "Authenticode evidence approved signer identity is missing or mismatched".into(),
+        );
+    }
+    if mode == UNSIGNED_ZERO_BUDGET_MODE
+        && !payload
+            .get("expected_signer_thumbprint")
+            .map(Value::is_null)
+            .unwrap_or(false)
+    {
+        return Err(
+            "unsigned-zero-budget Authenticode evidence must not contain a signer identity".into(),
         );
     }
     let files = payload
@@ -387,6 +406,51 @@ fn validate_authenticode_evidence_value(
         return Err(
             "canonical installer Authenticode status disagrees with platform status".into(),
         );
+    }
+    if mode == UNSIGNED_ZERO_BUDGET_MODE {
+        if payload.get("verification_policy").and_then(Value::as_str)
+            != Some("unsigned-project-owned-pe-files-and-canonical-nsis")
+            || status != "NotSigned"
+            || file.get("verification").and_then(Value::as_str)
+                != Some("authenticode-unsigned-zero-budget")
+            || file.get("trust_exception").and_then(Value::as_str)
+                != Some("unsigned-zero-budget-policy")
+            || file.get("integrity_verifier").and_then(Value::as_str)
+                != Some("not-applicable-unsigned-zero-budget")
+            || file.get("integrity_status").and_then(Value::as_str) != Some("NotSigned")
+            || !file
+                .get("signed_digest")
+                .map(Value::is_null)
+                .unwrap_or(false)
+            || !file
+                .get("computed_digest")
+                .map(Value::is_null)
+                .unwrap_or(false)
+            || !file
+                .get("signer_thumbprint")
+                .map(Value::is_null)
+                .unwrap_or(false)
+            || !file
+                .get("signer_subject")
+                .map(Value::is_null)
+                .unwrap_or(false)
+        {
+            return Err(
+                "canonical installer Authenticode evidence is not the required unsigned-zero-budget state"
+                    .into(),
+            );
+        }
+        if file
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case(&summary.installer_sha256))
+            != Some(true)
+        {
+            return Err(
+                "Authenticode evidence installer digest does not match the candidate".into(),
+            );
+        }
+        return Ok(());
     }
     let verification = file
         .get("verification")
@@ -710,6 +774,66 @@ mod tests {
         assert!(
             validate_authenticode_evidence_value(&payload, &summary, "test", &"A".repeat(40))
                 .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsigned_zero_budget_requires_an_unsigned_installer_and_exact_digest() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-tauri-authenticode-unsigned-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let installer = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe");
+        let signature = root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe.sig");
+        fs::write(&installer, b"unsigned installer").unwrap();
+        fs::write(&signature, b"test-signature\n").unwrap();
+        let summary = artifact_summary(&root, "4.0.0-alpha.1").unwrap();
+        let payload = json!({
+            "schema_version": 1,
+            "evidence_type": "authenticode-verification",
+            "mode": UNSIGNED_ZERO_BUDGET_MODE,
+            "expected_signer_thumbprint": null,
+            "verification_policy": "unsigned-project-owned-pe-files-and-canonical-nsis",
+            "files": [{
+                "name": summary.installer.clone(),
+                "status": "NotSigned",
+                "platform_status": "NotSigned",
+                "verification": "authenticode-unsigned-zero-budget",
+                "trust_exception": "unsigned-zero-budget-policy",
+                "integrity_verifier": "not-applicable-unsigned-zero-budget",
+                "integrity_status": "NotSigned",
+                "signed_digest_algorithm": null,
+                "signed_digest": null,
+                "computed_digest": null,
+                "signer_thumbprint": null,
+                "signer_subject": null,
+                "sha256": summary.installer_sha256.clone(),
+            }]
+        });
+        validate_authenticode_evidence_value(&payload, &summary, UNSIGNED_ZERO_BUDGET_MODE, "")
+            .unwrap();
+
+        let mut signed = payload.clone();
+        signed["files"][0]["status"] = json!("Valid");
+        signed["files"][0]["platform_status"] = json!("Valid");
+        assert!(
+            validate_authenticode_evidence_value(&signed, &summary, UNSIGNED_ZERO_BUDGET_MODE, "")
+                .is_err()
+        );
+
+        let mut wrong_digest = payload;
+        wrong_digest["files"][0]["sha256"] = json!("0".repeat(64));
+        assert!(
+            validate_authenticode_evidence_value(
+                &wrong_digest,
+                &summary,
+                UNSIGNED_ZERO_BUDGET_MODE,
+                ""
+            )
+            .is_err()
         );
         fs::remove_dir_all(root).unwrap();
     }

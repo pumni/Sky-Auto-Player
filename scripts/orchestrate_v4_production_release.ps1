@@ -36,13 +36,6 @@ if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta
 if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) {
     throw "Missing mandatory parameter: UpdaterPrivateKeyPath"
 }
-if ([string]::IsNullOrWhiteSpace($AuthenticodeProvider)) {
-    throw "Missing mandatory parameter: AuthenticodeProvider"
-}
-if ([string]::IsNullOrWhiteSpace($ApprovedSignerThumbprint)) {
-    throw "Missing mandatory parameter: ApprovedSignerThumbprint"
-}
-
 # 2. Reject internal test parameters unless -InternalTestFixture is explicitly specified
 if (-not $InternalTestFixture) {
     if (-not [string]::IsNullOrWhiteSpace($InternalFixtureCandidatePath)) {
@@ -173,27 +166,13 @@ try {
         throw "Channel 'beta' requires a prerelease SemVer version (e.g. '$Version-beta.1')"
     }
 
-    # Validate ApprovedSignerThumbprint
-    if ($ApprovedSignerThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
-        throw "ApprovedSignerThumbprint must be a 40-character hexadecimal SHA-1 thumbprint"
-    }
-    $approvedThumbprint = $ApprovedSignerThumbprint.ToUpperInvariant()
-
-    # Validate Authenticode provider invocation (mutual exclusivity)
+    # Provider inputs are optional under the project policy. Preserve the
+    # existing malformed-input guard for callers carrying both future-signer
+    # forms, but never require either form for current production.
     $hasScript = -not [string]::IsNullOrWhiteSpace($AuthenticodeProviderScript)
     $hasCommand = -not [string]::IsNullOrWhiteSpace($AuthenticodeProviderCommand)
-    if (-not $hasScript -and -not $hasCommand) {
-        throw "Authenticode provider requires exactly one of AuthenticodeProviderScript or AuthenticodeProviderCommand"
-    }
     if ($hasScript -and $hasCommand) {
         throw "Mutually exclusive Authenticode provider configuration: specify either AuthenticodeProviderScript or AuthenticodeProviderCommand, not both"
-    }
-    $resolvedProviderScript = $null
-    if ($hasScript) {
-        $resolvedProviderScript = (Resolve-Path -LiteralPath $AuthenticodeProviderScript -ErrorAction Stop).Path
-        if (-not (Test-Path -LiteralPath $resolvedProviderScript -PathType Leaf)) {
-            throw "AuthenticodeProviderScript does not exist: $AuthenticodeProviderScript"
-        }
     }
 
     # Validate UpdaterPrivateKeyPath (must exist and must NOT be inside repository workspace)
@@ -290,22 +269,18 @@ try {
         Write-Host "[Step 1/7] Internal test fixture mode: bypassing production root key pre-check..."
     }
 
-    # 5. Canonical Single Build with Production Signing Enabled
+    # 5. Canonical Single Build under the governed unsigned-zero-budget policy
     if (-not $InternalTestFixture) {
         Write-Host "[Step 2/7] Building canonical Tauri production artifact (build-once)..."
-        
-        # Set production Authenticode signing environment.
-        # Tauri NSIS bundler invokes scripts/sign_v4_authenticode.ps1 via bundle.windows.signCommand seam.
-        $env:SKY_AUTHENTICODE_MODE = "production"
-        $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $approvedThumbprint
-        $env:SKY_AUTHENTICODE_PROVIDER = $AuthenticodeProvider.Trim().ToLowerInvariant()
-        if ($hasScript) {
-            $env:SKY_AUTHENTICODE_PROVIDER_SCRIPT = $resolvedProviderScript
-            Remove-Item Env:SKY_AUTHENTICODE_PROVIDER_COMMAND -ErrorAction SilentlyContinue
-        } else {
-            $env:SKY_AUTHENTICODE_PROVIDER_COMMAND = $AuthenticodeProviderCommand
-            Remove-Item Env:SKY_AUTHENTICODE_PROVIDER_SCRIPT -ErrorAction SilentlyContinue
-        }
+
+        # Tauri NSIS invokes scripts/sign_v4_authenticode.ps1 via the configured
+        # signCommand seam. The project release policy deliberately performs no
+        # Authenticode signing and requires no certificate/provider/thumbprint.
+        $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
+        Remove-Item Env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT -ErrorAction SilentlyContinue
+        Remove-Item Env:SKY_AUTHENTICODE_PROVIDER -ErrorAction SilentlyContinue
+        Remove-Item Env:SKY_AUTHENTICODE_PROVIDER_SCRIPT -ErrorAction SilentlyContinue
+        Remove-Item Env:SKY_AUTHENTICODE_PROVIDER_COMMAND -ErrorAction SilentlyContinue
         # Tauri v2 bundler accepts a file path in TAURI_SIGNING_PRIVATE_KEY for signing.
         # Never place raw private key contents into environment variables.
         $env:TAURI_SIGNING_PRIVATE_KEY = $resolvedKeyPath
@@ -386,11 +361,10 @@ try {
 
     Write-Host "  Canonical candidate artifacts verified: $expectedInstallerName ($($installerBytes.Length) bytes)"
 
-    # 7. Production Authenticode Verification
-    $authenticodeMode = if ($InternalTestFixture) { "test" } else { "production" }
+    # 7. Production Authenticode-State Verification
+    $authenticodeMode = if ($InternalTestFixture) { "test" } else { "unsigned-zero-budget" }
     Write-Host "[Step 4/7] Verifying Authenticode $authenticodeMode signature..."
     $authenticodeEvidencePath = Join-Path $resolvedEvidenceDir "TAURI_AUTHENTICODE_EVIDENCE.json"
-    $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $approvedThumbprint
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
         -Mode $authenticodeMode `
@@ -401,10 +375,11 @@ try {
     }
     $authEvidence = Get-Content -LiteralPath $authenticodeEvidencePath -Raw | ConvertFrom-Json
     $observedThumbprint = $authEvidence.files[0].signer_thumbprint
-    if ($authenticodeMode -eq "production" -and $observedThumbprint -ne $approvedThumbprint) {
-        throw "Observed thumbprint ($observedThumbprint) does not match approved thumbprint ($approvedThumbprint)"
+    if ($authenticodeMode -eq "unsigned-zero-budget" -and $null -ne $observedThumbprint) {
+        throw "unsigned-zero-budget Authenticode evidence unexpectedly contains a signer identity"
     }
-    Write-Host "  Authenticode verification: PASS (Thumbprint: $observedThumbprint, Mode: $authenticodeMode)"
+    $authenticodeState = if ($authenticodeMode -eq "unsigned-zero-budget") { "unsigned" } else { "test-signed" }
+    Write-Host "  Authenticode verification: PASS (State: $authenticodeState, Mode: $authenticodeMode)"
 
     # 8. Tauri Updater Signature Verification against Canonical Root
     if (-not $InternalTestFixture) {
@@ -557,9 +532,10 @@ try {
             updater_signature = $expectedSignatureName
             signature_size = (Get-Item -LiteralPath $signaturePath).Length
             updater_signature_sha256 = $signatureSha256
-            authenticode_mode = "production"
-            authenticode_provider = $AuthenticodeProvider
-            approved_signer_thumbprint = $approvedThumbprint
+            authenticode_mode = "unsigned-zero-budget"
+            authenticode_state = "unsigned"
+            authenticode_provider = "none"
+            approved_signer_thumbprint = $null
             observed_signer_thumbprint = $observedThumbprint
             updater_key_id = $canonicalKeyId
             updater_signature_status = "valid"

@@ -61,8 +61,10 @@ audit in its `static` group.
 
 ## Update and release integrity
 
-The public binaries are intentionally unsigned for Authenticode and remain portable. Update
-metadata is authenticated separately: the native updater verifies the detached Ed25519 signature
+The v4 release policy is `unsigned-zero-budget`: shipped project PE files and the canonical NSIS
+installer are intentionally unsigned for Authenticode. Windows may show Unknown Publisher or a
+SmartScreen warning; this is a publisher-identity/UX trade-off, not a bypass of update trust.
+Update metadata is authenticated separately: the official Tauri updater verifies the detached Ed25519 signature
 over the exact `MANIFEST.json` bytes, using its embedded trusted key set, before trusting manifest
 hashes. It must also preserve its HTTPS allow-list, exact SHA256/archive/manifest verification,
 transaction/rollback behavior, preserve-list, bounded provenance, and user-triggered execution

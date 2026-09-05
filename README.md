@@ -86,7 +86,7 @@ Sky Auto Player automatically checks GitHub for new releases and displays a noti
 Selecting **Update and Restart** launches the bundled native Rust updater (`Sky-Auto-Player-Updater.exe`), which downloads the release, cryptographically verifies the SHA256 sidecar and `MANIFEST.json`, and performs a transactional atomic replacement with automatic rollback on error. **Open GitHub Releases** remains available as a manual fallback. Preserved user data includes `config.json`, `.env`, `songs/`, and `logs/`.
 
 > [!WARNING]
-> Windows binaries in this release are intentionally unsigned and portable (no Authenticode publisher requirement). Windows SmartScreen may display an unrecognized-app warning. Download releases only from the official [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases) and verify the published SHA256 checksums if desired.
+> Windows binaries in the current v4 release use the `unsigned-zero-budget` policy: they are intentionally Authenticode-unsigned, so Windows may show Unknown Publisher or a SmartScreen warning. This is a publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic trust. Download releases only from the official [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases) and verify the published SHA256 checksums if desired.
 
 ---
 

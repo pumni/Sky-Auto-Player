@@ -25,7 +25,7 @@ Every release candidate is subject to an immutable invariant:
      (1) BUILD ONCE  ---> Single NSIS Installer Candidate (.exe) + Updater Signature (.sig)
               |
               v
-     (2) QUALIFY     ---> Authenticode Production Verification + Ed25519 Minisign Verification
+     (2) QUALIFY     ---> Authenticode Unsigned-State Verification + Ed25519 Minisign Verification
               |           + SPDX SBOM Generation & Verification + Bundle Verification
               |           + Install/Launch/Uninstall Smoke Test
               v
@@ -43,7 +43,7 @@ Every release candidate is subject to an immutable invariant:
 - **Byte-Identity**: The SHA-256 hash recorded during qualification is identical to the hash
   in `V4_QUALIFICATION_EVIDENCE.json`, `latest.json`, `SBOM.spdx.json`, and the GitHub
   Release download asset.
-- **Fail-Closed Verification & Candidate Purge**: If any check (Authenticode, Ed25519 Minisign,
+- **Fail-Closed Verification & Candidate Purge**: If any check (Authenticode state, Ed25519 Minisign,
   SBOM, bundle, smoke test) fails, the candidate binary, signature, and unpromoted evidence are
   purged from the staging directory.
 
@@ -53,10 +53,10 @@ Every release candidate is subject to an immutable invariant:
 
 ### 2.1 The Custody vs. Cloud Attestation Boundary
 
-Tauri updater private keys and production Authenticode certificates must be protected
-with strict physical or cryptographic access controls (FIPS 140-2 Level 2+ HSM, smartcard,
-or isolated key vault). They **must never be stored as plaintext secrets in GitHub Actions
-cloud repository secrets**.
+The production v4 updater private key must remain outside the repository/workspace, encrypted at
+rest, with one independent readable encrypted backup. It **must never be stored as plaintext in
+GitHub Actions cloud repository secrets**. The current `unsigned-zero-budget` Authenticode policy
+does not require a production certificate or provider credential.
 
 Conversely, GitHub Artifact Attestations (`actions/attest@v4`) and GitHub-backed SLSA
 provenance rely on GitHub's OIDC minting service, which is accessible only from an active
@@ -73,14 +73,14 @@ GitHub Actions runner environment.
 |   GitHub Actions Workflow (Release Dispatch)                                   |
 |     |                                                                           |
 |     +---> Dedicated Single-Tenant Self-Hosted Windows Runner                    |
-|            |-- Isolated HSM / local key vault / KMS boundary (outside workspace)|
+|            |-- Encrypted updater-key custody outside workspace                     |
 |            |-- Clean worktree pre-flight check (fails closed on dirty source)   |
 |            |-- Runs `scripts/orchestrate_v4_production_release.ps1`             |
-|            |     |-- Validates commit, keys, providers                          |
+|            |     |-- Validates commit and updater key                         |
 |            |     |-- Builds candidate once with canonical public root           |
-|            |     |-- Signs PE via Authenticode Provider Seam                    |
+|            |     |-- Leaves project PEs unsigned under policy                  |
 |            |     |-- Signs updater package with private key (never logged)      |
-|            |     |-- Qualifies exact bytes (Authenticode + Minisign + SBOM)     |
+|            |     |-- Qualifies exact bytes (unsigned state + Minisign + SBOM)  |
 |            |     \-- Executes mandatory install/launch/uninstall smoke test     |
 |            |-- Runs `actions/attest` with GitHub OIDC token                     |
 |            |     \-- Generates authentic SLSA provenance & SBOM attestation     |
@@ -94,10 +94,10 @@ GitHub Actions runner environment.
 +---------------------------------------------------------------------------------+
 |                                                                                 |
 |   Maintainer Workstation (Offline or Private Network)                           |
-|     |-- Hardware Token / HSM / Offline Air-Gapped Key                           |
+|     |-- Encrypted updater key outside workspace                                |
 |     |-- Runs `scripts/orchestrate_v4_production_release.ps1`                    |
 |     |     |-- Builds candidate from verified clean git commit tag               |
-|     |     |-- Signs PE and updater payload                                      |
+|     |     |-- Leaves PE unsigned and signs updater payload                       |
 |     |     |-- Qualifies exact bytes & emits local evidence                      |
 |     |     \-- Executes install/launch/uninstall smoke test                      |
 |     |-- Cryptographic signatures authenticate bytes, BUT do NOT prove which    |
@@ -111,8 +111,9 @@ GitHub Actions runner environment.
 
 #### Topology A (Accepted Production Path):
 A dedicated, single-tenant Windows release runner registered as a GitHub Actions runner for the
-repository. The runner has access to the cloud signing provider (e.g., Azure Trusted
-Signing, DigiCert ONE) or attached hardware security key via external custody boundary.
+repository. The runner uses the governed `unsigned-zero-budget` Authenticode policy and needs no
+production certificate or provider. It still has access to the updater key only through the
+external encrypted custody boundary.
 Because it executes within GitHub Actions, `actions/attest@v4` runs directly on the exact
 candidate bytes produced by the orchestrator.
 **Under current ADR-0006 and WO-05 acceptance contracts, Topology A is the only release
@@ -120,7 +121,7 @@ path capable of satisfying the production GitHub provenance requirement.**
 
 #### Topology B (Documented Provenance Gap / Non-Qualifying Fallback):
 An operator runs `scripts/orchestrate_v4_production_release.ps1` directly on an air-gapped
-workstation. The script outputs candidate bytes, Authenticode signatures, updater signatures,
+workstation. The script outputs candidate bytes, Authenticode-state evidence, updater signatures,
 and local evidence. However, Authenticode and updater signatures authenticate the binary
 bytes; they do **not** cryptographically prove which source commit produced those bytes.
 Furthermore, `V4_PRODUCTION_RELEASE_EVIDENCE.json` is an unsigned local artifact.
@@ -152,10 +153,10 @@ The canonical release orchestrator is implemented in
 | `-Channel` | String | Yes | Release channel: `beta` or `stable`. Must conform to channel versioning rules. |
 | `-UpdaterPrivateKeyPath` | String | Yes | Path to private Minisign key. **Must be outside repository tree**. |
 | `-UpdaterPasswordEnv` | String | No | Name of environment variable holding key passphrase (default: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). |
-| `-AuthenticodeProvider` | String | Yes | Authenticode provider name matching provider seam (`trusted-signing`, `digicert-one`, `custom`, etc.). |
-| `-ApprovedSignerThumbprint` | String | Yes | Expected SHA-1 thumbprint of the production Authenticode certificate. |
-| `-AuthenticodeProviderScript` | String | Mutually Exclusive | Custom provider signing script path (for custom provider). |
-| `-AuthenticodeProviderCommand` | String | Mutually Exclusive | Custom provider command line (for command-based provider). |
+| `-AuthenticodeProvider` | String | No | Retained optional input for a future signer seam; unused by the current zero-budget policy. |
+| `-ApprovedSignerThumbprint` | String | No | Retained optional future-signer input; not required or recorded for current production. |
+| `-AuthenticodeProviderScript` | String | No | Retained optional future-signer input; not invoked by current production. |
+| `-AuthenticodeProviderCommand` | String | No | Retained optional future-signer input; not invoked by current production. |
 | `-BundleDir` | String | No | Target bundle directory. Defaults to `rust/target/dist/bundle/nsis`. |
 | `-EvidenceDir` | String | No | Target evidence directory. Defaults to `rust/target/dist`. |
 
@@ -181,10 +182,10 @@ Before initiating any build or invoking external tools, the orchestrator validat
    *before* building. Key ID is dynamically derived from canonical public root.
 8. **Zero Secret Output**: The orchestrator never prints or leaks the updater key passphrase or key material to
    stdout, stderr, or log streams under any execution or error path.
-9. **Provider Exclusivity**: Exactly one of `-AuthenticodeProviderScript` or `-AuthenticodeProviderCommand`.
-10. **Production Mode Enforcement**: Authenticode mode is locked to `production`. Test certificates
-    are rejected unconditionally.
-11. **Stale Output Purge**: Automatically purges any pre-existing installer candidate, `.sig` file,
+9. **Zero-Budget Authenticode Policy**: Production mode is locked to `unsigned-zero-budget`; the
+   signer seam performs no signing and qualification accepts only the actual unsigned state.
+   Test/self-signed and unexpected signed states are rejected.
+10. **Stale Output Purge**: Automatically purges any pre-existing installer candidate, `.sig` file,
     and qualification evidence from the resolved target bundle and evidence directories before packaging.
 
 ### 3.3 Execution Workflow
@@ -195,14 +196,15 @@ Step 1: Setup & Pre-Flight Checks
   - Validate parameters, commit SHA, clean worktree, version, channel rules.
   - Purge stale candidate and evidence files from resolved output directories.
   - Verify updater private key matches canonical public root via `cargo xtask updater-trust verify-private-key`.
-  - Configure production Authenticode environment variables for signCommand.
+  - Configure `SKY_AUTHENTICODE_MODE=unsigned-zero-budget` for signCommand; no provider inputs are required.
 
 Step 2: Build & Sign Candidate (Single Build)
   - Run `bun install --frozen-lockfile` and `bun run build` in desktop/.
   - Set `TAURI_SIGNING_PRIVATE_KEY` to the validated private key file path (never raw key bytes).
   - Run `bun run tauri build --ci -- --profile dist`.
   - Tauri NSIS bundler invokes `scripts/sign_v4_authenticode.ps1` via signCommand seam.
-  - Tauri bundler signs the installer with the private key, generating `.exe.sig`.
+  - The seam deliberately performs no Authenticode signing; Tauri signs the updater artifact with
+    the updater key, generating `.exe.sig`.
   - Assert working tree remains clean post-build (`git status --porcelain`); fail closed and purge
     candidate if any tracked file or manifest was mutated during packaging.
 
@@ -210,8 +212,9 @@ Step 3: Exact Candidate Verification
   - Check installer candidate and signature exist and are non-empty.
 
 Step 4: Authenticode Verification
-  - Run `scripts/verify_v4_authenticode.ps1 -Mode production`.
-  - Fail closed if thumbprint does not match `-ApprovedSignerThumbprint` or if CI test cert is detected.
+  - Run `scripts/verify_v4_authenticode.ps1 -Mode unsigned-zero-budget` for the final installer.
+  - Require `NotSigned` and no signer certificate for every project-owned shipped PE; fail closed
+    on test/self-signed, partially signed, or other unexpected state.
 
 Step 5: Tauri Updater Signature Verification against Canonical Root
   - Run `cargo xtask updater-trust verify-signature --installer <EXE> --signature <SIG>`.
@@ -223,7 +226,7 @@ Step 6: SPDX SBOM and Bundle Verification
 
 Step 7: Install Smoke Test
   - Install silently (`/S`) under `%TEMP%` test profile.
-  - Verify launcher executable exists and verify installed PE Authenticode signature.
+  - Verify launcher executable exists and verify every installed project PE is Authenticode-unsigned.
   - Launch application process, monitor execution, and stop.
   - Run uninstaller (`/S`) and verify clean removal.
 
@@ -260,7 +263,7 @@ constructs qualification evidence via the shared builder contract `scripts/v4_qu
   "signature_size": 512,
   "installer_sha256": "abcdef...",
   "updater_signature_sha256": "123456...",
-  "authenticode_mode": "production",
+  "authenticode_mode": "unsigned-zero-budget",
   "authenticode_evidence": "TAURI_AUTHENTICODE_EVIDENCE.json",
   "authenticode_evidence_sha256": "789abc...",
   "sbom": "SBOM.spdx.json",
@@ -289,10 +292,11 @@ Provides provenance and audit trails for release records:
   "updater_signature": "Sky Auto Player_4.0.0-beta.1_x64-setup.exe.sig",
   "signature_size": 512,
   "updater_signature_sha256": "123456...",
-  "authenticode_mode": "production",
-  "authenticode_provider": "trusted-signing",
-  "approved_signer_thumbprint": "0123456789ABCDEF0123456789ABCDEF01234567",
-  "observed_signer_thumbprint": "0123456789ABCDEF0123456789ABCDEF01234567",
+  "authenticode_mode": "unsigned-zero-budget",
+  "authenticode_state": "unsigned",
+  "authenticode_provider": "none",
+  "approved_signer_thumbprint": null,
+  "observed_signer_thumbprint": null,
   "updater_key_id": "F6355260A0C663D5",
   "updater_signature_status": "valid",
   "sbom": "SBOM.spdx.json",
@@ -316,7 +320,7 @@ Provides provenance and audit trails for release records:
    that a failed packaging run never leaves stale artifacts that could be erroneously reused.
 
 3. **Build or Signing Failure**:
-   If Tauri build fails or the Authenticode seam fails to sign:
+   If Tauri build fails or the Authenticode-state seam fails to qualify:
    - Any temporary signing environment overrides (`TAURI_SIGNING_PRIVATE_KEY*`, `SKY_AUTHENTICODE_*`)
      are removed and prior saved environment variables are restored in the `finally` block.
    - Canonical candidate installer (`.exe`), updater signature (`.exe.sig`), and unpromoted
@@ -329,7 +333,7 @@ Provides provenance and audit trails for release records:
      in isolated files outside the repository.
 
 4. **Qualification Failure & Candidate Purge**:
-   If the candidate binary fails Authenticode thumbprint verification, Ed25519 Minisign
+   If the candidate binary fails Authenticode unsigned-state verification, Ed25519 Minisign
    signature verification, SBOM validation, or smoke installation:
    - The candidate binary and signature file are purged from the bundle directory.
    - Unpromoted evidence files (`V4_QUALIFICATION_EVIDENCE.json`, `V4_PRODUCTION_RELEASE_EVIDENCE.json`)

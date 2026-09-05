@@ -41,17 +41,17 @@ cargo xtask updater-trust inventory
    - The production private updater key must NEVER be committed to Git, stored in
      cloud storage, transmitted over email/chat, or configured in GitHub Actions
      repository secrets.
-   - The private key is held exclusively on offline, air-gapped, encrypted physical media
-     (e.g., hardware security module, encrypted FIPS 140-2 Level 2+ USB drive, or an
-     air-gapped workstation).
+   - The private key is held outside the repository and workspace, encrypted at rest. Offline
+     encrypted storage is sufficient; an HSM or paid key service is not required.
 
 2. **Access Control**:
    - Only authorized Release Operators have access to the physical media and its
      decryption passphrase.
-   - Access requires multi-person verification (dual custody) for production releases.
+   - Access is limited to the maintainer responsible for the release and protected by the
+     encryption passphrase.
 
 3. **Passphrase Standards**:
-   - The private key passphrase must be generated with high entropy (minimum 128 bits).
+   - The private key passphrase must be strong and managed separately from the key file.
    - The passphrase must be managed via a dedicated password manager and never stored in
      plaintext scripts or shell history.
 
@@ -109,16 +109,14 @@ sanitized error without leaking secret bytes.
 
 ## 4. Backup Procedures
 
-1. **Cold Encrypted Backups**:
-   - Two cold backup copies of the private updater key file must exist in separate physical
-     locations (e.g., Primary Safe, Offsite Safe).
-   - Each backup copy is stored on dedicated encrypted offline storage.
+1. **Independent Encrypted Backup**:
+   - At least one independent backup of the private updater key must be readable when needed and
+     encrypted at rest. It must be stored outside the repository/workspace under separate access
+     control from the working copy.
+   - The maintainer should periodically perform a local read/integrity check without copying the
+     key into repository files, CI, or logs.
 
-2. **Passphrase Recovery Split**:
-   - The passphrase for the encrypted backup media should be split using Shamir's Secret
-     Sharing (or equivalent dual-custody envelopes) among project maintainers.
-
-3. **Periodic Integrity Audit**:
+2. **Periodic Integrity Audit**:
    - Annually, operators must perform an air-gapped read test of backup media to ensure data
      retention and media integrity, using `cargo xtask updater-trust verify-private-key`.
 
@@ -148,8 +146,9 @@ without accessible backups):
      ```
    - Update `tauri.conf.json`, `native_update.rs`, and `tauri_bundle.rs` with the new public root.
    - Because existing clients cannot auto-update to a package signed with an unknown root,
-     the recovery release must be published as a standalone installer (NSIS setup executable)
-     signed with the approved Authenticode certificate.
+     the recovery release must be published as a standalone NSIS installer under the
+     `unsigned-zero-budget` Authenticode policy; the new Tauri updater signature is the update
+     authorization gate.
    - Publish a security notice on GitHub and project channels directing users to perform a
      manual update via the official installer.
 
@@ -188,11 +187,11 @@ If the private updater key is suspected or confirmed to be compromised:
      Pop-Location
      ```
 
-4. **Publish Authenticode-Signed Emergency Standalone Installer**:
-   - Build and sign a new release containing the new public trust root.
-   - Publish the recovery release as an official standalone installer signed with the approved
-     publisher Authenticode certificate. Windows Authenticode and SmartScreen provide publisher
-     provenance and integrity for users performing the manual installation.
+4. **Publish Emergency Standalone Installer**:
+   - Build a new release containing the new public trust root and qualify its exact unsigned
+     Authenticode state under `unsigned-zero-budget`.
+   - The installer may produce an Unknown Publisher or SmartScreen warning; this does not weaken
+     the Tauri updater signature check for the migrated trust root.
    - Direct all users to install the emergency update manually to migrate to the new trust root.
 
 ## 7. Scheduled Key Rotation
@@ -204,14 +203,16 @@ the two-phase Bridge/Cutover model:
 
 1. Generate new updater key pair `new.key` / `new.key.pub`.
 2. Update `native_update.rs` to carry dual trust roots: `[old_root, new_root]`.
-3. Sign the `v4.N` installer with the `old.key` so that existing `v4.N-1` clients (which only trust
-   `old_root`) successfully verify and download the update.
+3. Sign the updater artifact for the `v4.N` installer with the `old.key` so that existing `v4.N-1`
+   clients (which only trust `old_root`) successfully verify and download the update. The NSIS and
+   project-owned PE files remain Authenticode-unsigned under the project policy.
 4. Once installed, `v4.N` clients trust both `old_root` and `new_root`.
 
 ### Phase 2: Cutover Release (`v4.N+1`)
 
 1. Update `tauri.conf.json`, `native_update.rs`, and `tauri_bundle.rs` to carry only `[new_root]`.
-2. Sign `v4.N+1` exclusively with `new.key`.
+2. Sign the updater artifact for `v4.N+1` exclusively with `new.key`; keep the project-owned PE
+   files Authenticode-unsigned under the project policy.
 3. `v4.N` bridge clients verify the update against `new_root` and install successfully.
 4. Old root `old.key` is permanently retired.
 

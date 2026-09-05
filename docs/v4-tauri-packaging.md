@@ -7,9 +7,10 @@ dedicated v4 release authority described in `v4-release-authority.md`.
 Production metadata may be absent until a qualified promotion. The independent
 Tauri updater trust root is committed as public material in the Tauri config
 and Rust updater boundary; missing or invalid trust material fails closed.
-Authenticode provider credentials remain an external Track B release input
-and are never committed; Track B must also provide the approved signer
-thumbprint used by production verification.
+Production v4 uses the explicitly governed `unsigned-zero-budget` Authenticode
+policy. No production certificate, provider, or thumbprint is required. An
+optional real-signer seam remains available for a separately approved future
+policy, but it does not block this project's release.
 
 ## Canonical package contract
 
@@ -22,7 +23,7 @@ thumbprint used by production verification.
 - Legacy `sky_updater`: retained and buildable until the later retirement work order
 - Runtime updater: official `tauri-plugin-updater`, behind Rust `UpdateService`
 - Tauri updater trust: v4-only public root; no v3 `release-2026` key reuse
-- Authenticode: configured through a fail-closed `signCommand` seam
+- Authenticode: `unsigned-zero-budget`; the bounded `signCommand` deliberately performs no signing
 - React updater surface: bounded state, release notes, and progress only
 
 The legacy `cargo xtask dist` portable assembler remains available for the
@@ -80,9 +81,10 @@ cargo xtask verify-tauri-bundle `
   --sbom rust/target/dist/SBOM.spdx.json
 ```
 
-The build config invokes `scripts/sign_v4_authenticode.ps1`; it signs only in
-test mode with the ephemeral certificate. In production mode it fails closed
-until an approved Authenticode provider is configured. See
+The build config invokes `scripts/sign_v4_authenticode.ps1`. The canonical
+production path sets `SKY_AUTHENTICODE_MODE=unsigned-zero-budget`, so the seam
+deliberately performs no signing. The test fixture below uses an ephemeral
+self-signed certificate only for test-mode integrity coverage. See
 `v4-authenticode-provider-seam.md` for the formalized provider seam specification,
 `v4-updater-key-custody.md` for the private key custody and rotation runbook, and
 `v4-release-execution-topology.md` for the single-candidate release orchestrator
@@ -106,8 +108,11 @@ rust/target/dist/bundle/nsis/
   Sky Auto Player_<version>_<arch>-setup.exe.sig
 ```
 
-The Authenticode verifier requires an embedded signer certificate whose exact
-thumbprint matches the test PFX identity in test mode. It independently
+In `unsigned-zero-budget` mode the Authenticode verifier requires every
+project-owned PE and the final NSIS installer to have exactly Windows
+`NotSigned` status and no signer certificate. Any signed or unexpected state
+fails closed. In test mode it instead requires an embedded signer certificate
+whose exact thumbprint matches the test PFX identity. It independently
 decodes the embedded PKCS#7 `SignedCms`, verifies the CMS signature, extracts
 the signed `SpcIndirectDataContent` digest, and recomputes the PE
 Authenticode image hash while excluding only the documented checksum,
@@ -117,10 +122,9 @@ self-signed test certificate as `NotTrusted` or `UnknownError`; those platform
 diagnostics are recorded in `status`/`platform_status`, but never serve as
 integrity proof; `integrity_status` is the independent cryptographic result. A
 test result is accepted only when the independent cryptographic verifier passes;
-unsupported or invalid statuses remain rejected. Production verification requires `Valid`
-plus the separately approved
-`SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT`; it never accepts an arbitrary
-trusted signer or the test exception. A package-step tamper regression signs a
+unsupported or invalid statuses remain rejected. Production evidence records
+`authenticode_mode: "unsigned-zero-budget"`; promotion rejects test-mode
+evidence. A package-step tamper regression signs a
 disposable PE with the same PFX, verifies the clean bytes, mutates a hashed
 section byte, and requires verification to fail. It records signer status and
 SHA-256 for every project-owned PE in the installed tree (the generated NSIS
@@ -133,8 +137,8 @@ current commit. The SBOM covers the reachable Rust production graph from
 and binds both lockfile hashes to the same artifact set. After the
 install/launch/uninstall smoke, the packaged
 qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with artifact,
-Authenticode evidence, SBOM, and digest references. Promotion requires
-production Authenticode mode and compares installer/.sig digests to the exact
+unsigned Authenticode evidence, SBOM, and digest references. Promotion requires
+the governed `unsigned-zero-budget` mode and compares installer/.sig digests to the exact
 published GitHub asset bytes. It rejects MSI, portable/updater ZIP, missing
 signatures, empty signatures, unexpected files, and version-naming drift.
 
@@ -172,10 +176,11 @@ The private halves are never read into repository files or logs.
 
 ## Operational key handling
 
-The release operator stores the private updater key and any approved
-Authenticode-provider credential in an offline encrypted vault, with a second
-offline backup under separate access control. Neither is copied into GitHub,
-build artifacts, frontend state, or logs. Loss of the updater key is fail-closed:
+The release operator stores the private updater key outside the repository/workspace,
+encrypted at rest, with at least one independent readable encrypted backup under
+separate access control. No Authenticode-provider credential is required by the
+current policy. Neither key nor credentials are copied into GitHub, build artifacts,
+frontend state, or logs. Loss of the updater key is fail-closed:
 create a new v4 root and release version, then use the normal reviewed
 qualification path. Suspected compromise requires revoking the old root through
 the bridge/cutover sequence, rotating the Authenticode provider if applicable,
@@ -200,4 +205,4 @@ path. A full non-PR run must be dispatched from the branch so provenance and
 SPDX attestations are generated and verified before acceptance. The production
 release/channel authority is configured by WO-04. The v4 updater public trust
 root and rotation policy are implemented here; an approved Authenticode
-provider and release credentials remain Track B work.
+provider is optional future work and is not a release prerequisite.

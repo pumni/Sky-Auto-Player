@@ -374,6 +374,8 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     let promotion_path = root.join("scripts/promote_v4_metadata.ps1");
     let promotion = fs::read_to_string(&promotion_path)?;
     for marker in [
+        "$productionAuthenticodeMode = \"unsigned-zero-budget\"",
+        "governed unsigned-zero-budget Authenticode evidence",
         "[ValidateSet(\"stable\", \"beta\")]",
         "$authorityRepository = \"pumni/Sky-Auto-Player-Releases\"",
         "$QualificationEvidence",
@@ -418,6 +420,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "scripts/ci_v4_release_authority_acceptance.ps1",
         "scripts/promote_v4_metadata.ps1 -SelfTest",
         "Emit exact Tauri qualification evidence",
+        "authenticode_mode = \"unsigned-zero-budget\"",
         "V4_QUALIFICATION_EVIDENCE.json",
         "RELEASE_AUTHORITY_RESULT",
         "needs: [changes, static, release_authority, supply_chain, validate, updater_e2e, packaged]",
@@ -505,6 +508,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "scripts/test_v4_updater_private_key.ps1",
         "V4 updater private-key verifier regression failed with exit code",
         "- name: Verify Tauri Authenticode signature",
+        "-Mode unsigned-zero-budget",
         "- name: Generate Tauri SPDX SBOM",
         "- name: Verify Tauri SPDX SBOM",
         "- name: Verify exact Tauri NSIS bundle",
@@ -513,6 +517,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "SBOM verification failed with exit code",
         "Tauri bundle verification failed with exit code",
         "Installed Authenticode verification failed with exit code",
+        "CI self-signed credentials remain test-only",
         "Tauri updater signer generation failed with exit code",
         "Tauri build failed with exit code",
         "Installer attestation verification failed with exit code",
@@ -710,6 +715,10 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
 
     let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
     for marker in [
+        "unsigned-zero-budget",
+        "NotSigned",
+        "authenticode-unsigned-zero-budget",
+        "unsigned-zero-budget-policy",
         "SKY_AUTHENTICODE_TEST_THUMBPRINT",
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
         "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
@@ -820,6 +829,8 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     let signer = fs::read_to_string(root.join("scripts/sign_v4_authenticode.ps1"))?;
     for marker in [
+        "unsigned-zero-budget",
+        "no signing performed",
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
         "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
         "/f $pfxPath",
@@ -855,11 +866,12 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let contract_test =
         fs::read_to_string(root.join("scripts/test_v4_production_signing_contract.ps1"))?;
     for marker in [
-        "Unconfigured production mode fails closed",
+        "unsigned-zero-budget mode succeeds without a provider",
         "Production signing rejects test credentials",
         "Production verification rejects CI test certificate",
+        "unsigned-zero-budget verification rejects signed binary",
         "Production verification rejects test thumbprint",
-        "CI test certificate cannot satisfy production mode",
+        "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
     ] {
         if !contract_test.contains(marker) {
             return Err(format!(
@@ -913,6 +925,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "V4_PRODUCTION_RELEASE_EVIDENCE.json",
         "sign_v4_authenticode.ps1",
         "verify_v4_authenticode.ps1",
+        "unsigned-zero-budget",
         "Invoke-PrePackagingStaleOutputPurge",
         "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
     ] {
