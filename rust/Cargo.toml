@@ -6,7 +6,6 @@ members = [
     "crates/sky_app_core",
     "crates/sky_native_adapters",
     "crates/sky_player",
-    "crates/sky_updater",
     "xtask",
     "tools/sky_ci_classifier",
     "../desktop/src-tauri",
@@ -18,10 +17,6 @@ edition = "2024"
 # freeze their own compiler and MSRV policy.
 rust-version = "1.98"
 authors = ["Sky Auto Player Team"]
-
-[workspace.metadata.sky-update-signing]
-key-id = "release-2026"
-public-key-hex = "f29125c71bdcb321ddd36722016893f91b0bcb684e7a0499b4bd5353be354cca"
 
 [profile.release]
 # Keep routine optimized engineering builds responsive. Shipped artifacts use

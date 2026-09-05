@@ -6,12 +6,12 @@
 
 *Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision.*
 
-[![Latest version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue&logo=rust&logoColor=white)](https://github.com/pumni/Sky-Auto-Player/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player/releases)
+[![Latest version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player-Releases?style=for-the-badge&label=version&color=blue&logo=rust&logoColor=white)](https://github.com/pumni/Sky-Auto-Player-Releases/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player-Releases/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player-Releases/releases)
 [![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold)](https://github.com/pumni/Sky-Auto-Player/stargazers)
 
-**[🌐 Landing Page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Download Latest](https://github.com/pumni/Sky-Auto-Player/releases/latest)**
+**[🌐 Landing Page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Download Latest](https://github.com/pumni/Sky-Auto-Player-Releases/releases/latest)**
 
 </div>
 
@@ -43,7 +43,7 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 - **Holds keep their full duration** — Long notes are never clipped short, even when subsequent notes follow in rapid succession.
 - **Explicit hold-frame timing** — Select exact game frame holds (`1.0`, `1.25`, or `1.5` frames) tailored to the in-game FPS configuration.
 - **Calibrated transport margins** — Sender-side hold shrink is calibrated and proven during admission to safeguard physical hold floors.
-- **Zero runtime Python dependency** — the portable desktop runs without a Python interpreter or extension module.
+- **Zero runtime Python dependency** — the packaged desktop runs without a Python interpreter or extension module.
 
 > [!WARNING]
 > Automated music playback may violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
@@ -52,17 +52,17 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 
 ## Quick Start
 
-**Requirements:** Windows 10 or 11 (64-bit). The packaged build is portable and standalone — no system Python, Rust toolchain, installer, admin rights, or registry modifications required.
+**Requirements:** Windows 10 or 11 (64-bit). The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No system Python or Rust toolchain is required at runtime.
 
-1. Download `Sky-Auto-Player-v<latest>.zip` from the [latest release](https://github.com/pumni/Sky-Auto-Player/releases/latest).
-2. Extract it anywhere (e.g. `C:\Sky-Auto-Player\`).
-3. Run `Sky-Auto-Player.exe`.
+1. Download the canonical Tauri NSIS installer from the [dedicated v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+2. Run the installer and keep the default current-user install location.
+3. Launch **Sky Auto Player** from the Start menu or installed shortcut.
 
 ### Adding Songs
 
 1. Open the [Sky Music Nightly editor](https://specy.github.io/skyMusic/).
 2. Export a song as **JSON**, **skysheet**, or JSON-compatible **txt**.
-3. Drop the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
+3. Import the file through the desktop Library.
 4. In the desktop Library, press **Reload songs**.
 
 ---
@@ -81,12 +81,15 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 
 ## Updating
 
-Sky Auto Player automatically checks GitHub for new releases and displays a notification banner when an update is available.
+Sky Auto Player checks the configured v4 channel through the dedicated release authority and displays a notification banner when an update is available.
 
-Selecting **Update and Restart** launches the bundled native Rust updater (`Sky-Auto-Player-Updater.exe`), which downloads the release, cryptographically verifies the SHA256 sidecar and `MANIFEST.json`, and performs a transactional atomic replacement with automatic rollback on error. **Open GitHub Releases** remains available as a manual fallback. Preserved user data includes `config.json`, `.env`, `songs/`, and `logs/`.
+Selecting **Update and Restart** uses the official Tauri updater through the Rust-owned `UpdateService`. It verifies the Tauri updater signature over the exact NSIS update artifact, then runs the current-user installer. The v4 product does not bundle `Sky-Auto-Player-Updater.exe`, use a portable ZIP updater, or use the retired v3 `MANIFEST.json.sig` contract.
 
 > [!WARNING]
-> Windows binaries in the current v4 release use the `unsigned-zero-budget` policy: they are intentionally Authenticode-unsigned, so Windows may show Unknown Publisher or a SmartScreen warning. This is a publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic trust. Download releases only from the official [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases) and verify the published SHA256 checksums if desired.
+> Windows binaries in the current v4 release use the `unsigned-zero-budget` policy: they are
+> intentionally Authenticode-unsigned, so Windows may show Unknown Publisher or a SmartScreen
+> warning. This is a publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic
+> trust. Download v4 installers only from the dedicated [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases); the installer and Tauri `.sig` sidecar are verified as exact release bytes during qualification.
 
 ---
 
@@ -107,7 +110,7 @@ No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for 
 <details>
 <summary><b>Can I build it from source?</b></summary>
 
-Yes. Prerequisites: Windows 10/11, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and portable build use Rust and Bun only.
+Yes. Prerequisites: Windows 10/11, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and Tauri NSIS package use Rust and Bun only.
 
 ```powershell
 # 1. Clone repository
@@ -122,8 +125,10 @@ cd ..
 # 3. Run repository verification
 cargo xtask check all
 
-# 4. Build the portable native desktop package
-cargo xtask dist --profile dist --output dist
+# 4. Build the canonical Tauri NSIS package (use the test-signing context
+#    described in docs/v4-tauri-packaging.md)
+cd desktop
+bun run tauri build --ci -- --profile dist
 ```
 </details>
 

@@ -24,9 +24,7 @@ pub const PACKAGE_WORKFLOW_FILES: &[&str] =
 pub const PACKAGE_PREFIXES: &[&str] = &[
     "desktop/src-tauri/capabilities/",
     "desktop/src-tauri/icons/",
-    "rust/crates/sky_updater/",
     "scripts/build_",
-    "scripts/test_windows_updater_e2e.ps1",
     "rust/xtask/",
 ];
 

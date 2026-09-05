@@ -4,15 +4,13 @@ mod audits;
 mod branding;
 mod checks;
 mod classifier;
-mod dist;
-mod manifest;
+mod hash;
 mod process;
 mod release_authority;
 mod repo;
 mod sbom;
 mod supply_chain;
 mod tauri_bundle;
-mod update_trust;
 mod updater_trust;
 mod version;
 
@@ -22,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask manifest sign --manifest <path> --output <path>\n  cargo xtask manifest verify --manifest <path> --signature <path>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask dist --profile dist --output <dir>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|verify-private-key|rotation-self-test>\n  cargo xtask verify-dist --release-dir <dir>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|verify-private-key|rotation-self-test>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -122,80 +120,6 @@ fn main() -> Result<()> {
             branding::write_ico(
                 Path::new(&layers.ok_or("branding requires --layers-dir")?),
                 Path::new(&output.ok_or("branding requires --output")?),
-            )
-        }
-        "manifest" if args.get(1).map(String::as_str) == Some("sign") => {
-            let mut manifest = None;
-            let mut output = None;
-            let mut key_id = None;
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--manifest" => manifest = Some(required_value(&args, &mut i, "--manifest")?),
-                    "--output" => output = Some(required_value(&args, &mut i, "--output")?),
-                    "--key-id" => key_id = Some(required_value(&args, &mut i, "--key-id")?),
-                    option => return Err(format!("unknown manifest option: {option}").into()),
-                }
-                i += 1;
-            }
-            manifest::sign(
-                Path::new(&manifest.ok_or("manifest sign requires --manifest <path>")?),
-                Path::new(&output.ok_or("manifest sign requires --output <path>")?),
-                key_id.as_deref(),
-            )
-        }
-        "manifest" if args.get(1).map(String::as_str) == Some("verify") => {
-            let mut manifest = None;
-            let mut signature = None;
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--manifest" => manifest = Some(required_value(&args, &mut i, "--manifest")?),
-                    "--signature" => {
-                        signature = Some(required_value(&args, &mut i, "--signature")?)
-                    }
-                    option => return Err(format!("unknown manifest option: {option}").into()),
-                }
-                i += 1;
-            }
-            manifest::verify_signature(
-                Path::new(&manifest.ok_or("manifest verify requires --manifest <path>")?),
-                Path::new(&signature.ok_or("manifest verify requires --signature <path>")?),
-            )
-        }
-        "dist" => {
-            let mut profile = None;
-            let mut output = None;
-            let mut i = 1;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--profile" => profile = Some(required_value(&args, &mut i, "--profile")?),
-                    "--output" => output = Some(required_value(&args, &mut i, "--output")?),
-                    option => return Err(format!("unknown dist option: {option}").into()),
-                }
-                i += 1;
-            }
-            if profile.as_deref() != Some("dist") {
-                return Err("dist requires --profile dist".into());
-            }
-            dist::build(output.ok_or("dist requires --output <dir>")?.as_ref())
-        }
-        "verify-dist" => {
-            let mut release_dir = None;
-            let mut i = 1;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--release-dir" => {
-                        release_dir = Some(required_value(&args, &mut i, "--release-dir")?)
-                    }
-                    option => return Err(format!("unknown verify-dist option: {option}").into()),
-                }
-                i += 1;
-            }
-            manifest::verify_release(
-                release_dir
-                    .ok_or("verify-dist requires --release-dir <dir>")?
-                    .as_ref(),
             )
         }
         "verify-tauri-bundle" => {

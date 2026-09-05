@@ -685,6 +685,101 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> {
+    for forbidden in [
+        "sky_updater",
+        "Sky-Auto-Player-Updater.exe",
+        "sky_updater_e2e",
+        "cargo xtask dist",
+        "verify-dist",
+        "MANIFEST.json",
+        "MANIFEST.json.sig",
+        "SKY_UPDATE_SIGNING_KEY_HEX",
+        "pep440_rs",
+        "packaging.version",
+        "ActiveUpdateState",
+        "active_update_for_install",
+    ] {
+        if source.contains(forbidden) {
+            return Err(format!(
+                "retired v3 updater marker `{forbidden}` remains in current v4 surface {surface}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
+    let desktop_manifest = root.join("desktop/src-tauri/Cargo.toml");
+    v4_legacy_updater_source_contract(
+        &fs::read_to_string(&desktop_manifest)?,
+        desktop_manifest.to_string_lossy().as_ref(),
+    )?;
+
+    let workspace_manifest = root.join("rust/Cargo.toml");
+    v4_legacy_updater_source_contract(
+        &fs::read_to_string(&workspace_manifest)?,
+        workspace_manifest.to_string_lossy().as_ref(),
+    )?;
+
+    let lockfile = root.join("rust/Cargo.lock");
+    let lockfile_source = fs::read_to_string(&lockfile)?;
+    for forbidden in ["name = \"sky_updater\"", "name = \"pep440_rs\""] {
+        if lockfile_source.contains(forbidden) {
+            return Err(format!(
+                "retired v3 dependency `{forbidden}` remains in {}",
+                lockfile.display()
+            )
+            .into());
+        }
+    }
+
+    let startup_guard = root.join("desktop/src-tauri/src/startup_guard.rs");
+    if startup_guard.exists() {
+        return Err(format!(
+            "retired custom updater startup admission path remains: {}",
+            startup_guard.display()
+        )
+        .into());
+    }
+
+    let current_v4_surfaces = [
+        "desktop/src-tauri/src",
+        "rust/xtask/src",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "scripts/orchestrate_v4_production_release.ps1",
+        "scripts/promote_v4_metadata.ps1",
+        "scripts/ci_tauri_update_e2e.ps1",
+    ];
+    for relative in current_v4_surfaces {
+        let path = root.join(relative);
+        if path.is_dir() {
+            for source_path in walk_source(root, relative)? {
+                if source_path.file_name().and_then(|name| name.to_str()) == Some("checks.rs") {
+                    continue;
+                }
+                let source = fs::read_to_string(&source_path)?;
+                let source = if relative == "rust/xtask/src" {
+                    source
+                        .split_once("\n#[cfg(test)]")
+                        .map(|(production, _)| production.to_owned())
+                        .unwrap_or(source)
+                } else {
+                    source
+                };
+                v4_legacy_updater_source_contract(&source, source_path.to_string_lossy().as_ref())?;
+            }
+        } else if path.is_file() {
+            v4_legacy_updater_source_contract(&fs::read_to_string(&path)?, relative)?;
+        }
+    }
+
+    println!("[xtask] v4 legacy updater retirement guards: PASS");
+    Ok(())
+}
+
 fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let config_path = root.join("desktop/src-tauri/tauri.conf.json");
     let config = fs::read_to_string(&config_path)?;
@@ -2463,6 +2558,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             legacy_release_guard(&root)?;
             release_authority_contract(&root)?;
             packaged_ci_contract(&root)?;
+            v4_legacy_updater_retirement(&root)?;
             retirement(&root)?;
         }
         "rust" => {
@@ -2707,6 +2803,36 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
         assert!(
             legacy_release_guard_source(&source.replace("$major -ge 4", "$major -gt 4")).is_err()
         );
+    }
+
+    #[test]
+    fn v4_legacy_updater_contract_rejects_retired_runtime_and_release_markers() {
+        assert!(
+            v4_legacy_updater_source_contract(
+                "official Tauri NSIS and UpdateService only",
+                "fixture"
+            )
+            .is_ok()
+        );
+        for marker in [
+            "sky_updater",
+            "Sky-Auto-Player-Updater.exe",
+            "sky_updater_e2e",
+            "cargo xtask dist",
+            "verify-dist",
+            "MANIFEST.json",
+            "MANIFEST.json.sig",
+            "SKY_UPDATE_SIGNING_KEY_HEX",
+            "pep440_rs",
+            "packaging.version",
+            "ActiveUpdateState",
+            "active_update_for_install",
+        ] {
+            assert!(
+                v4_legacy_updater_source_contract(marker, "fixture").is_err(),
+                "{marker}"
+            );
+        }
     }
 
     #[test]

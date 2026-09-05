@@ -1,9 +1,10 @@
 # Distribution and Update Model
 
-This is the normative contract for the v3-maintenance unsigned-binary,
-portable Windows package and its legacy user-triggered native updater. It
-tracks the native desktop Cargo version and is independent of the Rust
-playback dispatcher.
+This is the normative distribution and update contract for the current v4
+product. The canonical Windows distribution is a Tauri NSIS installer using
+`currentUser` installation semantics under `%LOCALAPPDATA%`. The official
+Tauri updater, mediated by the Rust-owned `UpdateService`, owns update
+discovery, signature verification, download, and installer execution.
 
 V4 uses the Tauri NSIS package and the Rust-owned `UpdateService` described in
 `v4-tauri-packaging.md`. V4 does not use this document's legacy GitHub
@@ -16,14 +17,34 @@ remains outside the repository/workspace, encrypted at rest, with an independent
 readable encrypted backup. No production certificate, provider, or thumbprint is
 required. Windows may show Unknown Publisher or a SmartScreen warning; this is a
 publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic trust.
+The v4 package contains the NSIS setup executable and its Tauri `.exe.sig`
+sidecar. It does not contain `Sky-Auto-Player-Updater.exe`, a portable ZIP
+updater contract, or the custom `MANIFEST.json` / `MANIFEST.json.sig`
+protocol. Tauri updater signatures and the retired v3 manifest signature are
+different contracts; only the former is used for v4 updates.
 
-For v4 rotation, the bridge client carries `[old,new]` and tries artifact
-verification during the Tauri download step; the cutover client carries
-`[new]` and rejects artifacts signed only by the old root. Check-time manifest
-discovery is not treated as package verification. Non-PR qualification also
-requires provenance and SPDX attestations to be generated and verified.
+V4 update ordering is SemVer-only. Rust owns the fixed stable/beta metadata
+endpoints and channel policy; React cannot provide updater authority, keys,
+URLs, or downgrade policy. The v4 trust root is public-only in source, while
+the private updater key remains external, encrypted at rest with an independent
+encrypted backup. Optional future Authenticode signer inputs remain external;
+no production certificate, provider, or thumbprint is required by the current
+`unsigned-zero-budget` policy.
 
-## 1. V3 maintenance distribution (legacy)
+Qualification binds the exact NSIS installer and Tauri signature bytes by
+SHA-256 and retains the governed unsigned-zero-budget Authenticode evidence,
+SPDX SBOM, provenance, clean worktree, install/launch/uninstall, and
+previous-v4-to-candidate-v4 fixture evidence. Release orchestration remains
+subject to the dedicated v4 release authority and its reviewed promotion policy.
+
+The remainder of this document is retained as a historical v3-maintenance
+reference. It is not a current v4 runtime, packaging, release, or update
+requirement, and its `MANIFEST.json`, PEP 440, portable ZIP, and custom
+updater references must not be applied to v4.
+
+## Historical v3 maintenance contract
+
+### 1. V3 maintenance distribution (legacy)
 
 Sky Auto Player has one canonical portable release package:
 
@@ -79,7 +100,7 @@ qualification pass. Assets are not replaced and the tag is not moved between
 draft creation and publication; a failed qualification requires a new version
 or RC instead.
 
-## 2. V3 runtime ownership (legacy)
+### 2. V3 runtime ownership (legacy)
 
 The Native Desktop Runtime owns update checking, stable/beta selection,
 update-notice state, and the fixed manual fallback URL. It does not download,
@@ -153,7 +174,7 @@ directory; a valid active update makes startup exit cleanly with the bounded
 output `Sky Auto Player is currently updating to vX (Phase). The updater window
 will restart the app automatically.`
 
-## 3. V3 release selection and network (legacy)
+### 3. V3 release selection and network (legacy)
 
 The desktop GUI is the canonical user-facing selector. Stable excludes prereleases;
 beta may include them. The checker uses:
@@ -198,7 +219,7 @@ not cross the Rust/React boundary. See `v4-release-authority.md` for the
 generator, validator, post-qualification promotion, and read-only namespace
 acceptance.
 
-## 4. Archive and manifest safety
+### 4. Archive and manifest safety
 
 The Rust updater downloads outside the install root and validates every ZIP
 entry before extraction. It rejects absolute, drive-qualified, UNC,
@@ -227,7 +248,7 @@ The native updater verifies unsigned project-owned files by SHA256. It has no
 runtime signature-bypass flag because Authenticode is not part of this public
 unsigned release contract.
 
-## 5. Managed and preserved files
+### 5. Managed and preserved files
 
 The updater's transaction plan distinguishes managed application files from
 these user-owned paths, which are never replaced or deleted by an update:
@@ -281,7 +302,7 @@ restarted. A later run recovers a `Prepared` transaction before starting a new
 update; malformed journals fail closed. Journal and result JSON use
 same-directory temporary files, flush, and atomic replace.
 
-## 6. Result and restart handoff
+### 6. Result and restart handoff
 
 The updater writes a bounded result record to:
 
@@ -315,7 +336,7 @@ the parent, attaches a debugger, reads its memory, injects code, installs a
 hook, or sends input. Restart uses the canonical app executable only after
 installed project-owned files pass the manifest integrity check.
 
-## 7. Manual fallback
+### 7. Manual fallback
 
 If the native update cannot be staged or launched, the UI offers the official
 Releases page. The user may:
@@ -350,7 +371,7 @@ the canonical ZIP manual bridge. Installations whose existing updater predates
 this transaction hardening must be moved manually to v3.4.5 before native
 self-update is trusted again.
 
-## 8. Security boundary
+### 8. Security boundary
 
 The updater is not a game integration. It does not modify game files, read or
 write game memory, bypass anti-cheat, inject DLLs, attach debuggers, install

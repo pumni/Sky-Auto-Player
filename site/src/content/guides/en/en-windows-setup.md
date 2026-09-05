@@ -4,11 +4,11 @@ locale: en
 slug: windows-setup
 title: Windows Setup and First Launch
 description: >-
-  Step-by-step setup guide for Sky Auto Player on Windows 10 or 11: download, extract,
-  verify the checksum, add songs, and configure the hotkeys.
+  Step-by-step setup guide for Sky Auto Player on Windows 10 or 11: download the Tauri installer,
+  install, add songs, and configure the hotkeys.
 summary: >-
-  Download the ZIP from GitHub releases, extract it anywhere — no installer, no admin rights.
-  Drop song files into songs/, launch Sky-Auto-Player.exe, and use hotkeys to control playback.
+  Download the canonical Tauri NSIS installer, install for the current user, and use the desktop
+  Library to import sheets.
 category: getting-started
 order: 3
 published: '2026-08-08'
@@ -31,40 +31,30 @@ evidence:
 
 - Windows 10 or 11, 64-bit
 - No system Python required — the packaged build is native and standalone
-- No administrator rights required for normal use
-- No registry entries, no system-wide installer
+- No administrator rights required for the current-user install
+- No system-wide installer or service
 
-## Download and extract
+## Download and install
 
-1. Go to the [latest release](https://github.com/pumni/Sky-Auto-Player/releases/latest) on GitHub.
-2. Download `Sky-Auto-Player-v<version>.zip`.
-3. _(Optional)_ Download `Sky-Auto-Player-v<version>.zip.sha256` and verify the checksum
-   before extracting:
-
-   ```powershell
-   # In PowerShell, in the folder where you downloaded the zip:
-   (Get-FileHash "Sky-Auto-Player-v<version>.zip" -Algorithm SHA256).Hash
-   # Compare the output with the contents of the .sha256 file
-   ```
-
-4. Extract the ZIP to any folder, for example `C:\Sky-Auto-Player\`.
-5. Run `Sky-Auto-Player.exe`.
+1. Go to the [dedicated v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+2. Download the canonical Tauri NSIS installer and its `.exe.sig` sidecar.
+3. Run the installer and keep the default current-user location.
+4. Launch **Sky Auto Player** from the installed shortcut.
 
 ## First launch
 
-On first launch the application creates a `config.json` file in the installation folder.
-You do not need to edit this file manually — all supported settings are available from the
-desktop app's **Settings** dialog.
+On first launch the application creates its app-data state under the Windows user profile.
+You do not need to edit it manually — all supported settings are available from the desktop
+app's **Settings** dialog.
 
-If Windows shows a SmartScreen prompt ("Windows protected your PC"), click
-**More info → Run anyway**. The binary is not code-signed; SmartScreen shows this warning
-for any unsigned executable downloaded from the internet.
+The canonical installer is Authenticode-qualified. If Windows reports an installer integrity or
+publisher error, discard it and download the exact package again from the v4 release authority.
 
 ## Adding songs
 
 1. Export a sheet from the [Sky Music editor](https://specy.github.io/skyMusic/) as JSON, `.skysheet`, or TXT.
-2. Copy or move the file into the `songs/` folder next to `Sky-Auto-Player.exe`.
-3. In the desktop Library, press **Reload songs**.
+2. Import the file through the desktop Library.
+3. Use the Library refresh control if the file was added through an external file picker.
 
 ## Desktop shortcuts
 
@@ -77,22 +67,13 @@ for any unsigned executable downloaded from the internet.
 
 ## Updating
 
-Sky Auto Player checks GitHub for new releases when it starts and shows a banner when one
-is available. Select **Open GitHub Releases** to download the update manually:
-
-1. Download the matching ZIP, `.zip.sha256`, `MANIFEST.json`, and `MANIFEST.json.sig` from the official
-   [GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
-2. Verify the ZIP SHA256 and exact manifest when desired.
-3. Extract the ZIP into a new folder and copy your `config.json`, `.env`, `songs/`, and
-   `logs/` into it.
-4. Start `Sky-Auto-Player.exe` from the new folder.
-
-Public Windows binaries are intentionally unsigned and there is no system installer. Use the
-in-app **Update and Restart** action for a verified native update; if it cannot be staged,
-download the canonical package manually as above. Authenticode is **N/A — intentionally
-unsigned**; Windows SmartScreen may show an unrecognized-app warning.
+Sky Auto Player checks the configured v4 channel through the dedicated release authority and
+shows a banner when an update is available. **Update and Restart** uses the official Tauri
+updater through the Rust-owned `UpdateService`; it verifies the Tauri `.sig` and runs the
+current-user NSIS installer. V4 has no bundled `Sky-Auto-Player-Updater.exe`, portable ZIP
+updater, or custom `MANIFEST.json.sig` contract.
 
 ## Uninstalling
 
-Delete the installation folder. Sky Auto Player does not write to the registry or any
-location outside its own folder.
+Use Windows **Installed apps** to uninstall the current-user package. Application data under
+the user profile is a separate boundary and can be removed after preserving anything you want.

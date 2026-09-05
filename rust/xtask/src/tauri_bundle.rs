@@ -1,4 +1,4 @@
-use crate::{Result, manifest, repo, sbom, version};
+use crate::{Result, hash, repo, sbom, version};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
@@ -267,8 +267,8 @@ fn artifact_summary(bundle_dir: &Path, project_version: &str) -> Result<Artifact
             .into_owned(),
         installer_size: installer.metadata()?.len(),
         signature_size: signature.metadata()?.len(),
-        installer_sha256: manifest::sha256(installer)?,
-        updater_signature_sha256: manifest::sha256(&signature)?,
+        installer_sha256: hash::sha256(installer)?,
+        updater_signature_sha256: hash::sha256(&signature)?,
     })
 }
 
@@ -616,6 +616,30 @@ mod tests {
             b"wrong target",
         )
         .unwrap();
+        assert!(artifact_summary(&root, "4.0.0-alpha.1").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_verifier_rejects_the_retired_custom_updater_executable() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-tauri-bundle-retired-updater-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe"),
+            b"installer",
+        )
+        .unwrap();
+        fs::write(
+            root.join("Sky Auto Player_4.0.0-alpha.1_x64-setup.exe.sig"),
+            b"test-signature\n",
+        )
+        .unwrap();
+        fs::write(root.join("Sky-Auto-Player-Updater.exe"), b"retired").unwrap();
+
         assert!(artifact_summary(&root, "4.0.0-alpha.1").is_err());
         fs::remove_dir_all(root).unwrap();
     }

@@ -17,21 +17,21 @@
     },
     {
       "path": "scripts/build_portable_release.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["direct native build, packaged qualification, and exact artifact assembly"],
-      "evidence": ["rust/xtask/src/dist.rs::build"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable assembly is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "scripts/release_common.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["canonical version, native source fingerprint, and build-environment resolution"],
-      "evidence": ["rust/xtask/src/repo.rs::source_fingerprint", "rust/xtask/src/version.rs::check"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 release-assembly helper is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "scripts/verify_release_manifest.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["runtime-zero release tree, schema-2 manifest, path safety, and hash verification"],
-      "evidence": ["rust/xtask/src/manifest.rs::verify_release"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable release-manifest verifier is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "scripts/generate_desktop_bindings.py",
@@ -71,21 +71,21 @@
     },
     {
       "path": "tests/test_dist_profile_contract.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["shipping binaries use the dist Cargo profile", "desktop build retains the production custom protocol feature"],
-      "evidence": ["rust/xtask/src/dist.rs::cargo_build", "rust/Cargo.toml::dist", "desktop/package.json::tauri:build"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable distribution profile contract is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "tests/test_native_build_provenance.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["desktop and calibration provenance is observed from the exact built binaries", "mismatched or malformed native metadata fails closed"],
-      "evidence": ["rust/xtask/src/dist.rs::validate_observed", "rust/xtask/src/dist.rs::observed_metadata_requires_exact_commit_and_fingerprint"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable artifact provenance contract is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "tests/test_unsigned_release_contract.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["public release trees reject legacy executables, scripts, caches and Python runtime files", "manifest paths and hashes are fail-closed"],
-      "evidence": ["rust/xtask/src/manifest.rs::forbidden_paths", "rust/xtask/src/manifest.rs::verify_release"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable release-tree contract is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "tests/test_wave5_retirement_guard.py",
@@ -95,9 +95,9 @@
     },
     {
       "path": "tests/test_write_release_manifest.py",
-      "classification": "MIGRATED_XTASK",
-      "invariants": ["schema-2 manifest generation records deterministic build time and managed file hashes", "manifest verification rejects git/native provenance drift"],
-      "evidence": ["rust/xtask/src/manifest.rs::write", "rust/xtask/src/manifest.rs::writes_and_verifies_schema_two_manifest"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 portable manifest generation contract is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "scripts/audit_agent_context.py",
@@ -177,9 +177,9 @@
     },
     {
       "path": "tests/test_updater_lifecycle_contract.py",
-      "classification": "MIGRATED_RUST",
-      "invariants": ["Starting state is persisted before READY and no fallible progress write occurs before execute_update"],
-      "evidence": ["rust/crates/sky_updater/src/runner.rs::ready_handoff_keeps_starting_state_before_execute_without_fallible_write"]
+      "classification": "OBSOLETE",
+      "invariants": ["v3 custom updater lifecycle contract is retired from the current v4 graph"],
+      "evidence": ["WO-06 / issue #108"]
     },
     {
       "path": "tests/test_version_consistency.py",

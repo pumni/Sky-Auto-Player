@@ -7,7 +7,7 @@ description: >-
   Sky Auto Player hỗ trợ file JSON, .skysheet và TXT tương thích JSON export từ Sky Music editor.
   Tìm hiểu nội dung từng định dạng và cách thêm bài hát đúng cách.
 summary: >-
-  Sky Auto Player đọc file JSON, .skysheet và TXT tương thích JSON từ thư mục songs/.
+  Sky Auto Player đọc file JSON, .skysheet và TXT tương thích JSON được nhập qua Library.
   Cả ba định dạng đều xuất phát từ Sky Music editor và dùng chung cấu trúc dữ liệu.
 category: getting-started
 order: 2
@@ -42,17 +42,8 @@ Cả ba dùng cùng cấu trúc dữ liệu — phần mở rộng xác định 
 
 ## Đặt file bài hát ở đâu
 
-Đặt file sheet vào thư mục `songs/` nằm cạnh `Sky-Auto-Player.exe`:
-
-```
-Sky-Auto-Player/
-├── Sky-Auto-Player.exe
-├── config.json
-└── songs/
-    ├── bai-hat.json
-    ├── bai-khac.skysheet
-    └── bai-ba.txt
-```
+Dùng Library desktop để nhập file sheet. Dữ liệu ứng dụng được lưu ở vùng app-data của người
+dùng, tách khỏi thư mục installer và không được quản lý như file cạnh executable.
 
 Sau khi thêm file, nhấn **Reload songs** trong Library desktop mà không cần khởi động lại ứng
 dụng.
@@ -62,7 +53,7 @@ dụng.
 1. Mở [Sky Music Nightly](https://specy.github.io/skyMusic/).
 2. Tìm hoặc tạo một bản nhạc.
 3. Dùng chức năng **Export** của editor để lưu dưới dạng JSON hoặc `.skysheet`.
-4. Thả file đã export vào thư mục `songs/`.
+4. Nhập file đã export qua Library desktop.
 
 ## Các lỗi thường gặp
 

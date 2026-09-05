@@ -1,4 +1,4 @@
-use crate::{Result, manifest, process, repo};
+use crate::{Result, hash, process, repo};
 use serde::Serialize;
 use std::env;
 use std::path::Path;
@@ -64,7 +64,7 @@ fn evidence(root: &Path, relative: &str) -> Result<FileEvidence> {
     Ok(FileEvidence {
         path: relative.to_owned(),
         size: std::fs::metadata(&path)?.len(),
-        sha256: manifest::sha256(&path)?,
+        sha256: hash::sha256(&path)?,
     })
 }
 

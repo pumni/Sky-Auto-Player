@@ -20,15 +20,16 @@ policy, but it does not block this project's release.
 - Windows target: NSIS only
 - Installer scope: `currentUser` under `%LOCALAPPDATA%`
 - Updater output: the NSIS setup executable and its `.exe.sig` sidecar
-- Legacy `sky_updater`: retained and buildable until the later retirement work order
+- Legacy v3 updater: removed from the current v4 workspace and product graph
 - Runtime updater: official `tauri-plugin-updater`, behind Rust `UpdateService`
 - Tauri updater trust: v4-only public root; no v3 `release-2026` key reuse
 - Authenticode: `unsigned-zero-budget`; the bounded `signCommand` deliberately performs no signing
 - React updater surface: bounded state, release notes, and progress only
 
-The legacy `cargo xtask dist` portable assembler remains available for the
-v3-maintenance line but fails closed when run against the canonical v4 source.
-It is not a v4 packaging entry point.
+V4 has no portable ZIP updater contract and no bundled
+`Sky-Auto-Player-Updater.exe`. The retired v3 assembler and updater remain
+available only through Git history and the `v3-maintenance` line; they are not
+current v4 tooling or release inputs.
 
 The Tauri config intentionally omits its optional `version` field so Cargo
 remains the single v4 version source. It contains only the v4 updater public
