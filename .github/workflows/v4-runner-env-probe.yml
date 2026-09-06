@@ -54,6 +54,11 @@ jobs:
           }
           Write-Host "Legacy signing env absent: PASS"
 
+      - name: Install desktop dependencies for tauri CLI
+        shell: pwsh
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
       - name: Verify real private key via Credential Manager broker
         shell: pwsh
         run: |
