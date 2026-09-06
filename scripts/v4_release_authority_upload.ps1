@@ -1,3 +1,43 @@
+function Get-V4ReleaseAuthorityAssetUploadUrl {
+    param(
+        [Parameter(Mandatory = $true)] [string]$UploadUrl,
+        [Parameter(Mandatory = $true)] [string]$AssetName
+    )
+
+    if ($UploadUrl.Contains("?")) {
+        throw "release asset upload base URL must not already contain a query"
+    }
+
+    $escapedAssetName = [Uri]::EscapeDataString($AssetName)
+    $assetUrl = [string]::Concat($UploadUrl, "?name=", $escapedAssetName)
+    if (-not $assetUrl.StartsWith(($UploadUrl + "?name="), [StringComparison]::Ordinal)) {
+        throw "release asset upload URL construction failed"
+    }
+    return $assetUrl
+}
+
+$uploadUrlSelfTestBase = "https://uploads.github.com/repos/pumni/Sky-Auto-Player-Releases/releases/42/assets"
+$uploadUrlSelfTestAsset = "fixture +#.bin"
+$uploadUrlSelfTestExpected = "https://uploads.github.com/repos/pumni/Sky-Auto-Player-Releases/releases/42/assets?name=fixture%20%2B%23.bin"
+$uploadUrlSelfTestActual = Get-V4ReleaseAuthorityAssetUploadUrl `
+    -UploadUrl $uploadUrlSelfTestBase `
+    -AssetName $uploadUrlSelfTestAsset
+if ($uploadUrlSelfTestActual -ne $uploadUrlSelfTestExpected) {
+    throw "release asset upload URL escaping self-test failed"
+}
+$uploadUrlSelfTestRejectedExistingQuery = $false
+try {
+    [void](Get-V4ReleaseAuthorityAssetUploadUrl `
+        -UploadUrl ($uploadUrlSelfTestBase + "?existing=1") `
+        -AssetName $uploadUrlSelfTestAsset)
+} catch {
+    $uploadUrlSelfTestRejectedExistingQuery = $true
+}
+if (-not $uploadUrlSelfTestRejectedExistingQuery) {
+    throw "release asset upload URL query rejection self-test failed"
+}
+Remove-Variable uploadUrlSelfTestBase, uploadUrlSelfTestAsset, uploadUrlSelfTestExpected, uploadUrlSelfTestActual, uploadUrlSelfTestRejectedExistingQuery -ErrorAction SilentlyContinue
+
 function Invoke-V4ReleaseAuthorityAssetUpload {
     param(
         [Parameter(Mandatory = $true)] [string]$UploadUrl,
@@ -14,7 +54,7 @@ function Invoke-V4ReleaseAuthorityAssetUpload {
         throw "release asset upload file is missing"
     }
 
-    $assetUrl = "$UploadUrl?name=$([Uri]::EscapeDataString($AssetName))"
+    $assetUrl = Get-V4ReleaseAuthorityAssetUploadUrl -UploadUrl $UploadUrl -AssetName $AssetName
     $client = [System.Net.Http.HttpClient]::new()
     $request = $null
     $fileStream = $null

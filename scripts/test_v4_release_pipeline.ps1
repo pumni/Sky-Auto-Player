@@ -54,6 +54,16 @@ foreach ($marker in @(
 if ($uploadHelper.Contains('gh ') -or $uploadHelper.Contains('ArgumentList')) {
     Fail "raw release asset upload helper must not invoke GitHub CLI"
 }
+if ($uploadHelper.Contains('$UploadUrl?name=')) {
+    Fail "raw release asset upload helper must not use ambiguous PowerShell URL interpolation"
+}
+foreach ($marker in @(
+    'UploadUrl.Contains("?")', '[string]::Concat($UploadUrl, "?name="', 'escapedAssetName'
+)) {
+    if (-not $uploadHelper.Contains($marker)) {
+        Fail "raw release asset upload URL construction guard is missing: $marker"
+    }
+}
 
 function Test-RawUploadBodyByteIdentity {
     $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-raw-upload-test-" + [guid]::NewGuid().ToString("N"))

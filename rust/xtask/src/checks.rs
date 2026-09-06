@@ -684,6 +684,23 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     if upload_helper.contains("gh ") || upload_helper.contains("ArgumentList") {
         return Err("raw release asset upload helper must not invoke GitHub CLI".into());
     }
+    if upload_helper.contains("$UploadUrl?name=") {
+        return Err(
+            "raw release asset upload helper uses ambiguous PowerShell URL interpolation".into(),
+        );
+    }
+    for marker in [
+        "UploadUrl.Contains(\"?\")",
+        "[string]::Concat($UploadUrl, \"?name=\"",
+        "escapedAssetName",
+    ] {
+        if !upload_helper.contains(marker) {
+            return Err(format!(
+                "raw release asset upload URL construction guard is missing: {marker}"
+            )
+            .into());
+        }
+    }
     println!("[xtask] v4 release pipeline state-machine contract: PASS");
     Ok(())
 }
