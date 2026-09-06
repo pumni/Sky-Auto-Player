@@ -24,7 +24,6 @@ param(
     [string]$WorkflowSha,
     [string]$StateRoot,
     [string]$UpdaterPrivateKeyPath,
-    [string]$UpdaterPasswordEnv = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
     [string]$ReleaseNotesPath,
     [string]$PublicationDateUtc,
     [string]$AuthorityTokenEnv = "V4_RELEASE_AUTHORITY_TOKEN"
@@ -349,27 +348,48 @@ function Assert-CandidateEvidence([object[]]$Records) {
 function Invoke-BuildCandidate {
     Assert-RequestIdentity
     if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) { Fail "updater private key path is required" }
-    if ([string]::IsNullOrWhiteSpace($UpdaterPasswordEnv)) { Fail "updater password environment variable name is required" }
     $keyPath = (Resolve-Path -LiteralPath $UpdaterPrivateKeyPath -ErrorAction Stop).Path
     $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
     if ($keyPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail "updater private key must remain outside workspace" }
     if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail "updater private key path is not a file" }
     if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or
-        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
-        Fail "ambient updater key environment is forbidden"
+        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH) -or
+        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+        Fail "ambient updater key or password environment is forbidden"
     }
 
-    # This is the only production candidate build boundary. The orchestrator
-    # owns key verification, stale purge, clean-worktree, NSIS, updater sig,
-    # unsigned-zero-budget, SBOM, and install smoke semantics.
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
-        -ExpectedSourceSha $SourceSha `
-        -Version $Version `
-        -Channel $Channel `
-        -UpdaterPrivateKeyPath $keyPath `
-        -UpdaterPasswordEnv $UpdaterPasswordEnv
-    if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
+    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
+
+    $prevPassword = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
+    $credential = $null
+    try {
+        $credential = Get-V4UpdaterProductionCredential
+        [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $credential, "Process")
+
+        # This is the only production candidate build boundary. The orchestrator
+        # owns key verification, stale purge, clean-worktree, NSIS, updater sig,
+        # unsigned-zero-budget, SBOM, and install smoke semantics.
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
+            -ExpectedSourceSha $SourceSha `
+            -Version $Version `
+            -Channel $Channel `
+            -UpdaterPrivateKeyPath $keyPath
+        if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
+    } finally {
+        if ($null -ne $prevPassword) {
+            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $prevPassword, "Process")
+        } else {
+            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $null, "Process")
+        }
+        try {
+            Remove-V4UpdaterProductionCredential
+        } catch {
+            Write-Warning "V4 updater session credential cleanup returned: $($_.Exception.Message)"
+        }
+        $credential = $null
+        Remove-Variable credential -ErrorAction SilentlyContinue
+    }
 
     $records = @(Get-CandidateRecords | ForEach-Object { Get-FileRecord $_ })
     Assert-CandidateEvidence $records

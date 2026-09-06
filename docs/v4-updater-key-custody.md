@@ -64,12 +64,33 @@ cargo xtask updater-trust inventory
    - This is an output-secrecy guarantee only. PowerShell/.NET managed strings are not claimed
      to be cryptographically zeroized by this runbook.
 
+5. **Production Release Passphrase Transport (Windows Credential Manager Broker)**:
+   - Parent-process environment variable inheritance does NOT reach Actions step processes
+     on dedicated runner hosts (incident #140). It is explicitly **not** the production transport.
+   - For production release dispatch, the Release Operator provisions a generic session credential
+     in Windows Credential Manager using `scripts/set_v4_updater_session_credential.ps1`.
+   - The provisioning script uses `Read-Host -AsSecureString` and writes the credential via
+     `CredWriteW` with `CRED_TYPE_GENERIC` and `CRED_PERSIST_SESSION`.
+   - The credential target name is fixed public metadata: `SkyAutoPlayer/V4UpdaterProduction`.
+   - The production workflow (`release-v4.yml`) `BuildCandidate` step calls the broker
+     (`scripts/v4_updater_credential_broker.ps1`) using `CredReadW`, injects the passphrase
+     strictly into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, invokes the release
+     orchestrator, and automatically deletes the credential in `finally` via `CredDeleteW`.
+   - The updater private key remains stored outside the repository and workspace.
+   - Passphrases **never** go into GitHub Secrets, runner `.env` files, command-line arguments,
+     GitHub issues/chat/PRs, or repository files.
+
 ## 3. Local Private Key Verification
 
 Release Operators must verify that their local private key matches the canonical public root
 prior to initiating release packaging. The verification tool signs an ephemeral cryptographic
 nonce and verifies the resulting signature against the compiled public root, without ever
 printing private key material or passphrases to stdout, stderr, or log files.
+
+The canonical public Key ID enforced by the verifier is:
+```text
+Key ID: 19AABD2E7838818C
+```
 
 To prevent password exposure in shell history (such as `PSReadLine` history files) or process listings,
 the verification tools avoid command-line password flags.
@@ -83,6 +104,21 @@ logs or history files:
 ```powershell
 # Prompts securely for passphrase if the private key is encrypted:
 pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key"
+```
+
+### Verification via Windows Credential Manager Broker (Pre-Release / Non-Release Proof)
+
+To verify the private key against the provisioned session credential without interactive prompts:
+
+```powershell
+# 1. Provision session credential as operator:
+pwsh scripts/set_v4_updater_session_credential.ps1
+
+# 2. Verify private key through the credential broker:
+pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key" -UseCredentialBroker
+
+# 3. Clean up session credential when finished (if not consumed by BuildCandidate):
+pwsh scripts/remove_v4_updater_session_credential.ps1
 ```
 
 ### Non-Interactive / Automation Verification via xtask
@@ -100,7 +136,7 @@ cargo xtask updater-trust verify-private-key --key-file "E:\secure\v4-updater.ke
 
 Expected output:
 ```text
-[xtask] Local updater private key matches canonical production v4 root (Key ID: <canonical public-root identity>)
+[xtask] Local updater private key matches canonical production v4 root (Key ID: 19AABD2E7838818C)
 [PASS] Local updater private key matches canonical production v4 root
 ```
 

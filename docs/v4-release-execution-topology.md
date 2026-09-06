@@ -133,9 +133,54 @@ cryptographic provenance design.
 
 Dedicated self-hosted Windows runners executing production releases must satisfy strict hygiene preconditions:
 1. **Clean Workspace Checkout**: The runner workspace must be checked out cleanly to the exact target release commit SHA with no uncommitted modifications or untracked dirty files (`git status --porcelain` is empty).
-2. **Unpolluted Environment Overrides**: The runner environment must not inherit ambient signing environment variables (such as pre-set `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH`). The orchestrator checks this pre-flight and fails closed if pre-existing keys or paths are detected.
+2. **Unpolluted Environment Overrides**: The runner environment must not inherit ambient signing environment variables (such as pre-set `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PATH`, or `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The orchestrator checks this pre-flight and fails closed if pre-existing keys or paths are detected.
 3. **Stale Output Purge**: Target bundle and evidence directories are purged of previous candidate installers, signatures, and evidence prior to building. Stale outputs from aborted or previous runs can never be reused.
 4. **Isolated Key Storage**: Private updater keys and certificate stores must reside outside the repository tree, accessible only via restricted paths or secure hardware/cloud seams.
+
+### 2.4 Production Passphrase Transport: Windows Credential Manager Session Broker
+
+Incident #140 established that parent-process environment variable inheritance does not reach Actions step processes on dedicated runner hosts (such as PUMZ). Parent-process env inheritance is explicitly **not** the production transport.
+
+Production passphrase custody and transport is governed by the Windows Credential Manager generic session broker:
+
+```text
+[Secure Operator Prompt (Read-Host -AsSecureString)]
+               |
+               v
+  (1) PROVISION SESSION CREDENTIAL
+      - CredWriteW (CRED_TYPE_GENERIC, CRED_PERSIST_SESSION)
+      - Fixed canonical target: SkyAutoPlayer/V4UpdaterProduction (public metadata)
+               |
+               v
+  (2) ACTIONS DISPATCH (release-v4.yml)
+      - Runs BuildCandidate on dedicated runner
+      - No passphrase in workflow inputs, secrets, or runner .env
+               |
+               v
+  (3) BROKER CONSUMPTION (v4_updater_credential_broker.ps1)
+      - CredReadW against fixed target SkyAutoPlayer/V4UpdaterProduction
+      - Fail-closed if absent or empty
+      - Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD at Process scope only
+               |
+               v
+  (4) ORCHESTRATION & PRE-PACKAGING VERIFIER
+      - Pre-packaging verification: cargo xtask updater-trust verify-private-key
+      - Canonical Public Key ID: 19AABD2E7838818C
+      - Single build once and qualify exact bytes
+               |
+               v
+  (5) MANDATORY CLEANUP (finally block)
+      - Restore / clear process-scoped TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+      - CredDeleteW against SkyAutoPlayer/V4UpdaterProduction
+      - Clear managed references
+```
+
+**Security Invariants**:
+- **No Parent-Process Inheritance**: Production does not rely on ambient shell inheritance.
+- **Fixed Canonical Target**: The Credential Manager target name is `SkyAutoPlayer/V4UpdaterProduction`. This target name is public metadata committed in source; workflow dispatch never accepts arbitrary credential targets.
+- **Zero Cloud Secret Exposure**: The passphrase is never stored in GitHub Secrets, runner `.env` files, command-line flags, GitHub issues/PRs/chat, or repository source files.
+- **Ephemeral Session Material**: Provisioned under `CRED_PERSIST_SESSION` and deterministically deleted by the `finally` block of `BuildCandidate`.
+- **Pre-Packaging Verifier**: Pre-packaging verification remains mandatory and enforces Key ID `19AABD2E7838818C`.
 
 ---
 
@@ -251,8 +296,12 @@ ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
 ```
 
 Only `BuildCandidate` calls
-`scripts/orchestrate_v4_production_release.ps1`, exactly once. The candidate
-manifest is the only asset upload authority. The following states download the
+`scripts/orchestrate_v4_production_release.ps1`, exactly once. `BuildCandidate`
+acquires the updater key passphrase through the fixed Windows Credential Manager
+session broker (`scripts/v4_updater_credential_broker.ps1`, target `SkyAutoPlayer/V4UpdaterProduction`)
+into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, passing no plaintext password
+CLI arguments, and automatically deletes the session credential in its `finally` block.
+The candidate manifest is the only asset upload authority. The following states download the
 draft assets again and compare names, sizes, and SHA-256 digests before running
 the Authenticode `unsigned-zero-budget`, Tauri updater signature, SPDX SBOM,
 exact-bundle, current-user install/launch/uninstall, GUI/input-safety, and

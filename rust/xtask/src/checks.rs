@@ -494,6 +494,10 @@ fn v4_release_pipeline_contract_source(
         "secrets.TAURI_SIGNING_PRIVATE_KEY",
         "secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
         "secrets.UPDATER_PRIVATE_KEY",
+        "secrets.UPDATER_PASSWORD",
+        "secrets.V4_UPDATER_PASSWORD",
+        "updater_password_env",
+        "credential_target",
         "Sky-Auto-Player-Updater.exe",
         "MANIFEST.json.sig",
         ".github/workflows/release.yml",
@@ -559,6 +563,7 @@ fn v4_release_pipeline_contract_source(
         "scan_performed",
         "selftest-update-active-playback",
         "scan_v4_defender_exact.ps1",
+        "v4_updater_credential_broker.ps1",
     ] {
         if !pipeline.contains(marker) {
             return Err(
@@ -602,6 +607,18 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
         format!("v4 release pipeline contract: {error}").into()
     })?;
+    for script_name in [
+        "scripts/v4_updater_credential_broker.ps1",
+        "scripts/set_v4_updater_session_credential.ps1",
+        "scripts/remove_v4_updater_session_credential.ps1",
+        "scripts/test_v4_updater_credential_broker.ps1",
+    ] {
+        if !root.join(script_name).exists() {
+            return Err(
+                format!("v4 release pipeline is missing required helper: {script_name}").into(),
+            );
+        }
+    }
     let rehearsal_path = root.join("scripts/test_v4_release_authority_rehearsal.ps1");
     let rehearsal = fs::read_to_string(&rehearsal_path)?;
     let upload_helper_path = root.join("scripts/v4_release_authority_upload.ps1");
@@ -3173,7 +3190,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateAuthority BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify authority main is not initialized upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1
+ValidateRequest ValidateAuthority BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify authority main is not initialized upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
