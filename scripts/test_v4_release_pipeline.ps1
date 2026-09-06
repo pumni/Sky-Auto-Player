@@ -36,6 +36,26 @@ foreach ($script in @(
     }
 }
 
+foreach ($marker in @(
+    'failed closed at phase',
+    'cleanup left the disposable draft release',
+    'cleanup left the disposable tag ref'
+)) {
+    if (-not $rehearsal.Contains($marker)) {
+        Fail "authority rehearsal cleanup diagnostic/verification marker is missing: $marker"
+    }
+}
+$tagProbeMarker = '"api", "repos/$authorityRepository/git/ref/tags/$tag"'
+$tagDeleteMarker = '"api", "--method", "DELETE", "repos/$authorityRepository/git/refs/tags/$tag"'
+$firstTagProbe = $rehearsal.IndexOf($tagProbeMarker, [StringComparison]::Ordinal)
+$tagDelete = $rehearsal.IndexOf($tagDeleteMarker, [StringComparison]::Ordinal)
+if ($firstTagProbe -lt 0 -or $tagDelete -lt 0 -or $firstTagProbe -gt $tagDelete) {
+    Fail "authority rehearsal must probe the disposable tag ref before attempting DELETE"
+}
+if (([regex]::Matches($rehearsal, [regex]::Escape($tagProbeMarker))).Count -lt 2) {
+    Fail "authority rehearsal must verify the disposable tag ref is absent after cleanup"
+}
+
 if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Count -ne 1) {
     Fail "production orchestrator must have exactly one call site"
 }
