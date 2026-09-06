@@ -44,6 +44,7 @@ foreach ($marker in @(
     'System.Net.Http.HttpClient', 'System.Net.Http.StreamContent', 'System.IO.FileStream',
     'Headers.Authorization', 'UserAgent', 'application/vnd.github+json',
     'X-GitHub-Api-Version', '2026-03-10', 'ContentLength', 'fileLength',
+    'StatusCode', 'System.Net.HttpStatusCode', 'Created',
     'SendAsync', 'ReadAsStringAsync', 'application/octet-stream'
 )) {
     if (-not $uploadHelper.Contains($marker)) {
@@ -103,6 +104,24 @@ function Test-RawUploadBodyByteIdentity {
 }
 
 Test-RawUploadBodyByteIdentity
+
+function Test-RawUploadRequiresCreated {
+    $created = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Created)
+    $ok = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK)
+    try {
+        if ($created.StatusCode -ne [System.Net.HttpStatusCode]::Created) {
+            Fail "raw upload Created response contract changed"
+        }
+        if ($ok.StatusCode -eq [System.Net.HttpStatusCode]::Created) {
+            Fail "raw upload accepted a non-Created response"
+        }
+    } finally {
+        $created.Dispose()
+        $ok.Dispose()
+    }
+}
+
+Test-RawUploadRequiresCreated
 
 foreach ($marker in @(
     'failed closed at phase',

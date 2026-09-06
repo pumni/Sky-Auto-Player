@@ -54,7 +54,7 @@ function Invoke-V4ReleaseAuthorityAssetUpload {
         $request.Content = $content
         $response = $client.SendAsync($request).GetAwaiter().GetResult()
         $responseBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-        if (-not $response.IsSuccessStatusCode) {
+        if ($response.StatusCode -ne [System.Net.HttpStatusCode]::Created) {
             throw "release authority asset upload failed"
         }
         return ($responseBody | ConvertFrom-Json)
