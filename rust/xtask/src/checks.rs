@@ -604,6 +604,8 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     })?;
     let rehearsal_path = root.join("scripts/test_v4_release_authority_rehearsal.ps1");
     let rehearsal = fs::read_to_string(&rehearsal_path)?;
+    let upload_helper_path = root.join("scripts/v4_release_authority_upload.ps1");
+    let upload_helper = fs::read_to_string(&upload_helper_path)?;
     for marker in [
         "ConfirmDisposable",
         "V4_RELEASE_AUTHORITY_TOKEN",
@@ -628,6 +630,7 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
             "gh @Arguments --output",
             "gh.exe @Arguments --output",
             "--output $OutputPath",
+            "\"$uploadUrl?name=",
         ] {
             if source.contains(forbidden) {
                 return Err(format!(
@@ -638,6 +641,7 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         }
         for marker in [
             "Invoke-GhBinaryOutput",
+            "Invoke-V4ReleaseAuthorityAssetUpload",
             "PSVersionTable.PSVersion",
             "7.4.0",
             "RedirectStandardOutput",
@@ -652,6 +656,33 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
                 );
             }
         }
+    }
+    for marker in [
+        "System.Net.Http.HttpClient",
+        "System.Net.Http.StreamContent",
+        "System.IO.FileStream",
+        "Headers.Authorization",
+        "UserAgent",
+        "application/vnd.github+json",
+        "X-GitHub-Api-Version",
+        "2026-03-10",
+        "ContentLength",
+        "fileLength",
+        "StatusCode",
+        "System.Net.HttpStatusCode",
+        "Created",
+        "SendAsync",
+        "ReadAsStringAsync",
+        "application/octet-stream",
+    ] {
+        if !upload_helper.contains(marker) {
+            return Err(
+                format!("raw release asset upload helper is missing marker: {marker}").into(),
+            );
+        }
+    }
+    if upload_helper.contains("gh ") || upload_helper.contains("ArgumentList") {
+        return Err("raw release asset upload helper must not invoke GitHub CLI".into());
     }
     println!("[xtask] v4 release pipeline state-machine contract: PASS");
     Ok(())
