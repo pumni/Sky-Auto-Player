@@ -28,6 +28,8 @@ $tag = "v4-authority-rehearsal-" + [guid]::NewGuid().ToString("N")
 $releaseId = $null
 $oldGhToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
 $failure = $null
+$failurePhase = $null
+$phase = "initialize"
 
 function Invoke-GhBinaryOutput {
     param(
@@ -118,6 +120,7 @@ function Invoke-AuthorityApi {
 }
 
 try {
+    $phase = "prepare-artifact"
     New-Item -ItemType Directory -Path $rehearsalRoot -Force | Out-Null
     [IO.File]::WriteAllText(
         $artifactPath,
@@ -127,6 +130,7 @@ try {
     $expectedHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $expectedSize = (Get-Item -LiteralPath $artifactPath).Length
 
+    $phase = "validate-immutable-policy"
     $policy = Invoke-AuthorityApi -Arguments @(
         "api", "repos/$authorityRepository/immutable-releases"
     )
@@ -134,6 +138,7 @@ try {
         throw "release authority immutable-releases policy is not enabled"
     }
 
+    $phase = "create-draft"
     $releasePayload = Join-Path $rehearsalRoot "release.json"
     [ordered]@{
         tag_name = $tag
@@ -146,7 +151,7 @@ try {
     $release = Invoke-AuthorityApi -Arguments @(
         "api", "--method", "POST", "repos/$authorityRepository/releases", "--input", $releasePayload
     )
-            $releaseId = [int64]$release.id
+    $releaseId = [int64]$release.id
     if (-not $release.draft -or [string]$release.tag_name -ne $tag) {
         throw "authority rehearsal did not create the expected draft"
     }
@@ -154,6 +159,8 @@ try {
     if ($uploadUrl -notmatch '^https://uploads\.github\.com/repos/[^/]+/[^/]+/releases/\d+/assets$') {
         throw "authority rehearsal did not receive the release-specific upload_url"
     }
+
+    $phase = "upload-asset"
     $uploaded = Invoke-AuthorityApi -Arguments @(
         "api", "--method", "POST", "$uploadUrl?name=$([Uri]::EscapeDataString($artifactName))",
         "--header", "Content-Type: text/plain", "--input", $artifactPath
@@ -162,14 +169,19 @@ try {
         throw "authority rehearsal upload response did not preserve the exact asset identity"
     }
 
+    $phase = "refetch-draft"
     $rehearsed = Invoke-AuthorityApi -Arguments @(
         "api", "repos/$authorityRepository/releases/$releaseId"
     )
     $asset = @($rehearsed.assets | Where-Object { [string]$_.name -eq $artifactName })
     if ($asset.Count -ne 1) { throw "authority rehearsal draft asset was not found" }
+
+    $phase = "download-asset"
     Invoke-AuthorityApi -Arguments @(
         "api", [string]$asset[0].url, "--header", "Accept: application/octet-stream"
     ) -BinaryOutput -OutputPath $downloadPath
+
+    $phase = "verify-downloaded-bytes"
     if ((Get-Item -LiteralPath $downloadPath).Length -ne $expectedSize -or
         (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash) {
         throw "authority rehearsal downloaded bytes did not match the throwaway upload"
@@ -177,20 +189,47 @@ try {
 }
 catch {
     $failure = $_
+    $failurePhase = $phase
 }
 finally {
     try {
         if ($null -ne $releaseId) {
+            $phase = "cleanup-release"
             Invoke-AuthorityApi -Arguments @(
                 "api", "--method", "DELETE", "repos/$authorityRepository/releases/$releaseId"
             ) -NoJson | Out-Null
+            $remainingRelease = Invoke-AuthorityApi -Arguments @(
+                "api", "repos/$authorityRepository/releases/$releaseId"
+            ) -AllowNotFound
+            if ($null -ne $remainingRelease) {
+                throw "authority rehearsal cleanup left the disposable draft release"
+            }
         }
-        Invoke-AuthorityApi -Arguments @(
-            "api", "--method", "DELETE", "repos/$authorityRepository/git/refs/tags/$tag"
-        ) -AllowNotFound -NoJson | Out-Null
+
+        # Draft releases may carry a tag_name without materializing refs/tags/<tag>
+        # until publication. Probe first so a legitimately absent draft tag is a
+        # successful cleanup state rather than an unconditional DELETE failure.
+        $phase = "cleanup-tag"
+        $existingTag = Invoke-AuthorityApi -Arguments @(
+            "api", "repos/$authorityRepository/git/ref/tags/$tag"
+        ) -AllowNotFound
+        if ($null -ne $existingTag) {
+            Invoke-AuthorityApi -Arguments @(
+                "api", "--method", "DELETE", "repos/$authorityRepository/git/refs/tags/$tag"
+            ) -NoJson | Out-Null
+        }
+        $remainingTag = Invoke-AuthorityApi -Arguments @(
+            "api", "repos/$authorityRepository/git/ref/tags/$tag"
+        ) -AllowNotFound
+        if ($null -ne $remainingTag) {
+            throw "authority rehearsal cleanup left the disposable tag ref"
+        }
     }
     catch {
-        if ($null -eq $failure) { $failure = $_ }
+        if ($null -eq $failure) {
+            $failure = $_
+            $failurePhase = $phase
+        }
     }
     if ($null -eq $oldGhToken) {
         [Environment]::SetEnvironmentVariable("GH_TOKEN", $null, "Process")
@@ -203,6 +242,7 @@ finally {
 }
 
 if ($null -ne $failure) {
-    throw "V4 release authority rehearsal failed closed; disposable cleanup was attempted"
+    $safePhase = if ([string]::IsNullOrWhiteSpace([string]$failurePhase)) { "unknown" } else { [string]$failurePhase }
+    throw "V4 release authority rehearsal failed closed at phase '$safePhase'; disposable cleanup was attempted"
 }
 Write-Host "V4 release authority upload rehearsal: PASS (draft upload/download exact bytes; draft and tag deleted)"
