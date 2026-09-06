@@ -15,10 +15,10 @@ completely isolated from legacy v3 release keys (`release-2026`).
 The canonical production v4 updater public trust root is:
 
 ```text
-Key ID: F6355260A0C663D5
+Key ID: 19AABD2E7838818C
 Algorithm: Ed25519 (Minisign)
 Public Key (Base64):
-dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK
 ```
 
 ### Verified repository locations

@@ -1206,7 +1206,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
                 .into(),
         );
     }
-    for forbidden in ["::add-mask::", "F6355260A0C663D5"] {
+    for forbidden in ["::add-mask::", "19AABD2E7838818C"] {
         if key_verifier.contains(forbidden) {
             return Err(format!(
                 "v4 updater key verification script must not emit or hard-code production secret/output data: {forbidden}"
