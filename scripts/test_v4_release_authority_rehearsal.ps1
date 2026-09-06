@@ -29,6 +29,60 @@ $releaseId = $null
 $oldGhToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
 $failure = $null
 
+function Invoke-GhBinaryOutput {
+    param(
+        [Parameter(Mandatory = $true)] [string[]]$Arguments,
+        [Parameter(Mandatory = $true)] [string]$OutputPath,
+        [Parameter(Mandatory = $true)] [string]$ErrorPath
+    )
+    if ($PSVersionTable.PSVersion -lt [Version]"7.4.0") {
+        throw "binary release-asset download requires PowerShell 7.4 or newer"
+    }
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        throw "binary release-asset output path is required"
+    }
+
+    $ghPath = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ghPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add([string]$argument)
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $outputStream = $null
+    $stderrTask = $null
+    $started = $false
+    try {
+        $outputStream = [IO.File]::Open(
+            $OutputPath,
+            [IO.FileMode]::Create,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None
+        )
+        $started = $process.Start()
+        if (-not $started) { throw "could not start GitHub CLI for binary release-asset download" }
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardOutput.BaseStream.CopyTo($outputStream)
+        $process.WaitForExit()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        [IO.File]::WriteAllText($ErrorPath, $stderr, [Text.UTF8Encoding]::new($false))
+        return [int]$process.ExitCode
+    } finally {
+        if ($started -and -not $process.HasExited) {
+            $process.Kill()
+            $process.WaitForExit()
+        }
+        if ($null -ne $outputStream) { $outputStream.Dispose() }
+        $process.Dispose()
+    }
+}
+
 function Invoke-AuthorityApi {
     param(
         [Parameter(Mandatory = $true)] [string[]]$Arguments,
@@ -40,11 +94,12 @@ function Invoke-AuthorityApi {
     try {
         [Environment]::SetEnvironmentVariable("GH_TOKEN", $token, "Process")
         if ($BinaryOutput) {
-            & gh @Arguments --output $OutputPath 2>$errorPath | Out-Null
+            $exitCode = Invoke-GhBinaryOutput `
+                -Arguments $Arguments -OutputPath $OutputPath -ErrorPath $errorPath
         } else {
             $result = & gh @Arguments 2>$errorPath
+            $exitCode = $LASTEXITCODE
         }
-        $exitCode = $LASTEXITCODE
     } finally {
         if ($null -eq $oldGhToken) {
             [Environment]::SetEnvironmentVariable("GH_TOKEN", $null, "Process")
