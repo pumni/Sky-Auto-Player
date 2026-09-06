@@ -203,6 +203,9 @@ jobs:
       - name: Promotion digest regression self-test
         run: pwsh scripts/promote_v4_metadata.ps1 -SelfTest
 
+      - name: V4 release pipeline mock state-machine self-test
+        run: pwsh scripts/test_v4_release_pipeline.ps1
+
       - name: Report CI timing
         if: always()
         run: |

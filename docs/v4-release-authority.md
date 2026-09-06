@@ -101,9 +101,30 @@ exact installer/`.sig` pair, and compares names, sizes, and SHA-256 digests
 against the qualified bytes before atomically copying metadata into the
 selected channel path in an authority checkout. Its `-SelfTest` regression
 path proves arbitrary `qualified=true` evidence and same-name/different-bytes
-assets are rejected. It never creates or edits a GitHub release; committing
-the resulting channel file is a separate reviewed authority-repository
-change.
+assets are rejected. The dedicated v4 release pipeline invokes this validator
+only after it has published the immutable draft, then writes the validated
+channel file through the bounded authority credential. The promotion helper
+itself never creates, edits, replaces, or deletes a GitHub release asset.
+
+## Release pipeline and authority bootstrap
+
+`.github/workflows/release-v4.yml` is the only production v4 publication entry
+point. It is manual, runs on the dedicated/single-tenant Windows runner, and
+uses `V4_RELEASE_AUTHORITY_TOKEN` for release/assets/channel metadata writes.
+The source `GITHUB_TOKEN` and OIDC permissions remain separate and are used for
+source-bound attestations. The updater private key is not a GitHub secret: the
+workflow receives only a path to the externally stored key on the runner.
+The authority token contract is bounded to the dedicated repository only, with
+the minimum Contents read/write capability needed for release records, release
+assets, and `channels/<channel>/latest.json`; it has no source-repository,
+Actions, secrets, package, or updater-key permission.
+
+The pipeline first requires `refs/heads/main` in this repository. An empty
+authority repository therefore fails closed with an instruction to perform a
+separately reviewed one-time bootstrap. That bootstrap must create the minimal
+authority `main` history (including the channel directory contract) outside a
+production release dispatch. A release dispatch never creates the first
+authority commit as a side effect.
 
 The v4 Tauri updater public trust root is committed independently of this
 release-authority metadata contract. Its operational private key remains

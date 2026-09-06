@@ -210,6 +210,27 @@ V4 preserves the strongest v3 release discipline:
 A failed qualification produces a new version/RC. Published artifacts and tags are never repaired in
 place.
 
+The production implementation is the dedicated manual workflow
+`.github/workflows/release-v4.yml`, which runs only on the accepted
+single-tenant Windows release runner. Its explicit states are:
+
+```text
+ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
+  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
+  -> PublishDraft -> PromoteMetadata -> FinalVerify
+```
+
+`BuildCandidate` is the only state allowed to invoke the production
+orchestrator, and it invokes it exactly once. The authority preflight requires
+an existing `main` branch; first-history/bootstrap work is a separate reviewed
+operation and is never created by a release transaction. The workflow uses a
+bounded `V4_RELEASE_AUTHORITY_TOKEN` only for the dedicated authority API.
+Source-repository `GITHUB_TOKEN`/OIDC permissions are reserved for source-bound
+attestations. A failed or reused authority tag, a draft-asset byte mismatch, a
+post-draft qualification failure, or an unavailable publication/metadata
+precondition stops the transaction; the existing tag and candidate assets are
+never moved or replaced.
+
 ### 12. SBOM is a first-class release artifact
 
 V4 generates a standard SBOM (SPDX JSON or CycloneDX JSON) and attests it alongside build provenance.

@@ -435,6 +435,159 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn v4_release_pipeline_contract_source(
+    workflow: &str,
+    pipeline: &str,
+    regression: &str,
+) -> Result<()> {
+    let workflow = workflow.replace("\r\n", "\n");
+    for marker in [
+        "name: V4 Release Pipeline",
+        "workflow_dispatch:",
+        "runs-on: [self-hosted, windows, v4-release, single-tenant]",
+        "contents: read",
+        "id-token: write",
+        "attestations: write",
+        "V4_RELEASE_AUTHORITY_TOKEN",
+        "ref: ${{ inputs.source_sha }}",
+        "persist-credentials: false",
+        "actions/attest@",
+        "--source-digest $env:GITHUB_SHA",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "throwaway official previous-v4 to candidate-v4 updater fixture",
+        "RecordAttestations",
+        "PublishDraft",
+        "PromoteMetadata",
+        "FinalVerify",
+    ] {
+        if !workflow.contains(marker) {
+            return Err(
+                format!("v4 release workflow is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    let workflow_states = [
+        "-State ValidateRequest",
+        "-State ValidateAuthority",
+        "-State BuildCandidate",
+        "-State CreateDraft",
+        "-State DownloadDraft",
+        "-State QualifyDownloaded",
+        "-State RecordAttestations",
+        "-State PublishDraft",
+        "-State PromoteMetadata",
+        "-State FinalVerify",
+    ];
+    let mut previous = 0;
+    for marker in workflow_states {
+        let position = workflow
+            .find(marker)
+            .ok_or_else(|| format!("v4 release workflow is missing state marker: {marker}"))?;
+        if position < previous {
+            return Err("v4 release workflow states are not ordered fail-closed".into());
+        }
+        previous = position;
+    }
+    for forbidden in [
+        "cargo xtask dist",
+        "softprops/action-gh-release",
+        "secrets.TAURI_SIGNING_PRIVATE_KEY",
+        "secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+        "secrets.UPDATER_PRIVATE_KEY",
+        "Sky-Auto-Player-Updater.exe",
+        "MANIFEST.json.sig",
+        ".github/workflows/release.yml",
+    ] {
+        if workflow.contains(forbidden) {
+            return Err(
+                format!("v4 release workflow contains forbidden marker: {forbidden}").into(),
+            );
+        }
+    }
+    if workflow.matches("GH_TOKEN: ${{ github.token }}").count() != 1 {
+        return Err(
+            "source GITHUB_TOKEN must be confined to the exact attestation verification step"
+                .into(),
+        );
+    }
+
+    if pipeline
+        .matches("orchestrate_v4_production_release.ps1")
+        .count()
+        != 1
+    {
+        return Err("production orchestrator must have exactly one pipeline call site".into());
+    }
+    for marker in [
+        "ValidateRequest",
+        "ValidateAuthority",
+        "BuildCandidate",
+        "CreateDraft",
+        "DownloadDraft",
+        "QualifyDownloaded",
+        "RecordAttestations",
+        "PublishDraft",
+        "PromoteMetadata",
+        "FinalVerify",
+        "unsigned-zero-budget",
+        "authority main is not initialized",
+        "refs/heads/main",
+        "authority already contains tag",
+        "existing releases are never moved or replaced",
+        "Get-FileHash",
+        "verify-signature",
+        "verify-tauri-bundle",
+        "current-user",
+        "active-playback-install-rejected",
+        "ci_v4_release_authority_acceptance.ps1",
+        "promote_v4_metadata.ps1",
+        "release-authority",
+        "published_at",
+        "draft = $true",
+        "draft = $false",
+        "V4_RELEASE_AUTHORITY_TOKEN",
+    ] {
+        if !pipeline.contains(marker) {
+            return Err(
+                format!("v4 release coordinator is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    let draft_boundary = pipeline
+        .find("function Invoke-CreateDraft")
+        .ok_or("v4 release coordinator is missing the draft boundary")?;
+    if pipeline[draft_boundary..].contains("orchestrate_v4_production_release.ps1") {
+        return Err("v4 release coordinator may not rebuild after draft creation".into());
+    }
+    if !regression.contains("MockReleaseApi")
+        || !regression.contains("candidate rebuilt")
+        || !regression.contains("promotion before immutable publication")
+        || !regression.contains("BuildCount -ne 1")
+    {
+        return Err(
+            "v4 release coordinator regression test is missing build-once/publication guards"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
+    let workflow_path = root.join(".github/workflows/release-v4.yml");
+    let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
+    let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
+    v4_release_pipeline_contract_source(
+        &fs::read_to_string(&workflow_path)?,
+        &fs::read_to_string(&pipeline_path)?,
+        &fs::read_to_string(&regression_path)?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
+        format!("v4 release pipeline contract: {error}").into()
+    })?;
+    println!("[xtask] v4 release pipeline state-machine contract: PASS");
+    Ok(())
+}
+
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
     let package_needs = "needs: [changes, static, release_authority, supply_chain, validate]";
@@ -2557,6 +2710,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             v4_trust_material_contract(&root)?;
             legacy_release_guard(&root)?;
             release_authority_contract(&root)?;
+            v4_release_pipeline_contract(&root)?;
             packaged_ci_contract(&root)?;
             v4_legacy_updater_retirement(&root)?;
             retirement(&root)?;
@@ -2867,6 +3021,70 @@ read_only=true
         assert!(acceptance.contains("This is deliberately read-only"));
         assert!(acceptance.contains("releases/latest"));
         assert!(!acceptance.contains("gh release create"));
+    }
+
+    #[test]
+    fn v4_release_pipeline_contract_requires_draft_download_and_publish_order() {
+        let workflow = r#"
+name: V4 Release Pipeline
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+jobs:
+  release:
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+    ref: ${{ inputs.source_sha }}
+    persist-credentials: false
+    env: V4_RELEASE_AUTHORITY_TOKEN
+    -State ValidateRequest
+    -State ValidateAuthority
+    -State BuildCandidate
+    -State CreateDraft
+    -State DownloadDraft
+    -State QualifyDownloaded
+    -State RecordAttestations
+    -State PublishDraft
+    -State PromoteMetadata
+    -State FinalVerify
+    throwaway official previous-v4 to candidate-v4 updater fixture
+    scripts/ci_tauri_update_e2e.ps1
+    actions/attest@v4
+    --source-digest $env:GITHUB_SHA
+    GH_TOKEN: ${{ github.token }}
+"#;
+        let pipeline = r#"
+ValidateRequest ValidateAuthority BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify authority main is not initialized
+function Invoke-BuildCandidate {
+  & pwsh -File orchestrate_v4_production_release.ps1
+}
+function Invoke-CreateDraft { draft = $true; refs/heads/main; authority already contains tag; existing releases are never moved or replaced }
+function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; ci_v4_release_authority_acceptance.ps1; promote_v4_metadata.ps1; release-authority; published_at }
+function Invoke-RecordAttestations { V4_RELEASE_AUTHORITY_TOKEN }
+function Invoke-PublishDraft { draft = $false }
+function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication }
+function Invoke-FinalVerify { FinalVerify }
+"#;
+        let regression = r#"
+class MockReleaseApi { [int]$BuildCount = 0; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1 }
+"#;
+        assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
+
+        let reordered = workflow.replace(
+            "-State CreateDraft\n    -State DownloadDraft",
+            "-State DownloadDraft\n    -State CreateDraft",
+        );
+        assert!(v4_release_pipeline_contract_source(&reordered, pipeline, regression).is_err());
+        let duplicated_build = pipeline.replace(
+            "function Invoke-CreateDraft",
+            "orchestrate_v4_production_release.ps1\nfunction Invoke-CreateDraft",
+        );
+        assert!(
+            v4_release_pipeline_contract_source(workflow, &duplicated_build, regression).is_err()
+        );
     }
 
     #[test]
