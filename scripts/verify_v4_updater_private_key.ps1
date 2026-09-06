@@ -4,7 +4,10 @@ param(
     [string]$KeyPath,
 
     [Parameter(Mandatory = $false)]
-    [string]$PasswordEnv = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+    [string]$PasswordEnv = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$UseCredentialBroker
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,9 +27,12 @@ if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
     throw "Private key file does not exist: $keyFile"
 }
 
-# 2. Resolve password: prefer specified environment variable or secure interactive prompt
+# 2. Resolve password: prefer credential broker if requested, or specified environment variable, or secure interactive prompt
 $envVal = [Environment]::GetEnvironmentVariable($PasswordEnv)
-$passwordValue = if (-not [string]::IsNullOrWhiteSpace($envVal)) {
+$passwordValue = if ($UseCredentialBroker) {
+    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
+    Get-V4UpdaterProductionCredential
+} elseif (-not [string]::IsNullOrWhiteSpace($envVal)) {
     $envVal
 } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
     Write-Host "Enter updater private key passphrase (press Enter if unencrypted): " -NoNewline

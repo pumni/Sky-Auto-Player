@@ -166,9 +166,22 @@ foreach ($marker in @(
     'current-user', 'active-playback-install-rejected', 'upload_url',
     'immutable-releases', 'Assert-ImmutableRelease', 'Start-MpScan',
     'previous-v4-to-exact-downloaded-candidate-update',
-    'selftest-update-active-playback', 'scan_performed'
+    'selftest-update-active-playback', 'scan_performed',
+    'v4_updater_credential_broker.ps1'
 )) {
     if (-not $pipeline.Contains($marker)) { Fail "pipeline marker is missing: $marker" }
+}
+
+foreach ($brokerFile in @(
+    'v4_updater_credential_broker.ps1',
+    'set_v4_updater_session_credential.ps1',
+    'remove_v4_updater_session_credential.ps1',
+    'test_v4_updater_credential_broker.ps1'
+)) {
+    $path = Join-Path $PSScriptRoot $brokerFile
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Fail "required credential broker file is missing: $brokerFile"
+    }
 }
 
 foreach ($marker in @(
@@ -190,6 +203,8 @@ foreach ($forbidden in @(
     'cargo xtask dist', 'Sky-Auto-Player-Updater.exe', 'MANIFEST.json.sig',
     'softprops/action-gh-release', 'secrets.TAURI_SIGNING_PRIVATE_KEY',
     'secrets.UPDATER_PRIVATE_KEY', 'secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+    'secrets.UPDATER_PASSWORD', 'secrets.V4_UPDATER_PASSWORD',
+    'updater_password_env', 'credential_target',
     'V4_RELEASE_STATE_ROOT: ${{ runner.temp }}'
 )) {
     if ($workflow.Contains($forbidden)) { Fail "forbidden production workflow marker remains: $forbidden" }

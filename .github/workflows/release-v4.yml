@@ -24,11 +24,6 @@ on:
         description: "Path to the externally stored updater key on the dedicated runner"
         required: true
         type: string
-      updater_password_env:
-        description: "Name of the runner-local environment variable containing the key passphrase"
-        required: true
-        default: TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-        type: string
       release_notes_path:
         description: "Bounded release notes file in the checked-out source"
         required: true
@@ -66,7 +61,6 @@ jobs:
       V4_RELEASE_WORKFLOW_SHA: ${{ github.sha }}
       V4_RELEASE_NOTES_PATH: ${{ inputs.release_notes_path }}
       V4_RELEASE_PUBLICATION_DATE: ${{ inputs.publication_date_utc }}
-      V4_RELEASE_UPDATER_PASSWORD_ENV: ${{ inputs.updater_password_env }}
 
     steps:
       - name: Initialize release state root
@@ -124,8 +118,7 @@ jobs:
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
-            -UpdaterPasswordEnv $env:V4_RELEASE_UPDATER_PASSWORD_ENV
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
 
       - name: Create exact candidate draft in release authority
         env:
