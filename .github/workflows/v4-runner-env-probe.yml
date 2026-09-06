@@ -1,0 +1,34 @@
+name: V4 Runner Environment Probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/v4-runner-env-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe PUMZ runner-local password inheritance
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+    steps:
+      - name: Check Actions step-process password presence
+        shell: pwsh
+        run: |
+          $name = 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
+          $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+          if ([string]::IsNullOrWhiteSpace($value)) {
+            Write-Host 'Runner job password presence: ABSENT'
+            exit 42
+          }
+          Write-Host 'Runner job password presence: PRESENT_NONEMPTY'
+
+          pwsh -NoProfile -NonInteractive -Command "if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PASSWORD','Process'))) { exit 42 } else { exit 0 }"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Runner job child inheritance: FAIL'
+          }
+          Write-Host 'Runner job child inheritance: PASS'
+
+          # Never print, hash, measure, persist, or export the secret value.
+          Remove-Variable value -ErrorAction SilentlyContinue
