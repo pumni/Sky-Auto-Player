@@ -304,7 +304,9 @@ exact assets, publish immutably, then promote updater metadata.
 - Authenticode verification;
 - updater signature verification;
 - SBOM/provenance verification;
-- Defender status/detection evidence;
+- exact downloaded-installer Defender custom scan with no detection (missing
+  Defender cmdlets, disabled protection, scan failure, or detection fails
+  closed; unavailable evidence is not promotable);
 - stable/beta isolation;
 - v3/v4 namespace isolation;
 - exact published asset digest match;

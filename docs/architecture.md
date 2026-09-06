@@ -65,7 +65,8 @@ authority is fixed to the dedicated v4 stable/beta metadata paths; missing
 metadata or missing/invalid v4 updater trust material fails closed. Production
 Authenticode uses the governed `unsigned-zero-budget` policy; no provider
 credentials are required, and qualification rejects signed or unexpected PE state.
-The signed packaged previous-v4 to candidate-v4 fixture is test-only. The retired
+The packaged previous-v4 to candidate-v4 fixture is test-only and consumes the
+exact installer/signature bytes re-downloaded from a release draft. The retired
 v3 transaction/recovery implementation is preserved in Git history and the
 `v3-maintenance` line; it is not part of the current workspace or product graph.
 

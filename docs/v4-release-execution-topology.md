@@ -256,9 +256,17 @@ manifest is the only asset upload authority. The following states download the
 draft assets again and compare names, sizes, and SHA-256 digests before running
 the Authenticode `unsigned-zero-budget`, Tauri updater signature, SPDX SBOM,
 exact-bundle, current-user install/launch/uninstall, GUI/input-safety, and
-active-playback rejection checks. The existing packaged official Tauri updater
-fixture remains the throwaway previous-v4 to candidate-v4 rotation evidence;
-no production candidate is rebuilt for that fixture.
+active-playback rejection checks. The packaged official Tauri updater fixture
+runs at this post-download boundary: a throwaway previous-v4 bridge consumes
+the exact downloaded installer and `.sig`, while the production candidate is
+never rebuilt. The packaged candidate also proves that update admission is
+rejected while playback is active.
+
+The same post-download qualification invokes a bounded Windows Defender
+custom scan against the exact downloaded installer and records the artifact
+name, size, SHA-256, scan result, and Defender status. This is a mandatory
+production gate: missing Defender cmdlets, disabled protection, scan failure,
+or a detection fails closed; no `unavailable` result is promotable.
 
 Attestation happens on those downloaded bytes with GitHub OIDC and is verified
 against the source repository, this workflow, the exact workflow SHA, and the
@@ -273,8 +281,14 @@ existing `main` branch. If the authority is empty, the workflow stops and the
 maintainer must perform a separately reviewed one-time minimal bootstrap; the
 release transaction never creates initial authority history implicitly. The
 only cross-repository secret is the bounded
-`V4_RELEASE_AUTHORITY_TOKEN`, scoped to the authority repository's release,
-asset, and channel-metadata writes. It is never used for updater-key custody.
+`V4_RELEASE_AUTHORITY_TOKEN`, scoped to the authority repository's
+Administration-read and Contents read/write permissions needed to inspect
+immutable releases, create/upload/read/publish the draft, and write channel
+metadata. It is never used for updater-key custody. A maintainer may run
+`scripts/test_v4_release_authority_rehearsal.ps1 -ConfirmDisposable` after
+bootstrap; that explicit rehearsal creates and deletes one uniquely tagged
+draft and verifies upload/download bytes through the real authority API. It
+never publishes a release or mutates an existing tag.
 
 ---
 

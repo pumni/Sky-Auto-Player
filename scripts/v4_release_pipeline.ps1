@@ -203,7 +203,11 @@ function Assert-AuthorityMain {
         Fail "release authority main is not initialized; run a separately reviewed authority bootstrap before production release"
     }
     if ([string]$main.ref -ne "refs/heads/main") { Fail "release authority main ref is not canonical" }
-    Write-Host "V4 release authority bootstrap precondition: PASS (main exists)"
+    $immutable = Invoke-AuthorityApi -Arguments @("api", "repos/$authorityRepository/immutable-releases") -AllowNotFound
+    if ($null -eq $immutable -or -not [bool]$immutable.enabled) {
+        Fail "release authority immutable-releases policy is not enabled; enable it before any production transaction"
+    }
+    Write-Host "V4 release authority preconditions: PASS (main exists; immutable releases enabled)"
 }
 
 function Get-ExpectedInstallerName {
@@ -362,15 +366,29 @@ function Invoke-CreateDraft {
     })
     $release = Invoke-AuthorityApi -Arguments @("api", "--method", "POST", "repos/$authorityRepository/releases", "--input", $payloadPath)
     if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "authority did not create the requested draft release" }
+    $uploadUrl = [string]$release.upload_url
+    if ([string]::IsNullOrWhiteSpace($uploadUrl)) { Fail "authority draft did not return its release-specific upload_url" }
+    $uploadUrl = $uploadUrl -replace '\{\?name,label\}$', ''
+    if ($uploadUrl -notmatch '^https://uploads\.github\.com/repos/[^/]+/[^/]+/releases/\d+/assets$') {
+        Fail "authority draft returned an unexpected release asset upload_url"
+    }
 
     foreach ($record in $manifest.assets) {
         $candidate = (Get-CandidateRecords | Where-Object { $_.name -eq [string]$record.name })
         if ($null -eq $candidate) { Fail "candidate manifest contains an unknown asset" }
-        Invoke-AuthorityApi -Arguments @(
-            "api", "--method", "POST",
-            "repos/$authorityRepository/releases/$($release.id)/assets?name=$([Uri]::EscapeDataString([string]$record.name))",
+        $assetUrl = "$uploadUrl?name=$([Uri]::EscapeDataString([string]$record.name))"
+        # GitHub's release-specific upload_url is deliberately used here. The
+        # endpoint rejects duplicate names; this path never deletes or
+        # replaces an asset after a failed upload.
+        $uploaded = Invoke-AuthorityApi -Arguments @(
+            "api", "--method", "POST", $assetUrl,
             "--header", "Content-Type: application/octet-stream", "--input", $candidate.path
-        ) | Out-Null
+        )
+        if ([string]$uploaded.name -ne [string]$record.name -or
+            [int64]$uploaded.size -ne [int64]$record.size -or
+            [string]$uploaded.state -ne "uploaded") {
+            Fail "authority upload did not return the exact uploaded asset: $($record.name)"
+        }
     }
     $state = [ordered]@{
         schema_version = 1
@@ -381,6 +399,7 @@ function Invoke-CreateDraft {
         release_id = [int64]$release.id
         draft = $true
         published = $false
+        immutable = $false
         attested = $false
         qualified_after_download = $false
         assets = $manifest.assets
@@ -393,6 +412,12 @@ function Assert-ExactAssetSet([object]$Release, [object[]]$Expected) {
     $actual = @($Release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
     $expectedNames = @($Expected | ForEach-Object { [string]$_.name } | Sort-Object)
     if (($actual -join "`n") -ne ($expectedNames -join "`n")) { Fail "authority release asset set differs from the qualified candidate set" }
+}
+
+function Assert-ImmutableRelease([object]$Release) {
+    if ($null -eq $Release.immutable -or -not [bool]$Release.immutable) {
+        Fail "authority release is not marked immutable"
+    }
 }
 
 function Invoke-DownloadDraft {
@@ -473,27 +498,44 @@ function Invoke-QualifyDownloaded {
         "-ValidateEvidence", (Join-Path $downloaded $qualificationEvidenceName)
     ) "downloaded candidate qualification evidence schema validation failed"
 
-    $defenderEvidence = [ordered]@{
-        schema_version = 1
-        evidence_type = "v4-defender-status"
-        status = "unavailable"
-        deterministic = $false
+    # Export the canonical public root through the existing updater-trust
+    # authority, then run the real previous-v4 bridge against the exact
+    # installer and signature downloaded from the draft. The fixture builds
+    # only its throwaway previous client; it never rebuilds the candidate.
+    $canonicalPublicKey = Join-Path $root "canonical-updater-public-key.txt"
+    Invoke-Checked "cargo" @(
+        "xtask", "updater-trust", "export-public-key", "--output", $canonicalPublicKey
+    ) "canonical updater public-root export failed"
+    $fixtureBundle = Join-Path $root "previous-v4-fixture"
+    Invoke-Checked "pwsh" @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"),
+        "-BundleDir", $fixtureBundle,
+        "-CandidateInstallerPath", (Join-Path $downloaded $installer),
+        "-CandidateSignaturePath", (Join-Path $downloaded "$installer.sig"),
+        "-CandidateVersion", $Version,
+        "-CandidatePublicKeyPath", $canonicalPublicKey
+    ) "exact downloaded previous-v4 to candidate-v4 updater qualification failed"
+
+    # Production policy requires a deterministic exact-artifact Defender
+    # custom scan on the downloaded installer. scan_v4_defender_exact.ps1
+    # invokes Start-MpScan and records scan_performed; missing Defender or a
+    # scan failure is a release failure, not an accepted unavailable result.
+    $defenderEvidencePath = Join-Path $root "defender-evidence.json"
+    Invoke-Checked "pwsh" @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $PSScriptRoot "scan_v4_defender_exact.ps1"),
+        "-Artifact", (Join-Path $downloaded $installer),
+        "-Evidence", $defenderEvidencePath
+    ) "exact downloaded installer Defender scan failed"
+    $defenderEvidence = Read-JsonFile $defenderEvidencePath
+    $installerRecord = @($state.assets | Where-Object { [string]$_.name -eq $installer })
+    if (-not [bool]$defenderEvidence.scan_performed -or
+        [string]$defenderEvidence.detection_result -ne "none" -or
+        $installerRecord.Count -ne 1 -or
+        [string]$defenderEvidence.artifact_sha256 -ne [string]$installerRecord[0].sha256) {
+        Fail "Defender evidence did not bind a clean scan to the exact downloaded installer"
     }
-    $defenderCommand = Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue
-    if ($null -ne $defenderCommand) {
-        try {
-            $defenderStatus = & $defenderCommand.Source
-            $defenderEvidence.status = "observed"
-            $defenderEvidence.deterministic = $true
-            $defenderEvidence.real_time_protection_enabled = [bool]$defenderStatus.RealTimeProtectionEnabled
-            $defenderEvidence.antivirus_enabled = [bool]$defenderStatus.AntivirusEnabled
-        } catch {
-            # Defender availability is recorded explicitly; it never changes
-            # the mandatory byte, updater-signature, SBOM, or provenance gates.
-            $defenderEvidence.status = "unavailable"
-        }
-    }
-    Write-JsonFile (Join-Path $root "defender-evidence.json") $defenderEvidence
 
     # Reuse the production current-user smoke shape against the downloaded
     # installer. The packaged shell self-test exercises GUI/native command
@@ -521,6 +563,8 @@ function Invoke-QualifyDownloaded {
             "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
             "-Mode", "unsigned-zero-budget", "-Artifact" , $installedPe.FullName
         ) "downloaded candidate installed PE state is not unsigned-zero-budget"
+        $activity = Start-Process -FilePath $app -ArgumentList @("--selftest-update-active-playback") -WindowStyle Hidden -Wait -PassThru
+        if ($activity.ExitCode -ne 0) { Fail "downloaded candidate packaged playback-active update rejection self-test failed" }
         $shell = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
         if ($shell.ExitCode -ne 0) { Fail "downloaded candidate packaged shell self-test failed" }
         $gui = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-gui") -WindowStyle Hidden -Wait -PassThru
@@ -550,11 +594,12 @@ function Invoke-QualifyDownloaded {
         qualification = @(
             "fresh-current-user-no-admin-install",
             "gui-input-safety",
+            "previous-v4-to-exact-downloaded-candidate-update",
             "official-tauri-updater-signature",
-            "active-playback-install-rejected",
+            "active-playback-install-rejected-packaged",
             "uninstall",
             "reinstall-preserves-external-app-data",
-            "defender-status-observed-or-explicitly-unavailable",
+            "defender-exact-download-scan-no-detection",
             "spdx-sbom",
             "exact-asset-digest"
         )
@@ -583,8 +628,10 @@ function Invoke-PublishDraft {
     Write-JsonFile $patchPath ([ordered]@{ draft = $false })
     $published = Invoke-AuthorityApi -Arguments @("api", "--method", "PATCH", "repos/$authorityRepository/releases/$($state.release_id)", "--input", $patchPath)
     if ($published.draft -or [string]::IsNullOrWhiteSpace([string]$published.published_at)) { Fail "authority did not publish the already-qualified draft" }
+    Assert-ImmutableRelease $published
     $state.draft = $false
     $state.published = $true
+    $state.immutable = $true
     Write-JsonFile (Get-StatePath) $state
     Write-Host "V4 immutable publication: PASS (assets were not replaced or rebuilt)"
 }
@@ -652,6 +699,7 @@ function Invoke-FinalVerify {
     if (-not $state.published) { Fail "final verification requires a published release" }
     $release = Invoke-AuthorityApi -Arguments @("api", "repos/$authorityRepository/releases/tags/$Tag")
     if ($release.draft -or [string]::IsNullOrWhiteSpace([string]$release.published_at)) { Fail "final release is still draft or unpublished" }
+    Assert-ImmutableRelease $release
     Assert-ExactAssetSet $release $state.assets
     foreach ($expected in $state.assets) {
         $asset = @($release.assets | Where-Object { [string]$_.name -eq [string]$expected.name })

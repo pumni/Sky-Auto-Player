@@ -106,6 +106,16 @@ only after it has published the immutable draft, then writes the validated
 channel file through the bounded authority credential. The promotion helper
 itself never creates, edits, replaces, or deletes a GitHub release asset.
 
+The dedicated authority must have GitHub immutable releases enabled before
+the first production transaction. `ValidateAuthority` checks both the
+existing `refs/heads/main` bootstrap and the repository's immutable-release
+setting; `PublishDraft` and `FinalVerify` require the returned release object
+to report `immutable=true`. Assets are uploaded only through the
+release-specific `upload_url` returned by the create-release response, and a
+duplicate-name/upload error is never repaired by deleting or replacing an
+asset. Any post-draft qualification failure therefore requires a new
+SemVer/RC.
+
 ## Release pipeline and authority bootstrap
 
 `.github/workflows/release-v4.yml` is the only production v4 publication entry
@@ -115,9 +125,10 @@ The source `GITHUB_TOKEN` and OIDC permissions remain separate and are used for
 source-bound attestations. The updater private key is not a GitHub secret: the
 workflow receives only a path to the externally stored key on the runner.
 The authority token contract is bounded to the dedicated repository only, with
-the minimum Contents read/write capability needed for release records, release
-assets, and `channels/<channel>/latest.json`; it has no source-repository,
-Actions, secrets, package, or updater-key permission.
+the minimum Administration read and Contents read/write capability needed to
+inspect immutable-release policy, create/read/publish release records, upload
+release assets, and write `channels/<channel>/latest.json`; it has no
+source-repository, Actions, secrets, package, or updater-key permission.
 
 The pipeline first requires `refs/heads/main` in this repository. An empty
 authority repository therefore fails closed with an instruction to perform a
@@ -126,20 +137,17 @@ authority `main` history (including the channel directory contract) outside a
 production release dispatch. A release dispatch never creates the first
 authority commit as a side effect.
 
-The v4 Tauri updater public trust root is committed independently of this
-release-authority metadata contract. Its operational private key remains
-outside the repository. The project's production release policy does not
-require Authenticode provider credentials; an optional real-signer seam is
-separately governed and is not represented as current production evidence.
-outside the repository. The project's production release policy is
-`unsigned-zero-budget`: no Authenticode provider credentials are required; an
+The project's production release policy is `unsigned-zero-budget`: no
+Authenticode provider credentials are required; an
 optional real-signer seam is separately governed and is not represented as
 current production evidence. The retired v3 updater is preserved by Git
 history and the `v3-maintenance` line, but is not part of the current v4
 workspace or product graph.
 
-Updater rotation is qualified with real packaged clients: the bridge trusts
-`[old,new]` and verifies candidate bytes during `Update::download()`, while the
-cutover client trusts `[new]` and rejects an old-root-only candidate. A full
+The v4 Tauri updater public trust root is committed independently of this
+release-authority metadata contract. Its operational private key remains
+outside the repository. The post-download fixture bridge trusts `[old,new]`
+and verifies the exact downloaded candidate bytes during `Update::download()`;
+the production candidate itself is not rebuilt by that qualification. A full
 non-PR workflow dispatch is required for provenance and SPDX attestation
 evidence.

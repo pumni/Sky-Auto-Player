@@ -231,6 +231,15 @@ post-draft qualification failure, or an unavailable publication/metadata
 precondition stops the transaction; the existing tag and candidate assets are
 never moved or replaced.
 
+Draft assets are posted only to the release-specific GitHub `upload_url`, and
+the authority preflight requires repository immutable releases to be enabled.
+Publication must return `immutable=true`; final verification checks the same
+property before metadata promotion. The post-draft Windows matrix consumes
+the downloaded installer and signature directly, including the packaged
+previous-v4 update, the packaged playback-active admission rejection, and a
+mandatory Defender custom scan with no detection. Missing Defender cmdlets,
+disabled protection, scan failure, or a detection fails closed.
+
 ### 12. SBOM is a first-class release artifact
 
 V4 generates a standard SBOM (SPDX JSON or CycloneDX JSON) and attests it alongside build provenance.

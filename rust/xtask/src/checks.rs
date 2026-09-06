@@ -452,9 +452,9 @@ fn v4_release_pipeline_contract_source(
         "ref: ${{ inputs.source_sha }}",
         "persist-credentials: false",
         "actions/attest@",
+        "actions/upload-artifact@",
         "--source-digest $env:GITHUB_SHA",
-        "scripts/ci_tauri_update_e2e.ps1",
-        "throwaway official previous-v4 to candidate-v4 updater fixture",
+        "Qualify downloaded exact candidate bytes and packaged update",
         "RecordAttestations",
         "PublishDraft",
         "PromoteMetadata",
@@ -497,6 +497,7 @@ fn v4_release_pipeline_contract_source(
         "Sky-Auto-Player-Updater.exe",
         "MANIFEST.json.sig",
         ".github/workflows/release.yml",
+        "ci_tauri_update_e2e.ps1",
     ] {
         if workflow.contains(forbidden) {
             return Err(
@@ -546,6 +547,18 @@ fn v4_release_pipeline_contract_source(
         "draft = $true",
         "draft = $false",
         "V4_RELEASE_AUTHORITY_TOKEN",
+        "upload_url",
+        "immutable-releases",
+        "Assert-ImmutableRelease",
+        "ci_tauri_update_e2e.ps1",
+        "CandidateInstallerPath",
+        "CandidateSignaturePath",
+        "CandidatePublicKeyPath",
+        "export-public-key",
+        "Start-MpScan",
+        "scan_performed",
+        "selftest-update-active-playback",
+        "scan_v4_defender_exact.ps1",
     ] {
         if !pipeline.contains(marker) {
             return Err(
@@ -563,6 +576,9 @@ fn v4_release_pipeline_contract_source(
         || !regression.contains("candidate rebuilt")
         || !regression.contains("promotion before immutable publication")
         || !regression.contains("BuildCount -ne 1")
+        || !regression.contains("UploadedThroughReleaseUrl")
+        || !regression.contains("ExactDownloadedBytes")
+        || !regression.contains("immutable")
     {
         return Err(
             "v4 release coordinator regression test is missing build-once/publication guards"
@@ -584,6 +600,24 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
         format!("v4 release pipeline contract: {error}").into()
     })?;
+    let rehearsal_path = root.join("scripts/test_v4_release_authority_rehearsal.ps1");
+    let rehearsal = fs::read_to_string(&rehearsal_path)?;
+    for marker in [
+        "ConfirmDisposable",
+        "V4_RELEASE_AUTHORITY_TOKEN",
+        "immutable-releases",
+        "upload_url",
+        "draft and tag deleted",
+        "--method",
+        "DELETE",
+    ] {
+        if !rehearsal.contains(marker) {
+            return Err(format!(
+                "v4 authority rehearsal is missing its bounded cleanup marker: {marker}"
+            )
+            .into());
+        }
+    }
     println!("[xtask] v4 release pipeline state-machine contract: PASS");
     Ok(())
 }
@@ -3045,31 +3079,31 @@ jobs:
     -State CreateDraft
     -State DownloadDraft
     -State QualifyDownloaded
+    Qualify downloaded exact candidate bytes and packaged update
     -State RecordAttestations
     -State PublishDraft
     -State PromoteMetadata
     -State FinalVerify
-    throwaway official previous-v4 to candidate-v4 updater fixture
-    scripts/ci_tauri_update_e2e.ps1
     actions/attest@v4
+    actions/upload-artifact@v7
     --source-digest $env:GITHUB_SHA
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateAuthority BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify authority main is not initialized
+ValidateRequest ValidateAuthority BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify authority main is not initialized upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
 function Invoke-CreateDraft { draft = $true; refs/heads/main; authority already contains tag; existing releases are never moved or replaced }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; ci_v4_release_authority_acceptance.ps1; promote_v4_metadata.ps1; release-authority; published_at }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; selftest-update-active-playback; ci_v4_release_authority_acceptance.ps1; promote_v4_metadata.ps1; release-authority; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { V4_RELEASE_AUTHORITY_TOKEN }
 function Invoke-PublishDraft { draft = $false }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication }
 function Invoke-FinalVerify { FinalVerify }
 "#;
         let regression = r#"
-class MockReleaseApi { [int]$BuildCount = 0; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1 }
+class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$UploadedThroughReleaseUrl = $false; [bool]$ExactDownloadedBytes = $false; [bool]$immutable = $false; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1; UploadedThroughReleaseUrl; ExactDownloadedBytes; immutable }
 "#;
         assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
 
