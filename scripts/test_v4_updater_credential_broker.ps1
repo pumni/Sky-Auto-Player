@@ -36,12 +36,12 @@ try {
     # Test 1: ABSENT fails closed
     # =========================================================================
     Write-Host "Test 1: ABSENT fails closed..."
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Test target should not exist before test"
     }
     $absentFailedClosed = $false
     try {
-        $null = Get-V4UpdaterProductionCredential -Target $testTarget
+        $null = Get-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     } catch {
         $absentFailedClosed = $true
         if ($_.Exception.Message -notmatch "absent") {
@@ -58,10 +58,10 @@ try {
     # =========================================================================
     Write-Host "Test 2: CRED_PERSIST_SESSION credential is readable..."
     [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
-    if (-not (Test-V4UpdaterProductionCredential -Target $testTarget)) {
+    if (-not (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget)) {
         Fail "Test target should be present after WriteSessionCredential"
     }
-    $readBack = Get-V4UpdaterProductionCredential -Target $testTarget
+    $readBack = Get-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     if ($readBack -ne $testSentinel) {
         Fail "Read credential does not match written sentinel"
     }
@@ -72,12 +72,12 @@ try {
     # =========================================================================
     Write-Host "Test 3: Empty credential blob is rejected..."
     [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteRawCredential($testTarget, [byte[]]@(), 1)
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Test-V4UpdaterProductionCredential should report false for empty credential blob"
     }
     $emptyFailedClosed = $false
     try {
-        $null = Get-V4UpdaterProductionCredential -Target $testTarget
+        $null = Get-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     } catch {
         $emptyFailedClosed = $true
         if ($_.Exception.Message -notmatch "empty") {
@@ -94,12 +94,12 @@ try {
     # =========================================================================
     Write-Host "Test 4: Deletion works and is idempotent..."
     [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
-    Remove-V4UpdaterProductionCredential -Target $testTarget
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    Remove-V4UpdaterProductionCredential -InternalTestTarget $testTarget
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Test target should not be present after Remove-V4UpdaterProductionCredential"
     }
     # Second removal should succeed without error (idempotent)
-    Remove-V4UpdaterProductionCredential -Target $testTarget
+    Remove-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     Write-Host "Test 4: PASS"
 
     # =========================================================================
@@ -110,7 +110,7 @@ try {
 
     $readOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1") `
-        -Action Read -BrokerTarget $testTarget 2>&1 | Out-String
+        -Action Read -InternalTestTarget $testTarget 2>&1 | Out-String
     Assert-NoSecretInText -Secret $testSentinel -Text $readOutput -Context "Broker -Action Read"
     if ($readOutput -notmatch "\[PASS\]") {
         Fail "Broker -Action Read did not report sanitized PASS"
@@ -118,7 +118,7 @@ try {
 
     $deleteOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1") `
-        -Action Delete -BrokerTarget $testTarget 2>&1 | Out-String
+        -Action Delete -InternalTestTarget $testTarget 2>&1 | Out-String
     Assert-NoSecretInText -Secret $testSentinel -Text $deleteOutput -Context "Broker -Action Delete"
     if ($deleteOutput -notmatch "\[PASS\]") {
         Fail "Broker -Action Delete did not report sanitized PASS"
@@ -130,7 +130,7 @@ try {
     # =========================================================================
     Write-Host "Test 6: Operator provisioning script contract..."
     # Empty input rejected
-    $emptyCommand = "`$sec = [System.Security.SecureString]::new(); & '$($repoRoot.Replace('\', '/'))/scripts/set_v4_updater_session_credential.ps1' -TestSecureString `$sec -Target '$testTarget'; exit `$LASTEXITCODE"
+    $emptyCommand = "`$sec = [System.Security.SecureString]::new(); & '$($repoRoot.Replace('\', '/'))/scripts/set_v4_updater_session_credential.ps1' -TestSecureString `$sec -InternalTestTarget '$testTarget'; exit `$LASTEXITCODE"
     $emptyOutput = & pwsh -NoProfile -Command $emptyCommand 2>&1 | Out-String
     $emptyExitCode = $LASTEXITCODE
     if ($emptyExitCode -eq 0 -or $emptyOutput -notmatch "\[FAIL\] Passphrase input cannot be empty") {
@@ -138,17 +138,17 @@ try {
     }
 
     # Successful provisioning
-    $setCommand = "`$sec = ConvertTo-SecureString '$testSentinel' -AsPlainText -Force; & '$($repoRoot.Replace('\', '/'))/scripts/set_v4_updater_session_credential.ps1' -TestSecureString `$sec -Target '$testTarget'; exit `$LASTEXITCODE"
+    $setCommand = "`$sec = ConvertTo-SecureString '$testSentinel' -AsPlainText -Force; & '$($repoRoot.Replace('\', '/'))/scripts/set_v4_updater_session_credential.ps1' -TestSecureString `$sec -InternalTestTarget '$testTarget'; exit `$LASTEXITCODE"
     $setOutput = & pwsh -NoProfile -Command $setCommand 2>&1 | Out-String
     $setExitCode = $LASTEXITCODE
     Assert-NoSecretInText -Secret $testSentinel -Text $setOutput -Context "Provisioning script"
     if ($setExitCode -ne 0 -or $setOutput -notmatch "\[PASS\]") {
         Fail "set_v4_updater_session_credential did not report PASS (exit=$setExitCode, out=$setOutput)"
     }
-    if (-not (Test-V4UpdaterProductionCredential -Target $testTarget)) {
+    if (-not (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget)) {
         Fail "Target was not provisioned in Credential Manager. setOutput: $setOutput"
     }
-    $retrieved = Get-V4UpdaterProductionCredential -Target $testTarget
+    $retrieved = Get-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     if ($retrieved -ne $testSentinel) {
         Fail "Provisioned credential value does not match sentinel"
     }
@@ -156,13 +156,13 @@ try {
     # Cleanup script
     $removeOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot "remove_v4_updater_session_credential.ps1") `
-        -Target $testTarget 2>&1 | Out-String
+        -InternalTestTarget $testTarget 2>&1 | Out-String
     $removeExitCode = $LASTEXITCODE
     Assert-NoSecretInText -Secret $testSentinel -Text $removeOutput -Context "Cleanup script"
     if ($removeExitCode -ne 0 -or $removeOutput -notmatch "\[PASS\]") {
         Fail "remove_v4_updater_session_credential did not report PASS (exit=$removeExitCode, out=$removeOutput)"
     }
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Target was not removed after remove_v4_updater_session_credential"
     }
     Write-Host "Test 6: PASS"
@@ -205,41 +205,17 @@ exit 0
 "@
     Set-Content -LiteralPath $mockOrchestratorPath -Value $mockScript -Encoding UTF8
 
-    # Integration test helper mimicking Invoke-BuildCandidate broker wrapper
-    function Invoke-TestBuildCandidateBroker(
-        [string]$Target,
-        [scriptblock]$Action
-    ) {
-        $prevPassword = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
-        $credential = $null
-        try {
-            $credential = Get-V4UpdaterProductionCredential -Target $Target
-            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $credential, "Process")
-            & $Action
-        } finally {
-            if ($null -ne $prevPassword) {
-                [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $prevPassword, "Process")
-            } else {
-                [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $null, "Process")
-            }
-            try {
-                Remove-V4UpdaterProductionCredential -Target $Target
-            } catch {
-                Write-Warning "Cleanup returned: $($_.Exception.Message)"
-            }
-            $credential = $null
-            Remove-Variable credential -ErrorAction SilentlyContinue
-        }
-    }
-
-    # Case A: Success path
+    # -------------------------------------------------------------------------
+    # Case 7A: Production helper success path (orchestrator success + cleanup success)
+    # -------------------------------------------------------------------------
+    Write-Host "Test 7A: Production helper success path..."
     [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
     $priorProcessEnv = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
     if (-not [string]::IsNullOrEmpty($priorProcessEnv)) {
         Fail "Prior process environment was unexpectedly non-empty"
     }
 
-    Invoke-TestBuildCandidateBroker -Target $testTarget -Action {
+    Invoke-WithV4UpdaterSessionCredential -InternalTestTarget $testTarget -Action {
         & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File $mockOrchestratorPath `
             -ExpectedSourceSha "0123456789abcdef0123456789abcdef01234567" `
@@ -249,7 +225,7 @@ exit 0
         if ($LASTEXITCODE -ne 0) { throw "Mock orchestrator failed" }
     }
 
-    # Assertions for Case A:
+    # Assertions for Case 7A:
     $recordedArgs = Get-Content -LiteralPath $mockLogPath -Raw
     Assert-NoSecretInText -Secret $testSentinel -Text $recordedArgs -Context "Orchestrator CLI arguments"
     $recordedEnv = Get-Content -LiteralPath $mockEnvPath -Raw
@@ -260,16 +236,20 @@ exit 0
     if (-not [string]::IsNullOrEmpty($postProcessEnv)) {
         Fail "TAURI_SIGNING_PRIVATE_KEY_PASSWORD was not cleared after success"
     }
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Session credential was not deleted after success"
     }
+    Write-Host "Test 7A: PASS"
 
-    # Case B: Failure path
+    # -------------------------------------------------------------------------
+    # Case 7B: Production helper orchestrator failure path (orchestrator failure + cleanup success)
+    # -------------------------------------------------------------------------
+    Write-Host "Test 7B: Production helper orchestrator failure path..."
     [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
     $failureObserved = $false
     try {
         $env:SKY_MOCK_ORCHESTRATOR_FAIL = '1'
-        Invoke-TestBuildCandidateBroker -Target $testTarget -Action {
+        Invoke-WithV4UpdaterSessionCredential -InternalTestTarget $testTarget -Action {
             & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
                 -File $mockOrchestratorPath `
                 -ExpectedSourceSha "0123456789abcdef0123456789abcdef01234567" `
@@ -290,15 +270,96 @@ exit 0
     if (-not [string]::IsNullOrEmpty($postFailProcessEnv)) {
         Fail "TAURI_SIGNING_PRIVATE_KEY_PASSWORD was not cleared after failure"
     }
-    if (Test-V4UpdaterProductionCredential -Target $testTarget) {
+    if (Test-V4UpdaterProductionCredential -InternalTestTarget $testTarget) {
         Fail "Session credential was not deleted after failure"
     }
+    Write-Host "Test 7B: PASS"
 
-    # Case C: Ambient environment rejection in v4_release_pipeline.ps1
+    # -------------------------------------------------------------------------
+    # Case 7C: Orchestrator success + credential deletion failure (FAILS CLOSED)
+    # -------------------------------------------------------------------------
+    Write-Host "Test 7C: Orchestrator success + credential deletion failure (fail closed)..."
+    [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
+    $cleanupFailObserved = $false
+    $cleanupFailError = $null
+    try {
+        Invoke-WithV4UpdaterSessionCredential -InternalTestTarget $testTarget -Action {
+            & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+                -File $mockOrchestratorPath `
+                -ExpectedSourceSha "0123456789abcdef0123456789abcdef01234567" `
+                -Version "4.0.0-rc.1" `
+                -Channel "beta" `
+                -UpdaterPrivateKeyPath "C:\path\to\key.key"
+            if ($LASTEXITCODE -ne 0) { throw "Mock orchestrator failed" }
+        } -InternalTestCleanup {
+            throw "Simulated CredDeleteW Win32 access denied"
+        }
+    } catch {
+        $cleanupFailObserved = $true
+        $cleanupFailError = $_.Exception.Message
+    }
+    if (-not $cleanupFailObserved) {
+        Fail "Invoke-WithV4UpdaterSessionCredential did not fail closed on credential deletion failure"
+    }
+    Assert-NoSecretInText -Secret $testSentinel -Text $cleanupFailError -Context "Cleanup failure error"
+    if ($cleanupFailError -notmatch "Simulated CredDeleteW Win32 access denied") {
+        Fail "Error message did not convey cleanup failure: $cleanupFailError"
+    }
+    $postCleanupFailEnv = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
+    if (-not [string]::IsNullOrEmpty($postCleanupFailEnv)) {
+        Fail "TAURI_SIGNING_PRIVATE_KEY_PASSWORD was not cleared after deletion failure: $postCleanupFailEnv"
+    }
+    Remove-V4UpdaterProductionCredential -InternalTestTarget $testTarget
+    Write-Host "Test 7C: PASS"
+
+    # -------------------------------------------------------------------------
+    # Case 7D: Orchestrator failure + credential deletion failure (FAILS CLOSED, SURFACES BOTH CAUSES, RESTORES ENV)
+    # -------------------------------------------------------------------------
+    Write-Host "Test 7D: Orchestrator failure + credential deletion failure (both fail, surfaces causes, restores env)..."
+    [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($testTarget, $testSentinel)
+    $priorEnvMarker = "BENIGN_PRIOR_ENV_MARKER_" + [guid]::NewGuid().ToString("N")
+    [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $priorEnvMarker, "Process")
+    $bothFailedObserved = $false
+    $bothFailedError = $null
+    $restoredProcessEnv = $null
+    try {
+        Invoke-WithV4UpdaterSessionCredential -InternalTestTarget $testTarget -Action {
+            throw "Mock orchestrator crashed with fatal hardware error"
+        } -InternalTestCleanup {
+            throw "Simulated CredDeleteW device timeout"
+        }
+    } catch {
+        $bothFailedObserved = $true
+        $bothFailedError = $_.Exception.Message
+    } finally {
+        $restoredProcessEnv = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
+        [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $null, "Process")
+        Remove-V4UpdaterProductionCredential -InternalTestTarget $testTarget
+    }
+    if (-not $bothFailedObserved) {
+        Fail "Invoke-WithV4UpdaterSessionCredential did not fail closed when both action and deletion failed"
+    }
+    Assert-NoSecretInText -Secret $testSentinel -Text $bothFailedError -Context "Both failed error"
+    if ($bothFailedError -notmatch "Mock orchestrator crashed with fatal hardware error") {
+        Fail "Error message omitted orchestrator failure cause: $bothFailedError"
+    }
+    if ($bothFailedError -notmatch "Simulated CredDeleteW device timeout") {
+        Fail "Error message omitted cleanup failure cause: $bothFailedError"
+    }
+    if ($restoredProcessEnv -ne $priorEnvMarker) {
+        Fail "TAURI_SIGNING_PRIVATE_KEY_PASSWORD was not restored to prior process value: $restoredProcessEnv"
+    }
+    Write-Host "Test 7D: PASS"
+
+    # -------------------------------------------------------------------------
+    # Case 7E: Ambient environment rejection in v4_release_pipeline.ps1
+    # -------------------------------------------------------------------------
+    Write-Host "Test 7E: Ambient environment rejection in v4_release_pipeline.ps1..."
     $savedKeyPathEnv = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
     $savedPassEnv = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
     $dummyKeyPath = Join-Path $fixtureRoot "test.key"
     New-Item -ItemType File -Path $dummyKeyPath -Force | Out-Null
+    $currentHeadSha = (git -C $repoRoot rev-parse HEAD).Trim().ToLowerInvariant()
     try {
         $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "ambient-forbidden-value"
         $pipelineOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
@@ -307,8 +368,8 @@ exit 0
             -Version "4.0.0-rc.1" `
             -Channel "beta" `
             -Tag "v4.0.0-rc.1" `
-            -SourceSha "02d3a973c23ca17ff331563e4f49fe090d3be207" `
-            -WorkflowSha "02d3a973c23ca17ff331563e4f49fe090d3be207" `
+            -SourceSha $currentHeadSha `
+            -WorkflowSha $currentHeadSha `
             -StateRoot (Join-Path ([IO.Path]::GetTempPath()) ("state-" + [guid]::NewGuid().ToString("N"))) `
             -UpdaterPrivateKeyPath $dummyKeyPath 2>&1 | Out-String
         if ($pipelineOutput -notmatch "ambient updater key or password environment is forbidden") {
@@ -321,14 +382,14 @@ exit 0
             Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
         }
     }
-
+    Write-Host "Test 7E: PASS"
     Write-Host "Test 7: PASS"
 
     Write-Host "================================================================="
     Write-Host " [PASS] All V4 updater credential broker tests passed"
     Write-Host "================================================================="
 } finally {
-    Remove-V4UpdaterProductionCredential -Target $testTarget
+    Remove-V4UpdaterProductionCredential -InternalTestTarget $testTarget
     if ($null -ne $fixtureRoot -and (Test-Path -LiteralPath $fixtureRoot)) {
         Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

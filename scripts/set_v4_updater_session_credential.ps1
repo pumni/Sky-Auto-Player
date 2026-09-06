@@ -8,8 +8,9 @@ param(
     [Parameter(Mandatory = $false)]
     [System.Security.SecureString]$TestSecureString,
 
+    # Internal test seam only: non-production target isolation for regression tests.
     [Parameter(Mandatory = $false)]
-    [string]$Target = "SkyAutoPlayer/V4UpdaterProduction"
+    [string]$InternalTestTarget
 )
 
 Set-StrictMode -Version Latest
@@ -20,9 +21,17 @@ if (-not [System.OperatingSystem]::IsWindows()) {
     exit 1
 }
 
+$explicitTarget = $InternalTestTarget
+
 . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
 
 try {
+    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($explicitTarget)) {
+        $explicitTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
     $secureInput = if ($null -ne $TestSecureString) {
         $TestSecureString
     } else {
@@ -42,7 +51,7 @@ try {
             Write-Host "[FAIL] Passphrase input cannot be empty"
             exit 1
         }
-        [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($Target, $passwordValue)
+        [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($targetToUse, $passwordValue)
     } finally {
         if ($bstr -ne [IntPtr]::Zero) {
             [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
@@ -51,7 +60,7 @@ try {
         Remove-Variable passwordValue -ErrorAction SilentlyContinue
     }
 
-    Write-Host "[PASS] V4 updater session credential provisioned for target: $Target"
+    Write-Host "[PASS] V4 updater session credential provisioned for target: $targetToUse"
     exit 0
 } catch {
     Write-Host "[FAIL] Failed to provision session credential: $($_.Exception.Message)"

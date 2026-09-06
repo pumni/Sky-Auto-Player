@@ -8,8 +8,10 @@ param(
     [ValidateSet("Read", "Delete", "Test")]
     [string]$Action,
 
+    # Internal test seam only: non-production target isolation for regression tests.
+    [Alias("InternalTestTarget")]
     [Parameter(Mandatory = $false)]
-    [string]$BrokerTarget
+    [string]$BrokerInternalTestTarget
 )
 
 Set-StrictMode -Version Latest
@@ -265,73 +267,175 @@ namespace SkyAutoPlayer
 function Get-V4UpdaterProductionCredential {
     [CmdletBinding()]
     param(
+        # Internal test seam only: non-production target isolation for regression tests.
         [Parameter(Mandatory = $false)]
-        [string]$Target = $script:CanonicalCredentialTarget
+        [string]$InternalTestTarget
     )
 
     if (-not [System.OperatingSystem]::IsWindows()) {
         throw "V4 updater credential broker requires Windows platform"
     }
 
+    $target = if (-not [string]::IsNullOrWhiteSpace($InternalTestTarget)) {
+        $InternalTestTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
     try {
-        return [SkyAutoPlayer.V4UpdaterCredentialBroker]::ReadCredential($Target)
+        return [SkyAutoPlayer.V4UpdaterCredentialBroker]::ReadCredential($target)
     } catch {
-        throw "V4 updater credential broker: failed to read credential for target $Target - $($_.Exception.Message)"
+        throw "V4 updater credential broker: failed to read credential for target $target - $($_.Exception.Message)"
     }
 }
 
 function Remove-V4UpdaterProductionCredential {
     [CmdletBinding()]
     param(
+        # Internal test seam only: non-production target isolation for regression tests.
         [Parameter(Mandatory = $false)]
-        [string]$Target = $script:CanonicalCredentialTarget
+        [string]$InternalTestTarget
     )
 
     if (-not [System.OperatingSystem]::IsWindows()) {
         throw "V4 updater credential broker requires Windows platform"
     }
 
+    $target = if (-not [string]::IsNullOrWhiteSpace($InternalTestTarget)) {
+        $InternalTestTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
     try {
-        [void][SkyAutoPlayer.V4UpdaterCredentialBroker]::DeleteCredential($Target)
+        [void][SkyAutoPlayer.V4UpdaterCredentialBroker]::DeleteCredential($target)
     } catch {
-        throw "V4 updater credential broker: failed to delete credential for target $Target - $($_.Exception.Message)"
+        throw "V4 updater credential broker: failed to delete credential for target $target - $($_.Exception.Message)"
     }
 }
 
 function Test-V4UpdaterProductionCredential {
     [CmdletBinding()]
     param(
+        # Internal test seam only: non-production target isolation for regression tests.
         [Parameter(Mandatory = $false)]
-        [string]$Target = $script:CanonicalCredentialTarget
+        [string]$InternalTestTarget
     )
 
     if (-not [System.OperatingSystem]::IsWindows()) {
         return $false
     }
 
+    $target = if (-not [string]::IsNullOrWhiteSpace($InternalTestTarget)) {
+        $InternalTestTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
     try {
-        return [SkyAutoPlayer.V4UpdaterCredentialBroker]::HasNonEmptyCredential($Target)
+        return [SkyAutoPlayer.V4UpdaterCredentialBroker]::HasNonEmptyCredential($target)
     } catch {
         return $false
     }
 }
 
+function Invoke-WithV4UpdaterSessionCredential {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Action,
+
+        # Internal test seam only: non-production target isolation for regression tests.
+        [Parameter(Mandatory = $false)]
+        [string]$InternalTestTarget,
+
+        # Internal test seam only: custom cleanup hook to exercise deletion failures in regression tests.
+        [Parameter(Mandatory = $false)]
+        [scriptblock]$InternalTestCleanup
+    )
+
+    if (-not [System.OperatingSystem]::IsWindows()) {
+        throw "V4 updater credential broker requires Windows platform"
+    }
+
+    $target = if (-not [string]::IsNullOrWhiteSpace($InternalTestTarget)) {
+        $InternalTestTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
+    $prevPassword = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
+    $credential = $null
+    $actionException = $null
+    $cleanupException = $null
+    $actionResult = $null
+
+    try {
+        $credential = Get-V4UpdaterProductionCredential -InternalTestTarget $target
+        [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $credential, "Process")
+
+        try {
+            $actionResult = & $Action
+        } catch {
+            $actionException = $_
+        }
+    } finally {
+        # 1. Process environment restoration is deterministic and unconditional
+        if ($null -ne $prevPassword) {
+            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $prevPassword, "Process")
+        } else {
+            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $null, "Process")
+        }
+
+        # 2. Session credential cleanup must execute even if action threw
+        try {
+            if ($null -ne $InternalTestCleanup) {
+                & $InternalTestCleanup
+            } else {
+                Remove-V4UpdaterProductionCredential -InternalTestTarget $target
+            }
+        } catch {
+            $cleanupException = $_
+        }
+
+        # 3. Clean local secret memory references
+        $credential = $null
+        Remove-Variable credential -ErrorAction SilentlyContinue
+    }
+
+    # 4. Fail closed on either action failure or cleanup failure:
+    if ($null -ne $actionException -and $null -ne $cleanupException) {
+        $cleanMsg = $cleanupException.Exception.Message
+        $actMsg = $actionException.Exception.Message
+        throw "V4 updater credential boundary failure: action failed: $actMsg; session credential cleanup also failed: $cleanMsg"
+    }
+    if ($null -ne $actionException) {
+        throw $actionException
+    }
+    if ($null -ne $cleanupException) {
+        $cleanMsg = $cleanupException.Exception.Message
+        throw "V4 updater credential boundary failure: session credential cleanup failed: $cleanMsg"
+    }
+
+    return $actionResult
+}
+
 if ($PSCmdlet.MyInvocation.BoundParameters.ContainsKey("Action")) {
-    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($BrokerTarget)) { $BrokerTarget } else { $script:CanonicalCredentialTarget }
+    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($BrokerInternalTestTarget)) { $BrokerInternalTestTarget } else { $script:CanonicalCredentialTarget }
     switch ($Action) {
         "Delete" {
-            Remove-V4UpdaterProductionCredential -Target $targetToUse
+            Remove-V4UpdaterProductionCredential -InternalTestTarget $targetToUse
             Write-Host "[PASS] V4 updater session credential deleted"
         }
         "Test" {
-            if (Test-V4UpdaterProductionCredential -Target $targetToUse) {
+            if (Test-V4UpdaterProductionCredential -InternalTestTarget $targetToUse) {
                 Write-Host "PRESENT_NONEMPTY"
             } else {
                 Write-Host "ABSENT"
             }
         }
         "Read" {
-            $null = Get-V4UpdaterProductionCredential -Target $targetToUse
+            $null = Get-V4UpdaterProductionCredential -InternalTestTarget $targetToUse
             Write-Host "[PASS] V4 updater credential read successfully"
         }
     }

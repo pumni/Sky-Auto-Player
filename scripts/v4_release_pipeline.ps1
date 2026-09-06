@@ -360,15 +360,10 @@ function Invoke-BuildCandidate {
 
     . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
 
-    $prevPassword = [Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "Process")
-    $credential = $null
-    try {
-        $credential = Get-V4UpdaterProductionCredential
-        [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $credential, "Process")
-
-        # This is the only production candidate build boundary. The orchestrator
-        # owns key verification, stale purge, clean-worktree, NSIS, updater sig,
-        # unsigned-zero-budget, SBOM, and install smoke semantics.
+    # This is the only production candidate build boundary. The orchestrator
+    # owns key verification, stale purge, clean-worktree, NSIS, updater sig,
+    # unsigned-zero-budget, SBOM, and install smoke semantics.
+    Invoke-WithV4UpdaterSessionCredential -Action {
         & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
             -ExpectedSourceSha $SourceSha `
@@ -376,19 +371,6 @@ function Invoke-BuildCandidate {
             -Channel $Channel `
             -UpdaterPrivateKeyPath $keyPath
         if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
-    } finally {
-        if ($null -ne $prevPassword) {
-            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $prevPassword, "Process")
-        } else {
-            [Environment]::SetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", $null, "Process")
-        }
-        try {
-            Remove-V4UpdaterProductionCredential
-        } catch {
-            Write-Warning "V4 updater session credential cleanup returned: $($_.Exception.Message)"
-        }
-        $credential = $null
-        Remove-Variable credential -ErrorAction SilentlyContinue
     }
 
     $records = @(Get-CandidateRecords | ForEach-Object { Get-FileRecord $_ })

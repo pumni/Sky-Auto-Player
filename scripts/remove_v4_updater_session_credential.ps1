@@ -4,8 +4,9 @@
 
 [CmdletBinding()]
 param(
+    # Internal test seam only: non-production target isolation for regression tests.
     [Parameter(Mandatory = $false)]
-    [string]$Target = "SkyAutoPlayer/V4UpdaterProduction"
+    [string]$InternalTestTarget
 )
 
 Set-StrictMode -Version Latest
@@ -16,11 +17,19 @@ if (-not [System.OperatingSystem]::IsWindows()) {
     exit 1
 }
 
+$explicitTarget = $InternalTestTarget
+
 . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
 
 try {
-    Remove-V4UpdaterProductionCredential -Target $Target
-    Write-Host "[PASS] V4 updater session credential removed for target: $Target"
+    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($explicitTarget)) {
+        $explicitTarget
+    } else {
+        $script:CanonicalCredentialTarget
+    }
+
+    Remove-V4UpdaterProductionCredential -InternalTestTarget $targetToUse
+    Write-Host "[PASS] V4 updater session credential removed for target: $targetToUse"
     exit 0
 } catch {
     Write-Host "[FAIL] Failed to remove session credential: $($_.Exception.Message)"

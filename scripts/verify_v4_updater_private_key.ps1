@@ -7,10 +7,7 @@ param(
     [string]$PasswordEnv = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
 
     [Parameter(Mandatory = $false)]
-    [switch]$UseCredentialBroker,
-
-    [Parameter(Mandatory = $false)]
-    [string]$CredentialTarget = "SkyAutoPlayer/V4UpdaterProduction"
+    [switch]$UseCredentialBroker
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +31,7 @@ if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
 $envVal = [Environment]::GetEnvironmentVariable($PasswordEnv)
 $passwordValue = if ($UseCredentialBroker) {
     . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
-    Get-V4UpdaterProductionCredential -Target $CredentialTarget
+    Get-V4UpdaterProductionCredential
 } elseif (-not [string]::IsNullOrWhiteSpace($envVal)) {
     $envVal
 } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
